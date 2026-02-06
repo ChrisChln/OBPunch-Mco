@@ -353,7 +353,7 @@ export default function App() {
       return;
     }
     if (!isValidId) {
-      setUiStatus({ tone: 'error', message: '工号格式不正确（例如：010454 / US010454）' });
+      setUiStatus({ tone: 'error', message: '工号格式不正确（例如：US010454）' });
       playError();
       return;
     }
@@ -425,7 +425,7 @@ export default function App() {
       return;
     }
     if (!isValidId) {
-      setUiStatus({ tone: 'error', message: '工号格式不正确（例如：010454 / US010454）' });
+      setUiStatus({ tone: 'error', message: '工号格式不正确（例如：US010454）' });
       playError();
       return;
     }
@@ -594,7 +594,7 @@ export default function App() {
       return;
     }
     if (!isValidId) {
-      setUiStatus({ tone: 'error', message: '工号格式不正确（例如：010454 / US010454）' });
+      setUiStatus({ tone: 'error', message: '工号格式不正确（例如：US010454）' });
       return;
     }
 
