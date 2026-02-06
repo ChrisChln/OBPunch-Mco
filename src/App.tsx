@@ -20,6 +20,9 @@ type PunchBoardRow = {
   created_at: string | null;
 };
 
+const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
+type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
+
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const EMPLOYEE_REQUESTS_TABLE = (import.meta.env.VITE_EMPLOYEE_REQUESTS_TABLE as string | undefined) ?? 'ob_employee_requests';
 
@@ -123,9 +126,20 @@ export default function App() {
   const [punchBoardEmployeeMap, setPunchBoardEmployeeMap] = useState<
     Record<string, { name: string; agency: string; position: string }>
   >({});
+  const [punchLogPositionFilter, setPunchLogPositionFilter] = useState<AllowedPosition | ''>('');
 
   const [lastPunchAction, setLastPunchAction] = useState<PunchAction | null>(null);
   const [lastPunchActionError, setLastPunchActionError] = useState<string | null>(null);
+
+  const punchBoardFiltered = useMemo(() => {
+    if (!punchLogPositionFilter) return punchBoard;
+    const needle = punchLogPositionFilter.trim().toLowerCase();
+    return punchBoard.filter((p) => {
+      const employee = punchBoardEmployeeMap[p.staff_id];
+      const pos = String(employee?.position ?? '').trim().toLowerCase();
+      return pos === needle;
+    });
+  }, [punchBoard, punchBoardEmployeeMap, punchLogPositionFilter]);
   const [lastPunchActionLoading, setLastPunchActionLoading] = useState(false);
 
   const [editName, setEditName] = useState('');
@@ -724,11 +738,30 @@ export default function App() {
                     Refresh
                   </button>
                 </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {ALLOWED_POSITIONS.map((pos) => (
+                    <button
+                      key={pos}
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => setPunchLogPositionFilter((prev) => (prev === pos ? '' : pos))}
+                      className={[
+                        'rounded-xl px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] transition disabled:cursor-not-allowed disabled:opacity-60',
+                        punchLogPositionFilter === pos
+                          ? 'bg-neon text-ink shadow-glow'
+                          : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                      ].join(' ')}
+                      title={`Filter: ${pos}`}
+                    >
+                      {pos}
+                    </button>
+                  ))}
+                </div>
 
                 {punchBoardError && <p className="mt-3 text-sm text-ember">加载失败：{punchBoardError}</p>}
-                {!punchBoardError && punchBoard.length === 0 && <p className="mt-3 text-sm text-slate-400">暂无数据</p>}
+                {!punchBoardError && punchBoardFiltered.length === 0 && <p className="mt-3 text-sm text-slate-400">暂无数据</p>}
 
-                {!punchBoardError && punchBoard.length > 0 && (
+                {!punchBoardError && punchBoardFiltered.length > 0 && (
                   <div className="mt-4 flex-1 overflow-auto pr-1">
                     <div className="space-y-2">
                       <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_6.5rem] items-center gap-3 px-4 text-xs uppercase tracking-[0.25em] text-slate-500 sm:grid-cols-[3.5rem_minmax(0,1fr)_7rem_7rem_9.5rem]">
@@ -739,7 +772,7 @@ export default function App() {
                         <div className="hidden sm:block">Position</div>
                         <div className="text-right">Time</div>
                       </div>
-                      {punchBoard.map((p) => {
+                      {punchBoardFiltered.map((p) => {
                         const employee = punchBoardEmployeeMap[p.staff_id];
                         const time = p.created_at
                           ? new Date(p.created_at).toLocaleString('zh-CN', { hour12: false })
