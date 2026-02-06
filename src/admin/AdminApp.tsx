@@ -85,6 +85,35 @@ const addDays = (value: Date, days: number) => {
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 1);
+const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? clamp(DAY_CUTOFF_HOUR_RAW, 0, 23) : 1;
+const DAY_CUTOFF_MS = DAY_CUTOFF_HOUR * 60 * 60 * 1000;
+const ATTENDANCE_RESET_HOUR_RAW = Number(import.meta.env.VITE_ATTENDANCE_RESET_HOUR ?? 5);
+const ATTENDANCE_RESET_HOUR = Number.isFinite(ATTENDANCE_RESET_HOUR_RAW)
+  ? clamp(ATTENDANCE_RESET_HOUR_RAW, 0, 23)
+  : 5;
+
+const getDayRange = (weekStart: Date, dayIndex: number, dayCount = 1) => {
+  const startBase = addDays(weekStart, dayIndex);
+  const endBase = addDays(weekStart, dayIndex + dayCount);
+  return {
+    start: new Date(startBase.getTime() + DAY_CUTOFF_MS),
+    end: new Date(endBase.getTime() + DAY_CUTOFF_MS)
+  };
+};
+
+const getPositionBadgeClass = (value: string) => {
+  const v = value.trim().toLowerCase();
+  if (v === 'pick') return 'border-sky-400/60 text-sky-200 bg-sky-500/10';
+  if (v === 'pack') return 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10';
+  if (v === 'rebin') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
+  if (v === 'preship') return 'border-rose-400/60 text-rose-200 bg-rose-500/10';
+  if (v === 'transfer') return 'border-violet-400/60 text-violet-200 bg-violet-500/10';
+  return 'border-white/20 text-slate-200 bg-white/5';
+};
+
+const ORDINAL_CN = ['第一次', '第二次', '第三次', '第四次', '第五次', '第六次', '第七次', '第八次', '第九次', '第十次'];
+
 const toLocalDateTimeInputValue = (value: Date) => {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
@@ -262,6 +291,11 @@ export default function AdminApp() {
   const [employeeNewName, setEmployeeNewName] = useState('');
   const [employeeNewAgency, setEmployeeNewAgency] = useState('');
   const [employeeNewPosition, setEmployeeNewPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [employeeEditOpen, setEmployeeEditOpen] = useState(false);
+  const [employeeEditStaffId, setEmployeeEditStaffId] = useState<string | null>(null);
+  const [employeeEditName, setEmployeeEditName] = useState('');
+  const [employeeEditAgency, setEmployeeEditAgency] = useState('');
+  const [employeeEditPosition, setEmployeeEditPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
 
   const [timecardRows, setTimecardRows] = useState<TimecardRow[]>([]);
   const [timecardError, setTimecardError] = useState<string | null>(null);
@@ -273,7 +307,6 @@ export default function AdminApp() {
   const [timecardWeekInput, setTimecardWeekInput] = useState(() =>
     toDateOnly(startOfWeekMonday(new Date()))
   );
-  const [timecardWeekInputFocused, setTimecardWeekInputFocused] = useState(false);
   const [timecardHasMore, setTimecardHasMore] = useState(false);
 
   const [timecardPunchOpen, setTimecardPunchOpen] = useState(false);
@@ -292,7 +325,7 @@ export default function AdminApp() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [attendanceStats, setAttendanceStats] = useState<
-    Record<string, { early: number; late: number; total: number }>
+    Record<string, { early: number; late: number; active: number }>
   >({});
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
 
@@ -363,12 +396,15 @@ export default function AdminApp() {
     try {
       const now = new Date(serverTime);
       const rangeStart = new Date(now);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeStart.setDate(rangeStart.getDate() - 1); // include yesterday for cross-day open sessions
+      rangeStart.setHours(ATTENDANCE_RESET_HOUR, 0, 0, 0);
+      if (now.getTime() < rangeStart.getTime()) {
+        rangeStart.setDate(rangeStart.getDate() - 1);
+      }
 
       const pageSize = 1000;
       const maxPages = 10;
       const latestByStaff = new Map<string, { action: 'IN' | 'OUT'; at: string }>();
+      const firstInByStaff = new Map<string, { at: string }>();
 
       for (let page = 0; page < maxPages; page += 1) {
         const from = page * pageSize;
@@ -402,18 +438,52 @@ export default function AdminApp() {
         if (rows.length < pageSize) break;
       }
 
+      for (let page = 0; page < maxPages; page += 1) {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const res = await supabase
+          .from('ob_punches')
+          .select('staff_id, created_at, id')
+          .eq('action', 'IN')
+          .gte('created_at', rangeStart.toISOString())
+          .order('created_at', { ascending: true })
+          .range(from, to);
+
+        if (seq !== attendanceFetchSeqRef.current) return;
+
+        if (res.error) {
+          setAttendanceError(res.error.message);
+          return;
+        }
+
+        const rows = (res.data as any[] | null) ?? [];
+        if (rows.length === 0) break;
+
+        for (const r of rows) {
+          const staff = String(r.staff_id ?? '').trim();
+          if (!staff || firstInByStaff.has(staff)) continue;
+          const at = String(r.created_at ?? '').trim();
+          if (!at) continue;
+          firstInByStaff.set(staff, { at });
+        }
+
+        if (rows.length < pageSize) break;
+      }
+
       const activeStaff = Array.from(latestByStaff.entries())
         .filter(([, v]) => v.action === 'IN')
         .map(([staff]) => staff);
+      const attendanceStaff = Array.from(firstInByStaff.keys());
 
-      if (activeStaff.length === 0) {
+      if (activeStaff.length === 0 && attendanceStaff.length === 0) {
         setAttendanceStats({});
         return;
       }
 
       const mode = await resolveEmployeeColumnMode();
       const staffToPosition = new Map<string, string>();
-      const batches = chunk(activeStaff, 200);
+      const allStaff = Array.from(new Set([...activeStaff, ...attendanceStaff]));
+      const batches = chunk(allStaff, 200);
       for (const batch of batches) {
         const select = mode === 'cased' ? 'staff_id, "Position"' : 'staff_id, position';
         let res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch);
@@ -438,17 +508,23 @@ export default function AdminApp() {
         }
       }
 
-      const stats: Record<string, { early: number; late: number; total: number }> = {};
-      for (const staff of activeStaff) {
-        const latest = latestByStaff.get(staff);
-        if (!latest || latest.action !== 'IN') continue;
+      const stats: Record<string, { early: number; late: number; active: number }> = {};
+      for (const staff of attendanceStaff) {
+        const firstIn = firstInByStaff.get(staff);
+        if (!firstIn) continue;
         const pos = staffToPosition.get(staff);
         if (!pos) continue;
-        const shift = getShiftBucket(latest.at);
+        const shift = getShiftBucket(firstIn.at);
         if (!shift) continue;
-        const s = (stats[pos] ??= { early: 0, late: 0, total: 0 });
+        const s = (stats[pos] ??= { early: 0, late: 0, active: 0 });
         s[shift] += 1;
-        s.total += 1;
+      }
+
+      for (const staff of activeStaff) {
+        const pos = staffToPosition.get(staff);
+        if (!pos) continue;
+        const s = (stats[pos] ??= { early: 0, late: 0, active: 0 });
+        s.active += 1;
       }
 
       setAttendanceStats(stats);
@@ -484,13 +560,12 @@ export default function AdminApp() {
     if (page !== 'timecard') {
       return;
     }
-    if (timecardWeekInputFocused) {
+    if (timecardWeekInput) {
       return;
     }
     const baseWeekStart = startOfWeekMonday(serverTime);
-    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
-    setTimecardWeekInput(toDateOnly(weekStart));
-  }, [page, timecardWeekOffset, timecardWeekInputFocused, toDateOnly(serverTime)]);
+    setTimecardWeekInput(toDateOnly(baseWeekStart));
+  }, [page, timecardWeekInput, toDateOnly(serverTime)]);
 
   useEffect(() => {
     if (page !== 'timecard') {
@@ -901,6 +976,59 @@ export default function AdminApp() {
     });
   };
 
+  const openEmployeeEdit = (payload: { staff: string; name: string; agency: string; position: string }) => {
+    setEmployeesError(null);
+    setEmployeeEditStaffId(payload.staff);
+    setEmployeeEditName(payload.name);
+    setEmployeeEditAgency(payload.agency);
+    const normalized = normalizePositionKey(payload.position);
+    setEmployeeEditPosition((normalized ?? '') as (typeof ALLOWED_POSITIONS)[number] | '');
+    setEmployeeEditOpen(true);
+  };
+
+  const closeEmployeeEdit = () => {
+    setEmployeeEditOpen(false);
+    setEmployeeEditStaffId(null);
+    setEmployeeEditName('');
+    setEmployeeEditAgency('');
+    setEmployeeEditPosition('');
+  };
+
+  const saveEmployeeEdit = async () => {
+    if (!supabase) {
+      setEmployeesError('缺少 Supabase 配置。');
+      return;
+    }
+    const staff = String(employeeEditStaffId ?? '').trim();
+    if (!staff) return;
+
+    const name = employeeEditName.trim();
+    const agency = employeeEditAgency.trim();
+    const positionRaw = employeeEditPosition.trim();
+    const normalizedPos = positionRaw ? normalizePositionKey(positionRaw) : null;
+    if (positionRaw && !normalizedPos) {
+      setEmployeesError(`Position 只能是：${ALLOWED_POSITIONS.join(', ')}`);
+      return;
+    }
+
+    await runLocked('employee_edit', async () => {
+      setEmployeesError(null);
+      const mode = await resolveEmployeeColumnMode();
+      const payload =
+        mode === 'cased'
+          ? { name, Agency: agency || null, Position: normalizedPos }
+          : { name, agency: agency || null, position: normalizedPos };
+      const { error } = await supabase.from(EMPLOYEE_TABLE).update(payload as any).eq('staff_id', staff);
+      if (error) {
+        setEmployeesError(error.message);
+        return;
+      }
+      setStatus({ tone: 'success', message: `已更新员工：${staff}` });
+      closeEmployeeEdit();
+      await fetchEmployees({ reset: true });
+    });
+  };
+
   const computeHoursByDay = (intervals: Array<{ start: Date; end: Date }>, weekStart: Date) => {
     const out = Array.from({ length: 7 }, () => 0);
     for (const { start, end } of intervals) {
@@ -909,8 +1037,7 @@ export default function AdminApp() {
       if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
 
       for (let i = 0; i < 7; i += 1) {
-        const dayStart = addDays(weekStart, i);
-        const dayEnd = addDays(weekStart, i + 1);
+        const { start: dayStart, end: dayEnd } = getDayRange(weekStart, i);
         const overlapStart = Math.max(startMs, dayStart.getTime());
         const overlapEnd = Math.min(endMs, dayEnd.getTime());
         if (overlapEnd > overlapStart) {
@@ -1087,8 +1214,7 @@ export default function AdminApp() {
         const inProgressByDay = new Array(7).fill(false) as boolean[];
         if (openInterval) {
           for (let idx = 0; idx < 7; idx++) {
-            const dayStart = addDays(weekStart, idx);
-            const dayEnd = addDays(weekStart, idx + 1);
+            const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
             const overlapStart = Math.max(openInterval.start.getTime(), dayStart.getTime());
             const overlapEnd = Math.min(openInterval.end.getTime(), dayEnd.getTime());
             if (overlapEnd > overlapStart) inProgressByDay[idx] = true;
@@ -1099,8 +1225,7 @@ export default function AdminApp() {
         for (const ev of events) {
           if (!ev.manual) continue;
           for (let idx = 0; idx < 7; idx++) {
-            const dayStart = addDays(weekStart, idx);
-            const dayEnd = addDays(weekStart, idx + 1);
+            const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
             if (ev.at.getTime() >= dayStart.getTime() && ev.at.getTime() < dayEnd.getTime()) {
               manualByDay[idx] = true;
               break;
@@ -1165,6 +1290,236 @@ export default function AdminApp() {
     });
   };
 
+  const exportTimecard = async () => {
+    await runLocked('timecard_export', async () => {
+      const rows = timecardRowsFiltered;
+      if (rows.length === 0) {
+        setStatus({ tone: 'error', message: '暂无可导出的时间卡数据。' });
+        return;
+      }
+
+      const baseWeekStart = startOfWeekMonday(serverTime);
+      const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+      const dayLabels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+      const headers = [
+        '工号',
+        '姓名',
+        'Agency',
+        '岗位',
+        '班次',
+        ...dayLabels.map((label, idx) => `${label} ${toDateOnly(addDays(weekStart, idx)).slice(5)}`),
+        '合计'
+      ];
+
+      const body = rows.map((r) => [
+        r.staff_id,
+        r.name,
+        r.agency,
+        r.position,
+        r.shift,
+        ...r.hoursByDay.map((h) => formatHours(h)),
+        formatHours(r.totalHours)
+      ]);
+
+      try {
+        const XLSX = await import('xlsx');
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...body]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'timecard');
+        const filename = `ob_timecard_${toDateOnly(weekStart)}.xlsx`;
+        XLSX.writeFile(wb, filename);
+        setStatus({ tone: 'success', message: `已导出：${filename}` });
+      } catch (err) {
+        const filename = `ob_timecard_${toDateOnly(weekStart)}.csv`;
+        const csv = [headers, ...body]
+          .map((row) =>
+            row
+              .map((cell) => {
+                const v = String(cell ?? '');
+                if (v.includes('"') || v.includes(',') || v.includes('\n')) {
+                  return `"${v.replace(/"/g, '""')}"`;
+                }
+                return v;
+              })
+              .join(',')
+          )
+          .join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setStatus({ tone: 'success', message: `已导出：${filename}` });
+      }
+    });
+  };
+
+  const exportDailyPunches = async () => {
+    await runLocked('timecard_export_daily', async () => {
+      if (!supabase) {
+        setStatus({ tone: 'error', message: '缺少 Supabase 配置。' });
+        return;
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(timecardWeekInput)) {
+        setStatus({ tone: 'error', message: '请先在 Week 日历里选择日期。' });
+        return;
+      }
+
+      const selectedDate = new Date(`${timecardWeekInput}T00:00:00`);
+      if (Number.isNaN(selectedDate.getTime())) {
+        setStatus({ tone: 'error', message: '日期无效，请重新选择。' });
+        return;
+      }
+
+      const dayStart = new Date(selectedDate);
+      dayStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
+      const dayEnd = new Date(dayStart);
+      dayEnd.setDate(dayEnd.getDate() + 1);
+
+      const pageSize = 1000;
+      const maxPages = 20;
+      const punches: Array<{ staff_id: string; action: 'IN' | 'OUT'; created_at: string }> = [];
+
+      for (let page = 0; page < maxPages; page += 1) {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const res = await supabase
+          .from('ob_punches')
+          .select('staff_id, action, created_at, id')
+          .gte('created_at', dayStart.toISOString())
+          .lt('created_at', dayEnd.toISOString())
+          .order('created_at', { ascending: true })
+          .range(from, to);
+
+        if (res.error) {
+          setStatus({ tone: 'error', message: `导出失败：${res.error.message}` });
+          return;
+        }
+
+        const rows = (res.data as any[] | null) ?? [];
+        if (rows.length === 0) break;
+
+        for (const r of rows) {
+          const staff = String(r.staff_id ?? '').trim();
+          const action = String(r.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+          const at = String(r.created_at ?? '').trim();
+          if (!staff || !at) continue;
+          punches.push({ staff_id: staff, action, created_at: at });
+        }
+
+        if (rows.length < pageSize) break;
+      }
+
+      if (punches.length === 0) {
+        setStatus({ tone: 'error', message: '该日期暂无打卡记录。' });
+        return;
+      }
+
+      const staffIds = Array.from(new Set(punches.map((p) => p.staff_id)));
+      const mode = await resolveEmployeeColumnMode();
+      const staffToProfile = new Map<string, { name: string; agency: string; position: string }>();
+      const batches = chunk(staffIds, 200);
+      for (const batch of batches) {
+        const select = mode === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
+        let res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch);
+        if (res.error) {
+          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
+          employeeColumnModeRef.current = flipped;
+          const select2 =
+            flipped === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
+          res = await supabase.from(EMPLOYEE_TABLE).select(select2).in('staff_id', batch);
+        }
+        if (res.error) {
+          setStatus({ tone: 'error', message: `读取员工信息失败：${res.error.message}` });
+          return;
+        }
+        for (const r of (res.data as any[] | null) ?? []) {
+          const staff = String(r.staff_id ?? '').trim();
+          if (!staff) continue;
+          staffToProfile.set(staff, {
+            name: String(r.name ?? '').trim(),
+            agency: String(r.agency ?? r.Agency ?? '').trim(),
+            position: String(r.position ?? r.Position ?? '').trim()
+          });
+        }
+      }
+
+      const punchesByStaff = new Map<string, Array<{ action: 'IN' | 'OUT'; at: string }>>();
+      for (const p of punches) {
+        const list = punchesByStaff.get(p.staff_id) ?? [];
+        list.push({ action: p.action, at: p.created_at });
+        punchesByStaff.set(p.staff_id, list);
+      }
+
+      let maxPairs = 0;
+      const body: string[][] = [];
+      for (const staff of staffIds) {
+        const list = punchesByStaff.get(staff) ?? [];
+        list.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+        const profile = staffToProfile.get(staff) ?? { name: '', agency: '', position: '' };
+        const times: string[] = [];
+        for (const item of list) {
+          const timeText = formatTime(new Date(item.at));
+          times.push(timeText);
+        }
+        maxPairs = Math.max(maxPairs, Math.ceil(times.length / 2));
+        body.push([staff, profile.name, profile.agency, profile.position, ...times]);
+      }
+
+      const pairCount = Math.max(1, maxPairs);
+      const headers = ['ID', '名字', 'Agency', 'Position'];
+      for (let i = 0; i < pairCount; i += 1) {
+        const label = ORDINAL_CN[i] ?? `第${i + 1}次`;
+        headers.push(`${label}打入`, `${label}打出`);
+      }
+
+      const paddedBody = body.map((row) => {
+        const out = [...row];
+        while (out.length < headers.length) out.push('');
+        return out;
+      });
+
+      try {
+        const XLSX = await import('xlsx');
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...paddedBody]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'daily_punches');
+        const filename = `ob_punches_${timecardWeekInput}.xlsx`;
+        XLSX.writeFile(wb, filename);
+        setStatus({ tone: 'success', message: `已导出：${filename}` });
+      } catch (err) {
+        const filename = `ob_punches_${timecardWeekInput}.csv`;
+        const csv = [headers, ...paddedBody]
+          .map((row) =>
+            row
+              .map((cell) => {
+                const v = String(cell ?? '');
+                if (v.includes('"') || v.includes(',') || v.includes('\n')) {
+                  return `"${v.replace(/"/g, '""')}"`;
+                }
+                return v;
+              })
+              .join(',')
+          )
+          .join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setStatus({ tone: 'success', message: `已导出：${filename}` });
+      }
+    });
+  };
+
   const fetchPunchRowsForTimecard = async (staffId: string, dayIndex: number | null) => {
     if (!supabase) {
       return { rows: [] as PunchRow[], error: '缺少 Supabase 配置。' };
@@ -1174,8 +1529,10 @@ export default function AdminApp() {
     const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
     const weekEnd = addDays(weekStart, 7);
 
-    const dayStart = dayIndex === null ? weekStart : addDays(weekStart, dayIndex);
-    const dayEnd = dayIndex === null ? weekEnd : addDays(weekStart, dayIndex + 1);
+    const dayRange =
+      dayIndex === null ? getDayRange(weekStart, 0, 7) : getDayRange(weekStart, dayIndex);
+    const dayStart = dayRange.start;
+    const dayEnd = dayRange.end;
 
     // include an extra day on each side to cover cross-night shifts
     const rangeStart = addDays(dayStart, -1);
@@ -1837,7 +2194,7 @@ export default function AdminApp() {
                     { key: 'Transfer', label: '调拨', hint: 'Transfer' }
                   ] as const
                 ).map((p) => {
-                  const s = attendanceStats[p.key] ?? { early: 0, late: 0, total: 0 };
+                  const s = attendanceStats[p.key] ?? { early: 0, late: 0, active: 0 };
                   return (
                     <div key={p.key} className="rounded-2xl bg-black/30 px-4 py-3">
                       <div className="flex items-start justify-between gap-3">
@@ -1847,7 +2204,7 @@ export default function AdminApp() {
                         </div>
                         <div className="text-right">
                           <div className="text-xs text-slate-400">打卡中</div>
-                          <div className="mt-1 font-display text-2xl tracking-[0.08em] text-neon">{s.total}</div>
+                          <div className="mt-1 font-display text-2xl tracking-[0.08em] text-neon">{s.active}</div>
                         </div>
                       </div>
                       <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
@@ -2243,6 +2600,21 @@ export default function AdminApp() {
                               <button
                                 type="button"
                                 disabled={isLocked}
+                                onClick={() =>
+                                  openEmployeeEdit({
+                                    staff,
+                                    name,
+                                    agency,
+                                    position
+                                  })
+                                }
+                                className="mr-2 rounded-xl bg-white/10 px-4 py-1.5 text-xs font-semibold text-slate-200 transition hover:-translate-y-0.5 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {t('编辑', 'Edit')}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isLocked}
                                 onClick={() => void deleteEmployeeRow(staff)}
                                 className="rounded-xl bg-ember px-4 py-1.5 text-xs font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
                               >
@@ -2255,6 +2627,85 @@ export default function AdminApp() {
                     </tbody>
                   </table>
                 </div>
+
+                {employeeEditOpen && (
+                  <div className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-black/60 px-4 py-10">
+                    <div className="w-full max-w-xl rounded-3xl border border-white/10 bg-slate-950/90 p-6 shadow-2xl backdrop-blur">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <div className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('编辑员工', 'Edit Employee')}</div>
+                          <div className="mt-2 text-sm text-slate-400">
+                            {t('工号：', 'Staff: ')}
+                            <span className="text-slate-200">{employeeEditStaffId}</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={closeEmployeeEdit}
+                          className="rounded-xl bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15"
+                        >
+                          {t('关闭', 'Close')}
+                        </button>
+                      </div>
+
+                      <div className="mt-4 grid gap-3 md:grid-cols-3">
+                        <div className="md:col-span-1">
+                          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('姓名', 'Name')}</label>
+                          <input
+                            value={employeeEditName}
+                            onChange={(e) => setEmployeeEditName(e.target.value)}
+                            disabled={isLocked}
+                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                          />
+                        </div>
+                        <div className="md:col-span-1">
+                          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Agency</label>
+                          <input
+                            value={employeeEditAgency}
+                            onChange={(e) => setEmployeeEditAgency(e.target.value)}
+                            disabled={isLocked}
+                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                          />
+                        </div>
+                        <div className="md:col-span-1">
+                          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Position</label>
+                          <select
+                            value={employeeEditPosition}
+                            onChange={(e) => setEmployeeEditPosition((e.target.value as any) ?? '')}
+                            disabled={isLocked}
+                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <option value="">{t('选择岗位', 'Position')}</option>
+                            {ALLOWED_POSITIONS.map((p) => (
+                              <option key={p} value={p}>
+                                {p}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 flex items-center justify-end gap-3">
+                        <button
+                          type="button"
+                          disabled={isLocked}
+                          onClick={closeEmployeeEdit}
+                          className="rounded-2xl bg-white/10 px-5 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {t('取消', 'Cancel')}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isLocked || !employeeEditStaffId}
+                          onClick={() => void saveEmployeeEdit()}
+                          className="rounded-2xl bg-neon px-6 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {t('保存', 'Save')}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="mt-4 flex items-center justify-end">
                   <button
@@ -2297,8 +2748,6 @@ export default function AdminApp() {
                             type="date"
                             disabled={isLocked}
                             value={timecardWeekInput}
-                            onFocus={() => setTimecardWeekInputFocused(true)}
-                            onBlur={() => setTimecardWeekInputFocused(false)}
                             onChange={(e) => {
                               const raw = e.target.value;
                               setTimecardWeekInput(raw);
@@ -2328,6 +2777,8 @@ export default function AdminApp() {
                       onClick={() => {
                         const next = timecardWeekOffset - 1;
                         setTimecardWeekOffset(next);
+                        const baseWeekStart = startOfWeekMonday(serverTime);
+                        setTimecardWeekInput(toDateOnly(addDays(baseWeekStart, next * 7)));
                         void fetchTimecard({ reset: true, weekOffset: next });
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
@@ -2339,6 +2790,8 @@ export default function AdminApp() {
                       disabled={isLocked || timecardWeekOffset === 0}
                       onClick={() => {
                         setTimecardWeekOffset(0);
+                        const baseWeekStart = startOfWeekMonday(serverTime);
+                        setTimecardWeekInput(toDateOnly(baseWeekStart));
                         void fetchTimecard({ reset: true, weekOffset: 0 });
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
@@ -2351,6 +2804,8 @@ export default function AdminApp() {
                       onClick={() => {
                         const next = timecardWeekOffset + 1;
                         setTimecardWeekOffset(next);
+                        const baseWeekStart = startOfWeekMonday(serverTime);
+                        setTimecardWeekInput(toDateOnly(addDays(baseWeekStart, next * 7)));
                         void fetchTimecard({ reset: true, weekOffset: next });
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
@@ -2364,6 +2819,22 @@ export default function AdminApp() {
                       className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {t('刷新', 'Refresh')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked || timecardRowsFiltered.length === 0}
+                      onClick={() => void exportTimecard()}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {t('导出', 'Export')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => void exportDailyPunches()}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {t('导出流水', 'Export punches')}
                     </button>
                     <button
                       type="button"
@@ -2478,11 +2949,23 @@ export default function AdminApp() {
                     </thead>
                     <tbody>
                           {timecardRowsFiltered.map((r) => (
-                            <tr key={r.staff_id} className="border-b border-white/5 last:border-0">
+                            <tr
+                              key={r.staff_id}
+                              className="border-b border-white/5 transition hover:bg-white/5 last:border-0"
+                            >
                               <td className="px-2 py-1.5 font-mono text-slate-200">{r.staff_id}</td>
                               <td className="px-2 py-1.5 text-slate-200 truncate">{r.name}</td>
                               <td className="px-2 py-1.5 text-slate-200 truncate">{r.agency}</td>
-                              <td className="px-2 py-1.5 text-slate-200 truncate">{r.position}</td>
+                              <td className="px-2 py-1.5 text-slate-200 truncate">
+                                <span
+                                  className={[
+                                    'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
+                                    getPositionBadgeClass(r.position)
+                                  ].join(' ')}
+                                >
+                                  {r.position || '-'}
+                                </span>
+                              </td>
                               {r.hoursByDay.map((h, idx) => (
                                 <td key={idx} className="w-[92px] px-2 py-1.5 text-center align-middle text-slate-200">
                                   {formatHours(h) ? (
@@ -2491,7 +2974,7 @@ export default function AdminApp() {
                                       disabled={isLocked}
                                       onClick={() => void openTimecardPunchModal(r.staff_id, idx)}
                                       className={(() => {
-                                        const over8 = h > 8;
+                                        const over8 = h > 8.5;
                                         const inProgress = r.inProgressByDay[idx];
                                         const manual = r.manualByDay[idx];
                                         const base =
@@ -2517,7 +3000,7 @@ export default function AdminApp() {
                                     disabled={isLocked}
                                     onClick={() => void openTimecardPunchModal(r.staff_id, null)}
                                     className={(() => {
-                                      const hasOver8 = r.hoursByDay.some((v) => v > 8);
+                                      const hasOver8 = r.hoursByDay.some((v) => v > 8.5);
                                       const inProgress = r.inProgressWeek;
                                       const manual = r.manualWeek;
                                       const base =
