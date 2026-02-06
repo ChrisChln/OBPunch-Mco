@@ -104,5 +104,5 @@ npm run build
 
 ## Notes
 
-- Staff ID supports `010454` and `US010454` (normalized internally).
+- Staff ID format: `US` + 3–12 digits (e.g. `US010454`).
 - Employee table column casing (`agency/position` vs `"Agency"/"Position"`) is auto-detected at runtime.

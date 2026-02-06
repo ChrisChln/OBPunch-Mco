@@ -910,7 +910,7 @@ export default function AdminApp() {
     const staffRaw = employeeNewStaffId.trim();
     const staff = normalizeStaffId(staffRaw);
     if (!staff || !isValidStaffIdValue(staff)) {
-      setEmployeesError('员工ID格式不正确（支持 010454 或 US010454）。');
+      setEmployeesError('员工ID格式不正确（例如：US010454）。');
       return;
     }
 
@@ -2518,7 +2518,7 @@ export default function AdminApp() {
                       value={employeeNewStaffId}
                       onChange={(e) => setEmployeeNewStaffId(e.target.value)}
                       disabled={isLocked}
-                      placeholder={t('员工ID（010454 / US010454）', 'Staff ID (010454 / US010454)')}
+                      placeholder={t('员工ID（例如：US010454）', 'Staff ID (e.g. US010454)')}
                       className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     />
                     <input
