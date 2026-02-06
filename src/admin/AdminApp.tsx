@@ -303,6 +303,7 @@ export default function AdminApp() {
   const [timecardAgency, setTimecardAgency] = useState('');
   const [timecardPosition, setTimecardPosition] = useState('');
   const [timecardShift, setTimecardShift] = useState<'' | 'early' | 'late'>('');
+  const [timecardInProgressOnly, setTimecardInProgressOnly] = useState(false);
   const [timecardWeekOffset, setTimecardWeekOffset] = useState(0);
   const [timecardWeekInput, setTimecardWeekInput] = useState(() =>
     toDateOnly(startOfWeekMonday(new Date()))
@@ -578,6 +579,16 @@ export default function AdminApp() {
   }, [page, timecardSearch, timecardAgency, timecardPosition]);
 
   useEffect(() => {
+    if (page !== 'employees') {
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      void fetchEmployees({ reset: true });
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [page, employeeSearch, employeeAgency, employeePosition]);
+
+  useEffect(() => {
     let active = true;
     const sync = async () => {
       if (!supabase) {
@@ -834,11 +845,9 @@ export default function AdminApp() {
     await runLocked('employees', async () => {
       setEmployeesError(null);
 
-      const from = reset ? 0 : employees.length;
-      const pageSize = 50;
-      const to = from + pageSize - 1;
+      const pageSize = 200;
 
-      const build = (mode: EmployeeColumnMode) => {
+      const build = (mode: EmployeeColumnMode, from: number, to: number) => {
         const agencyCol = mode === 'cased' ? 'Agency' : 'agency';
         const positionCol = mode === 'cased' ? 'Position' : 'position';
         const select =
@@ -865,39 +874,41 @@ export default function AdminApp() {
       };
 
       const mode = await resolveEmployeeColumnMode();
-      const run = async (m: EmployeeColumnMode) => {
-        const attemptCreatedAt = await build(m).order('created_at', { ascending: false });
-        return attemptCreatedAt.error ? await build(m).order('id', { ascending: false }) : attemptCreatedAt;
+      const run = async (m: EmployeeColumnMode, from: number, to: number) => {
+        const attemptCreatedAt = await build(m, from, to).order('created_at', { ascending: false });
+        return attemptCreatedAt.error ? await build(m, from, to).order('id', { ascending: false }) : attemptCreatedAt;
       };
 
-      let attempt = await run(mode);
-      if (attempt.error) {
-        const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-        employeeColumnModeRef.current = flipped;
-        attempt = await run(flipped);
-      }
+      const all: EmployeeRow[] = [];
+      let from = 0;
+      let done = false;
+      while (!done) {
+        const to = from + pageSize - 1;
+        let attempt = await run(mode, from, to);
+        if (attempt.error) {
+          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
+          employeeColumnModeRef.current = flipped;
+          attempt = await run(flipped, from, to);
+        }
 
-      let rows: EmployeeRow[] | null = null;
-      let errorMessage: string | null = null;
-
-      if (attempt.error) {
-        errorMessage = attempt.error.message;
-      } else {
-        rows = (attempt.data as EmployeeRow[] | null) ?? [];
-      }
-
-      if (errorMessage) {
-        setEmployeesError(errorMessage);
-        if (reset) {
+        if (attempt.error) {
+          setEmployeesError(attempt.error.message);
           setEmployees([]);
           setEmployeesHasMore(false);
+          return;
         }
-        return;
+
+        const rows = (attempt.data as EmployeeRow[] | null) ?? [];
+        all.push(...rows);
+        if (rows.length < pageSize) {
+          done = true;
+        } else {
+          from += pageSize;
+        }
       }
 
-      const next = rows ?? [];
-      setEmployees((prev) => (reset ? next : [...prev, ...next]));
-      setEmployeesHasMore(next.length === pageSize);
+      setEmployees(all);
+      setEmployeesHasMore(false);
     });
   };
 
@@ -1253,6 +1264,25 @@ export default function AdminApp() {
       return { rows, hasMore: employees.length === pageSize, error: null as string | null };
     };
 
+    const fetchAll = async () => {
+      const all: TimecardRow[] = [];
+      let from = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const result = await exec(from);
+        if (result.error) {
+          return { rows: [] as TimecardRow[], hasMore: false, error: result.error };
+        }
+        all.push(...result.rows);
+        hasMore = result.hasMore;
+        from += pageSize;
+        if (result.rows.length === 0) {
+          hasMore = false;
+        }
+      }
+      return { rows: all, hasMore: false, error: null as string | null };
+    };
+
     const shouldLockUi = lockUi ?? true;
     if (!shouldLockUi) {
       // Only support reset in soft mode to avoid pagination races.
@@ -1261,32 +1291,27 @@ export default function AdminApp() {
         return;
       }
       const seq = ++timecardFetchSeqRef.current;
-      const result = await exec(0);
+      const result = await fetchAll();
       if (seq !== timecardFetchSeqRef.current) {
         return;
       }
       setTimecardError(result.error);
       setTimecardRows(result.rows);
-      setTimecardHasMore(result.hasMore);
+      setTimecardHasMore(false);
       return;
     }
 
     await runLocked('timecard', async () => {
       setTimecardError(null);
-      const from = reset ? 0 : timecardRows.length;
-      const result = await exec(from);
+      const result = await fetchAll();
       if (result.error) {
         setTimecardError(result.error);
-        if (reset) {
-          setTimecardRows([]);
-          setTimecardHasMore(false);
-        } else {
-          setTimecardHasMore(false);
-        }
+        setTimecardRows([]);
+        setTimecardHasMore(false);
         return;
       }
-      setTimecardRows((prev) => (reset ? result.rows : [...prev, ...result.rows]));
-      setTimecardHasMore(result.hasMore);
+      setTimecardRows(result.rows);
+      setTimecardHasMore(false);
     });
   };
 
@@ -2154,9 +2179,12 @@ export default function AdminApp() {
   const timecardPositionOptions = ALLOWED_POSITIONS;
 
   const timecardRowsFiltered = useMemo(() => {
-    if (!timecardShift) return timecardRows;
-    return timecardRows.filter((r) => r.shift === timecardShift);
-  }, [timecardRows, timecardShift]);
+    return timecardRows.filter((r) => {
+      if (timecardShift && r.shift !== timecardShift) return false;
+      if (timecardInProgressOnly && !r.inProgressWeek) return false;
+      return true;
+    });
+  }, [timecardRows, timecardShift, timecardInProgressOnly]);
 
   const timecardPunchReadOnly = timecardPunchDayIndex === null;
 
@@ -2595,7 +2623,16 @@ export default function AdminApp() {
                             <td className="px-4 py-3 font-mono text-slate-200">{staff}</td>
                             <td className="px-4 py-3 text-slate-200">{name}</td>
                             <td className="px-4 py-3 text-slate-200">{agency}</td>
-                            <td className="px-4 py-3 text-slate-200">{position}</td>
+                            <td className="px-4 py-3 text-slate-200">
+                              <span
+                                className={[
+                                  'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
+                                  getPositionBadgeClass(position)
+                                ].join(' ')}
+                              >
+                                {position || '-'}
+                              </span>
+                            </td>
                             <td className="px-4 py-3 text-right">
                               <button
                                 type="button"
@@ -2628,7 +2665,8 @@ export default function AdminApp() {
                   </table>
                 </div>
 
-                {employeeEditOpen && (
+                {employeeEditOpen && typeof document !== 'undefined' &&
+                  createPortal(
                   <div className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-black/60 px-4 py-10">
                     <div className="w-full max-w-xl rounded-3xl border border-white/10 bg-slate-950/90 p-6 shadow-2xl backdrop-blur">
                       <div className="flex items-start justify-between">
@@ -2704,19 +2742,10 @@ export default function AdminApp() {
                         </button>
                       </div>
                     </div>
-                  </div>
+                  </div>,
+                  document.body
                 )}
 
-                <div className="mt-4 flex items-center justify-end">
-                  <button
-                    type="button"
-                    disabled={isLocked || !employeesHasMore}
-                    onClick={() => void fetchEmployees({ reset: false })}
-                    className="rounded-2xl bg-white/10 px-5 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {t('加载更多', 'Load more')}
-                  </button>
-                </div>
               </section>
             )}
 
@@ -2844,6 +2873,7 @@ export default function AdminApp() {
                         setTimecardAgency('');
                         setTimecardPosition('');
                         setTimecardShift('');
+                        setTimecardInProgressOnly(false);
                         void fetchTimecard({ reset: true, search: '', agency: '', position: '' });
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
@@ -2853,7 +2883,7 @@ export default function AdminApp() {
                   </div>
                 </div>
 
-                <div className="mt-5 grid gap-4 md:grid-cols-5">
+                <div className="mt-5 grid gap-4 md:grid-cols-6">
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Search</label>
                     <input
@@ -2908,6 +2938,18 @@ export default function AdminApp() {
                       <option value="early">{t('早班（05:00–14:59）', 'Early (05:00–14:59)')}</option>
                       <option value="late">{t('晚班（15:00+）', 'Late (15:00+)')}</option>
                     </select>
+                  </div>
+                  <div className="flex items-end">
+                    <label className="flex w-full cursor-pointer items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-200 transition hover:border-white/20">
+                      <input
+                        type="checkbox"
+                        checked={timecardInProgressOnly}
+                        onChange={(e) => setTimecardInProgressOnly(e.target.checked)}
+                        disabled={isLocked}
+                        className="h-4 w-4 accent-neon"
+                      />
+                      {t('只看打卡中', 'In progress only')}
+                    </label>
                   </div>
                 </div>
 
@@ -2979,10 +3021,10 @@ export default function AdminApp() {
                                         const manual = r.manualByDay[idx];
                                         const base =
                                           'rounded px-1.5 py-0.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
-                                        if (over8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
-                                        if (inProgress) return [base, 'bg-sky-500/15 text-sky-200 hover:bg-sky-500/25'].join(' ');
                                         if (manual) return [base, 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'].join(' ');
-                                        return [base, 'bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'].join(' ');
+                                        if (over8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
+                                        if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
+                                        return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
                                       })()}
                                       title="查看/编辑打卡流水"
                                     >
@@ -3005,10 +3047,10 @@ export default function AdminApp() {
                                       const manual = r.manualWeek;
                                       const base =
                                         'rounded px-1.5 py-0.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
-                                      if (hasOver8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
-                                      if (inProgress) return [base, 'bg-sky-500/15 text-sky-200 hover:bg-sky-500/25'].join(' ');
                                       if (manual) return [base, 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'].join(' ');
-                                      return [base, 'bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'].join(' ');
+                                      if (hasOver8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
+                                      if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
+                                      return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
                                     })()}
                                     title="查看本周打卡流水（只读）"
                                   >
@@ -3022,17 +3064,6 @@ export default function AdminApp() {
                           ))}
                     </tbody>
                   </table>
-                </div>
-
-                <div className="mt-4 flex items-center justify-end">
-                  <button
-                    type="button"
-                    disabled={isLocked || !timecardHasMore}
-                    onClick={() => void fetchTimecard({ reset: false })}
-                    className="rounded-2xl bg-white/10 px-5 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {t('加载更多', 'Load more')}
-                  </button>
                 </div>
 
                 {timecardPunchOpen &&
