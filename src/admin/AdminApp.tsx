@@ -3394,7 +3394,10 @@ export default function AdminApp() {
                                         action: e.target.value === 'OUT' ? 'OUT' : 'IN'
                                       }))
                                     }
-                                    className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-slate-200 outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                                    className={[
+                                      'mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 font-display text-xl tracking-[0.08em] outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                                      timecardPunchNew.action === 'IN' ? 'text-mint' : 'text-ember'
+                                    ].join(' ')}
                                   >
                                     <option value="IN">IN</option>
                                     <option value="OUT">OUT</option>
@@ -3452,7 +3455,10 @@ export default function AdminApp() {
                                           [String(r.id)]: { ...edit, action: e.target.value === 'OUT' ? 'OUT' : 'IN' }
                                         }))
                                       }
-                                      className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-slate-200 outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                                      className={[
+                                        'mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 font-display text-xl tracking-[0.08em] outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                                        edit.action === 'IN' ? 'text-mint' : 'text-ember'
+                                      ].join(' ')}
                                     >
                                       <option value="IN">IN</option>
                                       <option value="OUT">OUT</option>
