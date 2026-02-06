@@ -2370,13 +2370,8 @@ export default function AdminApp() {
     const idx = timecardPunchDayIndex;
     if (idx < 0 || idx > 6) return timecardPunchRows;
 
-    let weekStart = startOfWeekMonday(serverTime);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(timecardWeekInput)) {
-      const parsed = new Date(`${timecardWeekInput}T00:00:00`);
-      if (!Number.isNaN(parsed.getTime())) {
-        weekStart = startOfWeekMonday(parsed);
-      }
-    }
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
 
     const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
     const includedIds = new Set<string>();
@@ -2415,6 +2410,12 @@ export default function AdminApp() {
       }
     }
 
+    for (const ev of events) {
+      if (ev.at.getTime() >= dayStart.getTime() && ev.at.getTime() < dayEnd.getTime()) {
+        includedIds.add(ev.id);
+      }
+    }
+
     if (currentIn) {
       const now = new Date();
       const capEnd = new Date(clamp(now.getTime(), dayStart.getTime(), dayEnd.getTime()));
@@ -2424,7 +2425,7 @@ export default function AdminApp() {
     }
 
     return timecardPunchRows.filter((r) => includedIds.has(String(r.id)));
-  }, [timecardPunchRows, timecardPunchShowAll, timecardPunchDayIndex, timecardWeekInput, serverTime]);
+  }, [timecardPunchRows, timecardPunchShowAll, timecardPunchDayIndex, timecardWeekOffset, serverTime]);
 
   const timecardPunchReadOnly = timecardPunchDayIndex === null;
 
