@@ -4,7 +4,7 @@ import { createSupabaseClient } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
 import { createPortal } from 'react-dom';
 
-type AdminPage = 'employee_upload' | 'punches' | 'employees' | 'timecard';
+type AdminPage = 'employee_upload' | 'punches' | 'employees' | 'timecard' | 'audit';
 
 type StatusTone = 'idle' | 'pending' | 'success' | 'error';
 
@@ -15,6 +15,7 @@ type Status = {
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
+const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 
 const supabase = createSupabaseClient({ persistSession: true });
 
@@ -48,6 +49,16 @@ type PunchRow = {
   staff_id: string;
   action: 'IN' | 'OUT';
   created_at: string | null;
+};
+
+type AuditRow = {
+  id?: number | string;
+  created_at?: string | null;
+  actor?: string | null;
+  action?: string | null;
+  staff_id?: string | null;
+  target?: string | null;
+  payload?: any;
 };
 
 const formatTime = (value: Date, locale: string = 'zh-CN') =>
@@ -322,6 +333,10 @@ export default function AdminApp() {
     action: 'IN',
     atLocal: ''
   });
+
+  const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditSearch, setAuditSearch] = useState('');
 
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFillDuplicates, setUploadFillDuplicates] = useState(true);
@@ -667,6 +682,76 @@ export default function AdminApp() {
     });
   };
 
+  const writeAudit = async ({
+    action,
+    staffId,
+    target,
+    payload
+  }: {
+    action: string;
+    staffId?: string | null;
+    target?: string | null;
+    payload?: any;
+  }) => {
+    const row: AuditRow = {
+      id: `local_${Date.now()}`,
+      created_at: new Date(serverTime).toISOString(),
+      actor: user?.email ?? null,
+      action,
+      staff_id: staffId ?? null,
+      target: target ?? null,
+      payload: payload ?? null
+    };
+    setAuditRows((prev) => [row, ...prev].slice(0, 200));
+
+    if (!supabase) return;
+    try {
+      const { error } = await supabase.from(AUDIT_TABLE).insert([
+        {
+          actor: row.actor,
+          action: row.action,
+          staff_id: row.staff_id,
+          target: row.target,
+          payload: row.payload
+        }
+      ]);
+      if (error) {
+        // keep local log even if remote fails
+        setAuditError(error.message);
+      }
+    } catch (err: any) {
+      setAuditError(String(err?.message ?? err));
+    }
+  };
+
+  const fetchAudit = async (options?: { search?: string }) => {
+    if (!supabase) {
+      setAuditError('缺少 Supabase 配置。');
+      setAuditRows([]);
+      return;
+    }
+    const searchValue = (options?.search ?? auditSearch).trim();
+
+    await runLocked('audit', async () => {
+      setAuditError(null);
+      let q = supabase
+        .from(AUDIT_TABLE)
+        .select('id, created_at, actor, action, staff_id, target, payload')
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (searchValue) {
+        const term = `%${searchValue}%`;
+        q = q.or(`staff_id.ilike.${term},actor.ilike.${term},action.ilike.${term}`);
+      }
+      const res = await q;
+      if (res.error) {
+        setAuditError(res.error.message);
+        return;
+      }
+      setAuditRows(((res.data as any[]) ?? []) as AuditRow[]);
+    });
+  };
+
   const fetchRecentPunches = async (options?: { search?: string; lockUi?: boolean }) => {
     if (!supabase) {
       setRecentPunchesError('缺少 Supabase 配置。');
@@ -958,6 +1043,12 @@ export default function AdminApp() {
       }
 
       setStatus({ tone: 'success', message: `已添加/更新员工：${staff}` });
+      await writeAudit({
+        action: 'employee_upsert',
+        staffId: staff,
+        target: EMPLOYEE_TABLE,
+        payload: { staff_id: staff, name, agency, position: normalizedPos }
+      });
       setEmployeeNewStaffId('');
       setEmployeeNewName('');
       setEmployeeNewAgency('');
@@ -985,6 +1076,7 @@ export default function AdminApp() {
         return;
       }
       setStatus({ tone: 'success', message: `已删除员工：${staff}` });
+      await writeAudit({ action: 'employee_delete', staffId: staff, target: EMPLOYEE_TABLE });
       await fetchEmployees({ reset: true });
     });
   };
@@ -1037,6 +1129,12 @@ export default function AdminApp() {
         return;
       }
       setStatus({ tone: 'success', message: `已更新员工：${staff}` });
+      await writeAudit({
+        action: 'employee_update',
+        staffId: staff,
+        target: EMPLOYEE_TABLE,
+        payload: { staff_id: staff, name, agency, position: normalizedPos }
+      });
       closeEmployeeEdit();
       await fetchEmployees({ reset: true });
     });
@@ -1826,7 +1924,7 @@ export default function AdminApp() {
 
       await runLocked('timecard_add', async () => {
         setTimecardPunchError(null);
-        const { error } = await supabase.from('ob_punches').insert([
+        const insertRes = await supabase.from('ob_punches').insert([
           {
             staff_id: staff,
             action: timecardPunchNew.action,
@@ -1838,11 +1936,23 @@ export default function AdminApp() {
               operator: user?.email ?? null
             }
           }
-        ]);
-      if (error) {
-        setTimecardPunchError(error.message);
-        return;
-      }
+        ]).select('id');
+        if (insertRes.error) {
+          setTimecardPunchError(insertRes.error.message);
+          return;
+        }
+        const insertedId = String(((insertRes.data as any[] | null) ?? [])[0]?.id ?? '').trim() || null;
+        await writeAudit({
+          action: 'punch_manual_add',
+          staffId: staff,
+          target: 'ob_punches',
+          payload: {
+            punch_id: insertedId,
+            day_index: timecardPunchDayIndex,
+            action: timecardPunchNew.action,
+            created_at: createdAt
+          }
+        });
 
       const res = await fetchPunchRowsForTimecard(staff, timecardPunchDayIndex);
       if (res.error) {
@@ -1888,8 +1998,9 @@ export default function AdminApp() {
 
     await runLocked('timecard_edit', async () => {
       setTimecardPunchError(null);
-      const prevMetaRes = await supabase.from('ob_punches').select('metadata').eq('id', rowId).maybeSingle();
-      const prevMeta = (prevMetaRes.data as any)?.metadata;
+      const prevRowRes = await supabase.from('ob_punches').select('action, created_at, staff_id, metadata').eq('id', rowId).maybeSingle();
+      const prevRow = (prevRowRes.data as any) ?? null;
+      const prevMeta = prevRow?.metadata;
       const nextMeta =
         prevMeta && typeof prevMeta === 'object'
           ? {
@@ -1916,6 +2027,18 @@ export default function AdminApp() {
         setTimecardPunchError(error.message);
         return;
       }
+      await writeAudit({
+        action: 'punch_manual_edit',
+        staffId: staff,
+        target: 'ob_punches',
+        payload: {
+          punch_id: rowId,
+          before: prevRow
+            ? { action: String(prevRow.action ?? ''), created_at: String(prevRow.created_at ?? ''), metadata: prevRow.metadata ?? null }
+            : null,
+          after: { action: edit.action, created_at: createdAt, metadata: nextMeta }
+        }
+      });
 
       const res = await fetchPunchRowsForTimecard(staff, timecardPunchDayIndex);
       if (res.error) {
@@ -1946,11 +2069,24 @@ export default function AdminApp() {
 
     await runLocked('timecard_delete', async () => {
       setTimecardPunchError(null);
+      const prevRowRes = await supabase.from('ob_punches').select('action, created_at, staff_id, metadata').eq('id', rowId).maybeSingle();
+      const prevRow = (prevRowRes.data as any) ?? null;
       const { error } = await supabase.from('ob_punches').delete().eq('id', rowId);
       if (error) {
         setTimecardPunchError(error.message);
         return;
       }
+      await writeAudit({
+        action: 'punch_manual_delete',
+        staffId: staff,
+        target: 'ob_punches',
+        payload: {
+          punch_id: rowId,
+          before: prevRow
+            ? { action: String(prevRow.action ?? ''), created_at: String(prevRow.created_at ?? ''), metadata: prevRow.metadata ?? null }
+            : null
+        }
+      });
 
       const res = await fetchPunchRowsForTimecard(staff, timecardPunchDayIndex);
       if (res.error) {
@@ -1974,6 +2110,9 @@ export default function AdminApp() {
     }
     if (page === 'timecard') {
       void fetchTimecard({ reset: true });
+    }
+    if (page === 'audit') {
+      void fetchAudit({ search: auditSearch });
     }
   }, [page]);
 
@@ -2308,6 +2447,19 @@ export default function AdminApp() {
         tone: 'success',
         message: `上传完成：插入 ${insertedTotal} 条，补全更新 ${updatedTotal} 条，跳过重复 ${skippedTotal} 条（文件内 ${duplicateInFileCount}，表内 ${skippedExistingTotal}）`
       });
+      await writeAudit({
+        action: 'employee_upload',
+        target: EMPLOYEE_TABLE,
+        payload: {
+          file_name: file.name ?? null,
+          total_rows: rows.length,
+          inserted: insertedTotal,
+          updated_fill: updatedTotal,
+          skipped_total: skippedTotal,
+          skipped_file_duplicates: duplicateInFileCount,
+          skipped_existing: skippedExistingTotal
+        }
+      });
     });
   };
 
@@ -2602,6 +2754,14 @@ export default function AdminApp() {
               >
                 {t('打卡流水', 'Punches')}
               </button>
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={() => setPage('audit')}
+                className={tabClass(page === 'audit')}
+              >
+                {t('操作日志', 'Audit')}
+              </button>
             </nav>
 
             {page === 'punches' && (
@@ -2687,8 +2847,125 @@ export default function AdminApp() {
                      );
                    })}
                  </div>
-               </section>
-             )}
+                </section>
+              )}
+
+            {page === 'audit' && (
+              <section className="glass reveal rounded-3xl px-6 py-8">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h2 className="font-display text-2xl tracking-[0.08em]">{t('操作日志', 'Audit Log')}</h2>
+                  <button
+                    type="button"
+                    disabled={isLocked}
+                    onClick={() => void fetchAudit({ search: auditSearch })}
+                    className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {t('刷新', 'Refresh')}
+                  </button>
+                </div>
+
+                <div className="mt-5 grid gap-4 md:grid-cols-3">
+                  <div className="md:col-span-2">
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Search</label>
+                    <input
+                      value={auditSearch}
+                      onChange={(e) => setAuditSearch(e.target.value)}
+                      disabled={isLocked}
+                      placeholder={t('通过工号/操作者/动作搜索', 'Search by staff id / actor / action')}
+                      className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                  </div>
+                  <div className="flex items-end gap-3">
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => void fetchAudit({ search: auditSearch })}
+                      className="h-12 flex-1 rounded-2xl bg-neon px-6 text-base font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {t('查询', 'Search')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked || auditSearch.trim().length === 0}
+                      onClick={() => {
+                        setAuditSearch('');
+                        void fetchAudit({ search: '' });
+                      }}
+                      className="h-12 flex-1 rounded-2xl bg-white/10 px-6 text-base font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {t('清空', 'Clear')}
+                    </button>
+                  </div>
+                </div>
+
+                {auditError && (
+                  <p className="mt-3 text-sm text-ember">
+                    {t('加载失败：', 'Load failed: ')}
+                    {auditError}
+                    <span className="ml-2 text-xs text-slate-400">
+                      {t('（需要创建表：', '(Need table: ')}
+                      {AUDIT_TABLE}
+                      {t('）', ')')}
+                    </span>
+                  </p>
+                )}
+
+                {!auditError && auditRows.length === 0 && (
+                  <p className="mt-3 text-sm text-slate-400">
+                    {t('暂无日志。', 'No audit records.')}
+                  </p>
+                )}
+
+                {!auditError && auditRows.length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    {auditRows.map((r, idx) => {
+                      const id = String(r.id ?? idx);
+                      const at = r.created_at ? new Date(r.created_at).toLocaleString(locale, { hour12: false }) : '';
+                      const actor = String(r.actor ?? '').trim() || '-';
+                      const action = String(r.action ?? '').trim() || '-';
+                      const staff = String(r.staff_id ?? '').trim() || '-';
+                      const target = String(r.target ?? '').trim() || '-';
+                      let payloadText = '';
+                      try {
+                        payloadText =
+                          r.payload === null || typeof r.payload === 'undefined'
+                            ? ''
+                            : JSON.stringify(r.payload, null, 0);
+                      } catch {
+                        payloadText = String(r.payload ?? '');
+                      }
+                      if (payloadText.length > 260) payloadText = `${payloadText.slice(0, 260)}…`;
+
+                      return (
+                        <div key={id} className="rounded-2xl bg-white/5 px-4 py-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                              <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-200">
+                                {action}
+                              </span>
+                              <span className="text-sm text-slate-200">
+                                {t('工号：', 'Staff: ')}
+                                <span className="font-mono">{staff}</span>
+                              </span>
+                              <span className="text-xs text-slate-400">
+                                {t('操作者：', 'Actor: ')}
+                                {actor}
+                              </span>
+                              <span className="text-xs text-slate-500">
+                                {t('目标：', 'Target: ')}
+                                {target}
+                              </span>
+                            </div>
+                            <div className="text-right text-xs text-slate-400">{at}</div>
+                          </div>
+                          {payloadText && <div className="mt-2 text-xs text-slate-400">{payloadText}</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            )}
 
             {page === 'employees' && (
               <section className="glass reveal rounded-3xl px-6 py-8">
