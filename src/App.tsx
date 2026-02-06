@@ -56,6 +56,8 @@ export default function App() {
   const isLocked = Boolean(busy);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const successAudioRef = useRef<HTMLAudioElement | null>(null);
+  const errorAudioRef = useRef<HTMLAudioElement | null>(null);
 
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
@@ -67,6 +69,37 @@ export default function App() {
   const isValidId = useMemo(() => isValidStaffId(normalizedId), [normalizedId]);
 
   const [uiStatus, setUiStatus] = useState<Status>({ tone: 'idle', message: 'Enter US ID to start punch' });
+
+  useEffect(() => {
+    if (typeof Audio === 'undefined') return;
+    const success = new Audio('/sound/success.mp3');
+    success.preload = 'auto';
+    success.volume = 1;
+    successAudioRef.current = success;
+
+    const error = new Audio('/sound/error.mp3');
+    error.preload = 'auto';
+    error.volume = 1;
+    errorAudioRef.current = error;
+
+    return () => {
+      successAudioRef.current = null;
+      errorAudioRef.current = null;
+    };
+  }, []);
+
+  const playSound = (audio: HTMLAudioElement | null) => {
+    if (!audio) return;
+    try {
+      audio.currentTime = 0;
+      void audio.play();
+    } catch {
+      // ignore autoplay/permission issues
+    }
+  };
+
+  const playSuccess = () => playSound(successAudioRef.current);
+  const playError = () => playSound(errorAudioRef.current);
 
   const [offsetMs, setOffsetMs] = useState(0);
   const [serverTime, setServerTime] = useState(() => new Date());
@@ -321,10 +354,12 @@ export default function App() {
     }
     if (!isValidId) {
       setUiStatus({ tone: 'error', message: '工号格式不正确（例如：010454 / US010454）' });
+      playError();
       return;
     }
     if (!supabase) {
       setUiStatus({ tone: 'error', message: '缺少 Supabase 配置，请检查环境变量。' });
+      playError();
       return;
     }
 
@@ -336,6 +371,7 @@ export default function App() {
         : await fetchLastPunch(normalizedId);
       if (latest.error) {
         setUiStatus({ tone: 'error', message: `无法获取上次打卡记录：${latest.error}` });
+        playError();
         return;
       }
 
@@ -350,6 +386,7 @@ export default function App() {
               ? '已有 IN 记录，请先 OUT'
               : '已有 OUT 记录，请先 IN';
         setUiStatus({ tone: 'error', message: msg });
+        playError();
         setLastPunchAction(latest.action);
         setLastPunchActionError(null);
         return;
@@ -368,10 +405,12 @@ export default function App() {
 
       if (error) {
         setUiStatus({ tone: 'error', message: `打卡失败：${error.message}` });
+        playError();
         return;
       }
 
       setUiStatus({ tone: 'success', message: `打卡成功（${action}）` });
+      playSuccess();
       setLastPunchAction(action);
       setLastPunchActionError(null);
       if (options?.clearInput ?? true) {
@@ -387,16 +426,19 @@ export default function App() {
     }
     if (!isValidId) {
       setUiStatus({ tone: 'error', message: '工号格式不正确（例如：010454 / US010454）' });
+      playError();
       return;
     }
     if (!supabase) {
       setUiStatus({ tone: 'error', message: '缺少 Supabase 配置，请检查环境变量。' });
+      playError();
       return;
     }
 
     const latest = await fetchLastPunch(normalizedId);
     if (latest.error) {
       setUiStatus({ tone: 'error', message: `无法获取上次打卡记录：${latest.error}` });
+      playError();
       return;
     }
 
