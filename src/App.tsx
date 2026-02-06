@@ -42,6 +42,14 @@ const formatTime = (value: Date) =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+function chunk<T>(items: T[], size: number) {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
+
 const getPositionBadgeClass = (value: string) => {
   const v = value.trim().toLowerCase();
   if (v === 'pick') return 'border-sky-400/60 text-sky-200 bg-sky-500/10';
@@ -146,8 +154,9 @@ export default function App() {
     const needle = punchLogPositionFilter.trim().toLowerCase();
     return punchBoard.filter((p) => {
       const employee = punchBoardEmployeeMap[p.staff_id];
-      const pos = String(employee?.position ?? '').trim().toLowerCase();
-      return pos === needle;
+      const pos = String(employee?.position ?? '').trim();
+      if (!pos) return true;
+      return pos.toLowerCase() === needle;
     });
   }, [punchBoard, punchBoardEmployeeMap, punchLogPositionFilter]);
   const [lastPunchActionLoading, setLastPunchActionLoading] = useState(false);
@@ -263,6 +272,79 @@ export default function App() {
     isValidId && !lastPunchActionLoading && !lastPunchActionError && (lastPunchAction === null || lastPunchAction === 'OUT');
   const canPunchOut = isValidId && !lastPunchActionLoading && !lastPunchActionError && lastPunchAction === 'IN';
 
+  const resolveEmployeeColumnMode = async (): Promise<EmployeeColumnMode> => {
+    const cached = employeeColumnModeRef.current;
+    if (cached) return cached;
+    if (!supabase) {
+      employeeColumnModeRef.current = 'lower';
+      return 'lower';
+    }
+
+    const cased = await supabase.from(EMPLOYEE_TABLE).select('staff_id, "Agency", "Position"').limit(1);
+    if (!cased.error) {
+      employeeColumnModeRef.current = 'cased';
+      return 'cased';
+    }
+
+    const lower = await supabase.from(EMPLOYEE_TABLE).select('staff_id, agency, position').limit(1);
+    if (!lower.error) {
+      employeeColumnModeRef.current = 'lower';
+      return 'lower';
+    }
+
+    employeeColumnModeRef.current = 'lower';
+    return 'lower';
+  };
+
+  const fetchStaffIdsForPosition = async (position: AllowedPosition) => {
+    if (!supabase) {
+      return { staffIds: [] as string[], error: '缺少 Supabase 配置。' };
+    }
+
+    const pageSize = 1000;
+    const maxPages = 20;
+
+    const fetchAll = async (mode: EmployeeColumnMode) => {
+      const positionCol = mode === 'cased' ? 'Position' : 'position';
+      const all: string[] = [];
+
+      for (let page = 0; page < maxPages; page += 1) {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const res = await supabase
+          .from(EMPLOYEE_TABLE)
+          .select('staff_id')
+          .ilike(positionCol as any, position)
+          .range(from, to);
+
+        if (res.error) {
+          return { staffIds: [] as string[], error: res.error.message };
+        }
+
+        const rows = (res.data as any[] | null) ?? [];
+        for (const r of rows) {
+          const staff = String(r.staff_id ?? '').trim();
+          if (staff) all.push(staff);
+        }
+
+        if (rows.length < pageSize) {
+          break;
+        }
+      }
+
+      return { staffIds: Array.from(new Set(all)), error: null as string | null };
+    };
+
+    const mode = await resolveEmployeeColumnMode();
+    let res = await fetchAll(mode);
+    if (res.error) {
+      const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
+      employeeColumnModeRef.current = flipped;
+      res = await fetchAll(flipped);
+    }
+    return res;
+  };
+
   const fetchEmployeeMap = async (staffIds: string[]) => {
     if (!supabase || staffIds.length === 0) {
       return { map: {} as Record<string, { name: string; agency: string; position: string }>, error: null as string | null };
@@ -273,32 +355,12 @@ export default function App() {
       return { map: {} as Record<string, { name: string; agency: string; position: string }>, error: null as string | null };
     }
 
-    const resolveColumnMode = async (): Promise<EmployeeColumnMode> => {
-      const cached = employeeColumnModeRef.current;
-      if (cached) return cached;
-
-      const cased = await supabase.from(EMPLOYEE_TABLE).select('staff_id, "Agency", "Position"').limit(1);
-      if (!cased.error) {
-        employeeColumnModeRef.current = 'cased';
-        return 'cased';
-      }
-
-      const lower = await supabase.from(EMPLOYEE_TABLE).select('staff_id, agency, position').limit(1);
-      if (!lower.error) {
-        employeeColumnModeRef.current = 'lower';
-        return 'lower';
-      }
-
-      employeeColumnModeRef.current = 'lower';
-      return 'lower';
-    };
-
     const runQuery = async (mode: EmployeeColumnMode) => {
       const select = mode === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
       return await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', ids);
     };
 
-    const mode = await resolveColumnMode();
+    const mode = await resolveEmployeeColumnMode();
     let rows = await runQuery(mode);
     if (rows.error) {
       const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
@@ -322,7 +384,7 @@ export default function App() {
     return { map, error: null as string | null };
   };
 
-  const fetchPunchBoard = async () => {
+  const fetchPunchBoard = async (options?: { position?: AllowedPosition | '' }) => {
     if (!supabase) {
       setPunchBoardError('缺少 Supabase 配置。');
       return;
@@ -330,22 +392,77 @@ export default function App() {
 
     setPunchBoardError(null);
 
-    const base = () => supabase.from('ob_punches').select('id, staff_id, action, created_at').limit(20);
-    const attemptCreatedAt = await base().order('created_at', { ascending: false });
-    const attempt = attemptCreatedAt.error ? await base().order('id', { ascending: false }) : attemptCreatedAt;
-    if (attempt.error) {
-      setPunchBoardError(attempt.error.message);
+    const position = options?.position ?? '';
+
+    const loadLatestAll = async () => {
+      const base = () => supabase.from('ob_punches').select('id, staff_id, action, created_at').limit(30);
+      const attemptCreatedAt = await base().order('created_at', { ascending: false });
+      const attempt = attemptCreatedAt.error ? await base().order('id', { ascending: false }) : attemptCreatedAt;
+      if (attempt.error) {
+        return { rows: [] as PunchBoardRow[], error: attempt.error.message };
+      }
+      const rows = ((attempt.data as any[] | null) ?? []).map((r) => ({
+        id: r.id,
+        staff_id: String(r.staff_id ?? '').trim(),
+        action: String(r.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN',
+        created_at: (r.created_at ?? null) as string | null
+      })) as PunchBoardRow[];
+      return { rows, error: null as string | null };
+    };
+
+    const loadLatestByPosition = async (pos: AllowedPosition) => {
+      const staffRes = await fetchStaffIdsForPosition(pos);
+      if (staffRes.error) {
+        return { rows: [] as PunchBoardRow[], error: staffRes.error };
+      }
+      const staffIds = staffRes.staffIds;
+      if (staffIds.length === 0) {
+        return { rows: [] as PunchBoardRow[], error: null as string | null };
+      }
+
+      const batches = chunk(staffIds, 200);
+      const allPunches: PunchBoardRow[] = [];
+      for (const batch of batches) {
+        const base = () =>
+          supabase
+            .from('ob_punches')
+            .select('id, staff_id, action, created_at')
+            .in('staff_id', batch)
+            .limit(30);
+        const attemptCreatedAt = await base().order('created_at', { ascending: false });
+        const attempt = attemptCreatedAt.error ? await base().order('id', { ascending: false }) : attemptCreatedAt;
+        if (attempt.error) {
+          return { rows: [] as PunchBoardRow[], error: attempt.error.message };
+        }
+        for (const r of (attempt.data as any[] | null) ?? []) {
+          allPunches.push({
+            id: r.id,
+            staff_id: String(r.staff_id ?? '').trim(),
+            action: String(r.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN',
+            created_at: (r.created_at ?? null) as string | null
+          });
+        }
+      }
+
+      allPunches.sort((a, b) => {
+        const atA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const atB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        if (atA !== atB) return atB - atA;
+        return String(b.id).localeCompare(String(a.id), 'en-US');
+      });
+
+      return { rows: allPunches.slice(0, 30), error: null as string | null };
+    };
+
+    const loaded = position ? await loadLatestByPosition(position) : await loadLatestAll();
+    if (loaded.error) {
+      setPunchBoardError(loaded.error);
       setPunchBoard([]);
       setPunchBoardEmployeeMap({});
       return;
     }
 
-    const rows = ((attempt.data as any[] | null) ?? []).map((r) => ({
-      id: r.id,
-      staff_id: String(r.staff_id ?? '').trim(),
-      action: String(r.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN',
-      created_at: (r.created_at ?? null) as string | null
-    })) as PunchBoardRow[];
+    const rows = loaded.rows;
 
     setPunchBoard(rows);
 
@@ -365,17 +482,17 @@ export default function App() {
     let active = true;
     void (async () => {
       if (!active) return;
-      await fetchPunchBoard();
+      await fetchPunchBoard({ position: punchLogPositionFilter });
     })();
 
     const timer = window.setInterval(() => {
-      void fetchPunchBoard();
+      void fetchPunchBoard({ position: punchLogPositionFilter });
     }, 10000);
     return () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [page]);
+  }, [page, punchLogPositionFilter]);
 
   const submitPunch = async (
     action: PunchAction,
@@ -448,7 +565,7 @@ export default function App() {
       if (options?.clearInput ?? true) {
         setStaffId('');
       }
-      void fetchPunchBoard();
+      void fetchPunchBoard({ position: punchLogPositionFilter });
     });
   };
 
@@ -742,7 +859,7 @@ export default function App() {
                   <button
                     type="button"
                     disabled={isLocked}
-                    onClick={() => void fetchPunchBoard()}
+                    onClick={() => void fetchPunchBoard({ position: punchLogPositionFilter })}
                     className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     Refresh
