@@ -42,6 +42,16 @@ const formatTime = (value: Date) =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const getPositionBadgeClass = (value: string) => {
+  const v = value.trim().toLowerCase();
+  if (v === 'pick') return 'border-sky-400/60 text-sky-200 bg-sky-500/10';
+  if (v === 'pack') return 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10';
+  if (v === 'rebin') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
+  if (v === 'preship') return 'border-rose-400/60 text-rose-200 bg-rose-500/10';
+  if (v === 'transfer') return 'border-violet-400/60 text-violet-200 bg-violet-500/10';
+  return 'border-white/20 text-slate-200 bg-white/5';
+};
+
 function getBestTimeField(row: Record<string, unknown>) {
   const candidates = ['created_at', 'inserted_at', 'punch_at', 'time', 'timestamp', 'ts'];
   for (const c of candidates) {
@@ -795,7 +805,16 @@ export default function App() {
                                 <span className="hidden truncate text-sm text-slate-200 sm:block">{name}</span>
                               </span>
                               <span className="hidden min-w-0 truncate text-sm text-slate-200 sm:block">{agency}</span>
-                              <span className="hidden min-w-0 truncate text-sm text-slate-200 sm:block">{position}</span>
+                              <span className="hidden min-w-0 truncate text-sm text-slate-200 sm:block">
+                                <span
+                                  className={[
+                                    'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
+                                    getPositionBadgeClass(position)
+                                  ].join(' ')}
+                                >
+                                  {position || '-'}
+                                </span>
+                              </span>
                               <span className="text-right text-xs text-slate-400">{time}</span>
                             </div>
                           </div>
