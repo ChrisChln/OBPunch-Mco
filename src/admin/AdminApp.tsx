@@ -85,8 +85,8 @@ const addDays = (value: Date, days: number) => {
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
-const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 1);
-const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? clamp(DAY_CUTOFF_HOUR_RAW, 0, 23) : 1;
+const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
+const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? clamp(DAY_CUTOFF_HOUR_RAW, 0, 23) : 5;
 const DAY_CUTOFF_MS = DAY_CUTOFF_HOUR * 60 * 60 * 1000;
 const ATTENDANCE_RESET_HOUR_RAW = Number(import.meta.env.VITE_ATTENDANCE_RESET_HOUR ?? 5);
 const ATTENDANCE_RESET_HOUR = Number.isFinite(ATTENDANCE_RESET_HOUR_RAW)
@@ -286,7 +286,7 @@ export default function AdminApp() {
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [employeeAgency, setEmployeeAgency] = useState('');
   const [employeePosition, setEmployeePosition] = useState('');
-  const [employeesHasMore, setEmployeesHasMore] = useState(false);
+  const [, setEmployeesHasMore] = useState(false);
   const [employeeNewStaffId, setEmployeeNewStaffId] = useState('');
   const [employeeNewName, setEmployeeNewName] = useState('');
   const [employeeNewAgency, setEmployeeNewAgency] = useState('');
@@ -304,17 +304,19 @@ export default function AdminApp() {
   const [timecardPosition, setTimecardPosition] = useState('');
   const [timecardShift, setTimecardShift] = useState<'' | 'early' | 'late'>('');
   const [timecardInProgressOnly, setTimecardInProgressOnly] = useState(false);
+  const [timecardMissingEmployeeOnly, setTimecardMissingEmployeeOnly] = useState(false);
   const [timecardWeekOffset, setTimecardWeekOffset] = useState(0);
   const [timecardWeekInput, setTimecardWeekInput] = useState(() =>
     toDateOnly(startOfWeekMonday(new Date()))
   );
-  const [timecardHasMore, setTimecardHasMore] = useState(false);
+  const [, setTimecardHasMore] = useState(false);
 
   const [timecardPunchOpen, setTimecardPunchOpen] = useState(false);
   const [timecardPunchStaffId, setTimecardPunchStaffId] = useState<string | null>(null);
   const [timecardPunchDayIndex, setTimecardPunchDayIndex] = useState<number | null>(null); // 0..6 (Mon..Sun) or null=whole week
   const [timecardPunchRows, setTimecardPunchRows] = useState<PunchRow[]>([]);
   const [timecardPunchError, setTimecardPunchError] = useState<string | null>(null);
+  const [timecardPunchShowAll, setTimecardPunchShowAll] = useState(false);
   const [timecardPunchEdits, setTimecardPunchEdits] = useState<Record<string, { action: 'IN' | 'OUT'; atLocal: string }>>({});
   const [timecardPunchNew, setTimecardPunchNew] = useState<{ action: 'IN' | 'OUT'; atLocal: string }>({
     action: 'IN',
@@ -576,7 +578,7 @@ export default function AdminApp() {
       void fetchTimecard({ reset: true, lockUi: false });
     }, 250);
     return () => window.clearTimeout(handle);
-  }, [page, timecardSearch, timecardAgency, timecardPosition]);
+  }, [page, timecardSearch, timecardAgency, timecardPosition, timecardMissingEmployeeOnly]);
 
   useEffect(() => {
     if (page !== 'employees') {
@@ -823,7 +825,7 @@ export default function AdminApp() {
   };
 
   const fetchEmployees = async ({
-    reset,
+    reset: _reset,
     search,
     agency,
     position
@@ -1071,6 +1073,7 @@ export default function AdminApp() {
     search,
     agency,
     position,
+    missingEmployeeOnly,
     lockUi
   }: {
     reset: boolean;
@@ -1078,6 +1081,7 @@ export default function AdminApp() {
     search?: string;
     agency?: string;
     position?: string;
+    missingEmployeeOnly?: boolean;
     lockUi?: boolean;
   }) => {
     if (!supabase) {
@@ -1096,10 +1100,246 @@ export default function AdminApp() {
     const searchValue = (search ?? timecardSearch).trim().replace(/,/g, ' ');
     const agencyValue = (agency ?? timecardAgency).trim();
     const positionValue = (position ?? timecardPosition).trim();
+    const missingOnly = missingEmployeeOnly ?? timecardMissingEmployeeOnly;
 
     const pageSize = 50;
 
+    const fetchProfilesByStaffId = async (staffIds: string[]) => {
+      const staffToProfile = new Map<string, { name: string; agency: string; position: string }>();
+      if (!supabase) {
+        return { staffToProfile, error: 'Missing Supabase config.' };
+      }
+      if (staffIds.length === 0) {
+        return { staffToProfile, error: null as string | null };
+      }
+
+      const mode = await resolveEmployeeColumnMode();
+      const batches = chunk(staffIds, 200);
+      for (const batch of batches) {
+        const run = async (m: EmployeeColumnMode) => {
+          const select = m === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
+          return await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch);
+        };
+
+        let res = await run(mode);
+        if (res.error) {
+          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
+          employeeColumnModeRef.current = flipped;
+          res = await run(flipped);
+        }
+        if (res.error) {
+          return {
+            staffToProfile: new Map<string, { name: string; agency: string; position: string }>(),
+            error: res.error.message
+          };
+        }
+
+        for (const r of (res.data as any[] | null) ?? []) {
+          const staff = String(r.staff_id ?? '').trim();
+          if (!staff) continue;
+          staffToProfile.set(staff, {
+            name: String(r.name ?? '').trim(),
+            agency: String(r.agency ?? r.Agency ?? '').trim(),
+            position: String(r.position ?? r.Position ?? '').trim()
+          });
+        }
+      }
+
+      return { staffToProfile, error: null as string | null };
+    };
+
+    const fetchPunchesInRange = async () => {
+      if (!supabase) {
+        return { rows: [] as any[], error: 'Missing Supabase config.' };
+      }
+
+      const punchPageSize = 2000;
+      const maxPages = 80;
+      const all: any[] = [];
+
+      const base = () =>
+        supabase
+          .from('ob_punches')
+          .select('id, staff_id, action, created_at, metadata')
+          .gte('created_at', rangeStart.toISOString())
+          .lt('created_at', rangeEnd.toISOString());
+
+      for (let page = 0; page < maxPages; page += 1) {
+        const from = page * punchPageSize;
+        const to = from + punchPageSize - 1;
+        const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
+        const attempt = attemptCreatedAt.error ? await base().order('id', { ascending: true }).range(from, to) : attemptCreatedAt;
+        if (attempt.error) {
+          return { rows: [] as any[], error: attempt.error.message };
+        }
+        const rows = (attempt.data as any[] | null) ?? [];
+        if (rows.length === 0) break;
+        all.push(...rows);
+        if (rows.length < punchPageSize) break;
+      }
+
+      if (all.length >= punchPageSize * maxPages) {
+        return { rows: [] as any[], error: 'Too many punch rows; please narrow the date range.' };
+      }
+
+      return { rows: all, error: null as string | null };
+    };
+
+    const buildTimecardRow = ({
+      staff,
+      name,
+      agency,
+      position,
+      eventsByStaff,
+      capEnd
+    }: {
+      staff: string;
+      name: string;
+      agency: string;
+      position: string;
+      eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT'; manual: boolean }>>;
+      capEnd: Date;
+    }): TimecardRow => {
+      const events = eventsByStaff[staff] ?? [];
+      const intervals: Array<{ start: Date; end: Date }> = [];
+      let currentIn: Date | null = null;
+      let firstInInWeek: Date | null = null;
+      for (const ev of events) {
+        if (ev.action === 'IN') {
+          currentIn = ev.at;
+          if (!firstInInWeek && ev.at.getTime() >= weekStart.getTime() && ev.at.getTime() < weekEnd.getTime()) {
+            firstInInWeek = ev.at;
+          }
+          continue;
+        }
+        if (ev.action === 'OUT') {
+          if (currentIn && ev.at.getTime() > currentIn.getTime()) {
+            intervals.push({ start: currentIn, end: ev.at });
+            currentIn = null;
+          }
+        }
+      }
+
+      const openInterval = currentIn && capEnd.getTime() > currentIn.getTime() ? { start: currentIn, end: capEnd } : null;
+      if (openInterval) {
+        intervals.push(openInterval);
+      }
+
+      const hoursByDay = computeHoursByDay(intervals, weekStart);
+      const inProgressByDay = new Array(7).fill(false) as boolean[];
+      if (openInterval) {
+        for (let idx = 0; idx < 7; idx++) {
+          const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
+          const overlapStart = Math.max(openInterval.start.getTime(), dayStart.getTime());
+          const overlapEnd = Math.min(openInterval.end.getTime(), dayEnd.getTime());
+          if (overlapEnd > overlapStart) inProgressByDay[idx] = true;
+        }
+      }
+      const inProgressWeek = inProgressByDay.some(Boolean);
+      const manualByDay = new Array(7).fill(false) as boolean[];
+      for (const ev of events) {
+        if (!ev.manual) continue;
+        for (let idx = 0; idx < 7; idx++) {
+          const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
+          if (ev.at.getTime() >= dayStart.getTime() && ev.at.getTime() < dayEnd.getTime()) {
+            manualByDay[idx] = true;
+            break;
+          }
+        }
+      }
+      const manualWeek = manualByDay.some(Boolean);
+      const totalHours = hoursByDay.reduce((sum, v) => sum + v, 0);
+      const shift = firstInInWeek ? (getShiftBucketFromDate(firstInInWeek) ?? '') : '';
+
+      return {
+        staff_id: staff,
+        name,
+        agency,
+        position,
+        hoursByDay,
+        inProgressByDay,
+        inProgressWeek,
+        manualByDay,
+        manualWeek,
+        totalHours,
+        shift
+      };
+    };
+
     const exec = async (from: number) => {
+      if (missingOnly) {
+        const punchesRes = await fetchPunchesInRange();
+        if (punchesRes.error) {
+          return { rows: [] as TimecardRow[], hasMore: false, error: punchesRes.error };
+        }
+
+        const eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT'; manual: boolean }>> = {};
+        for (const p of punchesRes.rows ?? []) {
+          const staff = String(p.staff_id ?? '').trim();
+          const actionRaw = String(p.action ?? '').toUpperCase();
+          const atRaw = String(p.created_at ?? '').trim();
+          if (!staff || (actionRaw !== 'IN' && actionRaw !== 'OUT') || !atRaw) continue;
+          const at = new Date(atRaw);
+          if (Number.isNaN(at.getTime())) continue;
+          const meta = (p as any).metadata;
+          const kind = typeof meta?.kind === 'string' ? String(meta.kind) : '';
+          const manual = Boolean(meta && (meta.manual === true || kind.startsWith('manual_')));
+          const action = (actionRaw === 'OUT' ? 'OUT' : 'IN') as 'IN' | 'OUT';
+          (eventsByStaff[staff] ??= []).push({ at, action, manual });
+        }
+        for (const staff of Object.keys(eventsByStaff)) {
+          eventsByStaff[staff]!.sort((a, b) => a.at.getTime() - b.at.getTime());
+        }
+
+        const allStaffIds = Object.keys(eventsByStaff).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+        if (allStaffIds.length === 0) {
+          return { rows: [] as TimecardRow[], hasMore: false, error: null as string | null };
+        }
+
+        const now = new Date();
+        const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
+
+        const profilesRes = await fetchProfilesByStaffId(allStaffIds);
+        if (profilesRes.error) {
+          return { rows: [] as TimecardRow[], hasMore: false, error: profilesRes.error };
+        }
+
+        const isMissingProfile = (profile: { name: string; agency: string; position: string } | undefined) => {
+          if (!profile) return true;
+          return !profile.name && !profile.agency && !profile.position;
+        };
+
+        let staffIds = allStaffIds.filter((staff) => isMissingProfile(profilesRes.staffToProfile.get(staff)));
+
+        if (searchValue) {
+          const terms = searchValue
+            .split(/\s+/g)
+            .map((s) => s.trim())
+            .filter(Boolean)
+            .map((s) => s.toLowerCase());
+          const normalized = normalizeStaffId(searchValue);
+          const needles = Array.from(new Set([normalized, ...terms].filter(Boolean)));
+          staffIds = staffIds.filter((staff) => {
+            const hay = staff.toLowerCase();
+            return needles.every((needle) => hay.includes(needle));
+          });
+        }
+
+        const rows: TimecardRow[] = staffIds.map((staff) => {
+          const profile = profilesRes.staffToProfile.get(staff) ?? { name: '', agency: '', position: '' };
+          return buildTimecardRow({
+            staff,
+            name: profile.name,
+            agency: profile.agency,
+            position: profile.position,
+            eventsByStaff,
+            capEnd
+          });
+        });
+
+        return { rows, hasMore: false, error: null as string | null };
+      }
+
       const to = from + pageSize - 1;
 
       const mode = await resolveEmployeeColumnMode();
@@ -1194,71 +1434,7 @@ export default function AdminApp() {
         const name = String(e.name ?? '').trim();
         const agency = String(e.agency ?? e.Agency ?? '').trim();
         const position = String(e.position ?? e.Position ?? '').trim();
-
-        const events = eventsByStaff[staff] ?? [];
-        const intervals: Array<{ start: Date; end: Date }> = [];
-        let currentIn: Date | null = null;
-        let firstInInWeek: Date | null = null;
-        for (const ev of events) {
-          if (ev.action === 'IN') {
-            currentIn = ev.at;
-            if (!firstInInWeek && ev.at.getTime() >= weekStart.getTime() && ev.at.getTime() < weekEnd.getTime()) {
-              firstInInWeek = ev.at;
-            }
-            continue;
-          }
-          if (ev.action === 'OUT') {
-            if (currentIn && ev.at.getTime() > currentIn.getTime()) {
-              intervals.push({ start: currentIn, end: ev.at });
-              currentIn = null;
-            }
-          }
-        }
-
-        const openInterval =
-          currentIn && capEnd.getTime() > currentIn.getTime() ? { start: currentIn, end: capEnd } : null;
-        if (openInterval) {
-          intervals.push(openInterval);
-        }
-
-        const hoursByDay = computeHoursByDay(intervals, weekStart);
-        const inProgressByDay = new Array(7).fill(false) as boolean[];
-        if (openInterval) {
-          for (let idx = 0; idx < 7; idx++) {
-            const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
-            const overlapStart = Math.max(openInterval.start.getTime(), dayStart.getTime());
-            const overlapEnd = Math.min(openInterval.end.getTime(), dayEnd.getTime());
-            if (overlapEnd > overlapStart) inProgressByDay[idx] = true;
-          }
-        }
-        const inProgressWeek = inProgressByDay.some(Boolean);
-        const manualByDay = new Array(7).fill(false) as boolean[];
-        for (const ev of events) {
-          if (!ev.manual) continue;
-          for (let idx = 0; idx < 7; idx++) {
-            const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
-            if (ev.at.getTime() >= dayStart.getTime() && ev.at.getTime() < dayEnd.getTime()) {
-              manualByDay[idx] = true;
-              break;
-            }
-          }
-        }
-        const manualWeek = manualByDay.some(Boolean);
-        const totalHours = hoursByDay.reduce((sum, v) => sum + v, 0);
-        const shift = firstInInWeek ? (getShiftBucketFromDate(firstInInWeek) ?? '') : '';
-        return {
-          staff_id: staff,
-          name,
-          agency,
-          position,
-          hoursByDay,
-          inProgressByDay,
-          inProgressWeek,
-          manualByDay,
-          manualWeek,
-          totalHours,
-          shift
-        };
+        return buildTimecardRow({ staff, name, agency, position, eventsByStaff, capEnd });
       });
 
       return { rows, hasMore: employees.length === pageSize, error: null as string | null };
@@ -1552,7 +1728,6 @@ export default function AdminApp() {
 
     const baseWeekStart = startOfWeekMonday(serverTime);
     const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
-    const weekEnd = addDays(weekStart, 7);
 
     const dayRange =
       dayIndex === null ? getDayRange(weekStart, 0, 7) : getDayRange(weekStart, dayIndex);
@@ -1597,6 +1772,7 @@ export default function AdminApp() {
     setTimecardPunchDayIndex(dayIndex);
     setTimecardPunchError(null);
     setTimecardPunchRows([]);
+    setTimecardPunchShowAll(false);
     setTimecardPunchEdits({});
     setTimecardPunchNew({ action: 'IN', atLocal: toLocalDateTimeInputValue(new Date(serverTime)) });
 
@@ -1627,6 +1803,7 @@ export default function AdminApp() {
     setTimecardPunchDayIndex(null);
     setTimecardPunchRows([]);
     setTimecardPunchError(null);
+    setTimecardPunchShowAll(false);
     setTimecardPunchEdits({});
     setTimecardPunchNew({ action: 'IN', atLocal: '' });
   };
@@ -2185,6 +2362,69 @@ export default function AdminApp() {
       return true;
     });
   }, [timecardRows, timecardShift, timecardInProgressOnly]);
+
+  const timecardPunchRowsVisible = useMemo(() => {
+    if (timecardPunchShowAll) return timecardPunchRows;
+    if (timecardPunchDayIndex === null) return timecardPunchRows; // week view
+
+    const idx = timecardPunchDayIndex;
+    if (idx < 0 || idx > 6) return timecardPunchRows;
+
+    let weekStart = startOfWeekMonday(serverTime);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(timecardWeekInput)) {
+      const parsed = new Date(`${timecardWeekInput}T00:00:00`);
+      if (!Number.isNaN(parsed.getTime())) {
+        weekStart = startOfWeekMonday(parsed);
+      }
+    }
+
+    const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
+    const includedIds = new Set<string>();
+
+    const events = timecardPunchRows
+      .map((r) => {
+        const at = r.created_at ? new Date(r.created_at) : null;
+        if (!at || Number.isNaN(at.getTime())) return null;
+        return { id: String(r.id), action: r.action, at };
+      })
+      .filter(Boolean) as Array<{ id: string; action: 'IN' | 'OUT'; at: Date }>;
+
+    events.sort((a, b) => {
+      const diff = a.at.getTime() - b.at.getTime();
+      if (diff !== 0) return diff;
+      return a.id.localeCompare(b.id, 'en-US');
+    });
+
+    const overlaps = (aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) =>
+      Math.min(aEnd.getTime(), bEnd.getTime()) > Math.max(aStart.getTime(), bStart.getTime());
+
+    let currentIn: { id: string; at: Date } | null = null;
+    for (const ev of events) {
+      if (ev.action === 'IN') {
+        currentIn = { id: ev.id, at: ev.at };
+        continue;
+      }
+      if (ev.action === 'OUT') {
+        if (currentIn && ev.at.getTime() > currentIn.at.getTime()) {
+          if (overlaps(dayStart, dayEnd, currentIn.at, ev.at)) {
+            includedIds.add(currentIn.id);
+            includedIds.add(ev.id);
+          }
+          currentIn = null;
+        }
+      }
+    }
+
+    if (currentIn) {
+      const now = new Date();
+      const capEnd = new Date(clamp(now.getTime(), dayStart.getTime(), dayEnd.getTime()));
+      if (overlaps(dayStart, dayEnd, currentIn.at, capEnd)) {
+        includedIds.add(currentIn.id);
+      }
+    }
+
+    return timecardPunchRows.filter((r) => includedIds.has(String(r.id)));
+  }, [timecardPunchRows, timecardPunchShowAll, timecardPunchDayIndex, timecardWeekInput, serverTime]);
 
   const timecardPunchReadOnly = timecardPunchDayIndex === null;
 
@@ -2869,11 +3109,36 @@ export default function AdminApp() {
                       type="button"
                       disabled={isLocked}
                       onClick={() => {
+                        setTimecardMissingEmployeeOnly((prev) => {
+                          const next = !prev;
+                          if (next) {
+                            setTimecardAgency('');
+                            setTimecardPosition('');
+                          }
+                          return next;
+                        });
+                      }}
+                      className={[
+                        'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                        timecardMissingEmployeeOnly
+                          ? 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/25'
+                          : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                      ].join(' ')}
+                    >
+                      {timecardMissingEmployeeOnly
+                        ? t('显示全部时间卡', 'Show all timecards')
+                        : t('三无员工', 'Missing employee info')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => {
                         setTimecardSearch('');
                         setTimecardAgency('');
                         setTimecardPosition('');
                         setTimecardShift('');
                         setTimecardInProgressOnly(false);
+                        setTimecardMissingEmployeeOnly(false);
                         void fetchTimecard({ reset: true, search: '', agency: '', position: '' });
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
@@ -2899,7 +3164,7 @@ export default function AdminApp() {
                     <select
                       value={timecardAgency}
                       onChange={(e) => setTimecardAgency(e.target.value)}
-                      disabled={isLocked}
+                      disabled={isLocked || timecardMissingEmployeeOnly}
                       className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <option value="">{t('全部Agency', 'All agencies')}</option>
@@ -2915,7 +3180,7 @@ export default function AdminApp() {
                     <select
                       value={timecardPosition}
                       onChange={(e) => setTimecardPosition(e.target.value)}
-                      disabled={isLocked}
+                      disabled={isLocked || timecardMissingEmployeeOnly}
                       className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <option value="">{t('全部岗位', 'All positions')}</option>
@@ -2996,8 +3261,8 @@ export default function AdminApp() {
                               className="border-b border-white/5 transition hover:bg-white/5 last:border-0"
                             >
                               <td className="px-2 py-1.5 font-mono text-slate-200">{r.staff_id}</td>
-                              <td className="px-2 py-1.5 text-slate-200 truncate">{r.name}</td>
-                              <td className="px-2 py-1.5 text-slate-200 truncate">{r.agency}</td>
+                              <td className="px-2 py-1.5 text-slate-200 truncate">{r.name || '-'}</td>
+                              <td className="px-2 py-1.5 text-slate-200 truncate">{r.agency || '-'}</td>
                               <td className="px-2 py-1.5 text-slate-200 truncate">
                                 <span
                                   className={[
@@ -3083,23 +3348,39 @@ export default function AdminApp() {
                               {timecardPunchDayIndex === null ? (
                                 <span className="ml-2">（本周范围，仅查看）</span>
                               ) : (
-                                <span className="ml-2">（当天范围，含跨夜前后 1 天）</span>
+                                <span className="ml-2">
+                                  {timecardPunchShowAll
+                                    ? t('（显示全部记录）', '(All punches)')
+                                    : t('（只显示参与工时计算的记录）', '(Only punches used for hour calc)')}
+                                </span>
                               )}
                             </p>
                           </div>
-                          <button
-                            type="button"
-                            disabled={isLocked}
-                            onClick={closeTimecardPunchModal}
-                            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            关闭
-                          </button>
+                          <div className="flex items-center gap-2">
+                            {timecardPunchDayIndex !== null && (
+                              <button
+                                type="button"
+                                disabled={isLocked}
+                                onClick={() => setTimecardPunchShowAll((v) => !v)}
+                                className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {timecardPunchShowAll ? t('只看相关', 'Relevant only') : t('显示全部', 'Show all')}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={isLocked}
+                              onClick={closeTimecardPunchModal}
+                              className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              关闭
+                            </button>
+                          </div>
                         </div>
 
                         <div className="flex-1 overflow-y-auto px-6 py-5">
                           {!timecardPunchReadOnly && (
-                            <div className="rounded-2xl bg-white/5 px-4 py-4">
+                            <div className="rounded-2xl border border-neon/40 bg-black/30 px-4 py-4 shadow-glow">
                               <div className="grid gap-3 md:grid-cols-[8rem_1fr_7rem] md:items-end">
                                 <div>
                                   <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Action</div>
@@ -3137,18 +3418,18 @@ export default function AdminApp() {
                                   添加
                                 </button>
                               </div>
-                              <p className="mt-3 text-xs text-slate-400">手动添加一条打卡记录（支持跨夜）。</p>
+                              <p className="mt-3 text-xs text-slate-400">手动添加一条打卡记录。</p>
                             </div>
                           )}
 
                         {timecardPunchError && <p className="text-sm text-ember">操作失败：{timecardPunchError}</p>}
-                        {!timecardPunchError && timecardPunchRows.length === 0 && (
+                        {!timecardPunchError && timecardPunchRowsVisible.length === 0 && (
                           <p className="text-sm text-slate-400">暂无记录</p>
                         )}
 
-                        {timecardPunchRows.length > 0 && (
+                        {timecardPunchRowsVisible.length > 0 && (
                           <div className="mt-3 space-y-2">
-                            {timecardPunchRows.map((r) => {
+                            {timecardPunchRowsVisible.map((r) => {
                               const edit = timecardPunchEdits[String(r.id)] ?? {
                                 action: r.action,
                                 atLocal: r.created_at ? toLocalDateTimeInputValue(new Date(r.created_at)) : ''

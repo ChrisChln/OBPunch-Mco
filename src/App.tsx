@@ -56,7 +56,8 @@ export default function App() {
   const isLocked = Boolean(busy);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const successAudioRef = useRef<HTMLAudioElement | null>(null);
+  const successInAudioRef = useRef<HTMLAudioElement | null>(null);
+  const successOutAudioRef = useRef<HTMLAudioElement | null>(null);
   const errorAudioRef = useRef<HTMLAudioElement | null>(null);
 
   type EmployeeColumnMode = 'lower' | 'cased';
@@ -72,10 +73,15 @@ export default function App() {
 
   useEffect(() => {
     if (typeof Audio === 'undefined') return;
-    const success = new Audio('/sound/success.mp3');
-    success.preload = 'auto';
-    success.volume = 1;
-    successAudioRef.current = success;
+    const successIn = new Audio(encodeURI('/sound/success in.mp3'));
+    successIn.preload = 'auto';
+    successIn.volume = 1;
+    successInAudioRef.current = successIn;
+
+    const successOut = new Audio(encodeURI('/sound/success out.mp3'));
+    successOut.preload = 'auto';
+    successOut.volume = 1;
+    successOutAudioRef.current = successOut;
 
     const error = new Audio('/sound/error.mp3');
     error.preload = 'auto';
@@ -83,7 +89,8 @@ export default function App() {
     errorAudioRef.current = error;
 
     return () => {
-      successAudioRef.current = null;
+      successInAudioRef.current = null;
+      successOutAudioRef.current = null;
       errorAudioRef.current = null;
     };
   }, []);
@@ -98,7 +105,8 @@ export default function App() {
     }
   };
 
-  const playSuccess = () => playSound(successAudioRef.current);
+  const playSuccess = (action: PunchAction) =>
+    playSound(action === 'OUT' ? successOutAudioRef.current : successInAudioRef.current);
   const playError = () => playSound(errorAudioRef.current);
 
   const [offsetMs, setOffsetMs] = useState(0);
@@ -410,7 +418,7 @@ export default function App() {
       }
 
       setUiStatus({ tone: 'success', message: `打卡成功（${action}）` });
-      playSuccess();
+      playSuccess(action);
       setLastPunchAction(action);
       setLastPunchActionError(null);
       if (options?.clearInput ?? true) {
