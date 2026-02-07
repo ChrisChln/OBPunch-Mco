@@ -4,7 +4,7 @@ import { createSupabaseClient } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
 import { createPortal } from 'react-dom';
 
-type AdminPage = 'employee_upload' | 'punches' | 'employees' | 'timecard' | 'audit';
+type AdminPage = 'employee_upload' | 'punches' | 'employees' | 'timecard' | 'audit' | 'schedule';
 
 type StatusTone = 'idle' | 'pending' | 'success' | 'error';
 
@@ -16,6 +16,7 @@ type Status = {
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
+const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 
 const supabase = createSupabaseClient({ persistSession: true });
 
@@ -59,6 +60,18 @@ type AuditRow = {
   staff_id?: string | null;
   target?: string | null;
   payload?: any;
+};
+
+type ScheduleRow = {
+  id?: number | string;
+  staff_id?: string | null;
+  date?: string | null; // YYYY-MM-DD
+  shift?: 'early' | 'late' | null;
+  position?: string | null;
+  note?: string | null;
+  operator?: string | null;
+  updated_at?: string | null;
+  created_at?: string | null;
 };
 
 const formatTime = (value: Date, locale: string = 'zh-CN') =>
@@ -343,6 +356,20 @@ export default function AdminApp() {
   const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [auditSearch, setAuditSearch] = useState('');
+
+  const [scheduleRows, setScheduleRows] = useState<ScheduleRow[]>([]);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
+  const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
+  const [scheduleSearch, setScheduleSearch] = useState('');
+  const [schedulePosition, setSchedulePosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+
+  const [scheduleAddOpen, setScheduleAddOpen] = useState(false);
+  const [scheduleAddStaffId, setScheduleAddStaffId] = useState('');
+  const [scheduleAddDate, setScheduleAddDate] = useState(() => toDateOnly(new Date()));
+  const [scheduleAddShift, setScheduleAddShift] = useState<'early' | 'late'>('early');
+  const [scheduleAddPosition, setScheduleAddPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [scheduleAddNote, setScheduleAddNote] = useState('');
 
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFillDuplicates, setUploadFillDuplicates] = useState(true);
@@ -655,6 +682,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   }, [page, employeeSearch, employeeAgency, employeePosition]);
 
   useEffect(() => {
+    if (page !== 'schedule') {
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      void fetchSchedule();
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [page, scheduleSearch, schedulePosition, scheduleWeekOffset]);
+
+  useEffect(() => {
     let active = true;
     const sync = async () => {
       if (!supabase) {
@@ -798,6 +835,143 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return;
       }
       setAuditRows(((res.data as any[]) ?? []) as AuditRow[]);
+    });
+  };
+
+  const fetchSchedule = async (options?: { weekOffset?: number; search?: string; position?: string }) => {
+    if (!supabase) {
+      setScheduleError('缺少 Supabase 配置。');
+      setScheduleRows([]);
+      return;
+    }
+
+    const offset = options?.weekOffset ?? scheduleWeekOffset;
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekStart = addDays(baseWeekStart, offset * 7);
+    const weekEnd = addDays(weekStart, 7);
+    const startDate = toDateOnly(weekStart);
+    const endDate = toDateOnly(weekEnd);
+
+    const searchValue = (options?.search ?? scheduleSearch).trim();
+    const positionValue = (options?.position ?? schedulePosition).trim();
+
+    await runLocked('schedule', async () => {
+      setScheduleError(null);
+
+      let q = supabase
+        .from(SCHEDULE_TABLE)
+        .select('id, staff_id, date, shift, position, note, operator, updated_at, created_at')
+        .gte('date', startDate)
+        .lt('date', endDate)
+        .order('date', { ascending: false })
+        .order('staff_id', { ascending: true })
+        .limit(2000);
+
+      if (positionValue) {
+        q = q.eq('position', positionValue as any);
+      }
+      if (searchValue) {
+        const term = `%${searchValue}%`;
+        q = q.or(`staff_id.ilike.${term},note.ilike.${term},operator.ilike.${term}`);
+      }
+
+      const res = await q;
+      if (res.error) {
+        setScheduleError(res.error.message);
+        setScheduleRows([]);
+        return;
+      }
+
+      setScheduleRows(((res.data as any[]) ?? []) as ScheduleRow[]);
+    });
+  };
+
+  const openScheduleAdd = () => {
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekStart = addDays(baseWeekStart, scheduleWeekOffset * 7);
+    setScheduleAddOpen(true);
+    setScheduleAddStaffId('');
+    setScheduleAddDate(toDateOnly(weekStart));
+    setScheduleAddShift('early');
+    setScheduleAddPosition('');
+    setScheduleAddNote('');
+  };
+
+  const closeScheduleAdd = () => {
+    setScheduleAddOpen(false);
+  };
+
+  const saveScheduleAdd = async () => {
+    if (!supabase) {
+      setScheduleError('缺少 Supabase 配置。');
+      return;
+    }
+    const staff = normalizeStaffId(scheduleAddStaffId);
+    if (!staff || !isValidStaffIdValue(staff)) {
+      setScheduleError('员工ID格式不正确（例如：US010454）。');
+      return;
+    }
+    const date = scheduleAddDate.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setScheduleError('日期格式不正确。');
+      return;
+    }
+    if (!scheduleAddPosition) {
+      setScheduleError(`请选择岗位：${ALLOWED_POSITIONS.join(', ')}`);
+      return;
+    }
+
+    await runLocked('schedule_upsert', async () => {
+      setScheduleError(null);
+      const payload = {
+        staff_id: staff,
+        date,
+        shift: scheduleAddShift,
+        position: scheduleAddPosition,
+        note: scheduleAddNote.trim() || null,
+        operator: user?.email ?? null,
+        updated_at: new Date(serverTime).toISOString()
+      };
+      const res = await supabase.from(SCHEDULE_TABLE).upsert([payload as any], { onConflict: 'staff_id,date' });
+      if (res.error) {
+        setScheduleError(res.error.message);
+        return;
+      }
+      await writeAudit({
+        action: 'schedule_upsert',
+        staffId: staff,
+        target: SCHEDULE_TABLE,
+        payload
+      });
+      closeScheduleAdd();
+      await fetchSchedule();
+    });
+  };
+
+  const deleteScheduleRow = async (row: ScheduleRow) => {
+    if (!supabase) {
+      setScheduleError('缺少 Supabase 配置。');
+      return;
+    }
+    const id = String(row.id ?? '').trim();
+    if (!id) return;
+    const ok = window.confirm('确定要删除这条排班吗？此操作不可撤销。');
+    if (!ok) return;
+
+    await runLocked('schedule_delete', async () => {
+      setScheduleError(null);
+      const res = await supabase.from(SCHEDULE_TABLE).delete().eq('id', id);
+      if (res.error) {
+        setScheduleError(res.error.message);
+        return;
+      }
+      await writeAudit({
+        action: 'schedule_delete',
+        staffId: String(row.staff_id ?? '').trim() || null,
+        target: SCHEDULE_TABLE,
+        payload: { id, row }
+      });
+      await fetchSchedule();
     });
   };
 
@@ -2326,6 +2500,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     if (page === 'audit') {
       void fetchAudit({ search: auditSearch });
     }
+    if (page === 'schedule') {
+      void fetchSchedule();
+    }
   }, [page]);
 
   useEffect(() => {
@@ -2974,6 +3151,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               >
                 {t('操作日志', 'Audit')}
               </button>
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={() => setPage('schedule')}
+                className={tabClass(page === 'schedule')}
+              >
+                {t('排班', 'Schedule')}
+              </button>
             </nav>
 
             {page === 'punches' && (
@@ -3177,6 +3362,313 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   })}
                   </div>
                 )}
+              </section>
+            )}
+
+            {page === 'schedule' && (
+              <section className="glass reveal rounded-3xl px-6 py-8">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-display text-2xl tracking-[0.08em]">{t('排班', 'Schedule')}</h2>
+                    <p className="mt-2 text-xs text-slate-400">
+                      {t('按周管理排班（示例版）。', 'Manage weekly schedules (MVP).')}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => {
+                        const next = scheduleWeekOffset - 1;
+                        setScheduleWeekOffset(next);
+                        const baseWeekStart = startOfWeekMonday(serverTime);
+                        setScheduleWeekInput(toDateOnly(addDays(baseWeekStart, next * 7)));
+                      }}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {t('上一周', 'Prev')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => {
+                        setScheduleWeekOffset(0);
+                        const baseWeekStart = startOfWeekMonday(serverTime);
+                        setScheduleWeekInput(toDateOnly(baseWeekStart));
+                      }}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {t('本周', 'This week')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => {
+                        const next = scheduleWeekOffset + 1;
+                        setScheduleWeekOffset(next);
+                        const baseWeekStart = startOfWeekMonday(serverTime);
+                        setScheduleWeekInput(toDateOnly(addDays(baseWeekStart, next * 7)));
+                      }}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {t('下一周', 'Next')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => void fetchSchedule()}
+                      className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {t('刷新', 'Refresh')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={openScheduleAdd}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {t('新增排班', 'Add')}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-4 md:grid-cols-6">
+                  <div className="md:col-span-2">
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Week</label>
+                    <input
+                      type="date"
+                      value={scheduleWeekInput}
+                      disabled={isLocked}
+                      onChange={(e) => setScheduleWeekInput(e.target.value)}
+                      onBlur={() => {
+                        if (!/^\d{4}-\d{2}-\d{2}$/.test(scheduleWeekInput)) return;
+                        const parsed = new Date(`${scheduleWeekInput}T00:00:00`);
+                        if (Number.isNaN(parsed.getTime())) return;
+                        const weekStart = startOfWeekMonday(parsed);
+                        const baseWeekStart = startOfWeekMonday(serverTime);
+                        const offset = Math.round((weekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
+                        setScheduleWeekOffset(offset);
+                        setScheduleWeekInput(toDateOnly(weekStart));
+                        void fetchSchedule({ weekOffset: offset });
+                      }}
+                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Search</label>
+                    <input
+                      value={scheduleSearch}
+                      onChange={(e) => setScheduleSearch(e.target.value)}
+                      disabled={isLocked}
+                      placeholder={t('按工号/备注/操作者搜索', 'Search staff id / note / operator')}
+                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Position</label>
+                    <select
+                      value={schedulePosition}
+                      onChange={(e) => setSchedulePosition((e.target.value as any) ?? '')}
+                      disabled={isLocked}
+                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <option value="">{t('全部岗位', 'All positions')}</option>
+                      {ALLOWED_POSITIONS.map((p) => (
+                        <option key={p} value={p}>
+                          {p}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {scheduleError && <p className="mt-3 text-sm text-ember">{t('加载失败：', 'Load failed: ')}{scheduleError}</p>}
+                {!scheduleError && scheduleRows.length === 0 && (
+                  <p className="mt-3 text-sm text-slate-400">{t('暂无排班记录。', 'No schedules yet.')}</p>
+                )}
+
+                {!scheduleError && scheduleRows.length > 0 && (
+                  <div className="no-scrollbar mt-5 overflow-x-auto overflow-y-hidden rounded-2xl border border-white/10 bg-black/30">
+                    <table className="min-w-[1100px] w-max table-fixed text-left text-xs leading-tight">
+                      <thead className="border-b border-white/10 text-[10px] uppercase tracking-[0.16em] text-slate-400">
+                        <tr>
+                          <th className="w-[120px] px-3 py-2">Date</th>
+                          <th className="w-[140px] px-3 py-2">Staff</th>
+                          <th className="w-[110px] px-3 py-2">Shift</th>
+                          <th className="w-[140px] px-3 py-2">Position</th>
+                          <th className="w-[220px] px-3 py-2">Note</th>
+                          <th className="w-[220px] px-3 py-2">Operator</th>
+                          <th className="w-[180px] px-3 py-2">Updated</th>
+                          <th className="w-[110px] px-3 py-2 text-right">{t('操作', 'Actions')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {scheduleRows.map((r) => {
+                          const date = String(r.date ?? '').trim();
+                          const staff = String(r.staff_id ?? '').trim();
+                          const shift = (r.shift ?? null) as 'early' | 'late' | null;
+                          const position = String(r.position ?? '').trim();
+                          const note = String(r.note ?? '').trim();
+                          const operator = String(r.operator ?? '').trim();
+                          const updated = r.updated_at ? new Date(r.updated_at).toLocaleString(locale, { hour12: false }) : '';
+
+                          return (
+                            <tr key={String(r.id ?? `${date}-${staff}`)} className="border-b border-white/5 last:border-0">
+                              <td className="px-3 py-2 text-slate-200 font-mono">{date || '-'}</td>
+                              <td className="px-3 py-2 text-slate-200 font-mono">{staff || '-'}</td>
+                              <td className="px-3 py-2 text-slate-200">
+                                <span
+                                  className={[
+                                    'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
+                                    shift === 'early'
+                                      ? 'border-indigo-400/60 text-indigo-200 bg-indigo-500/10'
+                                      : 'border-fuchsia-400/60 text-fuchsia-200 bg-fuchsia-500/10'
+                                  ].join(' ')}
+                                >
+                                  {shift === 'early' ? t('早班', 'Early') : t('晚班', 'Late')}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-slate-200">
+                                <span
+                                  className={[
+                                    'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
+                                    getPositionBadgeClass(position)
+                                  ].join(' ')}
+                                >
+                                  {position || '-'}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-slate-200 truncate">{note || '-'}</td>
+                              <td className="px-3 py-2 text-slate-400 truncate">{operator || '-'}</td>
+                              <td className="px-3 py-2 text-slate-400 truncate">{updated || '-'}</td>
+                              <td className="px-3 py-2 text-right">
+                                <button
+                                  type="button"
+                                  disabled={isLocked}
+                                  onClick={() => void deleteScheduleRow(r)}
+                                  className="rounded-xl bg-ember px-4 py-1.5 text-xs font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {t('删除', 'Delete')}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {scheduleAddOpen &&
+                  typeof document !== 'undefined' &&
+                  createPortal(
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
+                      <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-white/10 bg-slate-950/90 shadow-2xl backdrop-blur">
+                        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
+                          <div>
+                            <h3 className="font-display text-2xl tracking-[0.08em]">{t('新增排班', 'Add schedule')}</h3>
+                            <p className="mt-2 text-xs text-slate-400">
+                              {t('将写入表：', 'Writes to table: ')}
+                              <span className="font-mono text-slate-200">{SCHEDULE_TABLE}</span>
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={isLocked}
+                            onClick={closeScheduleAdd}
+                            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {t('关闭', 'Close')}
+                          </button>
+                        </div>
+
+                        <div className="px-6 py-5">
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div>
+                              <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Staff ID</label>
+                              <input
+                                value={scheduleAddStaffId}
+                                onChange={(e) => setScheduleAddStaffId(e.target.value)}
+                                disabled={isLocked}
+                                placeholder="US010454"
+                                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Date</label>
+                              <input
+                                type="date"
+                                value={scheduleAddDate}
+                                onChange={(e) => setScheduleAddDate(e.target.value)}
+                                disabled={isLocked}
+                                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Shift</label>
+                              <select
+                                value={scheduleAddShift}
+                                onChange={(e) => setScheduleAddShift((e.target.value as any) === 'late' ? 'late' : 'early')}
+                                disabled={isLocked}
+                                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <option value="early">{t('早班', 'Early')}</option>
+                                <option value="late">{t('晚班', 'Late')}</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Position</label>
+                              <select
+                                value={scheduleAddPosition}
+                                onChange={(e) => setScheduleAddPosition((e.target.value as any) ?? '')}
+                                disabled={isLocked}
+                                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <option value="">{t('选择岗位', 'Select position')}</option>
+                                {ALLOWED_POSITIONS.map((p) => (
+                                  <option key={p} value={p}>
+                                    {p}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="md:col-span-2">
+                              <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Note</label>
+                              <input
+                                value={scheduleAddNote}
+                                onChange={(e) => setScheduleAddNote(e.target.value)}
+                                disabled={isLocked}
+                                placeholder={t('可选：备注', 'Optional note')}
+                                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                              />
+                            </div>
+                          </div>
+
+                          {scheduleError && <p className="mt-3 text-sm text-ember">{scheduleError}</p>}
+
+                          <div className="mt-5 flex items-center justify-end gap-3">
+                            <button
+                              type="button"
+                              disabled={isLocked}
+                              onClick={closeScheduleAdd}
+                              className="h-11 rounded-2xl bg-white/10 px-6 text-sm font-semibold text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {t('取消', 'Cancel')}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isLocked}
+                              onClick={() => void saveScheduleAdd()}
+                              className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {t('保存', 'Save')}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>,
+                    document.body
+                  )}
               </section>
             )}
 
