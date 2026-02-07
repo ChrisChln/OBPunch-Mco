@@ -103,6 +103,8 @@ const ATTENDANCE_RESET_HOUR_RAW = Number(import.meta.env.VITE_ATTENDANCE_RESET_H
 const ATTENDANCE_RESET_HOUR = Number.isFinite(ATTENDANCE_RESET_HOUR_RAW)
   ? clamp(ATTENDANCE_RESET_HOUR_RAW, 0, 23)
   : 5;
+const SHIFT_ANALYSIS_DAYS_RAW = Number(import.meta.env.VITE_SHIFT_ANALYSIS_DAYS ?? 30);
+const SHIFT_ANALYSIS_DAYS = Number.isFinite(SHIFT_ANALYSIS_DAYS_RAW) ? clamp(SHIFT_ANALYSIS_DAYS_RAW, 1, 90) : 30;
 
 const getDayRange = (weekStart: Date, dayIndex: number, dayCount = 1) => {
   const startBase = addDays(weekStart, dayIndex);
@@ -294,6 +296,9 @@ export default function AdminApp() {
 
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
   const [employeesError, setEmployeesError] = useState<string | null>(null);
+  const [employeeShiftByStaffId, setEmployeeShiftByStaffId] = useState<
+    Record<string, { shift: '' | 'early' | 'late'; earlyHours: number; lateHours: number }>
+  >({});
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [employeeAgency, setEmployeeAgency] = useState('');
   const [employeePosition, setEmployeePosition] = useState('');
@@ -302,6 +307,7 @@ export default function AdminApp() {
   const [employeeNewName, setEmployeeNewName] = useState('');
   const [employeeNewAgency, setEmployeeNewAgency] = useState('');
   const [employeeNewPosition, setEmployeeNewPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [employeeAddOpen, setEmployeeAddOpen] = useState(false);
   const [employeeEditOpen, setEmployeeEditOpen] = useState(false);
   const [employeeEditStaffId, setEmployeeEditStaffId] = useState<string | null>(null);
   const [employeeEditName, setEmployeeEditName] = useState('');
@@ -381,26 +387,69 @@ export default function AdminApp() {
     return null;
   };
 
-  const getShiftBucketFromDate = (dt: Date) => {
-    if (Number.isNaN(dt.getTime())) return null;
-    const h = dt.getHours();
-    const m = dt.getMinutes();
-    const minutes = h * 60 + m;
-    const earlyStart = 5 * 60;
-    const earlyEnd = 15 * 60; // 3pm
-    return minutes >= earlyStart && minutes < earlyEnd ? 'early' : 'late';
-  };
+const getShiftBucketFromDate = (dt: Date) => {
+  if (Number.isNaN(dt.getTime())) return null;
+  const h = dt.getHours();
+  const m = dt.getMinutes();
+  const minutes = h * 60 + m;
+  const earlyStart = 5 * 60;
+  const earlyEnd = 15 * 60; // 3pm
+  return minutes >= earlyStart && minutes < earlyEnd ? 'early' : 'late';
+};
 
-  const getShiftBucket = (inAtIso: string) => {
+const getShiftBucket = (inAtIso: string) => {
     const dt = new Date(inAtIso);
     if (Number.isNaN(dt.getTime())) return null;
     const h = dt.getHours();
     const m = dt.getMinutes();
     const minutes = h * 60 + m;
-    const earlyStart = 5 * 60;
-    const earlyEnd = 15 * 60; // 3pm
-    return minutes >= earlyStart && minutes < earlyEnd ? 'early' : 'late';
-  };
+  const earlyStart = 5 * 60;
+  const earlyEnd = 15 * 60; // 3pm
+  return minutes >= earlyStart && minutes < earlyEnd ? 'early' : 'late';
+};
+
+const getShiftBadgeClass = (value: '' | 'early' | 'late') => {
+  if (value === 'early') return 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10';
+  if (value === 'late') return 'border-indigo-400/60 text-indigo-200 bg-indigo-500/10';
+  return 'border-white/20 text-slate-200 bg-white/5';
+};
+
+const overlapMs = (aStart: number, aEnd: number, bStart: number, bEnd: number) =>
+  Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
+
+const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
+  let earlyMs = 0;
+  let lateMs = 0;
+  for (const interval of intervals) {
+    const start = interval.start.getTime();
+    const end = interval.end.getTime();
+    if (end <= start) continue;
+    const cursor = new Date(interval.start);
+    cursor.setHours(0, 0, 0, 0);
+    while (cursor.getTime() < end) {
+      const dayStart = new Date(cursor);
+      const earlyStart = new Date(dayStart);
+      earlyStart.setHours(5, 0, 0, 0);
+      const earlyEnd = new Date(dayStart);
+      earlyEnd.setHours(15, 0, 0, 0);
+      const lateStart = new Date(earlyEnd);
+      const lateEnd = new Date(dayStart);
+      lateEnd.setDate(lateEnd.getDate() + 1);
+      lateEnd.setHours(5, 0, 0, 0);
+
+      const dayStartMs = dayStart.getTime();
+      const dayEndMs = lateEnd.getTime();
+      const segmentStart = Math.max(start, dayStartMs);
+      const segmentEnd = Math.min(end, dayEndMs);
+      if (segmentEnd > segmentStart) {
+        earlyMs += overlapMs(segmentStart, segmentEnd, earlyStart.getTime(), earlyEnd.getTime());
+        lateMs += overlapMs(segmentStart, segmentEnd, lateStart.getTime(), lateEnd.getTime());
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  }
+  return { earlyHours: earlyMs / 3600000, lateHours: lateMs / 3600000 };
+};
 
   const fetchRealtimeAttendance = async () => {
     if (!supabase) {
@@ -933,6 +982,8 @@ export default function AdminApp() {
       setEmployeesError(null);
 
       const pageSize = 200;
+      const rangeEnd = new Date(serverTime);
+      const rangeStart = addDays(rangeEnd, -SHIFT_ANALYSIS_DAYS);
 
       const build = (mode: EmployeeColumnMode, from: number, to: number) => {
         const agencyCol = mode === 'cased' ? 'Agency' : 'agency';
@@ -996,6 +1047,95 @@ export default function AdminApp() {
 
       setEmployees(all);
       setEmployeesHasMore(false);
+
+      const staffIds = all.map((e) => String(e.staff_id ?? '').trim()).filter(Boolean);
+      if (staffIds.length === 0) {
+        setEmployeeShiftByStaffId({});
+        return;
+      }
+
+      const fetchPunchesForStaff = async (ids: string[]) => {
+        const batches = chunk(ids, 200);
+        const allRows: Array<{ staff_id: string; action: string; created_at: string | null; id?: any }> = [];
+        const punchPageSize = 2000;
+        const maxPages = 80;
+
+        for (const batch of batches) {
+          const base = () =>
+            supabase
+              .from('ob_punches')
+              .select('id, staff_id, action, created_at')
+              .in('staff_id', batch)
+              .gte('created_at', rangeStart.toISOString())
+              .lt('created_at', rangeEnd.toISOString());
+
+          for (let page = 0; page < maxPages; page += 1) {
+            const from = page * punchPageSize;
+            const to = from + punchPageSize - 1;
+            const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
+            const attempt = attemptCreatedAt.error
+              ? await base().order('id', { ascending: true }).range(from, to)
+              : attemptCreatedAt;
+            if (attempt.error) {
+              return { rows: null as any, error: attempt.error.message };
+            }
+            const rows = (attempt.data as any[] | null) ?? [];
+            allRows.push(...rows);
+            if (rows.length < punchPageSize) break;
+            if (page === maxPages - 1) {
+              return { rows: null as any, error: 'Punch data too large; please narrow shift analysis range.' };
+            }
+          }
+        }
+
+        return { rows: allRows, error: null as string | null };
+      };
+
+      const punchesRes = await fetchPunchesForStaff(staffIds);
+      if (punchesRes.error) {
+        setEmployeeShiftByStaffId({});
+        return;
+      }
+
+      const eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT' }>> = {};
+      for (const p of punchesRes.rows ?? []) {
+        const staff = String(p.staff_id ?? '').trim();
+        const action = String(p.action ?? '').toUpperCase();
+        const atRaw = String(p.created_at ?? '').trim();
+        if (!staff || (action !== 'IN' && action !== 'OUT') || !atRaw) continue;
+        const at = new Date(atRaw);
+        if (Number.isNaN(at.getTime())) continue;
+        (eventsByStaff[staff] ??= []).push({ at, action: action === 'OUT' ? 'OUT' : 'IN' });
+      }
+      for (const staff of Object.keys(eventsByStaff)) {
+        eventsByStaff[staff]!.sort((a, b) => a.at.getTime() - b.at.getTime());
+      }
+
+      const shiftMap: Record<string, { shift: '' | 'early' | 'late'; earlyHours: number; lateHours: number }> = {};
+      for (const staff of staffIds) {
+        const events = eventsByStaff[staff] ?? [];
+        const intervals: Array<{ start: Date; end: Date }> = [];
+        let currentIn: Date | null = null;
+        for (const ev of events) {
+          if (ev.action === 'IN') {
+            currentIn = ev.at;
+            continue;
+          }
+          if (ev.action === 'OUT' && currentIn && ev.at.getTime() > currentIn.getTime()) {
+            intervals.push({ start: currentIn, end: ev.at });
+            currentIn = null;
+          }
+        }
+        if (currentIn && rangeEnd.getTime() > currentIn.getTime()) {
+          intervals.push({ start: currentIn, end: rangeEnd });
+        }
+        const { earlyHours, lateHours } = computeShiftHours(intervals);
+        let shift: '' | 'early' | 'late' = '';
+        if (earlyHours > lateHours) shift = 'early';
+        else if (lateHours > earlyHours) shift = 'late';
+        shiftMap[staff] = { shift, earlyHours, lateHours };
+      }
+      setEmployeeShiftByStaffId(shiftMap);
     });
   };
 
@@ -1163,6 +1303,78 @@ export default function AdminApp() {
     const rounded = Math.round(value * 100) / 100;
     if (rounded <= 0) return '';
     return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  };
+
+  const formatAuditDetail = (row: AuditRow) => {
+    const action = String(row.action ?? '').trim();
+    const payload = row.payload ?? null;
+    const details: Array<{ label: string; value: string }> = [];
+    const push = (label: string, value: any) => {
+      const text = String(value ?? '').trim();
+      if (text) details.push({ label, value: text });
+    };
+    const fmtTime = (value: any) => {
+      const raw = String(value ?? '').trim();
+      if (!raw) return '';
+      const dt = new Date(raw);
+      return Number.isNaN(dt.getTime()) ? raw : dt.toLocaleString(locale, { hour12: false });
+    };
+    const fmtAction = (value: any) => (String(value ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN');
+
+    let summary = action || '-';
+    if (action === 'employee_upsert') {
+      summary = t('新增/更新员工', 'Employee upsert');
+      push(t('姓名', 'Name'), payload?.name);
+      push('Agency', payload?.agency);
+      push(t('岗位', 'Position'), payload?.position);
+    } else if (action === 'employee_update') {
+      summary = t('更新员工信息', 'Employee updated');
+      push(t('姓名', 'Name'), payload?.name);
+      push('Agency', payload?.agency);
+      push(t('岗位', 'Position'), payload?.position);
+    } else if (action === 'employee_delete') {
+      summary = t('删除员工', 'Employee deleted');
+    } else if (action === 'employee_upload') {
+      summary = t('批量上传员工', 'Employee upload');
+      push(t('文件', 'File'), payload?.file_name);
+      push(t('总行数', 'Total rows'), payload?.total_rows);
+      push(t('插入', 'Inserted'), payload?.inserted);
+      push(t('补全更新', 'Updated'), payload?.updated_fill);
+      push(t('跳过', 'Skipped'), payload?.skipped_total);
+    } else if (action === 'punch_manual_add') {
+      summary = t('手动新增打卡', 'Manual punch add');
+      push(t('动作', 'Action'), fmtAction(payload?.action));
+      push(t('时间', 'Time'), fmtTime(payload?.created_at));
+      push(t('记录ID', 'Punch ID'), payload?.punch_id);
+    } else if (action === 'punch_manual_edit') {
+      summary = t('手动修改打卡', 'Manual punch edit');
+      const before = payload?.before ?? null;
+      const after = payload?.after ?? null;
+      const beforeText = before ? `${fmtAction(before.action)} @ ${fmtTime(before.created_at)}` : '';
+      const afterText = after ? `${fmtAction(after.action)} @ ${fmtTime(after.created_at)}` : '';
+      push(t('修改前', 'Before'), beforeText);
+      push(t('修改后', 'After'), afterText);
+      push(t('记录ID', 'Punch ID'), payload?.punch_id);
+    } else if (action === 'punch_manual_delete') {
+      summary = t('手动删除打卡', 'Manual punch delete');
+      const before = payload?.before ?? null;
+      const beforeText = before ? `${fmtAction(before.action)} @ ${fmtTime(before.created_at)}` : '';
+      push(t('删除记录', 'Deleted'), beforeText);
+      push(t('记录ID', 'Punch ID'), payload?.punch_id);
+    }
+
+    if (details.length === 0 && payload) {
+      let payloadText = '';
+      try {
+        payloadText = JSON.stringify(payload, null, 0);
+      } catch {
+        payloadText = String(payload ?? '');
+      }
+      if (payloadText.length > 260) payloadText = `${payloadText.slice(0, 260)}…`;
+      if (payloadText) details.push({ label: 'Payload', value: payloadText });
+    }
+
+    return { summary, details };
   };
 
   const fetchTimecard = async ({
@@ -2925,16 +3137,7 @@ export default function AdminApp() {
                       const action = String(r.action ?? '').trim() || '-';
                       const staff = String(r.staff_id ?? '').trim() || '-';
                       const target = String(r.target ?? '').trim() || '-';
-                      let payloadText = '';
-                      try {
-                        payloadText =
-                          r.payload === null || typeof r.payload === 'undefined'
-                            ? ''
-                            : JSON.stringify(r.payload, null, 0);
-                      } catch {
-                        payloadText = String(r.payload ?? '');
-                      }
-                      if (payloadText.length > 260) payloadText = `${payloadText.slice(0, 260)}…`;
+                      const auditDetail = formatAuditDetail(r);
 
                       return (
                         <div key={id} className="rounded-2xl bg-white/5 px-4 py-3">
@@ -2943,6 +3146,7 @@ export default function AdminApp() {
                               <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-200">
                                 {action}
                               </span>
+                              <span className="text-sm text-slate-200">{auditDetail.summary}</span>
                               <span className="text-sm text-slate-200">
                                 {t('工号：', 'Staff: ')}
                                 <span className="font-mono">{staff}</span>
@@ -2952,16 +3156,25 @@ export default function AdminApp() {
                                 {actor}
                               </span>
                               <span className="text-xs text-slate-500">
-                                {t('目标：', 'Target: ')}
-                                {target}
-                              </span>
-                            </div>
-                            <div className="text-right text-xs text-slate-400">{at}</div>
+                              {t('目标：', 'Target: ')}
+                              {target}
+                            </span>
                           </div>
-                          {payloadText && <div className="mt-2 text-xs text-slate-400">{payloadText}</div>}
+                          <div className="text-right text-xs text-slate-400">{at}</div>
                         </div>
-                      );
-                    })}
+                          {auditDetail.details.length > 0 && (
+                            <div className="mt-2 grid gap-1 text-xs text-slate-400">
+                              {auditDetail.details.map((item, detailIdx) => (
+                                <div key={`${id}-detail-${detailIdx}`} className="flex flex-wrap items-center gap-2">
+                                  <span className="text-slate-500">{item.label}</span>
+                                  <span className="text-slate-200">{item.value}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                      </div>
+                    );
+                  })}
                   </div>
                 )}
               </section>
@@ -2972,6 +3185,14 @@ export default function AdminApp() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="font-display text-2xl tracking-[0.08em]">{t('员工信息', 'Employees')}</h2>
                   <div className="flex gap-3">
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => setEmployeeAddOpen((prev) => !prev)}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {employeeAddOpen ? t('隐藏新增', 'Hide add') : t('新增员工', 'Add employee')}
+                    </button>
                     <button
                       type="button"
                       disabled={isLocked}
@@ -3057,56 +3278,58 @@ export default function AdminApp() {
                   </div>
                 </div>
 
-                <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('新增员工', 'Add Employee')}</div>
-                  <div className="mt-3 grid gap-3 md:grid-cols-5">
-                    <input
-                      value={employeeNewStaffId}
-                      onChange={(e) => setEmployeeNewStaffId(e.target.value)}
-                      disabled={isLocked}
-                      placeholder={t('员工ID（例如：US010454）', 'Staff ID (e.g. US010454)')}
-                      className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                    <input
-                      value={employeeNewName}
-                      onChange={(e) => setEmployeeNewName(e.target.value)}
-                      disabled={isLocked}
-                      placeholder={t('姓名', 'Name')}
-                      className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                    <input
-                      value={employeeNewAgency}
-                      onChange={(e) => setEmployeeNewAgency(e.target.value)}
-                      disabled={isLocked}
-                      placeholder="Agency"
-                      className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                    <select
-                      value={employeeNewPosition}
-                      onChange={(e) => setEmployeeNewPosition((e.target.value as any) ?? '')}
-                      disabled={isLocked}
-                      className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <option value="">{t('选择岗位', 'Position')}</option>
-                      {ALLOWED_POSITIONS.map((p) => (
-                        <option key={p} value={p}>
-                          {p}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      disabled={isLocked}
-                      onClick={() => void addEmployeeRow()}
-                      className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {t('添加', 'Add')}
-                    </button>
+                {employeeAddOpen && (
+                  <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <div className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('新增员工', 'Add Employee')}</div>
+                    <div className="mt-3 grid gap-3 md:grid-cols-5">
+                      <input
+                        value={employeeNewStaffId}
+                        onChange={(e) => setEmployeeNewStaffId(e.target.value)}
+                        disabled={isLocked}
+                        placeholder={t('员工ID（例如：US010454）', 'Staff ID (e.g. US010454)')}
+                        className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <input
+                        value={employeeNewName}
+                        onChange={(e) => setEmployeeNewName(e.target.value)}
+                        disabled={isLocked}
+                        placeholder={t('姓名', 'Name')}
+                        className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <input
+                        value={employeeNewAgency}
+                        onChange={(e) => setEmployeeNewAgency(e.target.value)}
+                        disabled={isLocked}
+                        placeholder="Agency"
+                        className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <select
+                        value={employeeNewPosition}
+                        onChange={(e) => setEmployeeNewPosition((e.target.value as any) ?? '')}
+                        disabled={isLocked}
+                        className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <option value="">{t('选择岗位', 'Position')}</option>
+                        {ALLOWED_POSITIONS.map((p) => (
+                          <option key={p} value={p}>
+                            {p}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={isLocked}
+                        onClick={() => void addEmployeeRow()}
+                        className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {t('添加', 'Add')}
+                      </button>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-400">
+                      {t('Position 仅允许 5 个岗位，添加时会自动统一大小写。', 'Position only allows 5 roles; case will be normalized.')}
+                    </p>
                   </div>
-                  <p className="mt-2 text-xs text-slate-400">
-                    {t('Position 仅允许 5 个岗位，添加时会自动统一大小写。', 'Position only allows 5 roles; case will be normalized.')}
-                  </p>
-                </div>
+                )}
 
                 {employeesError && (
                   <p className="mt-3 text-sm text-ember">
@@ -3126,6 +3349,7 @@ export default function AdminApp() {
                         <th className="px-4 py-3">Name</th>
                         <th className="px-4 py-3">Agency</th>
                         <th className="px-4 py-3">Position</th>
+                        <th className="px-4 py-3">{t('班次', 'Shift')}</th>
                         <th className="px-4 py-3 text-right">{t('操作', 'Actions')}</th>
                       </tr>
                     </thead>
@@ -3135,6 +3359,16 @@ export default function AdminApp() {
                         const name = String(e.name ?? '').trim();
                         const agency = String(e.agency ?? e.Agency ?? '').trim();
                         const position = String(e.position ?? e.Position ?? '').trim();
+                        const shiftInfo = employeeShiftByStaffId[staff];
+                        const shift = shiftInfo?.shift ?? '';
+                        const shiftLabel =
+                          shift === 'early' ? t('白班', 'Day') : shift === 'late' ? t('晚班', 'Night') : '-';
+                        const shiftTitle = shiftInfo
+                          ? t(
+                              `近${SHIFT_ANALYSIS_DAYS}天：白班 ${shiftInfo.earlyHours.toFixed(1)}h / 晚班 ${shiftInfo.lateHours.toFixed(1)}h`,
+                              `Last ${SHIFT_ANALYSIS_DAYS}d: Day ${shiftInfo.earlyHours.toFixed(1)}h / Night ${shiftInfo.lateHours.toFixed(1)}h`
+                            )
+                          : '';
 
                         return (
                           <tr key={String(e.id ?? staff)} className="border-b border-white/5 last:border-0">
@@ -3149,6 +3383,17 @@ export default function AdminApp() {
                                 ].join(' ')}
                               >
                                 {position || '-'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-slate-200">
+                              <span
+                                title={shiftTitle}
+                                className={[
+                                  'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
+                                  getShiftBadgeClass(shift)
+                                ].join(' ')}
+                              >
+                                {shiftLabel}
                               </span>
                             </td>
                             <td className="px-4 py-3 text-right">
