@@ -17,6 +17,9 @@ const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefine
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
+const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
+const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
+const SCHEDULE_REST_NOTE = '__rest__';
 
 const supabase = createSupabaseClient({ persistSession: true });
 
@@ -107,7 +110,34 @@ const addDays = (value: Date, days: number) => {
   return d;
 };
 
+type AppSettingRow = {
+  id?: number | string;
+  key?: string | null;
+  value?: any;
+  updated_at?: string | null;
+};
+
+const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
+const getTemplateDateByDayIndex = (dayIndex: number) => toDateOnly(addDays(SCHEDULE_TEMPLATE_WEEK_START, dayIndex));
+const getDayIndexFromTemplateDate = (dateOnly: string) => {
+  const dt = new Date(`${dateOnly}T00:00:00`);
+  if (Number.isNaN(dt.getTime())) return null;
+  const diffDays = Math.round((dt.getTime() - SCHEDULE_TEMPLATE_WEEK_START.getTime()) / (24 * 60 * 60 * 1000));
+  if (diffDays < 0 || diffDays > 6) return null;
+  return diffDays;
+};
+
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const isAbortLikeError = (error: unknown) => {
+  const message = String((error as any)?.message ?? error ?? '').toLowerCase();
+  const name = String((error as any)?.name ?? '');
+  return (
+    name === 'AbortError' ||
+    message.includes('aborterror') ||
+    message.includes('signal is aborted') ||
+    message.includes('aborted without reason')
+  );
+};
 
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? clamp(DAY_CUTOFF_HOUR_RAW, 0, 23) : 5;
@@ -363,13 +393,10 @@ export default function AdminApp() {
   const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [schedulePosition, setSchedulePosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
-
-  const [scheduleAddOpen, setScheduleAddOpen] = useState(false);
-  const [scheduleAddStaffId, setScheduleAddStaffId] = useState('');
-  const [scheduleAddDate, setScheduleAddDate] = useState(() => toDateOnly(new Date()));
-  const [scheduleAddShift, setScheduleAddShift] = useState<'early' | 'late'>('early');
-  const [scheduleAddPosition, setScheduleAddPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
-  const [scheduleAddNote, setScheduleAddNote] = useState('');
+  const [scheduleShift, setScheduleShift] = useState<'' | 'early' | 'late'>('');
+  const [scheduleWorkDayFilter, setScheduleWorkDayFilter] = useState<number | null>(null);
+  const [schedulePublishTomorrow, setSchedulePublishTomorrow] = useState(false);
+  const [schedulePublishForDate, setSchedulePublishForDate] = useState<string>('');
 
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFillDuplicates, setUploadFillDuplicates] = useState(true);
@@ -513,7 +540,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         if (seq !== attendanceFetchSeqRef.current) return;
 
         if (res.error) {
-          setAttendanceError(res.error.message);
+          if (!isAbortLikeError(res.error.message)) setAttendanceError(res.error.message);
           return;
         }
 
@@ -546,7 +573,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         if (seq !== attendanceFetchSeqRef.current) return;
 
         if (res.error) {
-          setAttendanceError(res.error.message);
+          if (!isAbortLikeError(res.error.message)) setAttendanceError(res.error.message);
           return;
         }
 
@@ -589,7 +616,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         }
         if (seq !== attendanceFetchSeqRef.current) return;
         if (res.error) {
-          setAttendanceError(res.error.message);
+          if (!isAbortLikeError(res.error.message)) setAttendanceError(res.error.message);
           return;
         }
         for (const r of (res.data as any[] | null) ?? []) {
@@ -623,7 +650,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
       setAttendanceStats(stats);
     } catch (err: any) {
-      setAttendanceError(String(err?.message ?? err));
+      if (!isAbortLikeError(err)) {
+        setAttendanceError(String(err?.message ?? err));
+      }
     }
   };
 
@@ -635,6 +664,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setBusy(reason);
     try {
       await fn();
+    } catch (err) {
+      if (!isAbortLikeError(err)) {
+        throw err;
+      }
     } finally {
       busyRef.current = false;
       setBusy(null);
@@ -838,22 +871,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     });
   };
 
-  const fetchSchedule = async (options?: { weekOffset?: number; search?: string; position?: string }) => {
+  const fetchSchedule = async () => {
     if (!supabase) {
       setScheduleError('缺少 Supabase 配置。');
       setScheduleRows([]);
       return;
     }
 
-    const offset = options?.weekOffset ?? scheduleWeekOffset;
-    const baseWeekStart = startOfWeekMonday(serverTime);
-    const weekStart = addDays(baseWeekStart, offset * 7);
-    const weekEnd = addDays(weekStart, 7);
-    const startDate = toDateOnly(weekStart);
-    const endDate = toDateOnly(weekEnd);
-
-    const searchValue = (options?.search ?? scheduleSearch).trim();
-    const positionValue = (options?.position ?? schedulePosition).trim();
+    const startDate = getTemplateDateByDayIndex(0);
+    const endDate = getTemplateDateByDayIndex(6);
 
     await runLocked('schedule', async () => {
       setScheduleError(null);
@@ -862,22 +888,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         .from(SCHEDULE_TABLE)
         .select('id, staff_id, date, shift, position, note, operator, updated_at, created_at')
         .gte('date', startDate)
-        .lt('date', endDate)
+        .lte('date', endDate)
         .order('date', { ascending: false })
         .order('staff_id', { ascending: true })
         .limit(2000);
 
-      if (positionValue) {
-        q = q.eq('position', positionValue as any);
-      }
-      if (searchValue) {
-        const term = `%${searchValue}%`;
-        q = q.or(`staff_id.ilike.${term},note.ilike.${term},operator.ilike.${term}`);
-      }
-
       const res = await q;
       if (res.error) {
-        setScheduleError(res.error.message);
+        if (!isAbortLikeError(res.error.message)) setScheduleError(res.error.message);
         setScheduleRows([]);
         return;
       }
@@ -886,93 +904,194 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     });
   };
 
-  const openScheduleAdd = () => {
-    const baseWeekStart = startOfWeekMonday(serverTime);
-    const weekStart = addDays(baseWeekStart, scheduleWeekOffset * 7);
-    setScheduleAddOpen(true);
-    setScheduleAddStaffId('');
-    setScheduleAddDate(toDateOnly(weekStart));
-    setScheduleAddShift('early');
-    setScheduleAddPosition('');
-    setScheduleAddNote('');
+  const fetchSchedulePublishSetting = async () => {
+    if (!supabase) return;
+    const res = await supabase
+      .from(APP_SETTINGS_TABLE)
+      .select('id, key, value, updated_at')
+      .eq('key', TOMORROW_LIST_PUBLISH_KEY)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (res.error) return;
+
+    const row = (((res.data as any[]) ?? [])[0] ?? null) as AppSettingRow | null;
+    if (!row) {
+      setSchedulePublishTomorrow(false);
+      setSchedulePublishForDate('');
+      return;
+    }
+
+    const value = (row.value ?? {}) as Record<string, unknown>;
+    setSchedulePublishTomorrow(Boolean(value.enabled));
+    setSchedulePublishForDate(String(value.publish_for_date ?? ''));
   };
 
-  const closeScheduleAdd = () => {
-    setScheduleAddOpen(false);
-  };
-
-  const saveScheduleAdd = async () => {
+  const setSchedulePublishSetting = async (enabled: boolean) => {
     if (!supabase) {
-      setScheduleError('缺少 Supabase 配置。');
+      setScheduleError('Missing Supabase configuration.');
       return;
     }
-    const staff = normalizeStaffId(scheduleAddStaffId);
-    if (!staff || !isValidStaffIdValue(staff)) {
-      setScheduleError('员工ID格式不正确（例如：US010454）。');
-      return;
-    }
-    const date = scheduleAddDate.trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      setScheduleError('日期格式不正确。');
-      return;
-    }
-    if (!scheduleAddPosition) {
-      setScheduleError(`请选择岗位：${ALLOWED_POSITIONS.join(', ')}`);
-      return;
-    }
+    const tomorrow = addDays(new Date(serverTime), 1);
+    const publishForDate = toDateOnly(tomorrow);
+    const payload = {
+      key: TOMORROW_LIST_PUBLISH_KEY,
+      value: {
+        enabled,
+        publish_for_date: enabled ? publishForDate : '',
+        updated_at: new Date(serverTime).toISOString(),
+        operator: user?.email ?? null
+      },
+      updated_at: new Date(serverTime).toISOString()
+    };
 
-    await runLocked('schedule_upsert', async () => {
+    await runLocked('schedule_publish_toggle', async () => {
       setScheduleError(null);
+      const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
+      if (upsertRes.error) {
+        const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', TOMORROW_LIST_PUBLISH_KEY);
+        if (updateRes.error) {
+          const insertRes = await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
+          if (insertRes.error) {
+            setScheduleError(insertRes.error.message);
+            return;
+          }
+        }
+      }
+      setSchedulePublishTomorrow(enabled);
+      setSchedulePublishForDate(enabled ? publishForDate : '');
+    });
+  };
+
+  const setScheduleCellState = async (
+    employee: EmployeeRow,
+    dayIndex: number,
+    nextState: 'empty' | 'work' | 'rest',
+    targetShift: 'early' | 'late'
+  ) => {
+    if (!supabase) {
+      setScheduleError('Missing Supabase configuration.');
+      return;
+    }
+    const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+    if (!staff || !isValidStaffIdValue(staff)) {
+      setScheduleError('Invalid staff id.');
+      return;
+    }
+    const templateDate = getTemplateDateByDayIndex(dayIndex);
+    const existing = scheduleRows.find((row) => {
+      const rowStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
+      return rowStaff === staff && rowDayIndex === dayIndex;
+    });
+    const existingState: 'empty' | 'work' | 'rest' = !existing
+      ? 'empty'
+      : String(existing.note ?? '').trim() === SCHEDULE_REST_NOTE
+        ? 'rest'
+        : 'work';
+    if (nextState === existingState && (nextState !== 'work' || (existing?.shift ?? 'early') === targetShift)) return;
+    if (nextState === 'empty' && !existing) return;
+
+    await runLocked('schedule_toggle', async () => {
+      setScheduleError(null);
+
+      if (nextState === 'empty') {
+        const delRes =
+          existing?.id != null
+            ? await supabase.from(SCHEDULE_TABLE).delete().eq('id', existing.id as any)
+            : await supabase.from(SCHEDULE_TABLE).delete().eq('staff_id', staff).eq('date', templateDate);
+        if (delRes.error) {
+          setScheduleError(delRes.error.message);
+          return;
+        }
+        setScheduleRows((prev) =>
+          prev.filter((row) => {
+            const rowStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
+            const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
+            return !(rowStaff === staff && rowDayIndex === dayIndex);
+          })
+        );
+        void writeAudit({
+          action: 'schedule_clear',
+          staffId: staff,
+          target: SCHEDULE_TABLE,
+          payload: { weekday: dayIndex + 1, template_date: templateDate, removed_id: existing?.id ?? null }
+        });
+        return;
+      }
+
+      const employeePosition = String(employee.position ?? employee.Position ?? '').trim();
+      const normalizedPosition =
+        ALLOWED_POSITIONS.find((p) => p.toLowerCase() === employeePosition.toLowerCase()) ?? ALLOWED_POSITIONS[0];
       const payload = {
         staff_id: staff,
-        date,
-        shift: scheduleAddShift,
-        position: scheduleAddPosition,
-        note: scheduleAddNote.trim() || null,
+        date: templateDate,
+        shift: targetShift,
+        position: normalizedPosition,
+        note: nextState === 'rest' ? SCHEDULE_REST_NOTE : null,
         operator: user?.email ?? null,
         updated_at: new Date(serverTime).toISOString()
       };
-      const res = await supabase.from(SCHEDULE_TABLE).upsert([payload as any], { onConflict: 'staff_id,date' });
-      if (res.error) {
-        setScheduleError(res.error.message);
-        return;
+      const upsertRes = await supabase.from(SCHEDULE_TABLE).upsert([payload as any], { onConflict: 'staff_id,date' });
+      if (upsertRes.error) {
+        if (existing?.id != null) {
+          const updateRes = await supabase.from(SCHEDULE_TABLE).update(payload as any).eq('id', existing.id as any);
+          if (updateRes.error) {
+            setScheduleError(updateRes.error.message);
+            return;
+          }
+        } else {
+          const insertRes = await supabase.from(SCHEDULE_TABLE).insert([payload as any]);
+          if (insertRes.error) {
+            setScheduleError(insertRes.error.message);
+            return;
+          }
+        }
       }
-      await writeAudit({
-        action: 'schedule_upsert',
+
+      const localRow: ScheduleRow = {
+        id: existing?.id ?? undefined,
+        staff_id: staff,
+        date: templateDate,
+        shift: targetShift,
+        position: normalizedPosition,
+        note: nextState === 'rest' ? SCHEDULE_REST_NOTE : null,
+        operator: user?.email ?? null,
+        updated_at: new Date(serverTime).toISOString()
+      };
+      setScheduleRows((prev) => {
+        let replaced = false;
+        const next = prev.map((row) => {
+          const rowStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
+          if (rowStaff === staff && rowDayIndex === dayIndex) {
+            replaced = true;
+            return { ...row, ...localRow };
+          }
+          return row;
+        });
+        if (!replaced) next.push(localRow);
+        return next;
+      });
+
+      void writeAudit({
+        action: nextState === 'rest' ? 'schedule_rest' : 'schedule_work',
         staffId: staff,
         target: SCHEDULE_TABLE,
-        payload
+        payload: {
+          weekday: dayIndex + 1,
+          template_date: templateDate,
+          position: normalizedPosition,
+          shift: targetShift,
+          state: nextState
+        }
       });
-      closeScheduleAdd();
-      await fetchSchedule();
     });
   };
 
-  const deleteScheduleRow = async (row: ScheduleRow) => {
-    if (!supabase) {
-      setScheduleError('缺少 Supabase 配置。');
-      return;
-    }
-    const id = String(row.id ?? '').trim();
-    if (!id) return;
-    const ok = window.confirm('确定要删除这条排班吗？此操作不可撤销。');
-    if (!ok) return;
-
-    await runLocked('schedule_delete', async () => {
-      setScheduleError(null);
-      const res = await supabase.from(SCHEDULE_TABLE).delete().eq('id', id);
-      if (res.error) {
-        setScheduleError(res.error.message);
-        return;
-      }
-      await writeAudit({
-        action: 'schedule_delete',
-        staffId: String(row.staff_id ?? '').trim() || null,
-        target: SCHEDULE_TABLE,
-        payload: { id, row }
-      });
-      await fetchSchedule();
-    });
+  const refreshSchedulePanel = async () => {
+    await fetchSchedule();
+    await fetchEmployees({ reset: true, search: '', agency: '', position: '' });
+    await fetchSchedulePublishSetting();
   };
 
   const fetchRecentPunches = async (options?: { search?: string; lockUi?: boolean }) => {
@@ -1109,7 +1228,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return;
       }
       if (result.error) {
-        setRecentPunchesError(result.error);
+        if (!isAbortLikeError(result.error)) setRecentPunchesError(result.error);
         setRecentPunches([]);
         setEmployeeByStaffId({});
         return;
@@ -1122,7 +1241,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     await runLocked('punches', async () => {
       const result = await exec();
       if (result.error) {
-        setRecentPunchesError(result.error);
+        if (!isAbortLikeError(result.error)) setRecentPunchesError(result.error);
         setRecentPunches([]);
         setEmployeeByStaffId({});
         return;
@@ -1204,7 +1323,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         }
 
         if (attempt.error) {
-          setEmployeesError(attempt.error.message);
+          if (!isAbortLikeError(attempt.error.message)) setEmployeesError(attempt.error.message);
           setEmployees([]);
           setEmployeesHasMore(false);
           return;
@@ -1955,7 +2074,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (seq !== timecardFetchSeqRef.current) {
         return;
       }
-      setTimecardError(result.error);
+      setTimecardError(isAbortLikeError(result.error) ? null : result.error);
       setTimecardRows(result.rows);
       setTimecardHasMore(false);
       return;
@@ -1965,7 +2084,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       setTimecardError(null);
       const result = await fetchAll();
       if (result.error) {
-        setTimecardError(result.error);
+        if (!isAbortLikeError(result.error)) setTimecardError(result.error);
         setTimecardRows([]);
         setTimecardHasMore(false);
         return;
@@ -2501,7 +2620,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       void fetchAudit({ search: auditSearch });
     }
     if (page === 'schedule') {
-      void fetchSchedule();
+      void refreshSchedulePanel();
     }
   }, [page]);
 
@@ -2903,6 +3022,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return true;
     });
   }, [timecardRows, timecardShift, timecardInProgressOnly]);
+  const timecardDayTotalHours = useMemo(() => {
+    const totals = new Array(7).fill(0) as number[];
+    for (const row of timecardRowsFiltered) {
+      for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+        totals[dayIndex] += Number(row.hoursByDay?.[dayIndex] ?? 0);
+      }
+    }
+    return totals;
+  }, [timecardRowsFiltered]);
 
   const timecardPunchRowsVisible = useMemo(() => {
     if (timecardPunchShowAll) return timecardPunchRows;
@@ -2969,6 +3097,66 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   }, [timecardPunchRows, timecardPunchShowAll, timecardPunchDayIndex, timecardWeekOffset, serverTime]);
 
   const timecardPunchReadOnly = timecardPunchDayIndex === null;
+
+  const scheduleWeekStart = useMemo(() => {
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    return addDays(baseWeekStart, scheduleWeekOffset * 7);
+  }, [serverTime, scheduleWeekOffset]);
+
+  const scheduleDays = useMemo(
+    () => Array.from({ length: 7 }, (_, idx) => addDays(scheduleWeekStart, idx)),
+    [scheduleWeekStart]
+  );
+
+  const scheduleRowsByStaffDayIndex = useMemo(() => {
+    const map = new Map<string, ScheduleRow>();
+    for (const row of scheduleRows) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
+      if (!staff || dayIndex === null) continue;
+      map.set(`${staff}__${dayIndex}`, row);
+    }
+    return map;
+  }, [scheduleRows]);
+
+  const scheduleEmployeesFiltered = useMemo(() => {
+    const search = scheduleSearch.trim().toLowerCase();
+    return employees
+      .filter((employee) => {
+        const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+        const name = String(employee.name ?? '').trim();
+        const position = String(employee.position ?? employee.Position ?? '').trim();
+        if (!staff) return false;
+        if (scheduleWorkDayFilter !== null) {
+          const row = scheduleRowsByStaffDayIndex.get(`${staff}__${scheduleWorkDayFilter}`);
+          const isWork = Boolean(row) && String(row?.note ?? '').trim() !== SCHEDULE_REST_NOTE;
+          if (!isWork) return false;
+        }
+        if (schedulePosition && position.toLowerCase() !== schedulePosition.toLowerCase()) return false;
+        if (scheduleShift) {
+          const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
+          if (inferredShift !== scheduleShift) return false;
+        }
+        if (!search) return true;
+        return [staff, name, position].join(' ').toLowerCase().includes(search);
+      })
+      .sort((a, b) => String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US'));
+  }, [employees, scheduleSearch, schedulePosition, scheduleShift, employeeShiftByStaffId, scheduleWorkDayFilter, scheduleRowsByStaffDayIndex]);
+
+  const scheduleWorkingCountByDayIndex = useMemo(() => {
+    const counts = Array.from({ length: 7 }, () => 0);
+    for (const employee of scheduleEmployeesFiltered) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff) continue;
+      for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+        const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
+        if (!row) continue;
+        const isRest = String(row.note ?? '').trim() === SCHEDULE_REST_NOTE;
+        if (!isRest) counts[dayIndex] += 1;
+      }
+    }
+    return counts;
+  }, [scheduleEmployeesFiltered, scheduleRowsByStaffDayIndex]);
 
   if (!supabase) {
     return (
@@ -3365,16 +3553,30 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               </section>
             )}
 
-            {page === 'schedule' && (
+                        {page === 'schedule' && (
               <section className="glass reveal rounded-3xl px-6 py-8">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h2 className="font-display text-2xl tracking-[0.08em]">{t('排班', 'Schedule')}</h2>
-                    <p className="mt-2 text-xs text-slate-400">
-                      {t('按周管理排班（示例版）。', 'Manage weekly schedules (MVP).')}
-                    </p>
+                    <h2 className="font-display text-2xl tracking-[0.08em]">Schedule</h2>
+                    <p className="mt-2 text-xs text-slate-400">Weekly matrix: Empty / Work / Rest.</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => void setSchedulePublishSetting(!schedulePublishTomorrow)}
+                      className={[
+                        'rounded-2xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                        schedulePublishTomorrow
+                          ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/60'
+                          : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                      ].join(' ')}
+                      title="Manual publish tomorrow roster"
+                    >
+                      {schedulePublishTomorrow
+                        ? `Tomorrow list ON (${schedulePublishForDate || '-'})`
+                        : 'Tomorrow list OFF'}
+                    </button>
                     <button
                       type="button"
                       disabled={isLocked}
@@ -3386,7 +3588,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {t('上一周', 'Prev')}
+                      Prev
                     </button>
                     <button
                       type="button"
@@ -3398,7 +3600,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {t('本周', 'This week')}
+                      This week
                     </button>
                     <button
                       type="button"
@@ -3411,28 +3613,20 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {t('下一周', 'Next')}
+                      Next
                     </button>
                     <button
                       type="button"
                       disabled={isLocked}
-                      onClick={() => void fetchSchedule()}
+                      onClick={() => void refreshSchedulePanel()}
                       className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {t('刷新', 'Refresh')}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isLocked}
-                      onClick={openScheduleAdd}
-                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {t('新增排班', 'Add')}
+                      Refresh
                     </button>
                   </div>
                 </div>
 
-                <div className="mt-5 grid gap-4 md:grid-cols-6">
+                <div className="mt-5 grid gap-4 md:grid-cols-8">
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Week</label>
                     <input
@@ -3449,7 +3643,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         const offset = Math.round((weekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
                         setScheduleWeekOffset(offset);
                         setScheduleWeekInput(toDateOnly(weekStart));
-                        void fetchSchedule({ weekOffset: offset });
                       }}
                       className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     />
@@ -3460,7 +3653,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       value={scheduleSearch}
                       onChange={(e) => setScheduleSearch(e.target.value)}
                       disabled={isLocked}
-                      placeholder={t('按工号/备注/操作者搜索', 'Search staff id / note / operator')}
+                      placeholder="Search by staff id / name / position"
                       className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </div>
@@ -3472,7 +3665,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       disabled={isLocked}
                       className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      <option value="">{t('全部岗位', 'All positions')}</option>
+                      <option value="">All positions</option>
                       {ALLOWED_POSITIONS.map((p) => (
                         <option key={p} value={p}>
                           {p}
@@ -3480,77 +3673,154 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       ))}
                     </select>
                   </div>
+                  <div className="md:col-span-2">
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Shift</label>
+                    <select
+                      value={scheduleShift}
+                      onChange={(e) => setScheduleShift((e.target.value as any) ?? '')}
+                      disabled={isLocked}
+                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <option value="">All shifts</option>
+                      <option value="early">Early</option>
+                      <option value="late">Late</option>
+                    </select>
+                  </div>
                 </div>
 
-                {scheduleError && <p className="mt-3 text-sm text-ember">{t('加载失败：', 'Load failed: ')}{scheduleError}</p>}
-                {!scheduleError && scheduleRows.length === 0 && (
-                  <p className="mt-3 text-sm text-slate-400">{t('暂无排班记录。', 'No schedules yet.')}</p>
+                <div className="mt-4 text-xs text-slate-400">
+                  Loaded: {scheduleEmployeesFiltered.length} / {employees.length}
+                  {scheduleWorkDayFilter !== null && (
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => setScheduleWorkDayFilter(null)}
+                      className="ml-3 rounded-md bg-white/10 px-2 py-0.5 text-[11px] text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Day filter: {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][scheduleWorkDayFilter]} (Clear)
+                    </button>
+                  )}
+                </div>
+
+                {scheduleError && <p className="mt-3 text-sm text-ember">Load failed: {scheduleError}</p>}
+                {!scheduleError && scheduleEmployeesFiltered.length === 0 && (
+                  <p className="mt-3 text-sm text-slate-400">No employees found.</p>
                 )}
 
-                {!scheduleError && scheduleRows.length > 0 && (
-                  <div className="no-scrollbar mt-5 overflow-x-auto overflow-y-hidden rounded-2xl border border-white/10 bg-black/30">
-                    <table className="min-w-[1100px] w-max table-fixed text-left text-xs leading-tight">
-                      <thead className="border-b border-white/10 text-[10px] uppercase tracking-[0.16em] text-slate-400">
+                {!scheduleError && scheduleEmployeesFiltered.length > 0 && (
+                  <div className="no-scrollbar mt-4 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
+                    <table className="min-w-[1450px] w-max table-fixed text-left text-xs leading-tight">
+                      <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
-                          <th className="w-[120px] px-3 py-2">Date</th>
-                          <th className="w-[140px] px-3 py-2">Staff</th>
-                          <th className="w-[110px] px-3 py-2">Shift</th>
-                          <th className="w-[140px] px-3 py-2">Position</th>
-                          <th className="w-[220px] px-3 py-2">Note</th>
-                          <th className="w-[220px] px-3 py-2">Operator</th>
-                          <th className="w-[180px] px-3 py-2">Updated</th>
-                          <th className="w-[110px] px-3 py-2 text-right">{t('操作', 'Actions')}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {scheduleRows.map((r) => {
-                          const date = String(r.date ?? '').trim();
-                          const staff = String(r.staff_id ?? '').trim();
-                          const shift = (r.shift ?? null) as 'early' | 'late' | null;
-                          const position = String(r.position ?? '').trim();
-                          const note = String(r.note ?? '').trim();
-                          const operator = String(r.operator ?? '').trim();
-                          const updated = r.updated_at ? new Date(r.updated_at).toLocaleString(locale, { hour12: false }) : '';
-
-                          return (
-                            <tr key={String(r.id ?? `${date}-${staff}`)} className="border-b border-white/5 last:border-0">
-                              <td className="px-3 py-2 text-slate-200 font-mono">{date || '-'}</td>
-                              <td className="px-3 py-2 text-slate-200 font-mono">{staff || '-'}</td>
-                              <td className="px-3 py-2 text-slate-200">
-                                <span
-                                  className={[
-                                    'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
-                                    shift === 'early'
-                                      ? 'border-indigo-400/60 text-indigo-200 bg-indigo-500/10'
-                                      : 'border-fuchsia-400/60 text-fuchsia-200 bg-fuchsia-500/10'
-                                  ].join(' ')}
-                                >
-                                  {shift === 'early' ? t('早班', 'Early') : t('晚班', 'Late')}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 text-slate-200">
-                                <span
-                                  className={[
-                                    'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
-                                    getPositionBadgeClass(position)
-                                  ].join(' ')}
-                                >
-                                  {position || '-'}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 text-slate-200 truncate">{note || '-'}</td>
-                              <td className="px-3 py-2 text-slate-400 truncate">{operator || '-'}</td>
-                              <td className="px-3 py-2 text-slate-400 truncate">{updated || '-'}</td>
-                              <td className="px-3 py-2 text-right">
+                          <th className="sticky top-0 z-20 w-[100px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">ID</th>
+                          <th className="sticky top-0 z-20 w-[155px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">Name</th>
+                          <th className="sticky top-0 z-20 w-[96px] bg-slate-950/95 px-2 py-2 text-center backdrop-blur">Work Days</th>
+                          <th className="sticky top-0 z-20 w-[108px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">Agency</th>
+                          <th className="sticky top-0 z-20 w-[86px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">Position</th>
+                          <th className="sticky top-0 z-20 w-[76px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">Shift</th>
+                          {scheduleDays.map((day, idx) => (
+                            <th key={toDateOnly(day)} className="sticky top-0 z-20 w-[92px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
+                              <div className="flex flex-col items-center leading-tight">
                                 <button
                                   type="button"
                                   disabled={isLocked}
-                                  onClick={() => void deleteScheduleRow(r)}
-                                  className="rounded-xl bg-ember px-4 py-1.5 text-xs font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                                  onClick={() => setScheduleWorkDayFilter((prev) => (prev === idx ? null : idx))}
+                                  className={[
+                                    'rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition',
+                                    scheduleWorkDayFilter === idx
+                                      ? 'bg-neon/20 text-neon'
+                                      : 'text-neon hover:bg-white/10',
+                                    isLocked ? 'cursor-not-allowed opacity-60' : ''
+                                  ].join(' ')}
+                                  title="Filter employees working this day"
                                 >
-                                  {t('删除', 'Delete')}
+                                  {`工作 ${scheduleWorkingCountByDayIndex[idx]}人`}
                                 </button>
+                                <span>{`${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][idx]} ${toDateOnly(day).slice(5)}`}</span>
+                              </div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {scheduleEmployeesFiltered.map((employee) => {
+                          const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+                          const name = String(employee.name ?? '').trim();
+                          const agency = String(employee.agency ?? employee.Agency ?? '').trim();
+                          const position = String(employee.position ?? employee.Position ?? '').trim();
+                          if (!staff) return null;
+
+                          let workDays = 0;
+                          for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+                            const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
+                            if (!row) continue;
+                            const isRest = String(row.note ?? '').trim() === SCHEDULE_REST_NOTE;
+                            if (!isRest) workDays += 1;
+                          }
+                          const workDaysClass =
+                            workDays === 5
+                              ? 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10'
+                              : workDays >= 1 && workDays <= 4
+                                ? 'border-amber-400/60 text-amber-200 bg-amber-500/10'
+                                : 'border-rose-400/60 text-rose-200 bg-rose-500/10';
+
+                          return (
+                            <tr className="group border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-0" key={staff}>
+                              <td className="px-1.5 py-2 font-mono text-slate-200">{staff}</td>
+                              <td className="px-1.5 py-2 text-slate-200 truncate">{name || '-'}</td>
+                              <td className="px-2 py-2 text-center">
+                                <span className={['inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold', workDaysClass].join(' ')}>
+                                  {workDays}
+                                </span>
                               </td>
+                              <td className="px-1.5 py-2 text-slate-200 truncate">{agency || '-'}</td>
+                              <td className="px-1.5 py-2 text-slate-200">
+                                <span className={['inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]', getPositionBadgeClass(position)].join(' ')}>
+                                  {position || '-'}
+                                </span>
+                              </td>
+                              <td className="px-2 py-2 text-center text-slate-200">
+                                {(() => {
+                                  const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
+                                  const shiftLabel = inferredShift === 'early' ? '早班' : inferredShift === 'late' ? '晚班' : '-';
+                                  const shiftClass = getShiftBadgeClass(inferredShift);
+                                  return <span className={['inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold tracking-[0.08em]', shiftClass].join(' ')}>{shiftLabel}</span>;
+                                })()}
+                              </td>
+                              {scheduleDays.map((_, dayIndex) => {
+                                const key = `${staff}__${dayIndex}`;
+                                const row = scheduleRowsByStaffDayIndex.get(key);
+                                const state: 'empty' | 'work' | 'rest' = !row
+                                  ? 'empty'
+                                  : String(row.note ?? '').trim() === SCHEDULE_REST_NOTE
+                                    ? 'rest'
+                                    : 'work';
+                                const targetShift = scheduleShift || ((row?.shift as 'early' | 'late' | null) ?? 'early');
+                                const nextState: 'empty' | 'work' | 'rest' =
+                                  state === 'empty' ? 'work' : state === 'work' ? 'rest' : 'work';
+
+                                return (
+                                  <td key={key} className="px-1 py-1.5 align-middle">
+                                    <div className="flex items-center justify-center">
+                                      <button
+                                        type="button"
+                                        disabled={isLocked}
+                                        onClick={() => void setScheduleCellState(employee, dayIndex, nextState, targetShift)}
+                                        className={[
+                                          'h-7 min-w-[42px] rounded-md px-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55',
+                                          state === 'work'
+                                            ? 'bg-neon text-ink shadow-glow'
+                                            : state === 'rest'
+                                              ? 'bg-ember text-white'
+                                              : 'border border-white/20 bg-white/5 text-slate-200 hover:bg-white/10'
+                                        ].join(' ')}
+                                      >
+                                        {state === 'work' ? '工作' : state === 'rest' ? '休息' : '空'}
+                                      </button>
+                                    </div>
+                                  </td>
+                                );
+                              })}
                             </tr>
                           );
                         })}
@@ -3558,117 +3828,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     </table>
                   </div>
                 )}
-
-                {scheduleAddOpen &&
-                  typeof document !== 'undefined' &&
-                  createPortal(
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
-                      <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-white/10 bg-slate-950/90 shadow-2xl backdrop-blur">
-                        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
-                          <div>
-                            <h3 className="font-display text-2xl tracking-[0.08em]">{t('新增排班', 'Add schedule')}</h3>
-                            <p className="mt-2 text-xs text-slate-400">
-                              {t('将写入表：', 'Writes to table: ')}
-                              <span className="font-mono text-slate-200">{SCHEDULE_TABLE}</span>
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            disabled={isLocked}
-                            onClick={closeScheduleAdd}
-                            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {t('关闭', 'Close')}
-                          </button>
-                        </div>
-
-                        <div className="px-6 py-5">
-                          <div className="grid gap-4 md:grid-cols-2">
-                            <div>
-                              <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Staff ID</label>
-                              <input
-                                value={scheduleAddStaffId}
-                                onChange={(e) => setScheduleAddStaffId(e.target.value)}
-                                disabled={isLocked}
-                                placeholder="US010454"
-                                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                              />
-                            </div>
-                            <div>
-                              <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Date</label>
-                              <input
-                                type="date"
-                                value={scheduleAddDate}
-                                onChange={(e) => setScheduleAddDate(e.target.value)}
-                                disabled={isLocked}
-                                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                              />
-                            </div>
-                            <div>
-                              <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Shift</label>
-                              <select
-                                value={scheduleAddShift}
-                                onChange={(e) => setScheduleAddShift((e.target.value as any) === 'late' ? 'late' : 'early')}
-                                disabled={isLocked}
-                                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                <option value="early">{t('早班', 'Early')}</option>
-                                <option value="late">{t('晚班', 'Late')}</option>
-                              </select>
-                            </div>
-                            <div>
-                              <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Position</label>
-                              <select
-                                value={scheduleAddPosition}
-                                onChange={(e) => setScheduleAddPosition((e.target.value as any) ?? '')}
-                                disabled={isLocked}
-                                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                <option value="">{t('选择岗位', 'Select position')}</option>
-                                {ALLOWED_POSITIONS.map((p) => (
-                                  <option key={p} value={p}>
-                                    {p}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="md:col-span-2">
-                              <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Note</label>
-                              <input
-                                value={scheduleAddNote}
-                                onChange={(e) => setScheduleAddNote(e.target.value)}
-                                disabled={isLocked}
-                                placeholder={t('可选：备注', 'Optional note')}
-                                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                              />
-                            </div>
-                          </div>
-
-                          {scheduleError && <p className="mt-3 text-sm text-ember">{scheduleError}</p>}
-
-                          <div className="mt-5 flex items-center justify-end gap-3">
-                            <button
-                              type="button"
-                              disabled={isLocked}
-                              onClick={closeScheduleAdd}
-                              className="h-11 rounded-2xl bg-white/10 px-6 text-sm font-semibold text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {t('取消', 'Cancel')}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isLocked}
-                              onClick={() => void saveScheduleAdd()}
-                              className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {t('保存', 'Save')}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>,
-                    document.body
-                  )}
               </section>
             )}
 
@@ -3833,9 +3992,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   <p className="mt-3 text-sm text-slate-400">{t('暂无数据，点击“刷新/搜索”。', 'No data. Click “Refresh/Search”.')}</p>
                 )}
 
-                <div className="mt-5 overflow-auto rounded-2xl border border-white/10 bg-black/30">
+                <div className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
                   <table className="min-w-[900px] w-full text-left text-sm">
-                    <thead className="border-b border-white/10 text-xs uppercase tracking-[0.2em] text-slate-400">
+                    <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-xs uppercase tracking-[0.2em] text-slate-400 backdrop-blur">
                       <tr>
                         <th className="px-4 py-3">Employee ID</th>
                         <th className="px-4 py-3">Name</th>
@@ -4246,9 +4405,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   </p>
                 )}
 
-                <div className="no-scrollbar mt-5 overflow-x-auto overflow-y-hidden rounded-2xl border border-white/10 bg-black/30">
+                <div className="no-scrollbar mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
                   <table className="min-w-[1500px] w-max table-fixed text-left text-xs leading-tight">
-                    <thead className="border-b border-white/10 text-[10px] uppercase tracking-[0.16em] text-slate-400">
+                    <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                       {(() => {
                         const baseWeekStart = startOfWeekMonday(serverTime);
                         const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
@@ -4261,7 +4420,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             <th className="w-[120px] px-2 py-1.5">岗位</th>
                             {days.map((label, idx) => (
                               <th key={label} className="w-[92px] px-2 py-1.5 whitespace-nowrap text-center">
-                                {label} {toDateOnly(addDays(weekStart, idx)).slice(5)}
+                                <div className="text-neon">{`${t('总工时', 'Total')} ${formatHours(timecardDayTotalHours[idx]) || '0'}`}</div>
+                                <div>{label} {toDateOnly(addDays(weekStart, idx)).slice(5)}</div>
                               </th>
                             ))}
                             <th className="w-[92px] px-2 py-1.5 text-center">合计</th>
