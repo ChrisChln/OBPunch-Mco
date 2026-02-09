@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { createSupabaseClient } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
@@ -15,6 +15,7 @@ type Status = {
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
+type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
@@ -75,6 +76,14 @@ type ScheduleRow = {
   operator?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
+};
+
+type DailyListRow = {
+  staff_id: string;
+  name: string;
+  agency: string;
+  position: string;
+  shift: 'early' | 'late';
 };
 
 const formatTime = (value: Date, locale: string = 'zh-CN') =>
@@ -148,6 +157,7 @@ const ATTENDANCE_RESET_HOUR = Number.isFinite(ATTENDANCE_RESET_HOUR_RAW)
   : 5;
 const SHIFT_ANALYSIS_DAYS_RAW = Number(import.meta.env.VITE_SHIFT_ANALYSIS_DAYS ?? 30);
 const SHIFT_ANALYSIS_DAYS = Number.isFinite(SHIFT_ANALYSIS_DAYS_RAW) ? clamp(SHIFT_ANALYSIS_DAYS_RAW, 1, 90) : 30;
+const DAILY_LIST_RESET_HOUR = 5;
 
 const getDayRange = (weekStart: Date, dayIndex: number, dayCount = 1) => {
   const startBase = addDays(weekStart, dayIndex);
@@ -156,6 +166,14 @@ const getDayRange = (weekStart: Date, dayIndex: number, dayCount = 1) => {
     start: new Date(startBase.getTime() + DAY_CUTOFF_MS),
     end: new Date(endBase.getTime() + DAY_CUTOFF_MS)
   };
+};
+const getOperationalDateKey = (now: Date, cutoffHour: number) => {
+  const operationalStart = new Date(now);
+  operationalStart.setHours(cutoffHour, 0, 0, 0);
+  if (now.getTime() < operationalStart.getTime()) {
+    operationalStart.setDate(operationalStart.getDate() - 1);
+  }
+  return toDateOnly(operationalStart);
 };
 
 const getPositionBadgeClass = (value: string) => {
@@ -298,6 +316,7 @@ export default function AdminApp() {
   const timecardFetchSeqRef = useRef(0);
   const punchesFetchSeqRef = useRef(0);
   const attendanceFetchSeqRef = useRef(0);
+  const dailyListResetKeyRef = useRef(getOperationalDateKey(new Date(), DAILY_LIST_RESET_HOUR));
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
 
@@ -397,6 +416,22 @@ export default function AdminApp() {
   const [scheduleWorkDayFilter, setScheduleWorkDayFilter] = useState<number | null>(null);
   const [schedulePublishTomorrow, setSchedulePublishTomorrow] = useState(false);
   const [schedulePublishForDate, setSchedulePublishForDate] = useState<string>('');
+  const [dailyListOpen, setDailyListOpen] = useState(false);
+  const [dailyListSelectedPositions, setDailyListSelectedPositions] = useState<Record<AllowedPosition, boolean>>({
+    Pick: false,
+    Pack: false,
+    Rebin: false,
+    Preship: false,
+    Transfer: false
+  });
+  const [dailyListFilterPositions, setDailyListFilterPositions] = useState<Record<AllowedPosition, boolean>>({
+    Pick: false,
+    Pack: false,
+    Rebin: false,
+    Preship: false,
+    Transfer: false
+  });
+  const deferredScheduleSearch = useDeferredValue(scheduleSearch);
 
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFillDuplicates, setUploadFillDuplicates] = useState(true);
@@ -466,6 +501,17 @@ const getShiftBadgeClass = (value: '' | 'early' | 'late') => {
   if (value === 'early') return 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10';
   if (value === 'late') return 'border-indigo-400/60 text-indigo-200 bg-indigo-500/10';
   return 'border-white/20 text-slate-200 bg-white/5';
+};
+const normalizeShiftValue = (value: string): '' | 'early' | 'late' => {
+  const v = value.trim().toLowerCase();
+  if (v === 'early' || v === 'day' || v === 'morning') return 'early';
+  if (v === 'late' || v === 'night' || v === 'evening') return 'late';
+  return '';
+};
+const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
+  const pos = normalizePositionKey(position) ?? '';
+  if (shift === 'early') return pos === 'Pick' ? '07:00' : '08:00';
+  return pos === 'Pick' ? '15:30' : '16:30';
 };
 
 const overlapMs = (aStart: number, aEnd: number, bStart: number, bEnd: number) =>
@@ -682,6 +728,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     tick();
     return () => window.clearInterval(timer);
   }, [offsetMs]);
+  useEffect(() => {
+    const key = getOperationalDateKey(serverTime, DAILY_LIST_RESET_HOUR);
+    if (dailyListResetKeyRef.current === key) return;
+    dailyListResetKeyRef.current = key;
+    setDailyListSelectedPositions({
+      Pick: false,
+      Pack: false,
+      Rebin: false,
+      Preship: false,
+      Transfer: false
+    });
+  }, [serverTime]);
 
   useEffect(() => {
     if (page !== 'timecard') {
@@ -703,26 +761,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }, 250);
     return () => window.clearTimeout(handle);
   }, [page, timecardSearch, timecardAgency, timecardPosition, timecardMissingEmployeeOnly]);
-
-  useEffect(() => {
-    if (page !== 'employees') {
-      return;
-    }
-    const handle = window.setTimeout(() => {
-      void fetchEmployees({ reset: true });
-    }, 250);
-    return () => window.clearTimeout(handle);
-  }, [page, employeeSearch, employeeAgency, employeePosition]);
-
-  useEffect(() => {
-    if (page !== 'schedule') {
-      return;
-    }
-    const handle = window.setTimeout(() => {
-      void fetchSchedule();
-    }, 250);
-    return () => window.clearTimeout(handle);
-  }, [page, scheduleSearch, schedulePosition, scheduleWeekOffset]);
 
   useEffect(() => {
     let active = true;
@@ -3002,6 +3040,21 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
   }, [employees]);
+  const employeesFiltered = useMemo(() => {
+    const searchNeedle = employeeSearch.trim().toLowerCase();
+    const agencyNeedle = employeeAgency.trim().toLowerCase();
+    const positionNeedle = employeePosition.trim().toLowerCase();
+    return employees.filter((e) => {
+      const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
+      const name = String(e.name ?? '').trim();
+      const agency = String(e.agency ?? e.Agency ?? '').trim();
+      const position = String(e.position ?? e.Position ?? '').trim();
+      if (agencyNeedle && !agency.toLowerCase().includes(agencyNeedle)) return false;
+      if (positionNeedle && !position.toLowerCase().includes(positionNeedle)) return false;
+      if (!searchNeedle) return true;
+      return [staff, name].join(' ').toLowerCase().includes(searchNeedle);
+    });
+  }, [employees, employeeSearch, employeeAgency, employeePosition]);
 
   const timecardAgencyOptions = useMemo(() => {
     const out = new Set<string>();
@@ -3118,13 +3171,132 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
     return map;
   }, [scheduleRows]);
+  const employeeProfileByStaffId = useMemo(() => {
+    const map = new Map<string, { name: string; agency: string; position: string }>();
+    for (const employee of employees) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff) continue;
+      map.set(staff, {
+        name: String(employee.name ?? '').trim(),
+        agency: String(employee.agency ?? employee.Agency ?? '').trim(),
+        position: String(employee.position ?? employee.Position ?? '').trim()
+      });
+    }
+    return map;
+  }, [employees]);
+  const tomorrowDailyList = useMemo(() => {
+    const tomorrow = addDays(new Date(serverTime), 1);
+    const dayIndex = (tomorrow.getDay() + 6) % 7; // Mon=0..Sun=6
+    const templateDate = getTemplateDateByDayIndex(dayIndex);
+    const byStaff = new Map<string, ScheduleRow>();
+    for (const row of scheduleRows) {
+      const rowTemplateDate = String(row.date ?? '').trim();
+      if (rowTemplateDate !== templateDate) continue;
+      if (String(row.note ?? '').trim() === SCHEDULE_REST_NOTE) continue;
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff || byStaff.has(staff)) continue;
+      byStaff.set(staff, row);
+    }
 
-  const scheduleEmployeesFiltered = useMemo(() => {
-    const search = scheduleSearch.trim().toLowerCase();
+    const earlyRows: DailyListRow[] = [];
+    const lateRows: DailyListRow[] = [];
+    for (const [staff, row] of byStaff.entries()) {
+      const profile = employeeProfileByStaffId.get(staff);
+      const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
+      const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
+      const shift: 'early' | 'late' = (inferredShift || scheduledShift || 'early') as 'early' | 'late';
+      const item: DailyListRow = {
+        staff_id: staff,
+        name: profile?.name || '',
+        agency: profile?.agency || '',
+        position: String(row.position ?? '').trim() || profile?.position || '',
+        shift
+      };
+      if (shift === 'late') lateRows.push(item);
+      else earlyRows.push(item);
+    }
+    earlyRows.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
+    lateRows.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
+
+    return {
+      targetDate: toDateOnly(tomorrow),
+      weekday: tomorrow.toLocaleDateString('en-US', { weekday: 'short' }),
+      earlyRows,
+      lateRows
+    };
+  }, [serverTime, scheduleRows, employeeProfileByStaffId, employeeShiftByStaffId]);
+  const tomorrowAttendanceCards = useMemo(() => {
+    const countByKey: Record<string, number> = {};
+    const addRows = (rows: DailyListRow[], shift: 'early' | 'late') => {
+      for (const row of rows) {
+        const normalizedPosition = normalizePositionKey(String(row.position ?? '').trim());
+        if (!normalizedPosition) continue;
+        const key = `${shift}:${normalizedPosition}`;
+        countByKey[key] = (countByKey[key] ?? 0) + 1;
+      }
+    };
+    addRows(tomorrowDailyList.earlyRows, 'early');
+    addRows(tomorrowDailyList.lateRows, 'late');
+    return (['early', 'late'] as const).flatMap((shift) =>
+      ALLOWED_POSITIONS.map((position) => ({
+        key: `${shift}:${position}`,
+        shift,
+        position,
+        count: countByKey[`${shift}:${position}`] ?? 0
+      }))
+    );
+  }, [tomorrowDailyList]);
+  const tomorrowPositionSummaryCards = useMemo(
+    () =>
+      ALLOWED_POSITIONS.map((position) => {
+        const early = tomorrowAttendanceCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
+        const late = tomorrowAttendanceCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
+        return { position, early, late, total: early + late };
+      }),
+    [tomorrowAttendanceCards]
+  );
+  const selectedDailyPositions = useMemo(
+    () => ALLOWED_POSITIONS.filter((position) => Boolean(dailyListSelectedPositions[position])),
+    [dailyListSelectedPositions]
+  );
+  const selectedDailyFilterPositions = useMemo(
+    () => ALLOWED_POSITIONS.filter((position) => Boolean(dailyListFilterPositions[position])),
+    [dailyListFilterPositions]
+  );
+  const canCopyDailyList = selectedDailyPositions.length > 0;
+  const tomorrowDailyRowsForCopy = useMemo(() => {
+    if (!canCopyDailyList) {
+      return { earlyRows: [] as DailyListRow[], lateRows: [] as DailyListRow[] };
+    }
+    const allowed = new Set(selectedDailyPositions);
+    const match = (row: DailyListRow) => {
+      const pos = normalizePositionKey(String(row.position ?? '').trim());
+      return Boolean(pos && allowed.has(pos as AllowedPosition));
+    };
+    return {
+      earlyRows: tomorrowDailyList.earlyRows.filter(match),
+      lateRows: tomorrowDailyList.lateRows.filter(match)
+    };
+  }, [tomorrowDailyList, selectedDailyPositions, canCopyDailyList]);
+  const tomorrowDailyRowsDisplayed = useMemo(() => {
+    if (selectedDailyFilterPositions.length === 0) {
+      return { earlyRows: tomorrowDailyList.earlyRows, lateRows: tomorrowDailyList.lateRows };
+    }
+    const allowed = new Set(selectedDailyFilterPositions);
+    const match = (row: DailyListRow) => {
+      const pos = normalizePositionKey(String(row.position ?? '').trim());
+      return Boolean(pos && allowed.has(pos as AllowedPosition));
+    };
+    return {
+      earlyRows: tomorrowDailyList.earlyRows.filter(match),
+      lateRows: tomorrowDailyList.lateRows.filter(match)
+    };
+  }, [tomorrowDailyList, selectedDailyFilterPositions]);
+
+  const scheduleEmployeesBase = useMemo(() => {
     return employees
       .filter((employee) => {
         const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-        const name = String(employee.name ?? '').trim();
         const position = String(employee.position ?? employee.Position ?? '').trim();
         if (!staff) return false;
         if (scheduleWorkDayFilter !== null) {
@@ -3137,11 +3309,21 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
           if (inferredShift !== scheduleShift) return false;
         }
-        if (!search) return true;
-        return [staff, name, position].join(' ').toLowerCase().includes(search);
+        return true;
       })
       .sort((a, b) => String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US'));
-  }, [employees, scheduleSearch, schedulePosition, scheduleShift, employeeShiftByStaffId, scheduleWorkDayFilter, scheduleRowsByStaffDayIndex]);
+  }, [employees, schedulePosition, scheduleShift, employeeShiftByStaffId, scheduleWorkDayFilter, scheduleRowsByStaffDayIndex]);
+
+  const scheduleEmployeesFiltered = useMemo(() => {
+    const search = deferredScheduleSearch.trim().toLowerCase();
+    if (!search) return scheduleEmployeesBase;
+    return scheduleEmployeesBase.filter((employee) => {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      const name = String(employee.name ?? '').trim();
+      const position = String(employee.position ?? employee.Position ?? '').trim();
+      return [staff, name, position].join(' ').toLowerCase().includes(search);
+    });
+  }, [scheduleEmployeesBase, deferredScheduleSearch]);
 
   const scheduleWorkingCountByDayIndex = useMemo(() => {
     const counts = Array.from({ length: 7 }, () => 0);
@@ -3157,6 +3339,58 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
     return counts;
   }, [scheduleEmployeesFiltered, scheduleRowsByStaffDayIndex]);
+  const makeDailyListTsv = (rows: DailyListRow[]) =>
+    rows
+      .map((row) => [row.staff_id, row.name, row.agency, row.position, getPlannedStartTime(row.shift, row.position)].map((c) => String(c ?? '')).join('\t'))
+      .join('\n');
+  const copyDailyList = async (scope: 'early' | 'late' | 'all') => {
+    if (!canCopyDailyList) {
+      setStatus({ tone: 'error', message: '请先点亮至少一个岗位卡片。' });
+      return;
+    }
+    const early = tomorrowDailyRowsForCopy.earlyRows;
+    const late = tomorrowDailyRowsForCopy.lateRows;
+    const title = `Daily List ${tomorrowDailyList.targetDate} ${tomorrowDailyList.weekday}`;
+    const text =
+      scope === 'early'
+        ? makeDailyListTsv(early)
+        : scope === 'late'
+          ? makeDailyListTsv(late)
+          : [
+              `${title} - Early Shift`,
+              makeDailyListTsv(early),
+              '',
+              `${title} - Night Shift`,
+              makeDailyListTsv(late)
+            ].join('\n');
+    if (!text.trim()) {
+      setStatus({ tone: 'error', message: 'No rows to copy.' });
+      return;
+    }
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
+      }
+      setStatus({
+        tone: 'success',
+        message:
+          scope === 'all'
+            ? `Copied daily list (${early.length + late.length} rows).`
+            : `Copied ${scope === 'early' ? 'early' : 'night'} list (${scope === 'early' ? early.length : late.length} rows).`
+      });
+    } catch (err: any) {
+      setStatus({ tone: 'error', message: `Copy failed: ${String(err?.message ?? err ?? 'Unknown error')}` });
+    }
+  };
 
   if (!supabase) {
     return (
@@ -3618,6 +3852,30 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     <button
                       type="button"
                       disabled={isLocked}
+                      onClick={() => {
+                        setDailyListSelectedPositions({
+                          Pick: false,
+                          Pack: false,
+                          Rebin: false,
+                          Preship: false,
+                          Transfer: false
+                        });
+                        setDailyListFilterPositions({
+                          Pick: false,
+                          Pack: false,
+                          Rebin: false,
+                          Preship: false,
+                          Transfer: false
+                        });
+                        setDailyListOpen(true);
+                      }}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      每日名单
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked}
                       onClick={() => void refreshSchedulePanel()}
                       className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -3828,6 +4086,203 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     </table>
                   </div>
                 )}
+
+                {dailyListOpen &&
+                  typeof document !== 'undefined' &&
+                  createPortal(
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
+                      <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-950/95 shadow-2xl backdrop-blur">
+                        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 px-6 py-5">
+                          <div>
+                            <h3 className="font-display text-2xl tracking-[0.08em]">每日名单</h3>
+                            <p className="mt-2 text-xs text-slate-400">
+                              日期：<span className="text-slate-200">{tomorrowDailyList.targetDate}</span> {tomorrowDailyList.weekday}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500">班次按最近工时推断（无推断时回退排班班次）。</p>
+                          </div>
+                          <div className="min-w-[520px] flex-1">
+                            <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                              {tomorrowPositionSummaryCards.map((card) => (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setDailyListSelectedPositions((prev) => ({
+                                      ...prev,
+                                      [card.position]: !prev[card.position]
+                                    }))
+                                  }
+                                  key={card.position}
+                                  className={[
+                                    'rounded-xl border px-2.5 py-2 text-left transition',
+                                    dailyListSelectedPositions[card.position]
+                                      ? getPositionBadgeClass(card.position)
+                                      : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
+                                  ].join(' ')}
+                                >
+                                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em]">
+                                    {card.position}
+                                  </div>
+                                  <div className="mt-1 text-[11px] leading-tight opacity-90">早 {card.early} · 晚 {card.late}</div>
+                                  <div className="mt-1 text-xl font-bold leading-none">{card.total}</div>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={!canCopyDailyList}
+                              onClick={() => void copyDailyList('all')}
+                              className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              复制全部
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDailyListOpen(false)}
+                              className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15"
+                            >
+                              关闭
+                            </button>
+                          </div>
+                        </div>
+                        <div className="grid flex-1 gap-4 overflow-y-auto px-6 py-5 md:grid-cols-2">
+                          <div className="md:col-span-2">
+                            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-black/25 px-3 py-2">
+                              <span className="text-xs uppercase tracking-[0.14em] text-slate-400">筛选</span>
+                              {ALLOWED_POSITIONS.map((position) => (
+                                <button
+                                  key={`filter-${position}`}
+                                  type="button"
+                                  onClick={() =>
+                                    setDailyListFilterPositions((prev) => ({
+                                      ...prev,
+                                      [position]: !prev[position]
+                                    }))
+                                  }
+                                  className={[
+                                    'rounded-lg border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] transition',
+                                    dailyListFilterPositions[position]
+                                      ? getPositionBadgeClass(position)
+                                      : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
+                                  ].join(' ')}
+                                >
+                                  {position}
+                                </button>
+                              ))}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDailyListFilterPositions({
+                                    Pick: false,
+                                    Pack: false,
+                                    Rebin: false,
+                                    Preship: false,
+                                    Transfer: false
+                                  })
+                                }
+                                className="ml-auto rounded-lg bg-white/10 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:bg-white/15"
+                              >
+                                清空筛选
+                              </button>
+                            </div>
+                          </div>
+                          <div className="rounded-2xl border border-emerald-400/30 bg-emerald-500/[0.04] p-4">
+                            <div className="mb-3 flex items-center justify-between">
+                              <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-200">早班</h4>
+                              <button
+                                type="button"
+                                disabled={!canCopyDailyList}
+                                onClick={() => void copyDailyList('early')}
+                                className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                复制
+                              </button>
+                            </div>
+                            <div className="max-h-[55vh] overflow-auto rounded-xl border border-white/10 bg-black/25">
+                              <table className="min-w-full text-left text-xs">
+                                <thead className="sticky top-0 bg-slate-950/95 text-[10px] uppercase tracking-[0.15em] text-slate-400">
+                                  <tr>
+                                    <th className="px-3 py-2">US ID</th>
+                                    <th className="px-3 py-2">NAME</th>
+                                    <th className="px-3 py-2">AGENCY</th>
+                                    <th className="px-3 py-2">POSITION</th>
+                                    <th className="px-3 py-2">START TIME</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {tomorrowDailyRowsDisplayed.earlyRows.length === 0 ? (
+                                    <tr>
+                                      <td colSpan={5} className="px-3 py-3 text-center text-slate-400">
+                                        无数据
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    tomorrowDailyRowsDisplayed.earlyRows.map((row) => (
+                                      <tr key={`early-${row.staff_id}`} className="border-t border-white/5">
+                                        <td className="px-3 py-2 font-mono text-slate-200">{row.staff_id}</td>
+                                        <td className="px-3 py-2 text-slate-200">{row.name || '-'}</td>
+                                        <td className="px-3 py-2 text-slate-200">{row.agency || '-'}</td>
+                                        <td className="px-3 py-2 text-slate-200">{row.position || '-'}</td>
+                                        <td className="px-3 py-2 text-slate-200">{getPlannedStartTime('early', row.position)}</td>
+                                      </tr>
+                                    ))
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+
+                          <div className="rounded-2xl border border-indigo-400/30 bg-indigo-500/[0.04] p-4">
+                            <div className="mb-3 flex items-center justify-between">
+                              <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-indigo-200">晚班</h4>
+                              <button
+                                type="button"
+                                disabled={!canCopyDailyList}
+                                onClick={() => void copyDailyList('late')}
+                                className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                复制
+                              </button>
+                            </div>
+                            <div className="max-h-[55vh] overflow-auto rounded-xl border border-white/10 bg-black/25">
+                              <table className="min-w-full text-left text-xs">
+                                <thead className="sticky top-0 bg-slate-950/95 text-[10px] uppercase tracking-[0.15em] text-slate-400">
+                                  <tr>
+                                    <th className="px-3 py-2">US ID</th>
+                                    <th className="px-3 py-2">NAME</th>
+                                    <th className="px-3 py-2">AGENCY</th>
+                                    <th className="px-3 py-2">POSITION</th>
+                                    <th className="px-3 py-2">START TIME</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {tomorrowDailyRowsDisplayed.lateRows.length === 0 ? (
+                                    <tr>
+                                      <td colSpan={5} className="px-3 py-3 text-center text-slate-400">
+                                        无数据
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    tomorrowDailyRowsDisplayed.lateRows.map((row) => (
+                                      <tr key={`late-${row.staff_id}`} className="border-t border-white/5">
+                                        <td className="px-3 py-2 font-mono text-slate-200">{row.staff_id}</td>
+                                        <td className="px-3 py-2 text-slate-200">{row.name || '-'}</td>
+                                        <td className="px-3 py-2 text-slate-200">{row.agency || '-'}</td>
+                                        <td className="px-3 py-2 text-slate-200">{row.position || '-'}</td>
+                                        <td className="px-3 py-2 text-slate-200">{getPlannedStartTime('late', row.position)}</td>
+                                      </tr>
+                                    ))
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>,
+                    document.body
+                  )}
               </section>
             )}
 
@@ -3924,7 +4379,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   </button>
                   <div className="text-xs text-slate-400">
                     {t('已加载：', 'Loaded: ')}
-                    {employees.length}
+                    {employeesFiltered.length}
                     {t(' 条', '')}
                   </div>
                 </div>
@@ -3988,7 +4443,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     {employeesError}
                   </p>
                 )}
-                {!employeesError && employees.length === 0 && (
+                {!employeesError && employeesFiltered.length === 0 && (
                   <p className="mt-3 text-sm text-slate-400">{t('暂无数据，点击“刷新/搜索”。', 'No data. Click “Refresh/Search”.')}</p>
                 )}
 
@@ -4005,7 +4460,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       </tr>
                     </thead>
                     <tbody>
-                      {employees.map((e) => {
+                      {employeesFiltered.map((e) => {
                         const staff = String(e.staff_id ?? '').trim();
                         const name = String(e.name ?? '').trim();
                         const agency = String(e.agency ?? e.Agency ?? '').trim();
