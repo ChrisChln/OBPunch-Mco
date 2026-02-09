@@ -41,6 +41,10 @@ type TimecardRow = {
   agency: string;
   position: string;
   hoursByDay: number[]; // 0..6 (Mon..Sun)
+  punchCountByDay: number[]; // 0..6 (Mon..Sun)
+  punchCountMismatchByDay: boolean[]; // 0..6 (Mon..Sun)
+  scheduledByDay: boolean[]; // 0..6 (Mon..Sun)
+  absentByDay: boolean[]; // 0..6 (Mon..Sun)
   inProgressByDay: boolean[]; // 0..6 (Mon..Sun)
   inProgressWeek: boolean;
   manualByDay: boolean[]; // 0..6 (Mon..Sun)
@@ -371,6 +375,7 @@ export default function AdminApp() {
   const [employeeNewPosition, setEmployeeNewPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [employeeAddOpen, setEmployeeAddOpen] = useState(false);
   const [employeeEditOpen, setEmployeeEditOpen] = useState(false);
+  const [employeeEditOriginalStaffId, setEmployeeEditOriginalStaffId] = useState<string | null>(null);
   const [employeeEditStaffId, setEmployeeEditStaffId] = useState<string | null>(null);
   const [employeeEditName, setEmployeeEditName] = useState('');
   const [employeeEditAgency, setEmployeeEditAgency] = useState('');
@@ -1554,6 +1559,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   const openEmployeeEdit = (payload: { staff: string; name: string; agency: string; position: string }) => {
     setEmployeesError(null);
+    setEmployeeEditOriginalStaffId(payload.staff);
     setEmployeeEditStaffId(payload.staff);
     setEmployeeEditName(payload.name);
     setEmployeeEditAgency(payload.agency);
@@ -1564,6 +1570,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   const closeEmployeeEdit = () => {
     setEmployeeEditOpen(false);
+    setEmployeeEditOriginalStaffId(null);
     setEmployeeEditStaffId(null);
     setEmployeeEditName('');
     setEmployeeEditAgency('');
@@ -1575,8 +1582,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       setEmployeesError('缺少 Supabase 配置。');
       return;
     }
-    const staff = String(employeeEditStaffId ?? '').trim();
-    if (!staff) return;
+    const originalStaff = normalizeStaffId(String(employeeEditOriginalStaffId ?? '').trim());
+    const nextStaff = normalizeStaffId(String(employeeEditStaffId ?? '').trim());
+    if (!originalStaff || !nextStaff) return;
+    if (!isValidStaffIdValue(nextStaff)) {
+      setEmployeesError('员工ID格式不正确（例如：US010454）。');
+      return;
+    }
 
     const name = employeeEditName.trim();
     const agency = employeeEditAgency.trim();
@@ -1589,22 +1601,34 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
     await runLocked('employee_edit', async () => {
       setEmployeesError(null);
+      if (nextStaff !== originalStaff) {
+        const duplicateRes = await supabase.from(EMPLOYEE_TABLE).select('staff_id').eq('staff_id', nextStaff).limit(1);
+        if (duplicateRes.error) {
+          setEmployeesError(duplicateRes.error.message);
+          return;
+        }
+        if ((((duplicateRes.data as any[]) ?? []).length) > 0) {
+          setEmployeesError(`员工ID已存在：${nextStaff}`);
+          return;
+        }
+      }
+
       const mode = await resolveEmployeeColumnMode();
       const payload =
         mode === 'cased'
-          ? { name, Agency: agency || null, Position: normalizedPos }
-          : { name, agency: agency || null, position: normalizedPos };
-      const { error } = await supabase.from(EMPLOYEE_TABLE).update(payload as any).eq('staff_id', staff);
+          ? { staff_id: nextStaff, name, Agency: agency || null, Position: normalizedPos }
+          : { staff_id: nextStaff, name, agency: agency || null, position: normalizedPos };
+      const { error } = await supabase.from(EMPLOYEE_TABLE).update(payload as any).eq('staff_id', originalStaff);
       if (error) {
         setEmployeesError(error.message);
         return;
       }
-      setStatus({ tone: 'success', message: `已更新员工：${staff}` });
+      setStatus({ tone: 'success', message: `已更新员工：${originalStaff}${nextStaff !== originalStaff ? ` -> ${nextStaff}` : ''}` });
       await writeAudit({
         action: 'employee_update',
-        staffId: staff,
+        staffId: nextStaff,
         target: EMPLOYEE_TABLE,
-        payload: { staff_id: staff, name, agency, position: normalizedPos }
+        payload: { old_staff_id: originalStaff, staff_id: nextStaff, name, agency, position: normalizedPos }
       });
       closeEmployeeEdit();
       await fetchEmployees({ reset: true });
@@ -1742,6 +1766,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const agencyValue = (agency ?? timecardAgency).trim();
     const positionValue = (position ?? timecardPosition).trim();
     const missingOnly = missingEmployeeOnly ?? timecardMissingEmployeeOnly;
+    const nowMs = Date.now();
+    const startedDayByIndex = Array.from({ length: 7 }, (_, dayIndex) => {
+      const { start } = getDayRange(weekStart, dayIndex);
+      return start.getTime() <= nowMs;
+    });
+    const closedDayByIndex = Array.from({ length: 7 }, (_, dayIndex) => {
+      const { end } = getDayRange(weekStart, dayIndex);
+      return end.getTime() <= nowMs;
+    });
 
     const pageSize = 50;
 
@@ -1789,6 +1822,36 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return { staffToProfile, error: null as string | null };
     };
 
+    const fetchScheduledByStaff = async (staffIds: string[]) => {
+      const scheduledByStaff: Record<string, boolean[]> = {};
+      if (!supabase || staffIds.length === 0) {
+        return { scheduledByStaff, error: null as string | null };
+      }
+      const batches = chunk(staffIds, 200);
+      const startDate = getTemplateDateByDayIndex(0);
+      const endDate = getTemplateDateByDayIndex(6);
+      for (const batch of batches) {
+        const { data, error } = await supabase
+          .from(SCHEDULE_TABLE)
+          .select('staff_id, date, note')
+          .in('staff_id', batch)
+          .gte('date', startDate)
+          .lte('date', endDate);
+        if (error) {
+          return { scheduledByStaff: {} as Record<string, boolean[]>, error: error.message };
+        }
+        for (const row of (data as any[] | null) ?? []) {
+          const staff = String(row.staff_id ?? '').trim();
+          const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
+          if (!staff || dayIndex === null) continue;
+          const isRest = String(row.note ?? '').trim() === SCHEDULE_REST_NOTE;
+          const arr = (scheduledByStaff[staff] ??= new Array(7).fill(false) as boolean[]);
+          arr[dayIndex] = !isRest;
+        }
+      }
+      return { scheduledByStaff, error: null as string | null };
+    };
+
     const fetchPunchesInRange = async () => {
       if (!supabase) {
         return { rows: [] as any[], error: 'Missing Supabase config.' };
@@ -1832,6 +1895,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       agency,
       position,
       eventsByStaff,
+      scheduledByStaff,
       capEnd
     }: {
       staff: string;
@@ -1839,6 +1903,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       agency: string;
       position: string;
       eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT'; manual: boolean }>>;
+      scheduledByStaff: Record<string, boolean[]>;
       capEnd: Date;
     }): TimecardRow => {
       const events = eventsByStaff[staff] ?? [];
@@ -1877,6 +1942,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         }
       }
       const inProgressWeek = inProgressByDay.some(Boolean);
+      const punchCountByDay = new Array(7).fill(0) as number[];
+      const hasPunchByDay = new Array(7).fill(false) as boolean[];
+      for (const ev of events) {
+        for (let idx = 0; idx < 7; idx += 1) {
+          const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
+          if (ev.at.getTime() >= dayStart.getTime() && ev.at.getTime() < dayEnd.getTime()) {
+            punchCountByDay[idx] += 1;
+            hasPunchByDay[idx] = true;
+            break;
+          }
+        }
+      }
       const manualByDay = new Array(7).fill(false) as boolean[];
       for (const ev of events) {
         if (!ev.manual) continue;
@@ -1891,6 +1968,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const manualWeek = manualByDay.some(Boolean);
       const totalHours = hoursByDay.reduce((sum, v) => sum + v, 0);
       const shift = firstInInWeek ? (getShiftBucketFromDate(firstInInWeek) ?? '') : '';
+      const scheduledByDay = scheduledByStaff[staff] ?? (new Array(7).fill(false) as boolean[]);
+      const absentByDay = scheduledByDay.map(
+        (scheduled, idx) => Boolean(scheduled && startedDayByIndex[idx] && !hasPunchByDay[idx] && !inProgressByDay[idx])
+      );
+      const punchCountMismatchByDay = punchCountByDay.map((count, idx) => {
+        if (!closedDayByIndex[idx]) return false;
+        if (count <= 0) return false;
+        return count !== 4;
+      });
 
       return {
         staff_id: staff,
@@ -1898,6 +1984,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         agency,
         position,
         hoursByDay,
+        punchCountByDay,
+        punchCountMismatchByDay,
+        scheduledByDay,
+        absentByDay,
         inProgressByDay,
         inProgressWeek,
         manualByDay,
@@ -1966,6 +2056,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           });
         }
 
+        const scheduledRes = await fetchScheduledByStaff(staffIds);
+        if (scheduledRes.error) {
+          return { rows: [] as TimecardRow[], hasMore: false, error: scheduledRes.error };
+        }
+
         const rows: TimecardRow[] = staffIds.map((staff) => {
           const profile = profilesRes.staffToProfile.get(staff) ?? { name: '', agency: '', position: '' };
           return buildTimecardRow({
@@ -1974,6 +2069,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
             agency: profile.agency,
             position: profile.position,
             eventsByStaff,
+            scheduledByStaff: scheduledRes.scheduledByStaff,
             capEnd
           });
         });
@@ -2069,13 +2165,25 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
       const now = new Date();
       const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
+      const scheduledRes = await fetchScheduledByStaff(staffIds);
+      if (scheduledRes.error) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: scheduledRes.error };
+      }
 
       const rows: TimecardRow[] = employees.map((e) => {
         const staff = String(e.staff_id ?? '').trim();
         const name = String(e.name ?? '').trim();
         const agency = String(e.agency ?? e.Agency ?? '').trim();
         const position = String(e.position ?? e.Position ?? '').trim();
-        return buildTimecardRow({ staff, name, agency, position, eventsByStaff, capEnd });
+        return buildTimecardRow({
+          staff,
+          name,
+          agency,
+          position,
+          eventsByStaff,
+          scheduledByStaff: scheduledRes.scheduledByStaff,
+          capEnd
+        });
       });
 
       return { rows, hasMore: employees.length === pageSize, error: null as string | null };
@@ -3392,6 +3500,101 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
   };
 
+  const exportScheduleTemplate = async () => {
+    await runLocked('schedule_export', async () => {
+      const rows = scheduleEmployeesFiltered;
+      if (rows.length === 0) {
+        setStatus({ tone: 'error', message: '暂无可导出的排班数据。' });
+        return;
+      }
+      if (scheduleShift !== 'early' && scheduleShift !== 'late') {
+        setStatus({ tone: 'error', message: '请先在 Shift 里选择早班或晚班后再导出。' });
+        return;
+      }
+
+      const dateHeaders = scheduleDays.map((day) => toDateOnly(day));
+      const headers = ['用户ERP', '用户编码', '用户姓名', ...dateHeaders];
+
+      const resolveEmployeeShift = (staff: string): 'early' | 'late' => {
+        const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
+        let scheduledShift: '' | 'early' | 'late' = '';
+        for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+          const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
+          if (!row) continue;
+          if (String(row.note ?? '').trim() === SCHEDULE_REST_NOTE) continue;
+          const s = normalizeShiftValue(String(row.shift ?? '').trim());
+          if (s) {
+            scheduledShift = s;
+            break;
+          }
+        }
+        return (inferredShift || scheduledShift || 'early') as 'early' | 'late';
+      };
+
+      const buildShiftRows = (shift: 'early' | 'late') =>
+        rows
+          .filter((employee) => {
+            const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+            if (!staff) return false;
+            return resolveEmployeeShift(staff) === shift;
+          })
+          .sort((a, b) => String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US'))
+          .map((employee) => {
+            const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+            const name = String(employee.name ?? '').trim();
+            const dayCells = Array.from({ length: 7 }, (_, dayIndex) => {
+              const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
+              const isWork = Boolean(row) && String(row?.note ?? '').trim() !== SCHEDULE_REST_NOTE;
+              if (!isWork) return '休息';
+              return shift === 'late' ? '晚1' : '早1';
+            });
+            return ['', staff, name, ...dayCells];
+          });
+
+      const infoTextByShift = (shift: 'early' | 'late') =>
+        [
+          '班次信息：',
+          '休息 00:00:00--23:59:59 上班边界时长：0(分) 下班边界时长：0(分)',
+          shift === 'late'
+            ? '晚1 16:30:00--23:59:59 上班边界时长：30.0(分) 下班边界时长：30.0(分)'
+            : '早1 08:00:00--16:30:00 上班边界时长：30.0(分) 下班边界时长：30.0(分)'
+        ].join('\n');
+
+      try {
+        const XLSX = await import('xlsx');
+        const buildSheet = (shift: 'early' | 'late') => {
+          const infoText = infoTextByShift(shift);
+          const aoa = [[infoText], headers, ...buildShiftRows(shift)];
+          const ws = XLSX.utils.aoa_to_sheet(aoa);
+          ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }];
+          ws['!rows'] = [{ hpt: 78 }, { hpt: 28 }];
+          ws['!cols'] = Array.from({ length: headers.length }, (_, idx) => {
+            if (idx === 0) return { wch: 12 };
+            if (idx === 1) return { wch: 14 };
+            if (idx === 2) return { wch: 14 };
+            return { wch: 13 };
+          });
+          if (!ws.A1) ws.A1 = { t: 's', v: infoText };
+          (ws.A1 as any).s = {
+            alignment: { wrapText: true, vertical: 'top', horizontal: 'left' },
+            font: { bold: true }
+          };
+          return ws;
+        };
+
+        const wb = XLSX.utils.book_new();
+        const shift = scheduleShift as 'early' | 'late';
+        const sheetName = shift === 'late' ? '1' : '0';
+        XLSX.utils.book_append_sheet(wb, buildSheet(shift), sheetName);
+        const filename = `ob_schedule_${sheetName}_${toDateOnly(scheduleWeekStart)}.xlsx`;
+        XLSX.writeFile(wb, filename);
+        setStatus({ tone: 'success', message: `已导出：${filename}` });
+      } catch (err: any) {
+        setStatus({ tone: 'error', message: `导出失败：${String(err?.message ?? err ?? 'Unknown error')}` });
+      }
+    });
+  };
+
   if (!supabase) {
     return (
       <div className="min-h-screen px-5 py-8">
@@ -3872,6 +4075,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       每日名单
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked || scheduleEmployeesFiltered.length === 0}
+                      onClick={() => void exportScheduleTemplate()}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      导出排班
                     </button>
                     <button
                       type="button"
@@ -4542,8 +4753,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         <div>
                           <div className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('编辑员工', 'Edit Employee')}</div>
                           <div className="mt-2 text-sm text-slate-400">
-                            {t('工号：', 'Staff: ')}
-                            <span className="text-slate-200">{employeeEditStaffId}</span>
+                            {t('当前工号：', 'Current staff: ')}
+                            <span className="text-slate-200">{employeeEditOriginalStaffId || '-'}</span>
                           </div>
                         </div>
                         <button
@@ -4555,7 +4766,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         </button>
                       </div>
 
-                      <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      <div className="mt-4 grid gap-3 md:grid-cols-4">
+                        <div className="md:col-span-1">
+                          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('工号', 'Staff ID')}</label>
+                          <input
+                            value={employeeEditStaffId ?? ''}
+                            onChange={(e) => setEmployeeEditStaffId(e.target.value)}
+                            disabled={isLocked}
+                            placeholder={t('例如：US010454', 'e.g. US010454')}
+                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 font-mono text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                          />
+                        </div>
                         <div className="md:col-span-1">
                           <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('姓名', 'Name')}</label>
                           <input
@@ -4914,8 +5135,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                         const over8 = h > 8.5;
                                         const inProgress = r.inProgressByDay[idx];
                                         const manual = r.manualByDay[idx];
+                                        const punchCountMismatch = r.punchCountMismatchByDay[idx];
                                         const base =
                                           'rounded px-1.5 py-0.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
+                                        if (punchCountMismatch) {
+                                          return [
+                                            base,
+                                            'border-2 border-rose-500 bg-rose-500/20 text-rose-100 shadow-[0_0_0_1px_rgba(244,63,94,0.55)] hover:bg-rose-500/30'
+                                          ].join(' ');
+                                        }
                                         if (manual) return [base, 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'].join(' ');
                                         if (over8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
                                         if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
@@ -4925,6 +5153,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                     >
                                       {formatHours(h)}
                                     </button>
+                                  ) : r.absentByDay[idx] ? (
+                                    <span
+                                      className="inline-flex rounded px-1.5 py-0.5 text-[11px] font-semibold text-rose-200"
+                                      title="Scheduled but no punch"
+                                    >
+                                      Absent
+                                    </span>
                                   ) : (
                                     ''
                                   )}
