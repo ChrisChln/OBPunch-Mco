@@ -1928,6 +1928,25 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       push(t('记录ID', 'Punch ID'), payload?.punch_id);
     }
 
+    if (action === 'schedule_work') {
+      summary = t('排班改为工作', 'Schedule set to Work');
+      push(t('班次', 'Shift'), payload?.shift);
+      push(t('岗位', 'Position'), payload?.position);
+      push(t('星期', 'Weekday'), payload?.weekday);
+      push(t('模板日期', 'Template date'), payload?.template_date);
+    } else if (action === 'schedule_rest') {
+      summary = t('排班改为休息', 'Schedule set to Rest');
+      push(t('班次', 'Shift'), payload?.shift);
+      push(t('岗位', 'Position'), payload?.position);
+      push(t('星期', 'Weekday'), payload?.weekday);
+      push(t('模板日期', 'Template date'), payload?.template_date);
+    } else if (action === 'schedule_clear') {
+      summary = t('清空排班', 'Schedule cleared');
+      push(t('星期', 'Weekday'), payload?.weekday);
+      push(t('模板日期', 'Template date'), payload?.template_date);
+      push(t('删除ID', 'Removed ID'), payload?.removed_id);
+    }
+
     if (details.length === 0 && payload) {
       let payloadText = '';
       try {
