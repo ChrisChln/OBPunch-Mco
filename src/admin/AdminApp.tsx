@@ -402,6 +402,7 @@ export default function AdminApp() {
   const [timecardPunchRows, setTimecardPunchRows] = useState<PunchRow[]>([]);
   const [timecardPunchError, setTimecardPunchError] = useState<string | null>(null);
   const [timecardPunchShowAll, setTimecardPunchShowAll] = useState(false);
+  const [timecardPunchAddOpen, setTimecardPunchAddOpen] = useState(false);
   const [timecardPunchEdits, setTimecardPunchEdits] = useState<Record<string, { action: 'IN' | 'OUT'; atLocal: string }>>({});
   const [timecardPunchNew, setTimecardPunchNew] = useState<{ action: 'IN' | 'OUT'; atLocal: string }>({
     action: 'IN',
@@ -2697,6 +2698,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setTimecardPunchError(null);
     setTimecardPunchRows([]);
     setTimecardPunchShowAll(false);
+    setTimecardPunchAddOpen(false);
     setTimecardPunchEdits({});
     setTimecardPunchNew({ action: 'IN', atLocal: toLocalDateTimeInputValue(new Date(serverTime)) });
 
@@ -2728,6 +2730,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setTimecardPunchRows([]);
     setTimecardPunchError(null);
     setTimecardPunchShowAll(false);
+    setTimecardPunchAddOpen(false);
     setTimecardPunchEdits({});
     setTimecardPunchNew({ action: 'IN', atLocal: '' });
   };
@@ -5434,6 +5437,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 {timecardPunchShowAll ? t('只看相关', 'Relevant only') : t('显示全部', 'Show all')}
                               </button>
                             )}
+                            {!timecardPunchReadOnly && (
+                              <button
+                                type="button"
+                                disabled={isLocked}
+                                onClick={() => setTimecardPunchAddOpen((prev) => !prev)}
+                                className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
+                              </button>
+                            )}
                             <button
                               type="button"
                               disabled={isLocked}
@@ -5446,7 +5459,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         </div>
 
                         <div className="flex-1 overflow-y-auto px-6 py-5">
-                          {!timecardPunchReadOnly && (
+                          {!timecardPunchReadOnly && timecardPunchAddOpen && (
                             <div className="rounded-2xl border border-neon/40 bg-black/30 px-4 py-4 shadow-glow">
                               <div className="grid gap-3 md:grid-cols-[8rem_1fr_7rem] md:items-end">
                                 <div>
