@@ -5985,18 +5985,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     <button
                       type="button"
                       disabled={isLocked}
-                      onClick={() => void fetchTimecard({ reset: true })}
+                      onClick={() => void recomputeTimecardAttendanceMarks()}
                       className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {t('刷新', 'Refresh')}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isLocked}
-                      onClick={() => void recomputeTimecardAttendanceMarks()}
-                      className="rounded-2xl bg-amber-500/20 px-4 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {t('重算本周标记', 'Recompute marks')}
                     </button>
                     <button
                       type="button"
@@ -6235,7 +6227,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                     <span className="text-[11px] font-semibold text-amber-300" title="Temporary Rest">
                                       {t('临时排休', 'Temp Rest')}
                                     </span>
-                                  ) : r.restByDay[idx] ? (
+                                  ) : r.restByDay[idx] &&
+                                    toDateOnly(addDays(addDays(startOfWeekMonday(serverTime), timecardWeekOffset * 7), idx)) <=
+                                      toDateOnly(serverTime) ? (
                                     <span className="text-[11px] font-semibold text-amber-300" title="Rest">
                                       {t('休息', 'Rest')}
                                     </span>
