@@ -42,6 +42,8 @@ type ArrivalMetric = {
   present: number;
   onClock: number;
   onClockStaff: string[];
+  restWorked: number;
+  restWorkedStaff: string[];
 };
 
 type TomorrowListSetting = {
@@ -314,7 +316,9 @@ export default function App() {
         expected: 0,
         present: 0,
         onClock: 0,
-        onClockStaff: []
+        onClockStaff: [],
+        restWorked: 0,
+        restWorkedStaff: []
       }))
     )
   );
@@ -842,7 +846,9 @@ export default function App() {
         expected: 0,
         present: 0,
         onClock: 0,
-        onClockStaff: []
+        onClockStaff: [],
+        restWorked: 0,
+        restWorkedStaff: []
       }))
     );
     if (!supabase) {
@@ -863,22 +869,21 @@ export default function App() {
       return;
     }
 
-    const scheduleRows = ((scheduleRes.data as any[] | null) ?? []).filter(
-      (row) => String(row.note ?? '').trim() !== SCHEDULE_REST_NOTE
+    const allScheduleRows = (scheduleRes.data as any[] | null) ?? [];
+    const workScheduleRows = allScheduleRows.filter((row) => String(row.note ?? '').trim() !== SCHEDULE_REST_NOTE);
+    const restScheduleRows = allScheduleRows.filter((row) => String(row.note ?? '').trim() === SCHEDULE_REST_NOTE);
+    const allScheduleStaff = Array.from(
+      new Set(
+        allScheduleRows
+          .map((row) => normalizeStaffId(String(row.staff_id ?? '').trim()))
+          .filter(Boolean)
+      )
     );
-    const staffPositionMap = new Map<string, AllowedPosition>();
-    for (const row of scheduleRows) {
-      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-      const position = normalizeAllowedPosition(String(row.position ?? '').trim());
-      if (!staff || !position) continue;
-      if (!staffPositionMap.has(staff)) staffPositionMap.set(staff, position);
-    }
-    const scheduledStaff = Array.from(staffPositionMap.keys());
-    const inferredShiftByStaff = await inferShiftByWorkHoursForStaff(scheduledStaff);
+    const inferredShiftByStaff = await inferShiftByWorkHoursForStaff(allScheduleStaff);
 
     const staffByKey = new Map<string, Set<string>>();
     const keysByStaff = new Map<string, string[]>();
-    for (const row of scheduleRows) {
+    for (const row of workScheduleRows) {
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       if (!staff) continue;
       const position = normalizeAllowedPosition(String(row.position ?? '').trim());
@@ -893,15 +898,28 @@ export default function App() {
       if (!keys.includes(key)) keys.push(key);
       keysByStaff.set(staff, keys);
     }
+    const restByKey = new Map<string, Set<string>>();
+    for (const row of restScheduleRows) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) continue;
+      const position = normalizeAllowedPosition(String(row.position ?? '').trim());
+      if (!position) continue;
+      const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
+      const inferredShift = inferredShiftByStaff[staff] ?? '';
+      const shift = inferredShift || scheduledShift || 'early';
+      const key = `${shift}:${position}`;
+      if (!restByKey.has(key)) restByKey.set(key, new Set());
+      restByKey.get(key)?.add(staff);
+    }
 
-    const scheduledByKeyStaff = Array.from(keysByStaff.keys());
+    const trackedStaff = Array.from(new Set([...Array.from(keysByStaff.keys()), ...allScheduleStaff]));
     const punchedStaff = new Set<string>();
     const latestActionByStaff = new Map<string, PunchAction>();
-    if (scheduledByKeyStaff.length > 0) {
+    if (trackedStaff.length > 0) {
       const dayStartDate = getOperationalDayStart(now, ABSENT_RESET_HOUR);
       const dayStart = dayStartDate.toISOString();
       const dayEnd = addDays(dayStartDate, 1).toISOString();
-      for (const batch of chunk(scheduledByKeyStaff, 120)) {
+      for (const batch of chunk(trackedStaff, 120)) {
         const batchSet = new Set(batch);
         const pageSize = 1000;
         const maxPages = 30;
@@ -959,20 +977,33 @@ export default function App() {
         onClockByKey.get(key)?.add(staff);
       }
     }
-    const onClockStaffIds = Array.from(
-      new Set(
-        Array.from(onClockByKey.values()).flatMap((set) => Array.from(set))
-      )
+    const restWorkedByKey = new Map<string, Set<string>>();
+    for (const [key, restStaffSet] of restByKey.entries()) {
+      for (const staff of restStaffSet) {
+        if (!punchedStaff.has(staff)) continue;
+        if (!restWorkedByKey.has(key)) restWorkedByKey.set(key, new Set());
+        restWorkedByKey.get(key)?.add(staff);
+      }
+    }
+    const onClockStaffIds = Array.from(new Set(Array.from(onClockByKey.values()).flatMap((set) => Array.from(set))));
+    const restWorkedStaffIds = Array.from(
+      new Set(Array.from(restWorkedByKey.values()).flatMap((set) => Array.from(set)))
     );
-    const onClockMapRes = await fetchEmployeeMap(onClockStaffIds);
-    const onClockEmployeeMap = onClockMapRes.error ? {} : onClockMapRes.map;
+    const displayStaffIds = Array.from(new Set([...onClockStaffIds, ...restWorkedStaffIds]));
+    const displayMapRes = await fetchEmployeeMap(displayStaffIds);
+    const displayEmployeeMap = displayMapRes.error ? {} : displayMapRes.map;
 
     const out: ArrivalMetric[] = ['early', 'late'].flatMap((shift) =>
       ALLOWED_POSITIONS.map((position) => {
         const key = `${shift}:${position}`;
         const onClockIds = Array.from(onClockByKey.get(key) ?? []).sort((a, b) => a.localeCompare(b, 'en-US'));
         const onClockStaff = onClockIds.map((staff) => {
-          const name = String(onClockEmployeeMap[staff]?.name ?? '').trim();
+          const name = String(displayEmployeeMap[staff]?.name ?? '').trim();
+          return name ? `${name} (${staff})` : staff;
+        });
+        const restWorkedIds = Array.from(restWorkedByKey.get(key) ?? []).sort((a, b) => a.localeCompare(b, 'en-US'));
+        const restWorkedStaff = restWorkedIds.map((staff) => {
+          const name = String(displayEmployeeMap[staff]?.name ?? '').trim();
           return name ? `${name} (${staff})` : staff;
         });
         return {
@@ -981,7 +1012,9 @@ export default function App() {
           expected: staffByKey.get(key)?.size ?? 0,
           present: arrivedByKey.get(key)?.size ?? 0,
           onClock: onClockByKey.get(key)?.size ?? 0,
-          onClockStaff
+          onClockStaff,
+          restWorked: restWorkedByKey.get(key)?.size ?? 0,
+          restWorkedStaff
         };
       })
     );
@@ -1702,7 +1735,9 @@ export default function App() {
                       expected: 0,
                       present: 0,
                       onClock: 0,
-                      onClockStaff: []
+                      onClockStaff: [],
+                      restWorked: 0,
+                      restWorkedStaff: []
                     };
                     const late = arrivalMetricByKey[`${position}:late`] ?? {
                       shift: 'late' as const,
@@ -1710,8 +1745,16 @@ export default function App() {
                       expected: 0,
                       present: 0,
                       onClock: 0,
-                      onClockStaff: []
+                      onClockStaff: [],
+                      restWorked: 0,
+                      restWorkedStaff: []
                     };
+                    const earlyOnClockStaffCombined = Array.from(
+                      new Set([...early.onClockStaff, ...early.restWorkedStaff])
+                    );
+                    const lateOnClockStaffCombined = Array.from(
+                      new Set([...late.onClockStaff, ...late.restWorkedStaff])
+                    );
                     return (
                       <div key={position} className="grid gap-2 md:grid-cols-2">
                         <div className={['rounded-xl border px-3 py-2', positionFrameClass].join(' ')}>
@@ -1726,20 +1769,43 @@ export default function App() {
                             </div>
                             <div className="group relative rounded-md bg-slate-950/70 px-3 py-1.5 text-center">
                               <div className="text-[10px] font-semibold tracking-[0.08em] text-slate-300">On Clock</div>
-                              <div className="mt-0.5 text-2xl font-bold leading-none text-lime-400">{early.onClock}</div>
-                              <div className="pointer-events-none absolute right-0 top-full z-30 mt-2 hidden w-64 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl group-hover:block">
-                                <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">On Clock Staff</div>
-                                {early.onClockStaff.length === 0 ? (
-                                  <div className="text-xs text-slate-300">No one on clock</div>
-                                ) : (
-                                  <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
-                                    {early.onClockStaff.map((staffName) => (
-                                      <div key={`early-${position}-${staffName}`} className="truncate py-0.5">
-                                        {staffName}
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
+                              <div
+                                className={[
+                                  'mt-0.5 text-2xl font-bold leading-none',
+                                  early.restWorked > 0 ? 'text-sky-400' : 'text-lime-400'
+                                ].join(' ')}
+                              >
+                                {earlyOnClockStaffCombined.length}
+                              </div>
+                              <div className="pointer-events-none absolute right-0 top-full z-30 mt-2 hidden w-[33rem] gap-2 group-hover:flex">
+                                <div className="w-64 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl">
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Attendance Staff</div>
+                                  {early.onClockStaff.length === 0 ? (
+                                    <div className="text-xs text-slate-300">No one on clock</div>
+                                  ) : (
+                                    <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
+                                      {early.onClockStaff.map((staffName) => (
+                                        <div key={`early-on-${position}-${staffName}`} className="truncate py-0.5">
+                                          {staffName}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="w-64 rounded-lg border border-sky-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Rest Worked Staff</div>
+                                  {early.restWorkedStaff.length === 0 ? (
+                                    <div className="text-xs text-slate-300">No rest-worked staff</div>
+                                  ) : (
+                                    <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
+                                      {early.restWorkedStaff.map((staffName) => (
+                                        <div key={`early-rest-${position}-${staffName}`} className="truncate py-0.5">
+                                          {staffName}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -1756,20 +1822,43 @@ export default function App() {
                             </div>
                             <div className="group relative rounded-md bg-slate-950/70 px-3 py-1.5 text-center">
                               <div className="text-[10px] font-semibold tracking-[0.08em] text-slate-300">On Clock</div>
-                              <div className="mt-0.5 text-2xl font-bold leading-none text-lime-400">{late.onClock}</div>
-                              <div className="pointer-events-none absolute right-0 top-full z-30 mt-2 hidden w-64 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl group-hover:block">
-                                <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">On Clock Staff</div>
-                                {late.onClockStaff.length === 0 ? (
-                                  <div className="text-xs text-slate-300">No one on clock</div>
-                                ) : (
-                                  <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
-                                    {late.onClockStaff.map((staffName) => (
-                                      <div key={`late-${position}-${staffName}`} className="truncate py-0.5">
-                                        {staffName}
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
+                              <div
+                                className={[
+                                  'mt-0.5 text-2xl font-bold leading-none',
+                                  late.restWorked > 0 ? 'text-sky-400' : 'text-lime-400'
+                                ].join(' ')}
+                              >
+                                {lateOnClockStaffCombined.length}
+                              </div>
+                              <div className="pointer-events-none absolute right-0 top-full z-30 mt-2 hidden w-[33rem] gap-2 group-hover:flex">
+                                <div className="w-64 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl">
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Attendance Staff</div>
+                                  {late.onClockStaff.length === 0 ? (
+                                    <div className="text-xs text-slate-300">No one on clock</div>
+                                  ) : (
+                                    <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
+                                      {late.onClockStaff.map((staffName) => (
+                                        <div key={`late-on-${position}-${staffName}`} className="truncate py-0.5">
+                                          {staffName}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="w-64 rounded-lg border border-sky-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Rest Worked Staff</div>
+                                  {late.restWorkedStaff.length === 0 ? (
+                                    <div className="text-xs text-slate-300">No rest-worked staff</div>
+                                  ) : (
+                                    <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
+                                      {late.restWorkedStaff.map((staffName) => (
+                                        <div key={`late-rest-${position}-${staffName}`} className="truncate py-0.5">
+                                          {staffName}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           </div>

@@ -1579,14 +1579,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   const saveEmployeeEdit = async () => {
     if (!supabase) {
-      setEmployeesError('缺少 Supabase 配置。');
+      setEmployeesError('Missing Supabase config.');
       return;
     }
     const originalStaff = normalizeStaffId(String(employeeEditOriginalStaffId ?? '').trim());
     const nextStaff = normalizeStaffId(String(employeeEditStaffId ?? '').trim());
     if (!originalStaff || !nextStaff) return;
     if (!isValidStaffIdValue(nextStaff)) {
-      setEmployeesError('员工ID格式不正确（例如：US010454）。');
+      setEmployeesError('Invalid staff ID format (e.g. US010454).');
       return;
     }
 
@@ -1595,25 +1595,80 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const positionRaw = employeeEditPosition.trim();
     const normalizedPos = positionRaw ? normalizePositionKey(positionRaw) : null;
     if (positionRaw && !normalizedPos) {
-      setEmployeesError(`Position 只能是：${ALLOWED_POSITIONS.join(', ')}`);
+      setEmployeesError('Position must be one of: ' + ALLOWED_POSITIONS.join(', '));
       return;
     }
 
     await runLocked('employee_edit', async () => {
       setEmployeesError(null);
-      if (nextStaff !== originalStaff) {
+      const isStaffIdChanged = nextStaff !== originalStaff;
+      let migratedPunchCount = 0;
+      let migratedScheduleCount = 0;
+      let punchIdsToMigrate: Array<string | number> = [];
+      let scheduleIdsToMigrate: Array<string | number> = [];
+
+      if (isStaffIdChanged) {
         const duplicateRes = await supabase.from(EMPLOYEE_TABLE).select('staff_id').eq('staff_id', nextStaff).limit(1);
         if (duplicateRes.error) {
           setEmployeesError(duplicateRes.error.message);
           return;
         }
         if ((((duplicateRes.data as any[]) ?? []).length) > 0) {
-          setEmployeesError(`员工ID已存在：${nextStaff}`);
+          setEmployeesError('Staff ID already exists: ' + nextStaff);
           return;
         }
+
+        const nextPunchRes = await supabase.from('ob_punches').select('id', { count: 'exact', head: true }).eq('staff_id', nextStaff);
+        if (nextPunchRes.error) {
+          setEmployeesError(nextPunchRes.error.message);
+          return;
+        }
+        if ((nextPunchRes.count ?? 0) > 0) {
+          setEmployeesError('Target staff ID already has punch rows. Migration blocked for data safety.');
+          return;
+        }
+
+        const nextScheduleRes = await supabase.from(SCHEDULE_TABLE).select('id', { count: 'exact', head: true }).eq('staff_id', nextStaff);
+        if (nextScheduleRes.error) {
+          setEmployeesError(nextScheduleRes.error.message);
+          return;
+        }
+        if ((nextScheduleRes.count ?? 0) > 0) {
+          setEmployeesError('Target staff ID already has schedule rows. Migration blocked for data safety.');
+          return;
+        }
+
+        const punchListRes = await supabase.from('ob_punches').select('id').eq('staff_id', originalStaff);
+        if (punchListRes.error) {
+          setEmployeesError(punchListRes.error.message);
+          return;
+        }
+        punchIdsToMigrate = ((punchListRes.data as any[]) ?? []).map((r) => r.id).filter((id) => id !== null && id !== undefined);
+
+        const scheduleListRes = await supabase.from(SCHEDULE_TABLE).select('id').eq('staff_id', originalStaff);
+        if (scheduleListRes.error) {
+          setEmployeesError(scheduleListRes.error.message);
+          return;
+        }
+        scheduleIdsToMigrate = ((scheduleListRes.data as any[]) ?? []).map((r) => r.id).filter((id) => id !== null && id !== undefined);
       }
 
       const mode = await resolveEmployeeColumnMode();
+      const originalEmployeeRes = await supabase
+        .from(EMPLOYEE_TABLE)
+        .select(mode === 'cased' ? 'staff_id,name,"Agency","Position"' : 'staff_id,name,agency,position')
+        .eq('staff_id', originalStaff)
+        .maybeSingle();
+      if (originalEmployeeRes.error) {
+        setEmployeesError(originalEmployeeRes.error.message);
+        return;
+      }
+      const originalEmployeeRow = originalEmployeeRes.data as Record<string, any> | null;
+      if (!originalEmployeeRow) {
+        setEmployeesError('Original employee record not found.');
+        return;
+      }
+
       const payload =
         mode === 'cased'
           ? { staff_id: nextStaff, name, Agency: agency || null, Position: normalizedPos }
@@ -1623,18 +1678,70 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         setEmployeesError(error.message);
         return;
       }
-      setStatus({ tone: 'success', message: `已更新员工：${originalStaff}${nextStaff !== originalStaff ? ` -> ${nextStaff}` : ''}` });
+
+      if (isStaffIdChanged) {
+        const rollbackEmployee = async () => {
+          const restorePayload =
+            mode === 'cased'
+              ? {
+                  staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
+                  name: originalEmployeeRow.name ?? null,
+                  Agency: originalEmployeeRow.Agency ?? null,
+                  Position: originalEmployeeRow.Position ?? null
+                }
+              : {
+                  staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
+                  name: originalEmployeeRow.name ?? null,
+                  agency: originalEmployeeRow.agency ?? null,
+                  position: originalEmployeeRow.position ?? null
+                };
+          await supabase.from(EMPLOYEE_TABLE).update(restorePayload as any).eq('staff_id', nextStaff);
+        };
+
+        if (punchIdsToMigrate.length > 0) {
+          const punchUpdateRes = await supabase.from('ob_punches').update({ staff_id: nextStaff } as any).eq('staff_id', originalStaff);
+          if (punchUpdateRes.error) {
+            await rollbackEmployee();
+            setEmployeesError('Migration failed and rolled back. Punch migration error: ' + punchUpdateRes.error.message);
+            return;
+          }
+          migratedPunchCount = punchIdsToMigrate.length;
+        }
+
+        if (scheduleIdsToMigrate.length > 0) {
+          const scheduleUpdateRes = await supabase.from(SCHEDULE_TABLE).update({ staff_id: nextStaff } as any).eq('staff_id', originalStaff);
+          if (scheduleUpdateRes.error) {
+            if (punchIdsToMigrate.length > 0) {
+              await supabase.from('ob_punches').update({ staff_id: originalStaff } as any).in('id', punchIdsToMigrate as any[]);
+            }
+            await rollbackEmployee();
+            setEmployeesError('Migration failed and rolled back. Schedule migration error: ' + scheduleUpdateRes.error.message);
+            return;
+          }
+          migratedScheduleCount = scheduleIdsToMigrate.length;
+        }
+      }
+
+      const statusMessage = isStaffIdChanged ? ('Employee updated: ' + originalStaff + ' -> ' + nextStaff + ' (Punches ' + migratedPunchCount + ', Schedules ' + migratedScheduleCount + ')') : ('Employee updated: ' + originalStaff);
+      setStatus({ tone: 'success', message: statusMessage });
       await writeAudit({
         action: 'employee_update',
         staffId: nextStaff,
         target: EMPLOYEE_TABLE,
-        payload: { old_staff_id: originalStaff, staff_id: nextStaff, name, agency, position: normalizedPos }
+        payload: {
+          old_staff_id: originalStaff,
+          staff_id: nextStaff,
+          name,
+          agency,
+          position: normalizedPos,
+          migrated_punch_rows: migratedPunchCount,
+          migrated_schedule_rows: migratedScheduleCount
+        }
       });
       closeEmployeeEdit();
       await fetchEmployees({ reset: true });
     });
   };
-
   const computeHoursByDay = (intervals: Array<{ start: Date; end: Date }>, weekStart: Date) => {
     const out = Array.from({ length: 7 }, () => 0);
     for (const { start, end } of intervals) {
