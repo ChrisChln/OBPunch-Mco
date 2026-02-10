@@ -6228,15 +6228,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                       {t('缺勤', 'Absent')}
                                     </span>
                                   ) : r.leaveByDay[idx] ? (
-                                    <span className="inline-flex rounded bg-violet-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-violet-200" title="Excuse">
+                                    <span className="text-[11px] font-semibold text-violet-300" title="Excuse">
                                       {t('请假', 'Excuse')}
                                     </span>
                                   ) : r.tempRestByDay[idx] ? (
-                                    <span className="inline-flex rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-amber-200" title="Temporary Rest">
+                                    <span className="text-[11px] font-semibold text-amber-300" title="Temporary Rest">
                                       {t('临时排休', 'Temp Rest')}
                                     </span>
                                   ) : r.restByDay[idx] ? (
-                                    <span className="inline-flex rounded bg-rose-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-rose-200" title="Rest">
+                                    <span className="text-[11px] font-semibold text-amber-300" title="Rest">
                                       {t('休息', 'Rest')}
                                     </span>
                                   ) : (
