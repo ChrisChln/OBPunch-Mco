@@ -488,6 +488,7 @@ export default function AdminApp() {
   const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
   const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
   const [scheduleSearch, setScheduleSearch] = useState('');
+  const [scheduleSearchInput, setScheduleSearchInput] = useState('');
   const [schedulePosition, setSchedulePosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
   const [scheduleShift, setScheduleShift] = useState<'' | 'early' | 'late'>('');
@@ -521,6 +522,13 @@ export default function AdminApp() {
     Transfer: false
   });
   const deferredScheduleSearch = useDeferredValue(scheduleSearch);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setScheduleSearch(scheduleSearchInput);
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [scheduleSearchInput]);
 
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFillDuplicates, setUploadFillDuplicates] = useState(true);
@@ -4947,8 +4955,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Search</label>
                     <input
-                      value={scheduleSearch}
-                      onChange={(e) => setScheduleSearch(e.target.value)}
+                      value={scheduleSearchInput}
+                      onChange={(e) => setScheduleSearchInput(e.target.value)}
                       disabled={isLocked}
                       placeholder="Search by staff id / name / position"
                       className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
