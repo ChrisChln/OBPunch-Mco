@@ -386,6 +386,7 @@ export default function AdminApp() {
   const timecardFetchSeqRef = useRef(0);
   const punchesFetchSeqRef = useRef(0);
   const attendanceFetchSeqRef = useRef(0);
+  const timecardRecomputeLastRunByWeekRef = useRef<Record<string, number>>({});
   const dailyListResetKeyRef = useRef(getOperationalDateKey(new Date(), DAILY_LIST_RESET_HOUR));
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
@@ -2275,7 +2276,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return end.getTime() <= nowMs;
     });
 
-    const pageSize = 50;
+    const pageSize = 200;
 
     const fetchProfilesByStaffId = async (staffIds: string[]) => {
       const staffToProfile = new Map<string, { name: string; agency: string; position: string }>();
@@ -2621,11 +2622,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           });
         }
 
-        const scheduledRes = await fetchScheduledByStaff(staffIds);
+        const [scheduledRes, marksRes] = await Promise.all([
+          fetchScheduledByStaff(staffIds),
+          fetchAttendanceMarksByStaff(staffIds)
+        ]);
         if (scheduledRes.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: scheduledRes.error };
         }
-        const marksRes = await fetchAttendanceMarksByStaff(staffIds);
         if (marksRes.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: marksRes.error };
         }
@@ -2712,7 +2715,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return { rows: all, error: null as string | null };
       };
 
-      const punchesRes = await fetchPunchesForStaff(staffIds);
+      const [punchesRes, scheduledRes, marksRes] = await Promise.all([
+        fetchPunchesForStaff(staffIds),
+        fetchScheduledByStaff(staffIds),
+        fetchAttendanceMarksByStaff(staffIds)
+      ]);
       if (punchesRes.error) {
         return { rows: [] as TimecardRow[], hasMore: false, error: punchesRes.error };
       }
@@ -2736,11 +2743,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
       const now = new Date();
       const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
-      const scheduledRes = await fetchScheduledByStaff(staffIds);
       if (scheduledRes.error) {
         return { rows: [] as TimecardRow[], hasMore: false, error: scheduledRes.error };
       }
-      const marksRes = await fetchAttendanceMarksByStaff(staffIds);
       if (marksRes.error) {
         return { rows: [] as TimecardRow[], hasMore: false, error: marksRes.error };
       }
@@ -2823,9 +2828,27 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return;
     }
 
+    const RECOMPUTE_COOLDOWN_MS = 90 * 1000;
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+    const weekKey = toDateOnly(weekStart);
+    const nowMs = Date.now();
+    const lastRunMs = timecardRecomputeLastRunByWeekRef.current[weekKey] ?? 0;
+    if (nowMs - lastRunMs < RECOMPUTE_COOLDOWN_MS) {
+      const remainSec = Math.max(1, Math.ceil((RECOMPUTE_COOLDOWN_MS - (nowMs - lastRunMs)) / 1000));
+      timecardRecomputeLastRunByWeekRef.current[weekKey] = Date.now();
+      setStatus({
+        tone: 'success',
+        message: t(
+          `本周标记刚重算过，已跳过重算并刷新列表（约 ${remainSec} 秒后可再次重算）。`,
+          `This week was recomputed recently. Skipped recompute and refreshed only (${remainSec}s until next recompute).`
+        )
+      });
+      await fetchTimecard({ reset: true, lockUi: false });
+      return;
+    }
+
     await runLocked('attendance_marks_recompute_week', async () => {
-      const baseWeekStart = startOfWeekMonday(serverTime);
-      const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
       const weekDateByIndex = Array.from({ length: 7 }, (_, idx) => toDateOnly(addDays(weekStart, idx)));
       const templateStart = getTemplateDateByDayIndex(0);
       const templateEnd = getTemplateDateByDayIndex(6);
