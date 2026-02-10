@@ -5200,7 +5200,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                             : state === 'rest_worked'
                                               ? 'bg-sky-500 text-white'
                                             : state === 'temp_rest'
-                                              ? 'bg-amber-400 text-ink'
+                                              ? 'bg-red-800 text-red-100'
                                             : state === 'rest'
                                               ? 'bg-ember text-white'
                                               : 'border border-white/20 bg-white/5 text-slate-200 hover:bg-white/10'
@@ -5246,7 +5246,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           { key: 'work', labelZh: '工作', labelEn: 'Work', cls: 'bg-neon text-ink' },
                           { key: 'temp_work', labelZh: '临时工作', labelEn: 'Temporary Work', cls: 'bg-emerald-700 text-emerald-100' },
                           { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white' },
-                          { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Temporary Rest', cls: 'bg-amber-400 text-ink' },
+                          { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Temporary Rest', cls: 'bg-red-800 text-red-100' },
                           { key: 'rest', labelZh: '休息', labelEn: 'Rest', cls: 'bg-ember text-white' }
                         ] as Array<{ key: ScheduleBaseState; labelZh: string; labelEn: string; cls: string }>
                       ).map((item) => (

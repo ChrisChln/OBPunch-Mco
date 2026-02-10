@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createSupabaseClient } from './lib/supabase';
 import { isValidStaffId, normalizeStaffId } from './lib/staffId';
 
@@ -1972,7 +1972,7 @@ export default function App() {
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <p className="text-xs uppercase tracking-[0.3em] text-slate-400">ObPunch</p>
-                  <h1 className="font-display text-4xl tracking-[0.08em]">浠撳簱鎵撳崱</h1>
+                  <h1 className="font-display text-4xl tracking-[0.08em]">仓库打卡</h1>
                 </div>
                 <div className="text-right">
                   <div className="flex items-center justify-end gap-2 text-sm text-slate-300">
@@ -1991,7 +1991,7 @@ export default function App() {
                   onClick={() => setPage('punch')}
                   className={tabClass(false)}
                 >
-                  1 鎵撳崱鐣岄潰
+                  1 打卡界面
                 </button>
                 <button
                   type="button"
@@ -1999,7 +1999,7 @@ export default function App() {
                   onClick={() => setPage('log')}
                   className={tabClass(page === 'log')}
                 >
-                  2 鎵撳崱娴佹按
+                  2 打卡流水
                 </button>
                 <button
                   type="button"
@@ -2007,7 +2007,7 @@ export default function App() {
                   onClick={() => setPage('employee')}
                   className={tabClass(page === 'employee')}
                 >
-                  3 鍛樺伐淇℃伅
+                  3 员工信息
                 </button>
                 <button
                   type="button"
@@ -2029,14 +2029,14 @@ export default function App() {
         {page === 'log' && (
           <section className="glass reveal rounded-3xl px-6 py-8">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="font-display text-2xl tracking-[0.08em]">鎵撳崱娴佹按</h2>
+              <h2 className="font-display text-2xl tracking-[0.08em]">打卡流水</h2>
               <button
                 type="button"
                 disabled={isLocked}
                 onClick={() => void fetchPunches()}
                 className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                鍒锋柊
+                刷新
               </button>
             </div>
             <p className="mt-2 text-xs text-slate-400">
@@ -2073,7 +2073,7 @@ export default function App() {
         {page === 'employee' && (
           <section className="glass reveal rounded-3xl px-6 py-8">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="font-display text-2xl tracking-[0.08em]">鍛樺伐淇℃伅</h2>
+              <h2 className="font-display text-2xl tracking-[0.08em]">员工信息</h2>
               <button
                 type="button"
                 disabled={isLocked}
@@ -2084,10 +2084,10 @@ export default function App() {
               </button>
             </div>
             <p className="mt-2 text-xs text-slate-400">
-              榛樿琛細<span className="text-slate-200">{EMPLOYEE_TABLE}</span>锛堟寜 created_at 鍙栨渶鏂颁竴鏉★級
+              默认表：<span className="text-slate-200">{EMPLOYEE_TABLE}</span>（按 created_at 取最新一条）
             </p>
             {employeeError && <p className="mt-4 text-sm text-ember">Query failed: {employeeError}</p>}
-            {!employeeError && !employee && <p className="mt-4 text-sm text-slate-400">璇疯緭鍏ュ伐鍙峰悗鏌ヨ</p>}
+            {!employeeError && !employee && <p className="mt-4 text-sm text-slate-400">请输入工号后查询</p>}
             {employee && (
               <div className="mt-5 space-y-3">
                 <div className="rounded-2xl bg-black/30 px-4 py-3">
@@ -2110,14 +2110,14 @@ export default function App() {
         {page === 'edit' && (
           <section className="glass reveal rounded-3xl px-6 py-8">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="font-display text-2xl tracking-[0.08em]">淇敼淇℃伅锛堟彁浜ょ敵璇凤級</h2>
+              <h2 className="font-display text-2xl tracking-[0.08em]">修改信息（提交申请）</h2>
               <button
                 type="button"
                 disabled={isLocked || !isValidId}
                 onClick={() => void submitEmployeeChange()}
                 className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
               >
-                鎻愪氦
+                提交
               </button>
             </div>
             <p className="mt-2 text-xs text-slate-400">
@@ -2126,7 +2126,7 @@ export default function App() {
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
               <div>
-                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">濮撳悕</label>
+                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">姓名</label>
                 <input
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
@@ -2146,7 +2146,7 @@ export default function App() {
                 />
               </div>
               <div className="md:col-span-2">
-                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">鐢佃瘽</label>
+                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">电话</label>
                 <input
                   value={editPhone}
                   onChange={(e) => setEditPhone(e.target.value)}
@@ -2156,7 +2156,7 @@ export default function App() {
                 />
               </div>
               <div className="md:col-span-2">
-                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">璇存槑</label>
+                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">说明</label>
                 <textarea
                   value={editNote}
                   onChange={(e) => setEditNote(e.target.value)}
@@ -2178,5 +2178,4 @@ export default function App() {
     </div>
   );
 }
-
 
