@@ -60,6 +60,8 @@ const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefine
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
 const SCHEDULE_REST_NOTE = '__rest__';
+const SCHEDULE_LEAVE_NOTE = '__leave__';
+const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
 const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
 const ROSTER_RESET_HOUR_RAW = Number(import.meta.env.VITE_ROSTER_RESET_HOUR ?? 0);
 const ROSTER_RESET_HOUR = Number.isFinite(ROSTER_RESET_HOUR_RAW) ? Math.max(0, Math.min(23, ROSTER_RESET_HOUR_RAW)) : 5;
@@ -82,6 +84,11 @@ const formatTime = (value: Date) =>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isRestLikeScheduleNote = (note: unknown) => {
+  const value = String(note ?? '').trim();
+  return value === SCHEDULE_REST_NOTE || value === SCHEDULE_LEAVE_NOTE || value === SCHEDULE_TEMP_REST_NOTE;
+};
 
 function chunk<T>(items: T[], size: number) {
   const out: T[][] = [];
@@ -726,7 +733,7 @@ export default function App() {
     }
 
     const rawRows = (res.data as any[] | null) ?? [];
-    const rows = rawRows.filter((row) => String(row.note ?? '').trim() !== SCHEDULE_REST_NOTE);
+    const rows = rawRows.filter((row) => !isRestLikeScheduleNote(row.note));
     const staffIds = Array.from(
       new Set(
         rows
@@ -776,9 +783,7 @@ export default function App() {
       return;
     }
 
-    const scheduledRows = ((scheduleRes.data as any[] | null) ?? []).filter(
-      (row) => String(row.note ?? '').trim() !== SCHEDULE_REST_NOTE
-    );
+    const scheduledRows = ((scheduleRes.data as any[] | null) ?? []).filter((row) => !isRestLikeScheduleNote(row.note));
     const scheduledStaff = Array.from(
       new Set(
         scheduledRows
@@ -870,8 +875,8 @@ export default function App() {
     }
 
     const allScheduleRows = (scheduleRes.data as any[] | null) ?? [];
-    const workScheduleRows = allScheduleRows.filter((row) => String(row.note ?? '').trim() !== SCHEDULE_REST_NOTE);
-    const restScheduleRows = allScheduleRows.filter((row) => String(row.note ?? '').trim() === SCHEDULE_REST_NOTE);
+    const workScheduleRows = allScheduleRows.filter((row) => !isRestLikeScheduleNote(row.note));
+    const restScheduleRows = allScheduleRows.filter((row) => isRestLikeScheduleNote(row.note));
     const allScheduleStaff = Array.from(
       new Set(
         allScheduleRows

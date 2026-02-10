@@ -19,8 +19,10 @@ type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
+const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
 const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
+const SCHEDULE_WEEK_RESET_KEY = 'schedule_transient_reset_week';
 const SCHEDULE_REST_NOTE = '__rest__';
 const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
@@ -33,8 +35,11 @@ type SchedulePickerState = {
   cellKey: string;
   employee: EmployeeRow | null;
   dayIndex: number;
+  workDate: string;
   targetShift: 'early' | 'late';
   currentState: ScheduleDisplayState;
+  anchorLeft: number;
+  anchorTop: number;
 };
 
 const getScheduleBaseStateFromNote = (note: unknown): ScheduleBaseState => {
@@ -55,7 +60,8 @@ const getScheduleNoteFromBaseState = (state: ScheduleBaseState): string | null =
 };
 
 const isWorkingScheduleBaseState = (state: ScheduleBaseState) => state === 'work' || state === 'temp_work';
-const isRestLikeScheduleBaseState = (state: ScheduleBaseState) => state === 'rest' || state === 'temp_rest';
+const isRestLikeScheduleBaseState = (state: ScheduleBaseState) =>
+  state === 'rest' || state === 'temp_rest' || state === 'leave';
 
 const isWorkingScheduleRow = (row: ScheduleRow | null | undefined) =>
   Boolean(row && isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)));
@@ -92,6 +98,9 @@ type TimecardRow = {
   punchCountMismatchByDay: boolean[]; // 0..6 (Mon..Sun)
   scheduledByDay: boolean[]; // 0..6 (Mon..Sun)
   absentByDay: boolean[]; // 0..6 (Mon..Sun)
+  leaveByDay: boolean[]; // 0..6 (Mon..Sun)
+  tempRestByDay: boolean[]; // 0..6 (Mon..Sun)
+  restByDay: boolean[]; // 0..6 (Mon..Sun)
   inProgressByDay: boolean[]; // 0..6 (Mon..Sun)
   inProgressWeek: boolean;
   manualByDay: boolean[]; // 0..6 (Mon..Sun)
@@ -217,6 +226,14 @@ const getDayRange = (weekStart: Date, dayIndex: number, dayCount = 1) => {
     start: new Date(startBase.getTime() + DAY_CUTOFF_MS),
     end: new Date(endBase.getTime() + DAY_CUTOFF_MS)
   };
+};
+const getWorkDateRange = (workDate: string) => {
+  const base = new Date(`${workDate}T00:00:00`);
+  if (Number.isNaN(base.getTime())) return null;
+  const start = new Date(base);
+  start.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
+  const end = addDays(start, 1);
+  return { start, end };
 };
 const getOperationalDateKey = (now: Date, cutoffHour: number) => {
   const operationalStart = new Date(now);
@@ -481,8 +498,11 @@ export default function AdminApp() {
     cellKey: '',
     employee: null,
     dayIndex: 0,
+    workDate: '',
     targetShift: 'early',
-    currentState: 'empty'
+    currentState: 'empty',
+    anchorLeft: 0,
+    anchorTop: 0
   });
   const [dailyListOpen, setDailyListOpen] = useState(false);
   const [dailyListSelectedPositions, setDailyListSelectedPositions] = useState<Record<AllowedPosition, boolean>>({
@@ -1072,7 +1092,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     employee: EmployeeRow,
     dayIndex: number,
     nextState: 'empty' | ScheduleBaseState,
-    targetShift: 'early' | 'late'
+    targetShift: 'early' | 'late',
+    workDate?: string
   ) => {
     if (!supabase) {
       setScheduleError('Missing Supabase configuration.');
@@ -1084,6 +1105,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return;
     }
     const templateDate = getTemplateDateByDayIndex(dayIndex);
+    const targetWorkDate =
+      workDate && /^\d{4}-\d{2}-\d{2}$/.test(workDate)
+        ? workDate
+        : toDateOnly(addDays(startOfWeekMonday(new Date(serverTime)), dayIndex));
     const existing = scheduleRows.find((row) => {
       const rowStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
       const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
@@ -1096,6 +1121,65 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
     await runLocked('schedule_toggle', async () => {
       setScheduleError(null);
+      const syncAttendanceMark = async () => {
+        const clearRes = await supabase
+          .from(ATTENDANCE_MARKS_TABLE)
+          .delete()
+          .eq('staff_id', staff)
+          .eq('work_date', targetWorkDate)
+          .in('mark_type', ['absent', 'excuse', 'temporary_leave'] as any);
+        if (clearRes.error) {
+          setScheduleError(clearRes.error.message);
+          return false;
+        }
+
+        const marksToWrite: Array<'absent' | 'excuse' | 'temporary_leave'> = [];
+        if (nextState === 'leave') {
+          marksToWrite.push('excuse');
+        } else if (nextState === 'temp_rest') {
+          marksToWrite.push('temporary_leave');
+        } else if (nextState === 'work' || nextState === 'temp_work') {
+          const workRange = getWorkDateRange(targetWorkDate);
+          if (workRange) {
+            const now = new Date(serverTime);
+            if (workRange.end.getTime() <= now.getTime()) {
+              const punchRes = await supabase
+                .from('ob_punches')
+                .select('id', { count: 'exact', head: true })
+                .eq('staff_id', staff)
+                .gte('created_at', workRange.start.toISOString())
+                .lt('created_at', workRange.end.toISOString());
+              if (punchRes.error) {
+                setScheduleError(punchRes.error.message);
+                return false;
+              }
+              if (Number(punchRes.count ?? 0) === 0) {
+                marksToWrite.push('absent');
+              }
+            }
+          }
+        }
+
+        if (marksToWrite.length > 0) {
+          const payload = marksToWrite.map((markType) => ({
+            staff_id: staff,
+            work_date: targetWorkDate,
+            mark_type: markType,
+            source: 'schedule',
+            operator: user?.email ?? null,
+            payload: { state: nextState, template_date: templateDate, weekday: dayIndex + 1 },
+            updated_at: new Date(serverTime).toISOString()
+          }));
+          const upsertRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert(payload as any, {
+            onConflict: 'staff_id,work_date,mark_type'
+          });
+          if (upsertRes.error) {
+            setScheduleError(upsertRes.error.message);
+            return false;
+          }
+        }
+        return true;
+      };
 
       if (nextState === 'empty') {
         const delRes =
@@ -1113,6 +1197,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
             return !(rowStaff === staff && rowDayIndex === dayIndex);
           })
         );
+        await syncAttendanceMark();
         void writeAudit({
           action: 'schedule_clear',
           staffId: staff,
@@ -1175,6 +1260,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         if (!replaced) next.push(localRow);
         return next;
       });
+      await syncAttendanceMark();
 
       void writeAudit({
         action:
@@ -1200,7 +1286,73 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     });
   };
 
+  const resetScheduleTransientStatesForWeek = async () => {
+    if (!supabase) return;
+    const weekStart = toDateOnly(startOfWeekMonday(new Date(serverTime)));
+
+    const settingRes = await supabase
+      .from(APP_SETTINGS_TABLE)
+      .select('key, value, updated_at')
+      .eq('key', SCHEDULE_WEEK_RESET_KEY)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (settingRes.error) return;
+
+    const existing = (((settingRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
+    const existingWeek = String(existing?.value?.week_start ?? '');
+    if (existingWeek === weekStart) return;
+
+    await runLocked('schedule_week_reset', async () => {
+      setScheduleError(null);
+      const resetRes = await supabase
+        .from(SCHEDULE_TABLE)
+        .update({
+          note: null,
+          operator: user?.email ?? null,
+          updated_at: new Date(serverTime).toISOString()
+        } as any)
+        .in('note', [SCHEDULE_TEMP_WORK_NOTE, SCHEDULE_LEAVE_NOTE, SCHEDULE_TEMP_REST_NOTE] as any);
+
+      if (resetRes.error) {
+        setScheduleError(resetRes.error.message);
+        return;
+      }
+
+      const payload = {
+        key: SCHEDULE_WEEK_RESET_KEY,
+        value: {
+          week_start: weekStart,
+          updated_at: new Date(serverTime).toISOString(),
+          operator: user?.email ?? null
+        },
+        updated_at: new Date(serverTime).toISOString()
+      };
+      const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
+      if (upsertRes.error) {
+        const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', SCHEDULE_WEEK_RESET_KEY);
+        if (updateRes.error) {
+          const insertRes = await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
+          if (insertRes.error) {
+            setScheduleError(insertRes.error.message);
+            return;
+          }
+        }
+      }
+
+      setScheduleRows((prev) =>
+        prev.map((row) => {
+          const note = String(row.note ?? '').trim();
+          if (note === SCHEDULE_TEMP_WORK_NOTE || note === SCHEDULE_LEAVE_NOTE || note === SCHEDULE_TEMP_REST_NOTE) {
+            return { ...row, note: null };
+          }
+          return row;
+        })
+      );
+    });
+  };
+
   const refreshSchedulePanel = async () => {
+    await resetScheduleTransientStatesForWeek();
     await fetchSchedule();
     await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
     await fetchSchedulePublishSetting();
@@ -1211,34 +1363,46 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     cellKey: string,
     employee: EmployeeRow,
     dayIndex: number,
+    workDate: string,
     targetShift: 'early' | 'late',
-    currentState: ScheduleDisplayState
+    currentState: ScheduleDisplayState,
+    anchorRect: DOMRect
   ) => {
-    if (schedulePicker.open && schedulePicker.cellKey === cellKey) {
-      setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
-      return;
-    }
     setSchedulePicker({
       open: true,
       cellKey,
       employee,
       dayIndex,
+      workDate,
       targetShift,
-      currentState
+      currentState,
+      anchorLeft: anchorRect.left + anchorRect.width / 2,
+      anchorTop: anchorRect.bottom + 6
     });
   };
 
   useEffect(() => {
     if (!schedulePicker.open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (!target) return;
+    const onDocumentClickCapture = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
       if (target.closest('[data-schedule-popover="true"]')) return;
       if (target.closest('[data-schedule-trigger="true"]')) return;
       setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
     };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
+    document.addEventListener('click', onDocumentClickCapture, true);
+    return () => document.removeEventListener('click', onDocumentClickCapture, true);
+  }, [schedulePicker.open]);
+
+  useEffect(() => {
+    if (!schedulePicker.open) return;
+    const close = () => setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+    };
   }, [schedulePicker.open]);
 
   const fetchSchedulePunchPresence = async () => {
@@ -2106,10 +2270,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const positionValue = (position ?? timecardPosition).trim();
     const missingOnly = missingEmployeeOnly ?? timecardMissingEmployeeOnly;
     const nowMs = Date.now();
-    const startedDayByIndex = Array.from({ length: 7 }, (_, dayIndex) => {
-      const { start } = getDayRange(weekStart, dayIndex);
-      return start.getTime() <= nowMs;
-    });
     const closedDayByIndex = Array.from({ length: 7 }, (_, dayIndex) => {
       const { end } = getDayRange(weekStart, dayIndex);
       return end.getTime() <= nowMs;
@@ -2163,8 +2323,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
     const fetchScheduledByStaff = async (staffIds: string[]) => {
       const scheduledByStaff: Record<string, boolean[]> = {};
+      const scheduleStateByStaff: Record<string, ScheduleBaseState[]> = {};
       if (!supabase || staffIds.length === 0) {
-        return { scheduledByStaff, error: null as string | null };
+        return { scheduledByStaff, scheduleStateByStaff, error: null as string | null };
       }
       const batches = chunk(staffIds, 200);
       const startDate = getTemplateDateByDayIndex(0);
@@ -2177,17 +2338,69 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           .gte('date', startDate)
           .lte('date', endDate);
         if (error) {
-          return { scheduledByStaff: {} as Record<string, boolean[]>, error: error.message };
+          return {
+            scheduledByStaff: {} as Record<string, boolean[]>,
+            scheduleStateByStaff: {} as Record<string, ScheduleBaseState[]>,
+            error: error.message
+          };
         }
         for (const row of (data as any[] | null) ?? []) {
           const staff = String(row.staff_id ?? '').trim();
           const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
           if (!staff || dayIndex === null) continue;
           const arr = (scheduledByStaff[staff] ??= new Array(7).fill(false) as boolean[]);
-          arr[dayIndex] = isWorkingScheduleRow(row as ScheduleRow);
+          const stateArr = (scheduleStateByStaff[staff] ??= new Array(7).fill('work') as ScheduleBaseState[]);
+          const state = getScheduleBaseStateFromNote((row as ScheduleRow).note);
+          stateArr[dayIndex] = state;
+          arr[dayIndex] = isWorkingScheduleBaseState(state);
         }
       }
-      return { scheduledByStaff, error: null as string | null };
+      return { scheduledByStaff, scheduleStateByStaff, error: null as string | null };
+    };
+
+    const fetchAttendanceMarksByStaff = async (staffIds: string[]) => {
+      const marksByStaff: Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }> = {};
+      if (!supabase || staffIds.length === 0) {
+        return { marksByStaff, error: null as string | null };
+      }
+
+      const weekStartDate = toDateOnly(weekStart);
+      const weekEndDate = toDateOnly(addDays(weekStart, 6));
+      const batches = chunk(staffIds, 200);
+      for (const batch of batches) {
+        const { data, error } = await supabase
+          .from(ATTENDANCE_MARKS_TABLE)
+          .select('staff_id, work_date, mark_type')
+          .in('staff_id', batch)
+          .gte('work_date', weekStartDate)
+          .lte('work_date', weekEndDate)
+          .in('mark_type', ['absent', 'excuse', 'temporary_leave'] as any);
+        if (error) {
+          return {
+            marksByStaff: {} as Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }>,
+            error: error.message
+          };
+        }
+        for (const row of (data as any[] | null) ?? []) {
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          const workDateRaw = String(row.work_date ?? '').trim();
+          const markType = String(row.mark_type ?? '').trim();
+          if (!staff || !workDateRaw) continue;
+          const workDate = new Date(`${workDateRaw}T00:00:00`);
+          if (Number.isNaN(workDate.getTime())) continue;
+          const dayIndex = Math.round((workDate.getTime() - weekStart.getTime()) / (24 * 60 * 60 * 1000));
+          if (dayIndex < 0 || dayIndex > 6) continue;
+          const rec = (marksByStaff[staff] ??= {
+            absentByDay: new Array(7).fill(false) as boolean[],
+            leaveByDay: new Array(7).fill(false) as boolean[],
+            tempRestByDay: new Array(7).fill(false) as boolean[]
+          });
+          if (markType === 'absent') rec.absentByDay[dayIndex] = true;
+          if (markType === 'excuse') rec.leaveByDay[dayIndex] = true;
+          if (markType === 'temporary_leave') rec.tempRestByDay[dayIndex] = true;
+        }
+      }
+      return { marksByStaff, error: null as string | null };
     };
 
     const fetchPunchesInRange = async () => {
@@ -2234,6 +2447,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       position,
       eventsByStaff,
       scheduledByStaff,
+      scheduleStateByStaff,
+      marksByStaff,
       capEnd
     }: {
       staff: string;
@@ -2242,6 +2457,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       position: string;
       eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT'; manual: boolean }>>;
       scheduledByStaff: Record<string, boolean[]>;
+      scheduleStateByStaff: Record<string, ScheduleBaseState[]>;
+      marksByStaff: Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }>;
       capEnd: Date;
     }): TimecardRow => {
       const events = eventsByStaff[staff] ?? [];
@@ -2307,9 +2524,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const totalHours = hoursByDay.reduce((sum, v) => sum + v, 0);
       const shift = firstInInWeek ? (getShiftBucketFromDate(firstInInWeek) ?? '') : '';
       const scheduledByDay = scheduledByStaff[staff] ?? (new Array(7).fill(false) as boolean[]);
-      const absentByDay = scheduledByDay.map(
-        (scheduled, idx) => Boolean(scheduled && startedDayByIndex[idx] && !hasPunchByDay[idx] && !inProgressByDay[idx])
-      );
+      const markRec = marksByStaff[staff] ?? {
+        absentByDay: new Array(7).fill(false) as boolean[],
+        leaveByDay: new Array(7).fill(false) as boolean[],
+        tempRestByDay: new Array(7).fill(false) as boolean[]
+      };
+      const absentByDay = [...markRec.absentByDay];
+      const leaveByDay = [...markRec.leaveByDay];
+      const tempRestByDay = [...markRec.tempRestByDay];
+      const scheduleStates = scheduleStateByStaff[staff] ?? (new Array(7).fill('work') as ScheduleBaseState[]);
+      const restByDay = scheduleStates.map((state) => state === 'rest');
       const punchCountMismatchByDay = punchCountByDay.map((count, idx) => {
         if (!closedDayByIndex[idx]) return false;
         if (count <= 0) return false;
@@ -2326,6 +2550,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         punchCountMismatchByDay,
         scheduledByDay,
         absentByDay,
+        leaveByDay,
+        tempRestByDay,
+        restByDay,
         inProgressByDay,
         inProgressWeek,
         manualByDay,
@@ -2398,6 +2625,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         if (scheduledRes.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: scheduledRes.error };
         }
+        const marksRes = await fetchAttendanceMarksByStaff(staffIds);
+        if (marksRes.error) {
+          return { rows: [] as TimecardRow[], hasMore: false, error: marksRes.error };
+        }
 
         const rows: TimecardRow[] = staffIds.map((staff) => {
           const profile = profilesRes.staffToProfile.get(staff) ?? { name: '', agency: '', position: '' };
@@ -2408,6 +2639,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
             position: profile.position,
             eventsByStaff,
             scheduledByStaff: scheduledRes.scheduledByStaff,
+            scheduleStateByStaff: scheduledRes.scheduleStateByStaff,
+            marksByStaff: marksRes.marksByStaff,
             capEnd
           });
         });
@@ -2507,6 +2740,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (scheduledRes.error) {
         return { rows: [] as TimecardRow[], hasMore: false, error: scheduledRes.error };
       }
+      const marksRes = await fetchAttendanceMarksByStaff(staffIds);
+      if (marksRes.error) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: marksRes.error };
+      }
 
       const rows: TimecardRow[] = employees.map((e) => {
         const staff = String(e.staff_id ?? '').trim();
@@ -2520,6 +2757,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           position,
           eventsByStaff,
           scheduledByStaff: scheduledRes.scheduledByStaff,
+          scheduleStateByStaff: scheduledRes.scheduleStateByStaff,
+          marksByStaff: marksRes.marksByStaff,
           capEnd
         });
       });
@@ -2575,6 +2814,162 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
       setTimecardRows(result.rows);
       setTimecardHasMore(false);
+    });
+  };
+
+  const recomputeTimecardAttendanceMarks = async () => {
+    if (!supabase) {
+      setStatus({ tone: 'error', message: '缺少 Supabase 配置。' });
+      return;
+    }
+
+    await runLocked('attendance_marks_recompute_week', async () => {
+      const baseWeekStart = startOfWeekMonday(serverTime);
+      const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+      const weekDateByIndex = Array.from({ length: 7 }, (_, idx) => toDateOnly(addDays(weekStart, idx)));
+      const templateStart = getTemplateDateByDayIndex(0);
+      const templateEnd = getTemplateDateByDayIndex(6);
+
+      const scheduleRes = await supabase
+        .from(SCHEDULE_TABLE)
+        .select('staff_id, date, note')
+        .gte('date', templateStart)
+        .lte('date', templateEnd);
+      if (scheduleRes.error) {
+        setStatus({ tone: 'error', message: `重算失败：${scheduleRes.error.message}` });
+        return;
+      }
+
+      const stateByStaffDay = new Map<string, ScheduleBaseState>();
+      for (const row of ((scheduleRes.data as any[]) ?? []) as ScheduleRow[]) {
+        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+        const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
+        if (!staff || dayIndex === null || dayIndex < 0 || dayIndex > 6) continue;
+        stateByStaffDay.set(`${staff}__${dayIndex}`, getScheduleBaseStateFromNote(row.note));
+      }
+
+      const weekRange = getDayRange(weekStart, 0, 7);
+      const dayIndexByDate = new Map<string, number>();
+      weekDateByIndex.forEach((d, idx) => dayIndexByDate.set(d, idx));
+      const hasPunchByStaffDay = new Set<string>();
+
+      const pageSize = 2000;
+      const maxPages = 80;
+      for (let page = 0; page < maxPages; page += 1) {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const res = await supabase
+          .from('ob_punches')
+          .select('staff_id, created_at, id')
+          .gte('created_at', weekRange.start.toISOString())
+          .lt('created_at', weekRange.end.toISOString())
+          .order('created_at', { ascending: true })
+          .range(from, to);
+        if (res.error) {
+          setStatus({ tone: 'error', message: `重算失败：${res.error.message}` });
+          return;
+        }
+        const rows = (res.data as any[] | null) ?? [];
+        if (rows.length === 0) break;
+        for (const row of rows) {
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          const atRaw = String(row.created_at ?? '').trim();
+          if (!staff || !atRaw) continue;
+          const at = new Date(atRaw);
+          if (Number.isNaN(at.getTime())) continue;
+          const opDayDate = new Date(at.getTime() - DAY_CUTOFF_MS);
+          const workDate = toDateOnly(opDayDate);
+          const dayIndex = dayIndexByDate.get(workDate);
+          if (dayIndex == null) continue;
+          hasPunchByStaffDay.add(`${staff}__${dayIndex}`);
+        }
+        if (rows.length < pageSize) break;
+      }
+
+      const now = new Date(serverTime);
+      const marksToInsert: Array<{
+        staff_id: string;
+        work_date: string;
+        mark_type: 'absent' | 'excuse' | 'temporary_leave';
+        source: string;
+        operator: string | null;
+        payload: Record<string, unknown>;
+        updated_at: string;
+      }> = [];
+
+      for (const [key, state] of stateByStaffDay.entries()) {
+        const [staff, dayIndexRaw] = key.split('__');
+        const dayIndex = Number(dayIndexRaw);
+        if (!staff || !Number.isFinite(dayIndex) || dayIndex < 0 || dayIndex > 6) continue;
+        const workDate = weekDateByIndex[dayIndex];
+        if (!workDate) continue;
+
+        if (state === 'leave') {
+          marksToInsert.push({
+            staff_id: staff,
+            work_date: workDate,
+            mark_type: 'excuse',
+            source: 'recompute',
+            operator: user?.email ?? null,
+            payload: { state, weekday: dayIndex + 1, reason: 'weekly_recompute' },
+            updated_at: now.toISOString()
+          });
+          continue;
+        }
+        if (state === 'temp_rest') {
+          marksToInsert.push({
+            staff_id: staff,
+            work_date: workDate,
+            mark_type: 'temporary_leave',
+            source: 'recompute',
+            operator: user?.email ?? null,
+            payload: { state, weekday: dayIndex + 1, reason: 'weekly_recompute' },
+            updated_at: now.toISOString()
+          });
+          continue;
+        }
+
+        if (!isWorkingScheduleBaseState(state)) continue;
+        const dayRange = getWorkDateRange(workDate);
+        if (!dayRange || dayRange.end.getTime() > now.getTime()) continue;
+        if (hasPunchByStaffDay.has(key)) continue;
+        marksToInsert.push({
+          staff_id: staff,
+          work_date: workDate,
+          mark_type: 'absent',
+          source: 'recompute',
+          operator: user?.email ?? null,
+          payload: { state, weekday: dayIndex + 1, reason: 'weekly_recompute' },
+          updated_at: now.toISOString()
+        });
+      }
+
+      const clearRes = await supabase
+        .from(ATTENDANCE_MARKS_TABLE)
+        .delete()
+        .gte('work_date', weekDateByIndex[0] ?? '')
+        .lte('work_date', weekDateByIndex[6] ?? '')
+        .in('mark_type', ['absent', 'excuse', 'temporary_leave'] as any);
+      if (clearRes.error) {
+        setStatus({ tone: 'error', message: `重算失败：${clearRes.error.message}` });
+        return;
+      }
+
+      if (marksToInsert.length > 0) {
+        const upsertRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert(marksToInsert as any, {
+          onConflict: 'staff_id,work_date,mark_type'
+        });
+        if (upsertRes.error) {
+          setStatus({ tone: 'error', message: `重算失败：${upsertRes.error.message}` });
+          return;
+        }
+      }
+
+      setStatus({
+        tone: 'success',
+        message: `已重算本周标记：${weekDateByIndex[0]} ~ ${weekDateByIndex[6]}（${marksToInsert.length} 条）`
+      });
+      await fetchTimecard({ reset: true, lockUi: false });
     });
   };
 
@@ -3143,7 +3538,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   useEffect(() => {
     if (page !== 'schedule') return;
     void fetchSchedulePunchPresence();
-  }, [page, scheduleWeekOffset, employees, serverTime]);
+  }, [page, scheduleWeekOffset, employees]);
 
   const onFileSelected = async (file: File | null) => {
     if (!file) {
@@ -4750,8 +5145,19 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                       <button
                                         type="button"
                                         data-schedule-trigger="true"
-                                        disabled={isLocked}
-                                        onClick={() => openScheduleStatePicker(key, employee, dayIndex, targetShift, state)}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                                          openScheduleStatePicker(
+                                            key,
+                                            employee,
+                                            dayIndex,
+                                            toDateOnly(scheduleDays[dayIndex] as Date),
+                                            targetShift,
+                                            state,
+                                            rect
+                                          );
+                                        }}
                                         className={[
                                           'h-7 min-w-[42px] rounded-md px-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55',
                                           state === 'work'
@@ -4783,43 +5189,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                               ? t('休息', 'Rest')
                                               : t('空', 'Empty')}
                                       </button>
-                                      {schedulePicker.open && schedulePicker.cellKey === key && schedulePicker.employee && (
-                                        <div
-                                          data-schedule-popover="true"
-                                          className="absolute left-1/2 top-[calc(100%+4px)] z-30 w-44 -translate-x-1/2 rounded-xl border border-white/10 bg-slate-950/95 p-1.5 shadow-2xl backdrop-blur"
-                                        >
-                                          {(
-                                            [
-                                              { key: 'work', labelZh: '工作', labelEn: 'Work', cls: 'bg-neon text-ink' },
-                                              { key: 'temp_work', labelZh: '临时工作', labelEn: 'Temporary Work', cls: 'bg-emerald-700 text-emerald-100' },
-                                              { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white' },
-                                              { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Temporary Rest', cls: 'bg-amber-400 text-ink' },
-                                              { key: 'rest', labelZh: '休息', labelEn: 'Rest', cls: 'bg-ember text-white' }
-                                            ] as Array<{ key: ScheduleBaseState; labelZh: string; labelEn: string; cls: string }>
-                                          ).map((item) => (
-                                            <button
-                                              key={item.key}
-                                              type="button"
-                                              disabled={isLocked}
-                                              onClick={() => {
-                                                void setScheduleCellState(
-                                                  schedulePicker.employee as EmployeeRow,
-                                                  schedulePicker.dayIndex,
-                                                  item.key,
-                                                  schedulePicker.targetShift
-                                                );
-                                                setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
-                                              }}
-                                              className={[
-                                                'mb-1 w-full rounded-lg px-2 py-1.5 text-left text-xs font-semibold transition hover:brightness-110 last:mb-0 disabled:cursor-not-allowed disabled:opacity-55',
-                                                item.cls
-                                              ].join(' ')}
-                                            >
-                                              {t(item.labelZh, item.labelEn)}
-                                            </button>
-                                          ))}
-                                        </div>
-                                      )}
                                     </div>
                                   </td>
                                 );
@@ -4831,6 +5200,49 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     </table>
                   </div>
                 )}
+
+                {schedulePicker.open &&
+                  schedulePicker.employee &&
+                  typeof document !== 'undefined' &&
+                  createPortal(
+                    <div
+                      data-schedule-popover="true"
+                      className="fixed z-[80] w-44 -translate-x-1/2 rounded-xl border border-white/10 bg-slate-950/95 p-1.5 shadow-2xl backdrop-blur"
+                      style={{ left: `${schedulePicker.anchorLeft}px`, top: `${schedulePicker.anchorTop}px` }}
+                    >
+                      {(
+                        [
+                          { key: 'work', labelZh: '工作', labelEn: 'Work', cls: 'bg-neon text-ink' },
+                          { key: 'temp_work', labelZh: '临时工作', labelEn: 'Temporary Work', cls: 'bg-emerald-700 text-emerald-100' },
+                          { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white' },
+                          { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Temporary Rest', cls: 'bg-amber-400 text-ink' },
+                          { key: 'rest', labelZh: '休息', labelEn: 'Rest', cls: 'bg-ember text-white' }
+                        ] as Array<{ key: ScheduleBaseState; labelZh: string; labelEn: string; cls: string }>
+                      ).map((item) => (
+                        <button
+                          key={item.key}
+                          type="button"
+                          onClick={() => {
+                            void setScheduleCellState(
+                              schedulePicker.employee as EmployeeRow,
+                              schedulePicker.dayIndex,
+                              item.key,
+                              schedulePicker.targetShift,
+                              schedulePicker.workDate
+                            );
+                            setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
+                          }}
+                          className={[
+                            'mb-1 w-full rounded-lg px-2 py-1.5 text-left text-xs font-semibold transition hover:brightness-110 last:mb-0',
+                            item.cls
+                          ].join(' ')}
+                        >
+                          {t(item.labelZh, item.labelEn)}
+                        </button>
+                      ))}
+                    </div>,
+                    document.body
+                  )}
 
                 {dailyListOpen &&
                   typeof document !== 'undefined' &&
@@ -5580,6 +5992,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     </button>
                     <button
                       type="button"
+                      disabled={isLocked}
+                      onClick={() => void recomputeTimecardAttendanceMarks()}
+                      className="rounded-2xl bg-amber-500/20 px-4 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {t('重算本周标记', 'Recompute marks')}
+                    </button>
+                    <button
+                      type="button"
                       disabled={isLocked || timecardRowsFiltered.length === 0}
                       onClick={() => void exportTimecard()}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
@@ -5806,6 +6226,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                       title="Scheduled but no punch"
                                     >
                                       {t('缺勤', 'Absent')}
+                                    </span>
+                                  ) : r.leaveByDay[idx] ? (
+                                    <span className="inline-flex rounded bg-violet-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-violet-200" title="Excuse">
+                                      {t('请假', 'Excuse')}
+                                    </span>
+                                  ) : r.tempRestByDay[idx] ? (
+                                    <span className="inline-flex rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-amber-200" title="Temporary Rest">
+                                      {t('临时排休', 'Temp Rest')}
+                                    </span>
+                                  ) : r.restByDay[idx] ? (
+                                    <span className="inline-flex rounded bg-rose-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-rose-200" title="Rest">
+                                      {t('休息', 'Rest')}
                                     </span>
                                   ) : (
                                     ''
