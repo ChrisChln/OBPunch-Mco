@@ -22,6 +22,50 @@ const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | 
 const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
 const SCHEDULE_REST_NOTE = '__rest__';
+const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
+const SCHEDULE_LEAVE_NOTE = '__leave__';
+const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
+
+type ScheduleBaseState = 'work' | 'temp_work' | 'leave' | 'temp_rest' | 'rest';
+type ScheduleDisplayState = 'empty' | ScheduleBaseState | 'rest_worked';
+type SchedulePickerState = {
+  open: boolean;
+  cellKey: string;
+  employee: EmployeeRow | null;
+  dayIndex: number;
+  targetShift: 'early' | 'late';
+  currentState: ScheduleDisplayState;
+};
+
+const getScheduleBaseStateFromNote = (note: unknown): ScheduleBaseState => {
+  const value = String(note ?? '').trim();
+  if (value === SCHEDULE_TEMP_WORK_NOTE) return 'temp_work';
+  if (value === SCHEDULE_LEAVE_NOTE) return 'leave';
+  if (value === SCHEDULE_TEMP_REST_NOTE) return 'temp_rest';
+  if (value === SCHEDULE_REST_NOTE) return 'rest';
+  return 'work';
+};
+
+const getScheduleNoteFromBaseState = (state: ScheduleBaseState): string | null => {
+  if (state === 'work') return null;
+  if (state === 'temp_work') return SCHEDULE_TEMP_WORK_NOTE;
+  if (state === 'leave') return SCHEDULE_LEAVE_NOTE;
+  if (state === 'temp_rest') return SCHEDULE_TEMP_REST_NOTE;
+  return SCHEDULE_REST_NOTE;
+};
+
+const isWorkingScheduleBaseState = (state: ScheduleBaseState) => state === 'work' || state === 'temp_work';
+const isRestLikeScheduleBaseState = (state: ScheduleBaseState) => state === 'rest' || state === 'temp_rest';
+
+const isWorkingScheduleRow = (row: ScheduleRow | null | undefined) =>
+  Boolean(row && isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)));
+
+const getScheduleDisplayState = (row: ScheduleRow | undefined, hasPunch: boolean): ScheduleDisplayState => {
+  if (!row) return 'empty';
+  const base = getScheduleBaseStateFromNote(row.note);
+  if (hasPunch && isRestLikeScheduleBaseState(base)) return 'rest_worked';
+  return base;
+};
 
 const supabase = createSupabaseClient({ persistSession: true });
 
@@ -432,6 +476,14 @@ export default function AdminApp() {
   const [scheduleWorkDayFilter, setScheduleWorkDayFilter] = useState<number | null>(null);
   const [schedulePublishTomorrow, setSchedulePublishTomorrow] = useState(false);
   const [schedulePublishForDate, setSchedulePublishForDate] = useState<string>('');
+  const [schedulePicker, setSchedulePicker] = useState<SchedulePickerState>({
+    open: false,
+    cellKey: '',
+    employee: null,
+    dayIndex: 0,
+    targetShift: 'early',
+    currentState: 'empty'
+  });
   const [dailyListOpen, setDailyListOpen] = useState(false);
   const [dailyListSelectedPositions, setDailyListSelectedPositions] = useState<Record<AllowedPosition, boolean>>({
     Pick: false,
@@ -1019,7 +1071,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   const setScheduleCellState = async (
     employee: EmployeeRow,
     dayIndex: number,
-    nextState: 'empty' | 'work' | 'rest',
+    nextState: 'empty' | ScheduleBaseState,
     targetShift: 'early' | 'late'
   ) => {
     if (!supabase) {
@@ -1037,12 +1089,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
       return rowStaff === staff && rowDayIndex === dayIndex;
     });
-    const existingState: 'empty' | 'work' | 'rest' = !existing
-      ? 'empty'
-      : String(existing.note ?? '').trim() === SCHEDULE_REST_NOTE
-        ? 'rest'
-        : 'work';
-    if (nextState === existingState && (nextState !== 'work' || (existing?.shift ?? 'early') === targetShift)) return;
+    const existingState: 'empty' | ScheduleBaseState = !existing ? 'empty' : getScheduleBaseStateFromNote(existing.note);
+    const isWorkingNextState = nextState === 'work' || nextState === 'temp_work';
+    if (nextState === existingState && (!isWorkingNextState || (existing?.shift ?? 'early') === targetShift)) return;
     if (nextState === 'empty' && !existing) return;
 
     await runLocked('schedule_toggle', async () => {
@@ -1081,7 +1130,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         date: templateDate,
         shift: targetShift,
         position: normalizedPosition,
-        note: nextState === 'rest' ? SCHEDULE_REST_NOTE : null,
+        note: getScheduleNoteFromBaseState(nextState),
         operator: user?.email ?? null,
         updated_at: new Date(serverTime).toISOString()
       };
@@ -1108,7 +1157,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         date: templateDate,
         shift: targetShift,
         position: normalizedPosition,
-        note: nextState === 'rest' ? SCHEDULE_REST_NOTE : null,
+        note: getScheduleNoteFromBaseState(nextState),
         operator: user?.email ?? null,
         updated_at: new Date(serverTime).toISOString()
       };
@@ -1128,7 +1177,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       });
 
       void writeAudit({
-        action: nextState === 'rest' ? 'schedule_rest' : 'schedule_work',
+        action:
+          nextState === 'work'
+            ? 'schedule_work'
+            : nextState === 'temp_work'
+              ? 'schedule_temp_work'
+              : nextState === 'leave'
+                ? 'schedule_leave'
+                : nextState === 'temp_rest'
+                  ? 'schedule_temp_rest'
+                  : 'schedule_rest',
         staffId: staff,
         target: SCHEDULE_TABLE,
         payload: {
@@ -1148,6 +1206,40 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     await fetchSchedulePublishSetting();
     await fetchSchedulePunchPresence();
   };
+
+  const openScheduleStatePicker = (
+    cellKey: string,
+    employee: EmployeeRow,
+    dayIndex: number,
+    targetShift: 'early' | 'late',
+    currentState: ScheduleDisplayState
+  ) => {
+    if (schedulePicker.open && schedulePicker.cellKey === cellKey) {
+      setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
+      return;
+    }
+    setSchedulePicker({
+      open: true,
+      cellKey,
+      employee,
+      dayIndex,
+      targetShift,
+      currentState
+    });
+  };
+
+  useEffect(() => {
+    if (!schedulePicker.open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('[data-schedule-popover="true"]')) return;
+      if (target.closest('[data-schedule-trigger="true"]')) return;
+      setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [schedulePicker.open]);
 
   const fetchSchedulePunchPresence = async () => {
     if (!supabase) {
@@ -1934,6 +2026,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       push(t('岗位', 'Position'), payload?.position);
       push(t('星期', 'Weekday'), payload?.weekday);
       push(t('模板日期', 'Template date'), payload?.template_date);
+    } else if (action === 'schedule_temp_work') {
+      summary = t('排班改为临时工作', 'Schedule set to Temporary Work');
+      push(t('班次', 'Shift'), payload?.shift);
+      push(t('岗位', 'Position'), payload?.position);
+      push(t('星期', 'Weekday'), payload?.weekday);
+      push(t('模板日期', 'Template date'), payload?.template_date);
+    } else if (action === 'schedule_leave') {
+      summary = t('排班改为请假', 'Schedule set to Excuse');
+      push(t('班次', 'Shift'), payload?.shift);
+      push(t('岗位', 'Position'), payload?.position);
+      push(t('星期', 'Weekday'), payload?.weekday);
+      push(t('模板日期', 'Template date'), payload?.template_date);
+    } else if (action === 'schedule_temp_rest') {
+      summary = t('排班改为临时排休', 'Schedule set to Temporary Rest');
+      push(t('班次', 'Shift'), payload?.shift);
+      push(t('岗位', 'Position'), payload?.position);
+      push(t('星期', 'Weekday'), payload?.weekday);
+      push(t('模板日期', 'Template date'), payload?.template_date);
     } else if (action === 'schedule_rest') {
       summary = t('排班改为休息', 'Schedule set to Rest');
       push(t('班次', 'Shift'), payload?.shift);
@@ -2073,9 +2183,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           const staff = String(row.staff_id ?? '').trim();
           const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
           if (!staff || dayIndex === null) continue;
-          const isRest = String(row.note ?? '').trim() === SCHEDULE_REST_NOTE;
           const arr = (scheduledByStaff[staff] ??= new Array(7).fill(false) as boolean[]);
-          arr[dayIndex] = !isRest;
+          arr[dayIndex] = isWorkingScheduleRow(row as ScheduleRow);
         }
       }
       return { scheduledByStaff, error: null as string | null };
@@ -3580,7 +3689,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     for (const row of scheduleRows) {
       const rowTemplateDate = String(row.date ?? '').trim();
       if (rowTemplateDate !== templateDate) continue;
-      if (String(row.note ?? '').trim() === SCHEDULE_REST_NOTE) continue;
+      if (!isWorkingScheduleRow(row)) continue;
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       if (!staff || byStaff.has(staff)) continue;
       byStaff.set(staff, row);
@@ -3691,7 +3800,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         if (!staff) return false;
         if (scheduleWorkDayFilter !== null) {
           const row = scheduleRowsByStaffDayIndex.get(`${staff}__${scheduleWorkDayFilter}`);
-          const isWork = Boolean(row) && String(row?.note ?? '').trim() !== SCHEDULE_REST_NOTE;
+          const isWork = isWorkingScheduleRow(row);
           if (!isWork) return false;
         }
         if (schedulePosition && position.toLowerCase() !== schedulePosition.toLowerCase()) return false;
@@ -3739,8 +3848,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
         const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
         if (!row) continue;
-        const isRest = String(row.note ?? '').trim() === SCHEDULE_REST_NOTE;
-        if (!isRest) counts[dayIndex] += 1;
+        if (isWorkingScheduleRow(row)) counts[dayIndex] += 1;
       }
     }
     return counts;
@@ -3819,7 +3927,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
           const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
           if (!row) continue;
-          if (String(row.note ?? '').trim() === SCHEDULE_REST_NOTE) continue;
+          if (!isWorkingScheduleRow(row)) continue;
           const s = normalizeShiftValue(String(row.shift ?? '').trim());
           if (s) {
             scheduledShift = s;
@@ -3842,9 +3950,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
             const name = String(employee.name ?? '').trim();
             const dayCells = Array.from({ length: 7 }, (_, dayIndex) => {
               const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
-              const isWork = Boolean(row) && String(row?.note ?? '').trim() !== SCHEDULE_REST_NOTE;
-              if (!isWork) return '休息';
-              return shift === 'late' ? '晚1' : '早1';
+              if (!row) return '休息';
+              const state = getScheduleBaseStateFromNote(row.note);
+              if (state === 'work') return shift === 'late' ? '晚1' : '早1';
+              if (state === 'temp_work') return '临时工作';
+              if (state === 'leave') return '请假';
+              if (state === 'temp_rest') return '临时排休';
+              return '休息';
             });
             return ['', staff, name, ...dayCells];
           });
@@ -4293,7 +4405,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="font-display text-2xl tracking-[0.08em]">Schedule</h2>
-                    <p className="mt-2 text-xs text-slate-400">Weekly matrix: Empty / Work / Rest.</p>
+                    <p className="mt-2 text-xs text-slate-400">Weekly matrix: Work / Temp Work / Excuse / Temp Rest / Rest.</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <button
@@ -4592,8 +4704,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
                             const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
                             if (!row) continue;
-                            const isRest = String(row.note ?? '').trim() === SCHEDULE_REST_NOTE;
-                            if (!isRest) workDays += 1;
+                            if (isWorkingScheduleRow(row)) workDays += 1;
                           }
                           const workDaysClass =
                             workDays === 5
@@ -4630,30 +4741,29 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 const key = `${staff}__${dayIndex}`;
                                 const row = scheduleRowsByStaffDayIndex.get(key);
                                 const hasPunch = schedulePunchPresenceKeys.has(key);
-                                const state: 'empty' | 'work' | 'rest' | 'rest_worked' = !row
-                                  ? 'empty'
-                                  : String(row.note ?? '').trim() === SCHEDULE_REST_NOTE
-                                    ? hasPunch
-                                      ? 'rest_worked'
-                                      : 'rest'
-                                    : 'work';
+                                const state: ScheduleDisplayState = getScheduleDisplayState(row, hasPunch);
                                 const targetShift = scheduleShift || ((row?.shift as 'early' | 'late' | null) ?? 'early');
-                                const nextState: 'empty' | 'work' | 'rest' =
-                                  state === 'empty' ? 'work' : state === 'work' ? 'rest' : 'work';
 
                                 return (
                                   <td key={key} className="px-1 py-1.5 align-middle">
-                                    <div className="flex items-center justify-center">
+                                    <div className="relative flex items-center justify-center">
                                       <button
                                         type="button"
+                                        data-schedule-trigger="true"
                                         disabled={isLocked}
-                                        onClick={() => void setScheduleCellState(employee, dayIndex, nextState, targetShift)}
+                                        onClick={() => openScheduleStatePicker(key, employee, dayIndex, targetShift, state)}
                                         className={[
                                           'h-7 min-w-[42px] rounded-md px-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55',
                                           state === 'work'
                                             ? 'bg-neon text-ink shadow-glow'
+                                            : state === 'temp_work'
+                                              ? 'bg-emerald-700 text-emerald-100'
+                                            : state === 'leave'
+                                              ? 'bg-violet-500 text-white'
                                             : state === 'rest_worked'
                                               ? 'bg-sky-500 text-white'
+                                            : state === 'temp_rest'
+                                              ? 'bg-amber-400 text-ink'
                                             : state === 'rest'
                                               ? 'bg-ember text-white'
                                               : 'border border-white/20 bg-white/5 text-slate-200 hover:bg-white/10'
@@ -4661,12 +4771,55 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                       >
                                         {state === 'work'
                                           ? t('工作', 'Work')
+                                          : state === 'temp_work'
+                                            ? t('临时工作', 'Temporary Work')
+                                          : state === 'leave'
+                                            ? t('请假', 'Excuse')
                                           : state === 'rest_worked'
                                             ? t('排休出勤', 'Rest Worked')
+                                            : state === 'temp_rest'
+                                              ? t('临时排休', 'Temporary Rest')
                                             : state === 'rest'
                                               ? t('休息', 'Rest')
                                               : t('空', 'Empty')}
                                       </button>
+                                      {schedulePicker.open && schedulePicker.cellKey === key && schedulePicker.employee && (
+                                        <div
+                                          data-schedule-popover="true"
+                                          className="absolute left-1/2 top-[calc(100%+4px)] z-30 w-44 -translate-x-1/2 rounded-xl border border-white/10 bg-slate-950/95 p-1.5 shadow-2xl backdrop-blur"
+                                        >
+                                          {(
+                                            [
+                                              { key: 'work', labelZh: '工作', labelEn: 'Work', cls: 'bg-neon text-ink' },
+                                              { key: 'temp_work', labelZh: '临时工作', labelEn: 'Temporary Work', cls: 'bg-emerald-700 text-emerald-100' },
+                                              { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white' },
+                                              { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Temporary Rest', cls: 'bg-amber-400 text-ink' },
+                                              { key: 'rest', labelZh: '休息', labelEn: 'Rest', cls: 'bg-ember text-white' }
+                                            ] as Array<{ key: ScheduleBaseState; labelZh: string; labelEn: string; cls: string }>
+                                          ).map((item) => (
+                                            <button
+                                              key={item.key}
+                                              type="button"
+                                              disabled={isLocked}
+                                              onClick={() => {
+                                                void setScheduleCellState(
+                                                  schedulePicker.employee as EmployeeRow,
+                                                  schedulePicker.dayIndex,
+                                                  item.key,
+                                                  schedulePicker.targetShift
+                                                );
+                                                setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
+                                              }}
+                                              className={[
+                                                'mb-1 w-full rounded-lg px-2 py-1.5 text-left text-xs font-semibold transition hover:brightness-110 last:mb-0 disabled:cursor-not-allowed disabled:opacity-55',
+                                                item.cls
+                                              ].join(' ')}
+                                            >
+                                              {t(item.labelZh, item.labelEn)}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      )}
                                     </div>
                                   </td>
                                 );
