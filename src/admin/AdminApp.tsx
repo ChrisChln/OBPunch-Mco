@@ -31,8 +31,10 @@ type EmployeeRow = {
   name?: string | null;
   agency?: string | null;
   position?: string | null;
+  label?: string | null;
   Agency?: string | null;
   Position?: string | null;
+  Label?: string | null;
   created_at?: string | null;
 };
 
@@ -311,7 +313,9 @@ const EMPLOYEE_KEY_ALIASES: Record<string, string> = {
   '区域': 'agency',
   position: 'position',
   '岗位': 'position',
-  '职位': 'position'
+  '职位': 'position',
+  label: 'label',
+  '标签': 'label'
 };
 
 export default function AdminApp() {
@@ -369,11 +373,13 @@ export default function AdminApp() {
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [employeeAgency, setEmployeeAgency] = useState('');
   const [employeePosition, setEmployeePosition] = useState('');
+  const [employeeLabel, setEmployeeLabel] = useState('');
   const [, setEmployeesHasMore] = useState(false);
   const [employeeNewStaffId, setEmployeeNewStaffId] = useState('');
   const [employeeNewName, setEmployeeNewName] = useState('');
   const [employeeNewAgency, setEmployeeNewAgency] = useState('');
   const [employeeNewPosition, setEmployeeNewPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [employeeNewLabel, setEmployeeNewLabel] = useState('');
   const [employeeAddOpen, setEmployeeAddOpen] = useState(false);
   const [employeeEditOpen, setEmployeeEditOpen] = useState(false);
   const [employeeEditOriginalStaffId, setEmployeeEditOriginalStaffId] = useState<string | null>(null);
@@ -381,6 +387,7 @@ export default function AdminApp() {
   const [employeeEditName, setEmployeeEditName] = useState('');
   const [employeeEditAgency, setEmployeeEditAgency] = useState('');
   const [employeeEditPosition, setEmployeeEditPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [employeeEditLabel, setEmployeeEditLabel] = useState('');
 
   const [timecardRows, setTimecardRows] = useState<TimecardRow[]>([]);
   const [timecardError, setTimecardError] = useState<string | null>(null);
@@ -420,6 +427,7 @@ export default function AdminApp() {
   const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [schedulePosition, setSchedulePosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [scheduleLabel, setScheduleLabel] = useState('');
   const [scheduleShift, setScheduleShift] = useState<'' | 'early' | 'late'>('');
   const [scheduleWorkDayFilter, setScheduleWorkDayFilter] = useState<number | null>(null);
   const [schedulePublishTomorrow, setSchedulePublishTomorrow] = useState(false);
@@ -1136,7 +1144,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   const refreshSchedulePanel = async () => {
     await fetchSchedule();
-    await fetchEmployees({ reset: true, search: '', agency: '', position: '' });
+    await fetchEmployees({ reset: true, search: '', agency: '', position: '', label: '' });
     await fetchSchedulePublishSetting();
     await fetchSchedulePunchPresence();
   };
@@ -1362,12 +1370,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     reset: _reset,
     search,
     agency,
-    position
+    position,
+    label
   }: {
     reset: boolean;
     search?: string;
     agency?: string;
     position?: string;
+    label?: string;
   }) => {
     if (!supabase) {
       setEmployeesError('缺少 Supabase 配置。');
@@ -1377,6 +1387,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const searchValue = (search ?? employeeSearch).trim().replace(/,/g, ' ');
     const agencyValue = (agency ?? employeeAgency).trim();
     const positionValue = (position ?? employeePosition).trim();
+    const labelValue = (label ?? employeeLabel).trim();
 
     await runLocked('employees', async () => {
       setEmployeesError(null);
@@ -1388,10 +1399,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const build = (mode: EmployeeColumnMode, from: number, to: number) => {
         const agencyCol = mode === 'cased' ? 'Agency' : 'agency';
         const positionCol = mode === 'cased' ? 'Position' : 'position';
+        const labelCol = 'label';
         const select =
           mode === 'cased'
-            ? 'id, staff_id, name, "Agency", "Position", created_at'
-            : 'id, staff_id, name, agency, position, created_at';
+            ? 'id, staff_id, name, "Agency", "Position", label, created_at'
+            : 'id, staff_id, name, agency, position, label, created_at';
 
         let q = supabase.from(EMPLOYEE_TABLE).select(select).range(from, to);
 
@@ -1403,9 +1415,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           q = q.ilike(positionCol as any, `%${positionValue}%`);
         }
 
+        if (labelValue) {
+          q = q.ilike(labelCol as any, `%${labelValue}%`);
+        }
+
         if (searchValue) {
           const term = `%${searchValue}%`;
-          q = q.or(`staff_id.ilike.${term},name.ilike.${term}`);
+          q = q.or(`staff_id.ilike.${term},name.ilike.${term},${labelCol}.ilike.${term}`);
         }
 
         return q;
@@ -1555,6 +1571,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const name = employeeNewName.trim();
     const agency = employeeNewAgency.trim();
     const position = employeeNewPosition.trim();
+    const label = employeeNewLabel.trim();
     const normalizedPos = normalizePositionKey(position);
     if (!normalizedPos) {
       setEmployeesError(`Position 只能是：${ALLOWED_POSITIONS.join(', ')}`);
@@ -1567,8 +1584,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const mode = await resolveEmployeeColumnMode();
       const payload =
         mode === 'cased'
-          ? { staff_id: staff, name, Agency: agency, Position: normalizedPos }
-          : { staff_id: staff, name, agency, position: normalizedPos };
+          ? { staff_id: staff, name, Agency: agency, Position: normalizedPos, label: label || null }
+          : { staff_id: staff, name, agency, position: normalizedPos, label: label || null };
 
       const attemptUpsert = await supabase
         .from(EMPLOYEE_TABLE)
@@ -1587,12 +1604,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         action: 'employee_upsert',
         staffId: staff,
         target: EMPLOYEE_TABLE,
-        payload: { staff_id: staff, name, agency, position: normalizedPos }
+        payload: { staff_id: staff, name, agency, position: normalizedPos, label }
       });
       setEmployeeNewStaffId('');
       setEmployeeNewName('');
       setEmployeeNewAgency('');
       setEmployeeNewPosition('');
+      setEmployeeNewLabel('');
       await fetchEmployees({ reset: true });
     });
   };
@@ -1621,7 +1639,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     });
   };
 
-  const openEmployeeEdit = (payload: { staff: string; name: string; agency: string; position: string }) => {
+  const openEmployeeEdit = (payload: { staff: string; name: string; agency: string; position: string; label: string }) => {
     setEmployeesError(null);
     setEmployeeEditOriginalStaffId(payload.staff);
     setEmployeeEditStaffId(payload.staff);
@@ -1629,6 +1647,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setEmployeeEditAgency(payload.agency);
     const normalized = normalizePositionKey(payload.position);
     setEmployeeEditPosition((normalized ?? '') as (typeof ALLOWED_POSITIONS)[number] | '');
+    setEmployeeEditLabel(payload.label);
     setEmployeeEditOpen(true);
   };
 
@@ -1639,6 +1658,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setEmployeeEditName('');
     setEmployeeEditAgency('');
     setEmployeeEditPosition('');
+    setEmployeeEditLabel('');
   };
 
   const saveEmployeeEdit = async () => {
@@ -1662,12 +1682,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const name = employeeEditName.trim();
     const agency = employeeEditAgency.trim();
     const positionRaw = employeeEditPosition.trim();
+    const label = employeeEditLabel.trim();
     const normalizedPos = positionRaw ? normalizePositionKey(positionRaw) : null;
     if (positionRaw && !normalizedPos) {
       setEmployeesError('Position must be one of: ' + ALLOWED_POSITIONS.join(', '));
       return;
     }
 
+    let shouldRefresh = false;
     await runLocked('employee_edit', async () => {
       setEmployeesError(null);
       const isStaffIdChanged = nextStaff !== originalStaff;
@@ -1725,7 +1747,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const mode = await resolveEmployeeColumnMode();
       const originalEmployeeRes = await supabase
         .from(EMPLOYEE_TABLE)
-        .select(mode === 'cased' ? 'staff_id,name,"Agency","Position"' : 'staff_id,name,agency,position')
+        .select(mode === 'cased' ? 'staff_id,name,"Agency","Position",label' : 'staff_id,name,agency,position,label')
         .eq('staff_id', originalStaff)
         .maybeSingle();
       if (originalEmployeeRes.error) {
@@ -1740,8 +1762,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
       const payload =
         mode === 'cased'
-          ? { staff_id: nextStaff, name, Agency: agency || null, Position: normalizedPos }
-          : { staff_id: nextStaff, name, agency: agency || null, position: normalizedPos };
+          ? { staff_id: nextStaff, name, Agency: agency || null, Position: normalizedPos, label: label || null }
+          : { staff_id: nextStaff, name, agency: agency || null, position: normalizedPos, label: label || null };
       const { error } = await supabase.from(EMPLOYEE_TABLE).update(payload as any).eq('staff_id', originalStaff);
       if (error) {
         setEmployeesError(error.message);
@@ -1756,13 +1778,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
                   name: originalEmployeeRow.name ?? null,
                   Agency: originalEmployeeRow.Agency ?? null,
-                  Position: originalEmployeeRow.Position ?? null
+                  Position: originalEmployeeRow.Position ?? null,
+                  label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null
                 }
               : {
                   staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
                   name: originalEmployeeRow.name ?? null,
                   agency: originalEmployeeRow.agency ?? null,
-                  position: originalEmployeeRow.position ?? null
+                  position: originalEmployeeRow.position ?? null,
+                  label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null
                 };
           await supabase.from(EMPLOYEE_TABLE).update(restorePayload as any).eq('staff_id', nextStaff);
         };
@@ -1803,13 +1827,23 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           name,
           agency,
           position: normalizedPos,
+          label,
           migrated_punch_rows: migratedPunchCount,
           migrated_schedule_rows: migratedScheduleCount
         }
       });
       closeEmployeeEdit();
-      await fetchEmployees({ reset: true });
+      shouldRefresh = true;
     });
+    if (shouldRefresh) {
+      await fetchEmployees({
+        reset: true,
+        search: employeeSearch,
+        agency: employeeAgency,
+        position: employeePosition,
+        label: employeeLabel
+      });
+    }
   };
   const computeHoursByDay = (intervals: Array<{ start: Date; end: Date }>, weekStart: Date) => {
     const out = Array.from({ length: 7 }, () => 0);
@@ -3066,7 +3100,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return map[v] ?? null;
     };
 
-    const uniqueByStaff = new Map<string, { staff_id: string; name?: string; agency?: string; position?: string }>();
+    const uniqueByStaff = new Map<string, { staff_id: string; name?: string; agency?: string; position?: string; label?: string }>();
     let duplicateInFileCount = 0;
 
     for (const r of parsedRows) {
@@ -3091,12 +3125,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const agency = canonical.agency?.trim();
       const positionRaw = canonical.position?.trim();
       const position = positionRaw ? normalizePosition(positionRaw) : null;
+      const label = canonical.label?.trim();
 
-      const record: { staff_id: string; name?: string; agency?: string; position?: string } = { staff_id: staff };
+      const record: { staff_id: string; name?: string; agency?: string; position?: string; label?: string } = { staff_id: staff };
       if (name) record.name = name;
       if (agency) record.agency = agency;
       if (position) record.position = position;
       if (positionRaw && !position) record.position = positionRaw;
+      if (label) record.label = label;
       uniqueByStaff.set(staff, record);
     }
 
@@ -3136,7 +3172,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const fetchExistingDetails = async () => {
         const mode = await resolveEmployeeColumnMode();
         const run = async (m: EmployeeColumnMode) => {
-          const select = m === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
+          const select = m === 'cased' ? 'staff_id, name, "Agency", "Position", label' : 'staff_id, name, agency, position, label';
           const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batchStaffIds);
           return { mode: m, res };
         };
@@ -3179,13 +3215,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 staff_id: row.staff_id,
                 name: row.name ?? null,
                 Agency: row.agency ?? null,
-                Position: row.position ?? null
+                Position: row.position ?? null,
+                label: row.label ?? null
               }))
             : toInsert.map((row: any) => ({
                 staff_id: row.staff_id,
                 name: row.name ?? null,
                 agency: row.agency ?? null,
-                position: row.position ?? null
+                position: row.position ?? null,
+                label: row.label ?? null
               }));
 
         let attempt = await tryInsert(buildPayload(mode));
@@ -3208,14 +3246,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         }
       }
 
-      const existingByStaff = new Map<string, { name: string; agency: string; position: string }>();
+      const existingByStaff = new Map<string, { name: string; agency: string; position: string; label: string }>();
       for (const r of existingDetailsRes.rows) {
         const staff = String(r.staff_id ?? '').trim();
         if (!staff) continue;
         existingByStaff.set(staff, {
           name: String(r.name ?? '').trim(),
           agency: String(r.agency ?? r.Agency ?? '').trim(),
-          position: String(r.position ?? r.Position ?? '').trim()
+          position: String(r.position ?? r.Position ?? '').trim(),
+          label: String(r.label ?? r.Label ?? '').trim()
         });
       }
 
@@ -3227,7 +3266,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       for (const row of batch) {
         const staff = String(row.staff_id ?? '').trim();
         if (!staff || !existingSet.has(staff)) continue;
-        const existing = existingByStaff.get(staff) ?? { name: '', agency: '', position: '' };
+        const existing = existingByStaff.get(staff) ?? { name: '', agency: '', position: '', label: '' };
 
         const payload: Record<string, unknown> = {};
         if (!existing.name && row.name) payload.name = row.name;
@@ -3239,6 +3278,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           if (existingDetailsRes.mode === 'cased') payload.Position = row.position;
           else payload.position = row.position;
         }
+        if (!existing.label && row.label) payload.label = row.label;
 
         if (Object.keys(payload).length > 0) {
           toUpdate.push({ staff_id: staff, payload });
@@ -3331,21 +3371,55 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
   }, [employees]);
+
+  const collectEmployeeLabelOptionsByPosition = (positionRaw: string) => {
+    const targetPosition = normalizePositionKey(positionRaw);
+    const out = new Set<string>();
+    for (const e of employees) {
+      const label = String(e.label ?? e.Label ?? '').trim();
+      if (!label) continue;
+      if (targetPosition) {
+        const rowPosition = normalizePositionKey(String(e.position ?? e.Position ?? '').trim());
+        if (rowPosition !== targetPosition) continue;
+      }
+      out.add(label);
+    }
+    return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  };
+
+  const employeeFilterLabelOptions = useMemo(
+    () => collectEmployeeLabelOptionsByPosition(employeePosition),
+    [employees, employeePosition]
+  );
+
+  const employeeAddLabelOptions = useMemo(
+    () => collectEmployeeLabelOptionsByPosition(employeeNewPosition),
+    [employees, employeeNewPosition]
+  );
+
+  const employeeEditLabelOptions = useMemo(
+    () => collectEmployeeLabelOptionsByPosition(employeeEditPosition),
+    [employees, employeeEditPosition]
+  );
+
   const employeesFiltered = useMemo(() => {
     const searchNeedle = employeeSearch.trim().toLowerCase();
     const agencyNeedle = employeeAgency.trim().toLowerCase();
     const positionNeedle = employeePosition.trim().toLowerCase();
+    const labelNeedle = employeeLabel.trim().toLowerCase();
     return employees.filter((e) => {
       const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
       const name = String(e.name ?? '').trim();
       const agency = String(e.agency ?? e.Agency ?? '').trim();
       const position = String(e.position ?? e.Position ?? '').trim();
+      const label = String(e.label ?? e.Label ?? '').trim();
       if (agencyNeedle && !agency.toLowerCase().includes(agencyNeedle)) return false;
       if (positionNeedle && !position.toLowerCase().includes(positionNeedle)) return false;
+      if (labelNeedle && !label.toLowerCase().includes(labelNeedle)) return false;
       if (!searchNeedle) return true;
-      return [staff, name].join(' ').toLowerCase().includes(searchNeedle);
+      return [staff, name, label].join(' ').toLowerCase().includes(searchNeedle);
     });
-  }, [employees, employeeSearch, employeeAgency, employeePosition]);
+  }, [employees, employeeSearch, employeeAgency, employeePosition, employeeLabel]);
 
   const timecardAgencyOptions = useMemo(() => {
     const out = new Set<string>();
@@ -3589,6 +3663,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       .filter((employee) => {
         const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
         const position = String(employee.position ?? employee.Position ?? '').trim();
+        const label = String(employee.label ?? employee.Label ?? '').trim();
         if (!staff) return false;
         if (scheduleWorkDayFilter !== null) {
           const row = scheduleRowsByStaffDayIndex.get(`${staff}__${scheduleWorkDayFilter}`);
@@ -3596,6 +3671,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           if (!isWork) return false;
         }
         if (schedulePosition && position.toLowerCase() !== schedulePosition.toLowerCase()) return false;
+        if (scheduleLabel && !label.toLowerCase().includes(scheduleLabel.toLowerCase())) return false;
         if (scheduleShift) {
           const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
           if (inferredShift !== scheduleShift) return false;
@@ -3603,7 +3679,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return true;
       })
       .sort((a, b) => String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US'));
-  }, [employees, schedulePosition, scheduleShift, employeeShiftByStaffId, scheduleWorkDayFilter, scheduleRowsByStaffDayIndex]);
+  }, [employees, schedulePosition, scheduleLabel, scheduleShift, employeeShiftByStaffId, scheduleWorkDayFilter, scheduleRowsByStaffDayIndex]);
+
+  const scheduleLabelOptions = useMemo(() => {
+    const out = new Set<string>();
+    for (const employee of employees) {
+      const position = String(employee.position ?? employee.Position ?? '').trim();
+      if (schedulePosition && position.toLowerCase() !== schedulePosition.toLowerCase()) continue;
+      const label = String(employee.label ?? employee.Label ?? '').trim();
+      if (label) out.add(label);
+    }
+    return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  }, [employees, schedulePosition]);
 
   const scheduleEmployeesFiltered = useMemo(() => {
     const search = deferredScheduleSearch.trim().toLowerCase();
@@ -3793,7 +3880,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   return (
     <div className="min-h-screen px-5 py-8 text-paper">
-      <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-6">
+      <div className="mx-auto flex w-full max-w-none flex-col gap-6">
         <header className="glass reveal rounded-3xl px-6 py-6 shadow-glow">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-[220px]">
@@ -4278,7 +4365,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   </div>
                 </div>
 
-                <div className="mt-5 grid gap-4 md:grid-cols-8">
+                <div className="mt-5 grid gap-4 md:grid-cols-10">
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Week</label>
                     <input
@@ -4338,6 +4425,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       <option value="late">Late</option>
                     </select>
                   </div>
+                  <div className="md:col-span-2">
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('标签', 'Label')}</label>
+                    <input
+                      value={scheduleLabel}
+                      onChange={(e) => setScheduleLabel(e.target.value)}
+                      disabled={isLocked}
+                      list="schedule-label-options"
+                      placeholder={t('标签', 'Label')}
+                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                    <datalist id="schedule-label-options">
+                      {scheduleLabelOptions.map((item) => (
+                        <option key={item} value={item} />
+                      ))}
+                    </datalist>
+                  </div>
                 </div>
 
                 <div className="mt-4 text-xs text-slate-400">
@@ -4361,7 +4464,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
                 {!scheduleError && scheduleEmployeesFiltered.length > 0 && (
                   <div className="no-scrollbar mt-4 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
-                    <table className="min-w-[1450px] w-max table-fixed text-left text-xs leading-tight">
+                    <table className="min-w-[1540px] w-full table-fixed text-left text-xs leading-tight">
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
                           <th className="sticky top-0 z-20 w-[100px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">ID</th>
@@ -4369,6 +4472,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           <th className="sticky top-0 z-20 w-[96px] bg-slate-950/95 px-2 py-2 text-center backdrop-blur">Work Days</th>
                           <th className="sticky top-0 z-20 w-[108px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">Agency</th>
                           <th className="sticky top-0 z-20 w-[86px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">Position</th>
+                          <th className="sticky top-0 z-20 w-[110px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('标签', 'Label')}</th>
                           <th className="sticky top-0 z-20 w-[76px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">Shift</th>
                           {scheduleDays.map((day, idx) => (
                             <th key={toDateOnly(day)} className="sticky top-0 z-20 w-[92px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
@@ -4400,6 +4504,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           const name = String(employee.name ?? '').trim();
                           const agency = String(employee.agency ?? employee.Agency ?? '').trim();
                           const position = String(employee.position ?? employee.Position ?? '').trim();
+                          const label = String(employee.label ?? employee.Label ?? '').trim();
                           if (!staff) return null;
 
                           let workDays = 0;
@@ -4431,6 +4536,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   {position || '-'}
                                 </span>
                               </td>
+                              <td className="px-1.5 py-2 text-slate-200 truncate">{label || '-'}</td>
                               <td className="px-2 py-2 text-center text-slate-200">
                                 {(() => {
                                   const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
@@ -4719,7 +4825,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         setEmployeeSearch('');
                         setEmployeeAgency('');
                         setEmployeePosition('');
-                        void fetchEmployees({ reset: true, search: '', agency: '', position: '' });
+                        setEmployeeLabel('');
+                        void fetchEmployees({ reset: true, search: '', agency: '', position: '', label: '' });
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
@@ -4728,14 +4835,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   </div>
                 </div>
 
-                <div className="mt-5 grid gap-4 md:grid-cols-4">
+                <div className="mt-5 grid gap-4 md:grid-cols-5">
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Search</label>
                     <input
                       value={employeeSearch}
                       onChange={(e) => setEmployeeSearch(e.target.value)}
                       disabled={isLocked}
-                      placeholder={t('通过ID或者名字搜索', 'Search by id or name')}
+                      placeholder={t('通过ID/名字/标签搜索', 'Search by id / name / label')}
                       className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </div>
@@ -4771,6 +4878,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       ))}
                     </datalist>
                   </div>
+                  <div>
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('标签', 'Label')}</label>
+                    <input
+                      value={employeeLabel}
+                      onChange={(e) => setEmployeeLabel(e.target.value)}
+                      disabled={isLocked}
+                      list="employee-label-filter-options"
+                      placeholder={t('标签', 'Label')}
+                      className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                    <datalist id="employee-label-filter-options">
+                      {employeeFilterLabelOptions.map((d) => (
+                        <option key={d} value={d} />
+                      ))}
+                    </datalist>
+                  </div>
                 </div>
 
                 <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -4792,7 +4915,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 {employeeAddOpen && (
                   <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4">
                     <div className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('新增员工', 'Add Employee')}</div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-5">
+                    <div className="mt-3 grid gap-3 md:grid-cols-6">
                       <input
                         value={employeeNewStaffId}
                         onChange={(e) => setEmployeeNewStaffId(e.target.value)}
@@ -4827,6 +4950,19 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           </option>
                         ))}
                       </select>
+                      <input
+                        value={employeeNewLabel}
+                        onChange={(e) => setEmployeeNewLabel(e.target.value)}
+                        disabled={isLocked}
+                        list="employee-label-add-options"
+                        placeholder={t('标签', 'Label')}
+                        className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <datalist id="employee-label-add-options">
+                        {employeeAddLabelOptions.map((d) => (
+                          <option key={d} value={d} />
+                        ))}
+                      </datalist>
                       <button
                         type="button"
                         disabled={isLocked}
@@ -4853,13 +4989,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 )}
 
                 <div className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
-                  <table className="min-w-[900px] w-full text-left text-sm">
+                  <table className="min-w-[1040px] w-full text-left text-sm">
                     <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-xs uppercase tracking-[0.2em] text-slate-400 backdrop-blur">
                       <tr>
                         <th className="px-4 py-3">Employee ID</th>
                         <th className="px-4 py-3">Name</th>
                         <th className="px-4 py-3">Agency</th>
                         <th className="px-4 py-3">Position</th>
+                        <th className="px-4 py-3">{t('标签', 'Label')}</th>
                         <th className="px-4 py-3">{t('班次', 'Shift')}</th>
                         <th className="px-4 py-3 text-right">{t('操作', 'Actions')}</th>
                       </tr>
@@ -4870,6 +5007,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         const name = String(e.name ?? '').trim();
                         const agency = String(e.agency ?? e.Agency ?? '').trim();
                         const position = String(e.position ?? e.Position ?? '').trim();
+                        const label = String(e.label ?? e.Label ?? '').trim();
                         const shiftInfo = employeeShiftByStaffId[staff];
                         const shift = shiftInfo?.shift ?? '';
                         const shiftLabel =
@@ -4896,6 +5034,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 {position || '-'}
                               </span>
                             </td>
+                            <td className="px-4 py-3 text-slate-200">{label || '-'}</td>
                             <td className="px-4 py-3 text-slate-200">
                               <span
                                 title={shiftTitle}
@@ -4916,7 +5055,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                     staff,
                                     name,
                                     agency,
-                                    position
+                                    position,
+                                    label
                                   })
                                 }
                                 className="mr-2 rounded-xl bg-white/10 px-4 py-1.5 text-xs font-semibold text-slate-200 transition hover:-translate-y-0.5 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
@@ -4960,7 +5100,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         </button>
                       </div>
 
-                      <div className="mt-4 grid gap-3 md:grid-cols-4">
+                      <div className="mt-4 grid gap-3 md:grid-cols-5">
                         <div className="md:col-span-1">
                           <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('工号', 'Staff ID')}</label>
                           <input
@@ -5007,6 +5147,21 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               </option>
                             ))}
                           </select>
+                        </div>
+                        <div className="md:col-span-1">
+                          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('标签', 'Label')}</label>
+                          <input
+                            value={employeeEditLabel}
+                            onChange={(e) => setEmployeeEditLabel(e.target.value)}
+                            disabled={isLocked}
+                            list="employee-label-edit-options"
+                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                          />
+                          <datalist id="employee-label-edit-options">
+                            {employeeEditLabelOptions.map((d) => (
+                              <option key={d} value={d} />
+                            ))}
+                          </datalist>
                         </div>
                       </div>
 
@@ -5279,7 +5434,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 )}
 
                 <div className="no-scrollbar mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
-                  <table className="min-w-[1500px] w-max table-fixed text-left text-xs leading-tight">
+                  <table className="min-w-[1500px] w-full table-fixed text-left text-xs leading-tight">
                     <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                       {(() => {
                         const baseWeekStart = startOfWeekMonday(serverTime);
@@ -5608,8 +5763,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       className="h-4 w-4 accent-neon disabled:cursor-not-allowed disabled:opacity-60"
                     />
                     {t(
-                      '重复时补全信息（仅填充数据库里为空的 name/agency/position）',
-                      'Fill missing fields on duplicates (only empty name/agency/position)'
+                      '重复时补全信息（仅填充数据库里为空的 name/agency/position/label）',
+                      'Fill missing fields on duplicates (only empty name/agency/position/label)'
                     )}
                   </label>
                 </div>
@@ -5638,7 +5793,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       onClick={async () => {
                         try {
                           const XLSX = await import('xlsx');
-                          const headers = ['staff_id', 'name', 'agency', 'position'];
+                          const headers = ['staff_id', 'name', 'agency', 'position', 'label'];
                           const ws = XLSX.utils.aoa_to_sheet([headers]);
                           const wb = XLSX.utils.book_new();
                           XLSX.utils.book_append_sheet(wb, ws, 'template');
@@ -5646,7 +5801,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           XLSX.writeFile(wb, 'ob_employees_template.xlsx');
                         } catch (err: any) {
                           // fallback to CSV download
-                          const headers = ['staff_id', 'name', 'agency', 'position'];
+                          const headers = ['staff_id', 'name', 'agency', 'position', 'label'];
                           const csv = headers.join(',') + '\n';
                           const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                           const url = URL.createObjectURL(blob);
