@@ -742,7 +742,7 @@ export default function App() {
     const list: DailyRosterItem[] = rows.map((row) => {
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       const employeeInfo = staff ? employeeMap[staff] : undefined;
-      const position = String(row.position ?? '').trim();
+      const position = String(employeeInfo?.position ?? '').trim() || String(row.position ?? '').trim();
       return {
         staff_id: staff,
         name: employeeInfo?.name || staff,
@@ -831,7 +831,7 @@ export default function App() {
           staff_id: staff,
           name: employeeInfo?.name || '',
           agency: employeeInfo?.agency || '-',
-          position: scheduleInfo?.position || employeeInfo?.position || '',
+          position: employeeInfo?.position || scheduleInfo?.position || '',
           shift: inferredShiftByStaff[staff] || normalizeShiftValue(scheduleInfo?.shift || '')
         };
       });

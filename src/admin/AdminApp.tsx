@@ -373,7 +373,7 @@ export default function AdminApp() {
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [employeeAgency, setEmployeeAgency] = useState('');
   const [employeePosition, setEmployeePosition] = useState('');
-  const [employeeLabel, setEmployeeLabel] = useState('');
+  const [employeeLabels, setEmployeeLabels] = useState<string[]>([]);
   const [, setEmployeesHasMore] = useState(false);
   const [employeeNewStaffId, setEmployeeNewStaffId] = useState('');
   const [employeeNewName, setEmployeeNewName] = useState('');
@@ -427,7 +427,7 @@ export default function AdminApp() {
   const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [schedulePosition, setSchedulePosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
-  const [scheduleLabel, setScheduleLabel] = useState('');
+  const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
   const [scheduleShift, setScheduleShift] = useState<'' | 'early' | 'late'>('');
   const [scheduleWorkDayFilter, setScheduleWorkDayFilter] = useState<number | null>(null);
   const [schedulePublishTomorrow, setSchedulePublishTomorrow] = useState(false);
@@ -1144,7 +1144,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   const refreshSchedulePanel = async () => {
     await fetchSchedule();
-    await fetchEmployees({ reset: true, search: '', agency: '', position: '', label: '' });
+    await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
     await fetchSchedulePublishSetting();
     await fetchSchedulePunchPresence();
   };
@@ -1371,13 +1371,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     search,
     agency,
     position,
-    label
+    labels
   }: {
     reset: boolean;
     search?: string;
     agency?: string;
     position?: string;
-    label?: string;
+    labels?: string[];
   }) => {
     if (!supabase) {
       setEmployeesError('缺少 Supabase 配置。');
@@ -1387,7 +1387,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const searchValue = (search ?? employeeSearch).trim().replace(/,/g, ' ');
     const agencyValue = (agency ?? employeeAgency).trim();
     const positionValue = (position ?? employeePosition).trim();
-    const labelValue = (label ?? employeeLabel).trim();
+    const labelValues = (labels ?? employeeLabels).map((item) => item.trim()).filter(Boolean);
 
     await runLocked('employees', async () => {
       setEmployeesError(null);
@@ -1415,8 +1415,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           q = q.ilike(positionCol as any, `%${positionValue}%`);
         }
 
-        if (labelValue) {
-          q = q.ilike(labelCol as any, `%${labelValue}%`);
+        if (labelValues.length === 1) {
+          q = q.ilike(labelCol as any, `%${labelValues[0]}%`);
         }
 
         if (searchValue) {
@@ -1841,7 +1841,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         search: employeeSearch,
         agency: employeeAgency,
         position: employeePosition,
-        label: employeeLabel
+        labels: employeeLabels
       });
     }
   };
@@ -3425,7 +3425,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const searchNeedle = employeeSearch.trim().toLowerCase();
     const agencyNeedle = employeeAgency.trim().toLowerCase();
     const positionNeedle = employeePosition.trim().toLowerCase();
-    const labelNeedle = employeeLabel.trim().toLowerCase();
+    const labelNeedles = employeeLabels.map((item) => item.trim().toLowerCase()).filter(Boolean);
     return employees.filter((e) => {
       const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
       const name = String(e.name ?? '').trim();
@@ -3434,11 +3434,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const label = String(e.label ?? e.Label ?? '').trim();
       if (agencyNeedle && !agency.toLowerCase().includes(agencyNeedle)) return false;
       if (positionNeedle && !position.toLowerCase().includes(positionNeedle)) return false;
-      if (labelNeedle && !label.toLowerCase().includes(labelNeedle)) return false;
+      if (labelNeedles.length > 0) {
+        const normalizedLabel = label.toLowerCase();
+        const hit = labelNeedles.some((needle) => normalizedLabel === needle);
+        if (!hit) return false;
+      }
       if (!searchNeedle) return true;
       return [staff, name, label].join(' ').toLowerCase().includes(searchNeedle);
     });
-  }, [employees, employeeSearch, employeeAgency, employeePosition, employeeLabel]);
+  }, [employees, employeeSearch, employeeAgency, employeePosition, employeeLabels]);
 
   const timecardAgencyOptions = useMemo(() => {
     const out = new Set<string>();
@@ -3586,6 +3590,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const lateRows: DailyListRow[] = [];
     for (const [staff, row] of byStaff.entries()) {
       const profile = employeeProfileByStaffId.get(staff);
+      if (!profile) continue;
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
       const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
       const shift: 'early' | 'late' = (inferredShift || scheduledShift || 'early') as 'early' | 'late';
@@ -3593,7 +3598,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         staff_id: staff,
         name: profile?.name || '',
         agency: profile?.agency || '',
-        position: String(row.position ?? '').trim() || profile?.position || '',
+        position: profile?.position || String(row.position ?? '').trim() || '',
         shift
       };
       if (shift === 'late') lateRows.push(item);
@@ -3690,7 +3695,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           if (!isWork) return false;
         }
         if (schedulePosition && position.toLowerCase() !== schedulePosition.toLowerCase()) return false;
-        if (scheduleLabel && !label.toLowerCase().includes(scheduleLabel.toLowerCase())) return false;
+        if (scheduleLabels.length > 0) {
+          const normalizedLabel = label.toLowerCase();
+          const hit = scheduleLabels.some((item) => normalizedLabel === item.toLowerCase());
+          if (!hit) return false;
+        }
         if (scheduleShift) {
           const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
           if (inferredShift !== scheduleShift) return false;
@@ -3698,7 +3707,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return true;
       })
       .sort((a, b) => String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US'));
-  }, [employees, schedulePosition, scheduleLabel, scheduleShift, employeeShiftByStaffId, scheduleWorkDayFilter, scheduleRowsByStaffDayIndex]);
+  }, [employees, schedulePosition, scheduleLabels, scheduleShift, employeeShiftByStaffId, scheduleWorkDayFilter, scheduleRowsByStaffDayIndex]);
 
   const scheduleLabelOptions = useMemo(() => {
     const out = new Set<string>();
@@ -4446,19 +4455,72 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   </div>
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('标签', 'Label')}</label>
-                    <input
-                      value={scheduleLabel}
-                      onChange={(e) => setScheduleLabel(e.target.value)}
-                      disabled={isLocked}
-                      list="schedule-label-options"
-                      placeholder={t('标签', 'Label')}
-                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                    <datalist id="schedule-label-options">
-                      {scheduleLabelOptions.map((item) => (
-                        <option key={item} value={item} />
-                      ))}
-                    </datalist>
+                    <details className="relative mt-2">
+                      <summary
+                        className={[
+                          'flex h-12 cursor-pointer list-none items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition',
+                          'hover:border-white/20',
+                          isLocked ? 'pointer-events-none cursor-not-allowed opacity-60' : ''
+                        ].join(' ')}
+                      >
+                        <span className="truncate">
+                          {scheduleLabels.length === 0
+                            ? t('选择标签', 'Select labels')
+                            : scheduleLabels.length <= 2
+                              ? scheduleLabels.join(', ')
+                              : `${scheduleLabels.slice(0, 2).join(', ')} +${scheduleLabels.length - 2}`}
+                        </span>
+                        <span className="ml-3 text-xs text-slate-400">{scheduleLabels.length}</span>
+                      </summary>
+                      <div className="absolute z-30 mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/95 p-3 shadow-2xl backdrop-blur">
+                        <div className="mb-2 flex items-center justify-between text-[11px] text-slate-400">
+                          <span>{t('可多选', 'Multi-select')}</span>
+                          <button
+                            type="button"
+                            disabled={isLocked || scheduleLabels.length === 0}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setScheduleLabels([]);
+                            }}
+                            className="rounded-md bg-white/10 px-2 py-1 text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {t('清空', 'Clear')}
+                          </button>
+                        </div>
+                        <div className="max-h-56 space-y-1 overflow-auto pr-1">
+                          {scheduleLabelOptions.length === 0 ? (
+                            <p className="rounded-lg bg-white/5 px-2 py-2 text-xs text-slate-400">{t('暂无标签', 'No labels')}</p>
+                          ) : (
+                            scheduleLabelOptions.map((item) => {
+                              const checked = scheduleLabels.includes(item);
+                              return (
+                                <label
+                                  key={item}
+                                  className={[
+                                    'flex cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-sm transition',
+                                    checked
+                                      ? 'border-neon/50 bg-neon/10 text-neon'
+                                      : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                                  ].join(' ')}
+                                >
+                                  <span className="truncate">{item}</span>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() =>
+                                      setScheduleLabels((prev) =>
+                                        prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]
+                                      )
+                                    }
+                                    className="h-3.5 w-3.5 accent-lime-400"
+                                  />
+                                </label>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </details>
                   </div>
                 </div>
 
@@ -4844,8 +4906,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         setEmployeeSearch('');
                         setEmployeeAgency('');
                         setEmployeePosition('');
-                        setEmployeeLabel('');
-                        void fetchEmployees({ reset: true, search: '', agency: '', position: '', label: '' });
+                        setEmployeeLabels([]);
+                        void fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
@@ -4899,19 +4961,72 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   </div>
                   <div>
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('标签', 'Label')}</label>
-                    <input
-                      value={employeeLabel}
-                      onChange={(e) => setEmployeeLabel(e.target.value)}
-                      disabled={isLocked}
-                      list="employee-label-filter-options"
-                      placeholder={t('标签', 'Label')}
-                      className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                    <datalist id="employee-label-filter-options">
-                      {employeeFilterLabelOptions.map((d) => (
-                        <option key={d} value={d} />
-                      ))}
-                    </datalist>
+                    <details className="relative mt-2">
+                      <summary
+                        className={[
+                          'flex h-[46px] cursor-pointer list-none items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition',
+                          'hover:border-white/20',
+                          isLocked ? 'pointer-events-none cursor-not-allowed opacity-60' : ''
+                        ].join(' ')}
+                      >
+                        <span className="truncate">
+                          {employeeLabels.length === 0
+                            ? t('选择标签', 'Select labels')
+                            : employeeLabels.length <= 2
+                              ? employeeLabels.join(', ')
+                              : `${employeeLabels.slice(0, 2).join(', ')} +${employeeLabels.length - 2}`}
+                        </span>
+                        <span className="ml-3 text-xs text-slate-400">{employeeLabels.length}</span>
+                      </summary>
+                      <div className="absolute z-30 mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/95 p-3 shadow-2xl backdrop-blur">
+                        <div className="mb-2 flex items-center justify-between text-[11px] text-slate-400">
+                          <span>{t('可多选', 'Multi-select')}</span>
+                          <button
+                            type="button"
+                            disabled={isLocked || employeeLabels.length === 0}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setEmployeeLabels([]);
+                            }}
+                            className="rounded-md bg-white/10 px-2 py-1 text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {t('清空', 'Clear')}
+                          </button>
+                        </div>
+                        <div className="max-h-56 space-y-1 overflow-auto pr-1">
+                          {employeeFilterLabelOptions.length === 0 ? (
+                            <p className="rounded-lg bg-white/5 px-2 py-2 text-xs text-slate-400">{t('暂无标签', 'No labels')}</p>
+                          ) : (
+                            employeeFilterLabelOptions.map((item) => {
+                              const checked = employeeLabels.includes(item);
+                              return (
+                                <label
+                                  key={item}
+                                  className={[
+                                    'flex cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-sm transition',
+                                    checked
+                                      ? 'border-neon/50 bg-neon/10 text-neon'
+                                      : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                                  ].join(' ')}
+                                >
+                                  <span className="truncate">{item}</span>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() =>
+                                      setEmployeeLabels((prev) =>
+                                        prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]
+                                      )
+                                    }
+                                    className="h-3.5 w-3.5 accent-lime-400"
+                                  />
+                                </label>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </details>
                   </div>
                 </div>
 
