@@ -19,6 +19,7 @@ type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
+const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
 const SCHEDULE_REST_NOTE = '__rest__';
 
@@ -1582,9 +1583,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       setEmployeesError('Missing Supabase config.');
       return;
     }
+    const canEditStaffId = String(user?.email ?? '').trim().toLowerCase() === STAFF_ID_EDITOR_EMAIL;
     const originalStaff = normalizeStaffId(String(employeeEditOriginalStaffId ?? '').trim());
     const nextStaff = normalizeStaffId(String(employeeEditStaffId ?? '').trim());
     if (!originalStaff || !nextStaff) return;
+    if (!canEditStaffId && nextStaff !== originalStaff) {
+      setEmployeesError(`Only ${STAFF_ID_EDITOR_EMAIL} can change staff ID.`);
+      return;
+    }
     if (!isValidStaffIdValue(nextStaff)) {
       setEmployeesError('Invalid staff ID format (e.g. US010454).');
       return;
@@ -4879,10 +4885,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           <input
                             value={employeeEditStaffId ?? ''}
                             onChange={(e) => setEmployeeEditStaffId(e.target.value)}
-                            disabled={isLocked}
+                            disabled={isLocked || String(user?.email ?? '').trim().toLowerCase() !== STAFF_ID_EDITOR_EMAIL}
                             placeholder={t('例如：US010454', 'e.g. US010454')}
                             className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 font-mono text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                           />
+                          {String(user?.email ?? '').trim().toLowerCase() !== STAFF_ID_EDITOR_EMAIL && (
+                            <p className="mt-1 text-[11px] text-slate-500">Only {STAFF_ID_EDITOR_EMAIL} can edit staff ID.</p>
+                          )}
                         </div>
                         <div className="md:col-span-1">
                           <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('姓名', 'Name')}</label>
