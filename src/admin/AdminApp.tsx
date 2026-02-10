@@ -414,6 +414,7 @@ export default function AdminApp() {
 
   const [scheduleRows, setScheduleRows] = useState<ScheduleRow[]>([]);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [schedulePunchPresenceKeys, setSchedulePunchPresenceKeys] = useState<Set<string>>(new Set());
   const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
   const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
   const [scheduleSearch, setScheduleSearch] = useState('');
@@ -1136,6 +1137,67 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     await fetchSchedule();
     await fetchEmployees({ reset: true, search: '', agency: '', position: '' });
     await fetchSchedulePublishSetting();
+    await fetchSchedulePunchPresence();
+  };
+
+  const fetchSchedulePunchPresence = async () => {
+    if (!supabase) {
+      setSchedulePunchPresenceKeys(new Set());
+      return;
+    }
+
+    const staffSet = new Set(
+      employees
+        .map((e) => normalizeStaffId(String(e.staff_id ?? '').trim()))
+        .filter((staff): staff is string => Boolean(staff))
+    );
+    if (staffSet.size === 0) {
+      setSchedulePunchPresenceKeys(new Set());
+      return;
+    }
+
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekStart = addDays(baseWeekStart, scheduleWeekOffset * 7);
+    const { start, end } = getDayRange(weekStart, 0, 7);
+    const day0StartMs = start.getTime();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const found = new Set<string>();
+
+    const pageSize = 2000;
+    let page = 0;
+    while (true) {
+      const from = page * pageSize;
+      const to = from + pageSize - 1;
+      const res = await supabase
+        .from('ob_punches')
+        .select('staff_id, created_at')
+        .gte('created_at', start.toISOString())
+        .lt('created_at', end.toISOString())
+        .order('created_at', { ascending: true })
+        .range(from, to);
+
+      if (res.error) {
+        setSchedulePunchPresenceKeys(new Set());
+        return;
+      }
+
+      const rows = (res.data as any[]) ?? [];
+      for (const row of rows) {
+        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+        if (!staff || !staffSet.has(staff)) continue;
+        const at = new Date(String(row.created_at ?? ''));
+        if (Number.isNaN(at.getTime())) continue;
+        const dayIndex = Math.floor((at.getTime() - day0StartMs) / dayMs);
+        if (dayIndex < 0 || dayIndex > 6) continue;
+        found.add(`${staff}__${dayIndex}`);
+      }
+
+      if (rows.length < pageSize) break;
+      page += 1;
+      if (page >= 20) break;
+    }
+
+    setSchedulePunchPresenceKeys(found);
   };
 
   const fetchRecentPunches = async (options?: { search?: string; lockUi?: boolean }) => {
@@ -2913,6 +2975,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     return () => window.clearTimeout(handle);
   }, [page, punchesSearch]);
 
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    void fetchSchedulePunchPresence();
+  }, [page, scheduleWeekOffset, employees, serverTime]);
+
   const onFileSelected = async (file: File | null) => {
     if (!file) {
       setUploadError(null);
@@ -4187,7 +4254,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      每日名单
+                      {t('每日名单', 'Daily list')}
                     </button>
                     <button
                       type="button"
@@ -4195,7 +4262,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       onClick={() => void exportScheduleTemplate()}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      导出排班
+                      {t('导出排班', 'Export schedule')}
                     </button>
                     <button
                       type="button"
@@ -4316,7 +4383,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   ].join(' ')}
                                   title="Filter employees working this day"
                                 >
-                                  {`工作 ${scheduleWorkingCountByDayIndex[idx]}人`}
+                                  {lang === 'en' ? `Work ${scheduleWorkingCountByDayIndex[idx]}` : `工作 ${scheduleWorkingCountByDayIndex[idx]}人`}
                                 </button>
                                 <span>{`${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][idx]} ${toDateOnly(day).slice(5)}`}</span>
                               </div>
@@ -4364,7 +4431,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               <td className="px-2 py-2 text-center text-slate-200">
                                 {(() => {
                                   const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-                                  const shiftLabel = inferredShift === 'early' ? '早班' : inferredShift === 'late' ? '晚班' : '-';
+                                  const shiftLabel = inferredShift === 'early' ? t('早班', 'Morning') : inferredShift === 'late' ? t('晚班', 'Night') : '-';
                                   const shiftClass = getShiftBadgeClass(inferredShift);
                                   return <span className={['inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold tracking-[0.08em]', shiftClass].join(' ')}>{shiftLabel}</span>;
                                 })()}
@@ -4372,10 +4439,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               {scheduleDays.map((_, dayIndex) => {
                                 const key = `${staff}__${dayIndex}`;
                                 const row = scheduleRowsByStaffDayIndex.get(key);
-                                const state: 'empty' | 'work' | 'rest' = !row
+                                const hasPunch = schedulePunchPresenceKeys.has(key);
+                                const state: 'empty' | 'work' | 'rest' | 'rest_worked' = !row
                                   ? 'empty'
                                   : String(row.note ?? '').trim() === SCHEDULE_REST_NOTE
-                                    ? 'rest'
+                                    ? hasPunch
+                                      ? 'rest_worked'
+                                      : 'rest'
                                     : 'work';
                                 const targetShift = scheduleShift || ((row?.shift as 'early' | 'late' | null) ?? 'early');
                                 const nextState: 'empty' | 'work' | 'rest' =
@@ -4392,12 +4462,20 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                           'h-7 min-w-[42px] rounded-md px-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55',
                                           state === 'work'
                                             ? 'bg-neon text-ink shadow-glow'
+                                            : state === 'rest_worked'
+                                              ? 'bg-sky-500 text-white'
                                             : state === 'rest'
                                               ? 'bg-ember text-white'
                                               : 'border border-white/20 bg-white/5 text-slate-200 hover:bg-white/10'
                                         ].join(' ')}
                                       >
-                                        {state === 'work' ? '工作' : state === 'rest' ? '休息' : '空'}
+                                        {state === 'work'
+                                          ? t('工作', 'Work')
+                                          : state === 'rest_worked'
+                                            ? t('排休出勤', 'Rest Worked')
+                                            : state === 'rest'
+                                              ? t('休息', 'Rest')
+                                              : t('空', 'Empty')}
                                       </button>
                                     </div>
                                   </td>
@@ -4418,7 +4496,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-950/95 shadow-2xl backdrop-blur">
                         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 px-6 py-5">
                           <div>
-                            <h3 className="font-display text-2xl tracking-[0.08em]">每日名单</h3>
+                            <h3 className="font-display text-2xl tracking-[0.08em]">{t('每日名单', 'Daily list')}</h3>
                             <p className="mt-2 text-xs text-slate-400">
                               日期：<span className="text-slate-200">{tomorrowDailyList.targetDate}</span> {tomorrowDailyList.weekday}
                             </p>
@@ -4459,7 +4537,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               onClick={() => void copyDailyList('all')}
                               className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                              复制全部
+                              {t('复制全部', 'Copy all')}
                             </button>
                             <button
                               type="button"
@@ -4473,7 +4551,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         <div className="grid flex-1 gap-4 overflow-y-auto px-6 py-5 md:grid-cols-2">
                           <div className="md:col-span-2">
                             <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-black/25 px-3 py-2">
-                              <span className="text-xs uppercase tracking-[0.14em] text-slate-400">筛选</span>
+                              <span className="text-xs uppercase tracking-[0.14em] text-slate-400">{t('筛选', 'Filter')}</span>
                               {ALLOWED_POSITIONS.map((position) => (
                                 <button
                                   key={`filter-${position}`}
@@ -4507,20 +4585,20 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 }
                                 className="ml-auto rounded-lg bg-white/10 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:bg-white/15"
                               >
-                                清空筛选
+                                {t('清空筛选', 'Clear filters')}
                               </button>
                             </div>
                           </div>
                           <div className="rounded-2xl border border-emerald-400/30 bg-emerald-500/[0.04] p-4">
                             <div className="mb-3 flex items-center justify-between">
-                              <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-200">早班</h4>
+                              <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-200">{t('早班', 'Morning')}</h4>
                               <button
                                 type="button"
                                 disabled={!canCopyDailyList}
                                 onClick={() => void copyDailyList('early')}
                                 className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
                               >
-                                复制
+                                {t('复制', 'Copy')}
                               </button>
                             </div>
                             <div className="max-h-[55vh] overflow-auto rounded-xl border border-white/10 bg-black/25">
@@ -4538,7 +4616,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   {tomorrowDailyRowsDisplayed.earlyRows.length === 0 ? (
                                     <tr>
                                       <td colSpan={5} className="px-3 py-3 text-center text-slate-400">
-                                        无数据
+                                        {t('无数据', 'No data')}
                                       </td>
                                     </tr>
                                   ) : (
@@ -4559,14 +4637,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
                           <div className="rounded-2xl border border-indigo-400/30 bg-indigo-500/[0.04] p-4">
                             <div className="mb-3 flex items-center justify-between">
-                              <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-indigo-200">晚班</h4>
+                              <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-indigo-200">{t('晚班', 'Night')}</h4>
                               <button
                                 type="button"
                                 disabled={!canCopyDailyList}
                                 onClick={() => void copyDailyList('late')}
                                 className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
                               >
-                                复制
+                                {t('复制', 'Copy')}
                               </button>
                             </div>
                             <div className="max-h-[55vh] overflow-auto rounded-xl border border-white/10 bg-black/25">
@@ -4584,7 +4662,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   {tomorrowDailyRowsDisplayed.lateRows.length === 0 ? (
                                     <tr>
                                       <td colSpan={5} className="px-3 py-3 text-center text-slate-400">
-                                        无数据
+                                        {t('无数据', 'No data')}
                                       </td>
                                     </tr>
                                   ) : (
@@ -4886,7 +4964,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             value={employeeEditStaffId ?? ''}
                             onChange={(e) => setEmployeeEditStaffId(e.target.value)}
                             disabled={isLocked || String(user?.email ?? '').trim().toLowerCase() !== STAFF_ID_EDITOR_EMAIL}
-                            placeholder={t('例如：US010454', 'e.g. US010454')}
+                            placeholder={t('例如：US012345', 'e.g. US12345')}
                             className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 font-mono text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                           />
                           {String(user?.email ?? '').trim().toLowerCase() !== STAFF_ID_EDITOR_EMAIL && (
@@ -5203,20 +5281,28 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       {(() => {
                         const baseWeekStart = startOfWeekMonday(serverTime);
                         const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
-                        const days = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+                        const days = [
+                          t('周一', 'Mon'),
+                          t('周二', 'Tue'),
+                          t('周三', 'Wed'),
+                          t('周四', 'Thu'),
+                          t('周五', 'Fri'),
+                          t('周六', 'Sat'),
+                          t('周日', 'Sun')
+                        ];
                         return (
                           <tr>
                             <th className="w-[108px] px-2 py-1.5">ID</th>
                             <th className="w-[200px] px-2 py-1.5">Name</th>
                             <th className="w-[140px] px-2 py-1.5">Agency</th>
-                            <th className="w-[120px] px-2 py-1.5">岗位</th>
+                            <th className="w-[120px] px-2 py-1.5">{t('岗位', 'Position')}</th>
                             {days.map((label, idx) => (
                               <th key={label} className="w-[92px] px-2 py-1.5 whitespace-nowrap text-center">
                                 <div className="text-neon">{`${t('总工时', 'Total')} ${formatHours(timecardDayTotalHours[idx]) || '0'}`}</div>
                                 <div>{label} {toDateOnly(addDays(weekStart, idx)).slice(5)}</div>
                               </th>
                             ))}
-                            <th className="w-[92px] px-2 py-1.5 text-center">合计</th>
+                            <th className="w-[92px] px-2 py-1.5 text-center">{t('合计', 'Total')}</th>
                           </tr>
                         );
                       })()}
@@ -5274,7 +5360,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                       className="inline-flex rounded px-1.5 py-0.5 text-[11px] font-semibold text-rose-200"
                                       title="Scheduled but no punch"
                                     >
-                                      Absent
+                                      {t('缺勤', 'Absent')}
                                     </span>
                                   ) : (
                                     ''
