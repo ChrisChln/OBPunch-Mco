@@ -90,6 +90,42 @@ const isRestLikeScheduleNote = (note: unknown) => {
   return value === SCHEDULE_REST_NOTE || value === SCHEDULE_LEAVE_NOTE || value === SCHEDULE_TEMP_REST_NOTE;
 };
 
+const toEpochMs = (value: unknown) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return 0;
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : 0;
+};
+
+// Deduplicate same-day schedule rows by staff, keeping the latest row.
+const pickLatestScheduleRowsByStaff = <T extends { staff_id?: unknown; updated_at?: unknown; created_at?: unknown; id?: unknown }>(
+  rows: T[]
+) => {
+  const byStaff = new Map<string, T>();
+  for (const row of rows) {
+    const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+    if (!staff) continue;
+    const prev = byStaff.get(staff);
+    if (!prev) {
+      byStaff.set(staff, row);
+      continue;
+    }
+    const prevMs = Math.max(toEpochMs(prev.updated_at), toEpochMs(prev.created_at));
+    const curMs = Math.max(toEpochMs(row.updated_at), toEpochMs(row.created_at));
+    if (curMs > prevMs) {
+      byStaff.set(staff, row);
+      continue;
+    }
+    if (curMs < prevMs) continue;
+    const prevId = Number(prev.id ?? 0);
+    const curId = Number(row.id ?? 0);
+    if (Number.isFinite(curId) && Number.isFinite(prevId) && curId > prevId) {
+      byStaff.set(staff, row);
+    }
+  }
+  return Array.from(byStaff.values());
+};
+
 function chunk<T>(items: T[], size: number) {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) {
@@ -721,7 +757,7 @@ export default function App() {
     setDailyRosterError(null);
     const res = await supabase
       .from(SCHEDULE_TABLE)
-      .select('staff_id, position, shift, note')
+      .select('id, staff_id, position, shift, note, updated_at, created_at')
       .eq('date', templateDate)
       .order('staff_id', { ascending: true })
       .limit(2000);
@@ -732,7 +768,7 @@ export default function App() {
       return;
     }
 
-    const rawRows = (res.data as any[] | null) ?? [];
+    const rawRows = pickLatestScheduleRowsByStaff((((res.data as any[]) ?? []) as any[]));
     const rows = rawRows.filter((row) => !isRestLikeScheduleNote(row.note));
     const staffIds = Array.from(
       new Set(
@@ -773,7 +809,7 @@ export default function App() {
 
     const scheduleRes = await supabase
       .from(SCHEDULE_TABLE)
-      .select('staff_id, position, shift, note')
+      .select('id, staff_id, position, shift, note, updated_at, created_at')
       .eq('date', templateDate)
       .order('staff_id', { ascending: true })
       .limit(3000);
@@ -783,7 +819,9 @@ export default function App() {
       return;
     }
 
-    const scheduledRows = ((scheduleRes.data as any[] | null) ?? []).filter((row) => !isRestLikeScheduleNote(row.note));
+    const scheduledRows = pickLatestScheduleRowsByStaff((((scheduleRes.data as any[]) ?? []) as any[])).filter(
+      (row) => !isRestLikeScheduleNote(row.note)
+    );
     const scheduledStaff = Array.from(
       new Set(
         scheduledRows
@@ -866,7 +904,7 @@ export default function App() {
     const templateDate = getTemplateDateByDayIndex(todayDayIndex);
     const scheduleRes = await supabase
       .from(SCHEDULE_TABLE)
-      .select('staff_id, position, shift, note')
+      .select('id, staff_id, position, shift, note, updated_at, created_at')
       .eq('date', templateDate)
       .limit(5000);
     if (scheduleRes.error) {
@@ -874,7 +912,7 @@ export default function App() {
       return;
     }
 
-    const allScheduleRows = (scheduleRes.data as any[] | null) ?? [];
+    const allScheduleRows = pickLatestScheduleRowsByStaff((((scheduleRes.data as any[]) ?? []) as any[]));
     const workScheduleRows = allScheduleRows.filter((row) => !isRestLikeScheduleNote(row.note));
     const restScheduleRows = allScheduleRows.filter((row) => isRestLikeScheduleNote(row.note));
     const allScheduleStaff = Array.from(
@@ -884,6 +922,8 @@ export default function App() {
           .filter(Boolean)
       )
     );
+    const positionMapRes = await fetchEmployeeMap(allScheduleStaff);
+    const employeePositionMap = positionMapRes.error ? {} : positionMapRes.map;
     const inferredShiftByStaff = await inferShiftByWorkHoursForStaff(allScheduleStaff);
 
     const staffByKey = new Map<string, Set<string>>();
@@ -891,7 +931,8 @@ export default function App() {
     for (const row of workScheduleRows) {
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       if (!staff) continue;
-      const position = normalizeAllowedPosition(String(row.position ?? '').trim());
+      const latestPosition = normalizeAllowedPosition(String(employeePositionMap[staff]?.position ?? '').trim());
+      const position = latestPosition ?? normalizeAllowedPosition(String(row.position ?? '').trim());
       if (!position) continue;
       const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
       const inferredShift = inferredShiftByStaff[staff] ?? '';
@@ -907,7 +948,8 @@ export default function App() {
     for (const row of restScheduleRows) {
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       if (!staff) continue;
-      const position = normalizeAllowedPosition(String(row.position ?? '').trim());
+      const latestPosition = normalizeAllowedPosition(String(employeePositionMap[staff]?.position ?? '').trim());
+      const position = latestPosition ?? normalizeAllowedPosition(String(row.position ?? '').trim());
       if (!position) continue;
       const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
       const inferredShift = inferredShiftByStaff[staff] ?? '';
@@ -2178,4 +2220,3 @@ export default function App() {
     </div>
   );
 }
-
