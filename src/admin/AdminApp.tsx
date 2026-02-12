@@ -622,6 +622,13 @@ export default function AdminApp() {
   >({});
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
   const [homeRosterSide, setHomeRosterSide] = useState<'absent' | 'restWorked'>('absent');
+  const [homeRosterPositionFilters, setHomeRosterPositionFilters] = useState<Record<AllowedPosition, boolean>>({
+    Pick: true,
+    Pack: true,
+    Rebin: true,
+    Preship: true,
+    Transfer: true
+  });
 
   const resolveEmployeeColumnMode = async (): Promise<EmployeeColumnMode> => {
     const cached = employeeColumnModeRef.current;
@@ -4643,6 +4650,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     employeeShiftByStaffId,
     employeeProfileByStaffId
   ]);
+  const homeRosterRowsFiltered = useMemo(() => {
+    const enabled = new Set(ALLOWED_POSITIONS.filter((position) => Boolean(homeRosterPositionFilters[position])));
+    const filterRows = (rows: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>) =>
+      rows.filter((row) => {
+        const pos = normalizePositionKey(String(row.position ?? '').trim());
+        return Boolean(pos && enabled.has(pos));
+      });
+    return {
+      absent: filterRows(homeRosterRows.absent),
+      restWorked: filterRows(homeRosterRows.restWorked)
+    };
+  }, [homeRosterRows, homeRosterPositionFilters]);
   const makeDailyListTsv = (rows: DailyListRow[]) =>
     rows
       .map((row) => [row.staff_id, row.name, row.agency, row.position, getPlannedStartTime(row.shift, row.position)].map((c) => String(c ?? '')).join('\t'))
@@ -5135,7 +5154,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   <h2 className="font-display text-2xl tracking-[0.08em]">{t('首页看板', 'Home Dashboard')}</h2>
                   <p className="text-xs text-slate-400">{t('预计来自排班，实时来自打卡', 'Expected from schedule, realtime from punches')}</p>
                 </div>
-                <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">
+                <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_560px]">
                   <div className="space-y-4">
                     {ALLOWED_POSITIONS.map((position) => {
                       const stats = attendanceStats[position] ?? { early: 0, late: 0, active: 0 };
@@ -5193,26 +5212,51 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         </button>
                       </div>
                     </div>
+                    <div className="mt-3 grid grid-cols-5 gap-2">
+                      {ALLOWED_POSITIONS.map((position) => {
+                        const checked = homeRosterPositionFilters[position];
+                        return (
+                          <button
+                            key={`home-roster-filter-${position}`}
+                            type="button"
+                            onClick={() =>
+                              setHomeRosterPositionFilters((prev) => ({
+                                ...prev,
+                                [position]: !prev[position]
+                              }))
+                            }
+                            className={[
+                              'rounded-xl px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] transition',
+                              checked ? 'bg-neon text-ink' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                            ].join(' ')}
+                          >
+                            {position}
+                          </button>
+                        );
+                      })}
+                    </div>
                     <div className="mt-3 rounded-xl border border-white/10 bg-black/30 p-2">
-                      <div className="grid grid-cols-[56px_1fr_1fr_74px] gap-2 px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-slate-400">
+                      <div className="grid grid-cols-[56px_1fr_1fr_1fr_74px] gap-2 px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-slate-400">
                         <span>ID</span>
                         <span>{t('姓名', 'Name')}</span>
                         <span>Agency</span>
+                        <span>{t('宀椾綅', 'Position')}</span>
                         <span>{t('班次', 'Shift')}</span>
                       </div>
                       <div className="mt-1 max-h-[560px] space-y-1 overflow-auto pr-1">
-                        {(homeRosterSide === 'absent' ? homeRosterRows.absent : homeRosterRows.restWorked).map((row) => (
+                        {(homeRosterSide === 'absent' ? homeRosterRowsFiltered.absent : homeRosterRowsFiltered.restWorked).map((row) => (
                           <div
                             key={`${homeRosterSide}-${row.staff_id}`}
-                            className="grid grid-cols-[56px_1fr_1fr_74px] gap-2 rounded-lg bg-white/5 px-2 py-2 text-sm text-slate-200"
+                            className="grid grid-cols-[56px_1fr_1fr_1fr_74px] gap-2 rounded-lg bg-white/5 px-2 py-2 text-sm text-slate-200"
                           >
                             <span className="font-mono text-xs">{row.staff_id}</span>
                             <span className="truncate">{row.name || '-'}</span>
                             <span className="truncate">{row.agency || '-'}</span>
+                            <span className="truncate">{row.position || '-'}</span>
                             <span className="text-xs text-slate-300">{row.shift}</span>
                           </div>
                         ))}
-                        {(homeRosterSide === 'absent' ? homeRosterRows.absent : homeRosterRows.restWorked).length === 0 && (
+                        {(homeRosterSide === 'absent' ? homeRosterRowsFiltered.absent : homeRosterRowsFiltered.restWorked).length === 0 && (
                           <div className="px-2 py-4 text-sm text-slate-400">{t('当前无记录', 'No rows')}</div>
                         )}
                       </div>
