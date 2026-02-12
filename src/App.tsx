@@ -2014,7 +2014,6 @@ export default function App() {
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <p className="text-xs uppercase tracking-[0.3em] text-slate-400">ObPunch</p>
-                  <h1 className="font-display text-4xl tracking-[0.08em]">仓库打卡</h1>
                 </div>
                 <div className="text-right">
                   <div className="flex items-center justify-end gap-2 text-sm text-slate-300">

@@ -3093,6 +3093,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       dayStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
       const dayEnd = new Date(dayStart);
       dayEnd.setDate(dayEnd.getDate() + 1);
+      const filteredStaffIds = new Set(
+        timecardRowsFiltered
+          .map((row) => normalizeStaffId(String(row.staff_id ?? '').trim()))
+          .filter(Boolean)
+      );
 
       const pageSize = 1000;
       const maxPages = 20;
@@ -3128,12 +3133,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         if (rows.length < pageSize) break;
       }
 
-      if (punches.length === 0) {
+      const filteredPunches = punches.filter((p) =>
+        filteredStaffIds.has(normalizeStaffId(String(p.staff_id ?? '').trim()))
+      );
+
+      if (filteredPunches.length === 0) {
         setStatus({ tone: 'error', message: '该日期暂无打卡记录。' });
         return;
       }
 
-      const staffIds = Array.from(new Set(punches.map((p) => p.staff_id)));
+      const staffIds = Array.from(new Set(filteredPunches.map((p) => p.staff_id)));
       const mode = await resolveEmployeeColumnMode();
       const staffToProfile = new Map<string, { name: string; agency: string; position: string }>();
       const batches = chunk(staffIds, 200);
@@ -3163,7 +3172,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
 
       const punchesByStaff = new Map<string, Array<{ action: 'IN' | 'OUT'; at: string }>>();
-      for (const p of punches) {
+      for (const p of filteredPunches) {
         const list = punchesByStaff.get(p.staff_id) ?? [];
         list.push({ action: p.action, at: p.created_at });
         punchesByStaff.set(p.staff_id, list);
