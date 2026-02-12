@@ -539,6 +539,7 @@ export default function AdminApp() {
     Record<string, { early: number; late: number; active: number }>
   >({});
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
+  const [homeRosterSide, setHomeRosterSide] = useState<'absent' | 'restWorked'>('absent');
 
   const resolveEmployeeColumnMode = async (): Promise<EmployeeColumnMode> => {
     const cached = employeeColumnModeRef.current;
@@ -4289,6 +4290,56 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
     return counts;
   }, [scheduleEmployeesFiltered, scheduleRowsByStaffDayIndex]);
+
+  const homeOperationalDayIndex = useMemo(() => {
+    const now = new Date(serverTime);
+    const operationalStart = new Date(now);
+    operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
+    if (now.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
+    return (operationalStart.getDay() + 6) % 7;
+  }, [serverTime]);
+
+  const homeRosterRows = useMemo(() => {
+    const absent: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
+    const restWorked: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
+    const seen = new Set<string>();
+
+    for (const employee of employees) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff || seen.has(staff)) continue;
+      seen.add(staff);
+
+      const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
+      if (!row) continue;
+
+      const baseState = getScheduleBaseStateFromNote(row.note);
+      const hasPunch = schedulePunchPresenceKeys.has(`${staff}__${homeOperationalDayIndex}`);
+      const position = String(employee.position ?? employee.Position ?? '').trim();
+      const shift = employeeShiftByStaffId[staff]?.shift || normalizeShiftValue(String(row.shift ?? '').trim()) || '';
+      const profile = employeeProfileByStaffId.get(staff);
+      const item = {
+        staff_id: staff,
+        name: String(profile?.name ?? employee.name ?? '').trim(),
+        agency: String(profile?.agency ?? employee.agency ?? employee.Agency ?? '').trim(),
+        position,
+        shift: shift === 'early' ? 'Morning' : shift === 'late' ? 'Night' : '-'
+      };
+
+      if (isWorkingScheduleBaseState(baseState) && !hasPunch) absent.push(item);
+      if (isRestLikeScheduleBaseState(baseState) && hasPunch) restWorked.push(item);
+    }
+
+    absent.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
+    restWorked.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
+    return { absent, restWorked };
+  }, [
+    employees,
+    scheduleRowsByStaffDayIndex,
+    homeOperationalDayIndex,
+    schedulePunchPresenceKeys,
+    employeeShiftByStaffId,
+    employeeProfileByStaffId
+  ]);
   const makeDailyListTsv = (rows: DailyListRow[]) =>
     rows
       .map((row) => [row.staff_id, row.name, row.agency, row.position, getPlannedStartTime(row.shift, row.position)].map((c) => String(c ?? '')).join('\t'))
@@ -4477,17 +4528,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const earlyRows = rows.filter((r) => r.shift === 'early').sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     const lateRows = rows.filter((r) => r.shift === 'late').sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
 
-    const renderRows = (list: Array<{ staff_id: string; name: string; agency: string }>) =>
+    const renderRows = (list: Array<{ staff_id: string; name: string; agency: string }>, bgColor: string) =>
       list
         .map(
           (r, idx) =>
-            `<tr><td class="num">${idx + 1}</td><td>${r.staff_id}</td><td>${r.name}</td><td>${r.agency}</td><td></td><td></td><td></td></tr>`
+            `<tr>
+              <td class="num" style="background:${bgColor};">${idx + 1}</td>
+              <td style="background:${bgColor};">${r.staff_id}</td>
+              <td style="background:${bgColor};">${r.name}</td>
+              <td style="background:${bgColor};">${r.agency}</td>
+              <td style="background:${bgColor};"></td>
+              <td style="background:${bgColor};"></td>
+              <td style="background:${bgColor};"></td>
+            </tr>`
         )
         .join('');
 
-    const renderTable = (title: string, rowsHtml: string, klass: 'morning' | 'night') => `
+    const renderTable = (rowsHtml: string, klass: 'morning' | 'night') => `
       <section class="block ${klass}">
-        <div class="section-title">${title}</div>
         <table>
           <thead>
             <tr>
@@ -4513,28 +4571,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   <style>
     @page { size: Letter portrait; margin: 10mm; }
     * { box-sizing: border-box; }
+    html, body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #111827; }
     .sheet { width: 100%; margin: 0 auto; }
     h1 { margin: 0; text-align: center; font-size: 32px; letter-spacing: 0.04em; font-weight: 800; }
     .meta { margin: 6px 0 12px; text-align: center; font-size: 16px; font-weight: 700; color: #111827; }
-    .block { margin-top: 10px; }
-    .section-title { margin: 0 0 4px; font-size: 14px; font-weight: 700; padding: 4px 8px; border-radius: 6px; }
-    .morning .section-title { background: #e7f2ff; color: #0b4a79; border: 1px solid #b7ddff; }
-    .night .section-title { background: #efe9ff; color: #4527a0; border: 1px solid #d5c7ff; }
+    .block { margin-top: 8px; }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 1px solid #111; }
     th, td { border: 1px solid #444; padding: 4px 6px; font-size: 12px; height: 28px; }
-    th { background: #111; color: #fff; text-align: left; }
+    th { background: #111 !important; color: #fff !important; text-align: left; }
     .num { width: 40px; text-align: center; }
-    tbody tr:nth-child(odd) { background: #f4f9ff; }
-    .night tbody tr:nth-child(odd) { background: #f7f4ff; }
   </style>
 </head>
 <body>
   <main class="sheet">
     <h1>${roleLabel}</h1>
     <div class="meta">Sign-in Sheet ${schedulePrintDate} ${weekLabel}</div>
-    ${renderTable(`Morning Shift / 白班 (${earlyRows.length})`, renderRows(earlyRows), 'morning')}
-    ${renderTable(`Night Shift / 夜班 (${lateRows.length})`, renderRows(lateRows), 'night')}
+    ${renderTable(renderRows(earlyRows, '#eef6ff'), 'morning')}
+    ${renderTable(renderRows(lateRows, '#f3edff'), 'night')}
   </main>
 </body>
 </html>`;
@@ -4772,44 +4826,98 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               </button>
             </nav>
 
-            {page === 'home' && (
+                        {page === 'home' && (
               <section className="glass reveal rounded-3xl px-6 py-8">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="font-display text-2xl tracking-[0.08em]">{t('首页看板', 'Home Dashboard')}</h2>
                   <p className="text-xs text-slate-400">{t('预计来自排班，实时来自打卡', 'Expected from schedule, realtime from punches')}</p>
                 </div>
-                <div className="mt-5 grid gap-4 md:grid-cols-2">
-                  {ALLOWED_POSITIONS.map((position) => {
-                    const stats = attendanceStats[position] ?? { early: 0, late: 0, active: 0 };
-                    const plan = tomorrowPositionSummaryCards.find((item) => item.position === position) ?? {
-                      position,
-                      early: 0,
-                      late: 0,
-                      total: 0
-                    };
-                    return (
-                      <article key={position} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <h3 className="font-display text-xl tracking-[0.06em]">{position}</h3>
-                          <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-300">On Clock {stats.active}</span>
-                        </div>
-                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                          <div className="rounded-xl bg-black/30 px-3 py-2">
-                            <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Morning</div>
-                            <div className="mt-1 text-sm text-slate-200">Expected {plan.early} · Present {stats.early}</div>
+                <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">
+                  <div className="space-y-4">
+                    {ALLOWED_POSITIONS.map((position) => {
+                      const stats = attendanceStats[position] ?? { early: 0, late: 0, active: 0 };
+                      const plan = tomorrowPositionSummaryCards.find((item) => item.position === position) ?? {
+                        position,
+                        early: 0,
+                        late: 0,
+                        total: 0
+                      };
+                      return (
+                        <article key={position} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <h3 className="font-display text-xl tracking-[0.06em]">{position}</h3>
+                            <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-300">On Clock {stats.active}</span>
                           </div>
-                          <div className="rounded-xl bg-black/30 px-3 py-2">
-                            <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Night</div>
-                            <div className="mt-1 text-sm text-slate-200">Expected {plan.late} · Present {stats.late}</div>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            <div className="rounded-xl bg-black/30 px-3 py-2">
+                              <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Morning</div>
+                              <div className="mt-1 text-sm text-slate-200">Expected {plan.early} · Present {stats.early}</div>
+                            </div>
+                            <div className="rounded-xl bg-black/30 px-3 py-2">
+                              <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Night</div>
+                              <div className="mt-1 text-sm text-slate-200">Expected {plan.late} · Present {stats.late}</div>
+                            </div>
                           </div>
-                        </div>
-                      </article>
-                    );
-                  })}
+                        </article>
+                      );
+                    })}
+                  </div>
+                  <aside className="rounded-2xl border border-white/15 bg-white/5 p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="font-display text-lg tracking-[0.06em]">
+                        {homeRosterSide === 'absent' ? t('缺勤名单', 'Absent List') : t('排休出勤名单', 'Rest Worked List')}
+                      </h3>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setHomeRosterSide('absent')}
+                          className={[
+                            'rounded-xl px-3 py-1 text-xs font-semibold transition',
+                            homeRosterSide === 'absent' ? 'bg-neon text-ink' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                          ].join(' ')}
+                        >
+                          {t('缺勤', 'Absent')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHomeRosterSide('restWorked')}
+                          className={[
+                            'rounded-xl px-3 py-1 text-xs font-semibold transition',
+                            homeRosterSide === 'restWorked' ? 'bg-neon text-ink' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                          ].join(' ')}
+                        >
+                          {t('排休出勤', 'Rest Worked')}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-3 rounded-xl border border-white/10 bg-black/30 p-2">
+                      <div className="grid grid-cols-[56px_1fr_1fr_74px] gap-2 px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-slate-400">
+                        <span>ID</span>
+                        <span>{t('姓名', 'Name')}</span>
+                        <span>Agency</span>
+                        <span>{t('班次', 'Shift')}</span>
+                      </div>
+                      <div className="mt-1 max-h-[560px] space-y-1 overflow-auto pr-1">
+                        {(homeRosterSide === 'absent' ? homeRosterRows.absent : homeRosterRows.restWorked).map((row) => (
+                          <div
+                            key={`${homeRosterSide}-${row.staff_id}`}
+                            className="grid grid-cols-[56px_1fr_1fr_74px] gap-2 rounded-lg bg-white/5 px-2 py-2 text-sm text-slate-200"
+                          >
+                            <span className="font-mono text-xs">{row.staff_id}</span>
+                            <span className="truncate">{row.name || '-'}</span>
+                            <span className="truncate">{row.agency || '-'}</span>
+                            <span className="text-xs text-slate-300">{row.shift}</span>
+                          </div>
+                        ))}
+                        {(homeRosterSide === 'absent' ? homeRosterRows.absent : homeRosterRows.restWorked).length === 0 && (
+                          <div className="px-2 py-4 text-sm text-slate-400">{t('当前无记录', 'No rows')}</div>
+                        )}
+                      </div>
+                    </div>
+                  </aside>
                 </div>
               </section>
             )}
-
             {page === 'punches' && (
               <section className="glass reveal rounded-3xl px-6 py-8">
                 <div className="flex flex-wrap items-center justify-between gap-3">
