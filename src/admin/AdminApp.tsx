@@ -4,7 +4,7 @@ import { createSupabaseClient } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
 import { createPortal } from 'react-dom';
 
-type AdminPage = 'employee_upload' | 'punches' | 'employees' | 'timecard' | 'audit' | 'schedule';
+type AdminPage = 'home' | 'employee_upload' | 'punches' | 'employees' | 'timecard' | 'audit' | 'schedule';
 
 type StatusTone = 'idle' | 'pending' | 'success' | 'error';
 
@@ -391,7 +391,7 @@ export default function AdminApp() {
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
 
-  const [page, setPage] = useState<AdminPage>('punches');
+  const [page, setPage] = useState<AdminPage>('home');
 
   type Lang = 'zh' | 'en';
   const [lang, setLang] = useState<Lang>(() => {
@@ -487,6 +487,7 @@ export default function AdminApp() {
   const [schedulePunchPresenceKeys, setSchedulePunchPresenceKeys] = useState<Set<string>>(new Set());
   const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
   const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
+  const [schedulePrintDate, setSchedulePrintDate] = useState(() => toDateOnly(new Date()));
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [scheduleSearchInput, setScheduleSearchInput] = useState('');
   const [schedulePosition, setSchedulePosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
@@ -4440,6 +4441,138 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     });
   };
 
+  const printScheduleSignInSheet = () => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(schedulePrintDate)) {
+      setStatus({ tone: 'error', message: 'Please select a valid print date.' });
+      return;
+    }
+    const dt = new Date(`${schedulePrintDate}T00:00:00`);
+    if (Number.isNaN(dt.getTime())) {
+      setStatus({ tone: 'error', message: 'Invalid print date.' });
+      return;
+    }
+
+    const dayIndex = (dt.getDay() + 6) % 7;
+    const weekLabel = dt.toLocaleDateString('en-US', { weekday: 'short' });
+    const roleLabel = schedulePosition ? schedulePosition.toUpperCase() : 'ALL POSITIONS';
+
+    const rows = scheduleEmployeesFiltered
+      .map((employee) => {
+        const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+        if (!staff) return null;
+        const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
+        if (!isWorkingScheduleRow(row)) return null;
+        const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
+        const rowShift = normalizeShiftValue(String(row?.shift ?? '').trim());
+        const shift = (inferredShift || rowShift || 'early') as 'early' | 'late';
+        return {
+          staff_id: staff,
+          name: String(employee.name ?? '').trim(),
+          agency: String(employee.agency ?? employee.Agency ?? '').trim(),
+          shift
+        };
+      })
+      .filter(Boolean) as Array<{ staff_id: string; name: string; agency: string; shift: 'early' | 'late' }>;
+
+    const earlyRows = rows.filter((r) => r.shift === 'early').sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
+    const lateRows = rows.filter((r) => r.shift === 'late').sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
+
+    const renderRows = (list: Array<{ staff_id: string; name: string; agency: string }>) =>
+      list
+        .map(
+          (r, idx) =>
+            `<tr><td class="num">${idx + 1}</td><td>${r.staff_id}</td><td>${r.name}</td><td>${r.agency}</td><td></td><td></td><td></td></tr>`
+        )
+        .join('');
+
+    const renderTable = (title: string, rowsHtml: string, klass: 'morning' | 'night') => `
+      <section class="block ${klass}">
+        <div class="section-title">${title}</div>
+        <table>
+          <thead>
+            <tr>
+              <th class="num">No.</th>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Agency</th>
+              <th>Clockin</th>
+              <th>Clockout</th>
+              <th>Signature</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </section>
+    `;
+
+    const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Sign-in Sheet ${schedulePrintDate}</title>
+  <style>
+    @page { size: Letter portrait; margin: 10mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #111827; }
+    .sheet { width: 100%; margin: 0 auto; }
+    h1 { margin: 0; text-align: center; font-size: 32px; letter-spacing: 0.04em; font-weight: 800; }
+    .meta { margin: 6px 0 12px; text-align: center; font-size: 16px; font-weight: 700; color: #111827; }
+    .block { margin-top: 10px; }
+    .section-title { margin: 0 0 4px; font-size: 14px; font-weight: 700; padding: 4px 8px; border-radius: 6px; }
+    .morning .section-title { background: #e7f2ff; color: #0b4a79; border: 1px solid #b7ddff; }
+    .night .section-title { background: #efe9ff; color: #4527a0; border: 1px solid #d5c7ff; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 1px solid #111; }
+    th, td { border: 1px solid #444; padding: 4px 6px; font-size: 12px; height: 28px; }
+    th { background: #111; color: #fff; text-align: left; }
+    .num { width: 40px; text-align: center; }
+    tbody tr:nth-child(odd) { background: #f4f9ff; }
+    .night tbody tr:nth-child(odd) { background: #f7f4ff; }
+  </style>
+</head>
+<body>
+  <main class="sheet">
+    <h1>${roleLabel}</h1>
+    <div class="meta">Sign-in Sheet ${schedulePrintDate} ${weekLabel}</div>
+    ${renderTable(`Morning Shift / 白班 (${earlyRows.length})`, renderRows(earlyRows), 'morning')}
+    ${renderTable(`Night Shift / 夜班 (${lateRows.length})`, renderRows(lateRows), 'night')}
+  </main>
+</body>
+</html>`;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(iframe);
+    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!doc) {
+      iframe.remove();
+      setStatus({ tone: 'error', message: 'Print failed: iframe not available.' });
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    const doPrint = () => {
+      const win = iframe.contentWindow;
+      if (!win) {
+        iframe.remove();
+        setStatus({ tone: 'error', message: 'Print failed.' });
+        return;
+      }
+      win.focus();
+      win.print();
+      window.setTimeout(() => iframe.remove(), 1200);
+    };
+    if (iframe.contentWindow?.document.readyState === 'complete') doPrint();
+    else iframe.onload = doPrint;
+  };
+
   if (!supabase) {
     return (
       <div className="min-h-screen px-5 py-8">
@@ -4584,6 +4717,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               <button
                 type="button"
                 disabled={isLocked}
+                onClick={() => setPage('home')}
+                className={tabClass(page === 'home')}
+              >
+                {t('首页', 'Home')}
+              </button>
+              <button
+                type="button"
+                disabled={isLocked}
                 onClick={() => setPage('employee_upload')}
                 className={tabClass(page === 'employee_upload')}
               >
@@ -4630,6 +4771,44 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 {t('排班', 'Schedule')}
               </button>
             </nav>
+
+            {page === 'home' && (
+              <section className="glass reveal rounded-3xl px-6 py-8">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h2 className="font-display text-2xl tracking-[0.08em]">{t('首页看板', 'Home Dashboard')}</h2>
+                  <p className="text-xs text-slate-400">{t('预计来自排班，实时来自打卡', 'Expected from schedule, realtime from punches')}</p>
+                </div>
+                <div className="mt-5 grid gap-4 md:grid-cols-2">
+                  {ALLOWED_POSITIONS.map((position) => {
+                    const stats = attendanceStats[position] ?? { early: 0, late: 0, active: 0 };
+                    const plan = tomorrowPositionSummaryCards.find((item) => item.position === position) ?? {
+                      position,
+                      early: 0,
+                      late: 0,
+                      total: 0
+                    };
+                    return (
+                      <article key={position} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="font-display text-xl tracking-[0.06em]">{position}</h3>
+                          <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-300">On Clock {stats.active}</span>
+                        </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          <div className="rounded-xl bg-black/30 px-3 py-2">
+                            <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Morning</div>
+                            <div className="mt-1 text-sm text-slate-200">Expected {plan.early} · Present {stats.early}</div>
+                          </div>
+                          <div className="rounded-xl bg-black/30 px-3 py-2">
+                            <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Night</div>
+                            <div className="mt-1 text-sm text-slate-200">Expected {plan.late} · Present {stats.late}</div>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
 
             {page === 'punches' && (
               <section className="glass reveal rounded-3xl px-6 py-8">
@@ -4920,6 +5099,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {t('每日名单', 'Daily list')}
+                    </button>
+                    <input
+                      type="date"
+                      value={schedulePrintDate}
+                      disabled={isLocked}
+                      onChange={(e) => setSchedulePrintDate(e.target.value)}
+                      className="h-10 rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                      title={t('打印签到表日期', 'Sign-in print date')}
+                    />
+                    <button
+                      type="button"
+                      disabled={isLocked || scheduleEmployeesFiltered.length === 0}
+                      onClick={printScheduleSignInSheet}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {t('打印签到表', 'Print sign-in')}
                     </button>
                     <button
                       type="button"
