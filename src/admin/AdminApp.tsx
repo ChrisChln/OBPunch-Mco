@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
-import { createSupabaseClient } from '../lib/supabase';
+import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
 import { createPortal } from 'react-dom';
 
@@ -20,6 +20,12 @@ const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
+const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
+const OBUP_REPORT_DETAILS_TABLE =
+  (import.meta.env.VITE_OBUP_REPORT_DETAILS_TABLE as string | undefined) ?? 'report_details';
+const OBUP_ACCOUNT_LINKS_TABLE = (import.meta.env.VITE_OBUP_ACCOUNT_LINKS_TABLE as string | undefined) ?? 'account_links';
+const OBUP_UPLOAD_RECORDS_TABLE = (import.meta.env.VITE_OBUP_UPLOAD_RECORDS_TABLE as string | undefined) ?? 'upload_records';
+const SCHEDULE_UPH_DAYS = 30;
 const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
 const SCHEDULE_WEEK_RESET_KEY = 'schedule_transient_reset_week';
@@ -74,6 +80,80 @@ const getScheduleDisplayState = (row: ScheduleRow | undefined, hasPunch: boolean
 };
 
 const supabase = createSupabaseClient({ persistSession: true });
+const obupSupabase = createSupabaseClientWithCredentials({
+  persistSession: false,
+  url: import.meta.env.VITE_OBUP_SUPABASE_URL as string | undefined,
+  anonKey: import.meta.env.VITE_OBUP_SUPABASE_ANON_KEY as string | undefined
+});
+
+const normalizeWorkOperatorKey = (value: string) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const compact = raw.replace(/\s+/g, '');
+  if (/^ob[a-z]*#?\d+/i.test(compact)) {
+    return compact.toLowerCase();
+  }
+  const withoutParen = raw.replace(/\s*\([^)]*\)\s*$/g, '');
+  const lowered = withoutParen.toLowerCase();
+  const lettersOnly = lowered.replace(/[^a-z\u00c0-\u024f\u4e00-\u9fff]+/g, ' ');
+  const noDigits = lettersOnly.replace(/\b\d+\b/g, ' ');
+  return noDigits.replace(/\s+/g, ' ').trim();
+};
+
+const parseUph = (value: unknown) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  if (n < 0) return null;
+  return n;
+};
+
+const formatUph = (value: number | null | undefined) => (value === null || value === undefined ? '-' : value.toFixed(1));
+const SCHEDULE_UPH_FUZZY_THRESHOLD = 0.7;
+
+const splitNameTokens = (value: string) => normalizeWorkOperatorKey(value).split(' ').filter(Boolean);
+
+const diceSimilarity = (aRaw: string, bRaw: string) => {
+  const a = aRaw.replace(/\s+/g, '');
+  const b = bRaw.replace(/\s+/g, '');
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) return a === b ? 1 : 0;
+  const bigrams = new Map<string, number>();
+  for (let i = 0; i < a.length - 1; i += 1) {
+    const bg = a.slice(i, i + 2);
+    bigrams.set(bg, (bigrams.get(bg) ?? 0) + 1);
+  }
+  let overlap = 0;
+  for (let i = 0; i < b.length - 1; i += 1) {
+    const bg = b.slice(i, i + 2);
+    const count = bigrams.get(bg) ?? 0;
+    if (count > 0) {
+      overlap += 1;
+      bigrams.set(bg, count - 1);
+    }
+  }
+  return (2 * overlap) / (a.length - 1 + b.length - 1);
+};
+
+const tokenSimilarity = (aRaw: string, bRaw: string) => {
+  const aTokens = splitNameTokens(aRaw);
+  const bTokens = splitNameTokens(bRaw);
+  if (aTokens.length === 0 || bTokens.length === 0) return 0;
+  const aSet = new Set(aTokens);
+  const bSet = new Set(bTokens);
+  let intersect = 0;
+  for (const token of aSet) {
+    if (bSet.has(token)) intersect += 1;
+  }
+  return (2 * intersect) / (aSet.size + bSet.size);
+};
+
+const fuzzyNameSimilarity = (aRaw: string, bRaw: string) => {
+  const a = normalizeWorkOperatorKey(aRaw);
+  const b = normalizeWorkOperatorKey(bRaw);
+  if (!a || !b) return 0;
+  return Math.max(diceSimilarity(a, b), tokenSimilarity(a, b));
+};
 
 type EmployeeRow = {
   id?: number | string;
@@ -390,6 +470,7 @@ export default function AdminApp() {
   const dailyListResetKeyRef = useRef(getOperationalDateKey(new Date(), DAILY_LIST_RESET_HOUR));
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
+  const scheduleUphRequestRef = useRef(0);
 
   const [page, setPage] = useState<AdminPage>('home');
 
@@ -485,6 +566,7 @@ export default function AdminApp() {
   const [scheduleRows, setScheduleRows] = useState<ScheduleRow[]>([]);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [schedulePunchPresenceKeys, setSchedulePunchPresenceKeys] = useState<Set<string>>(new Set());
+  const [scheduleUphByStaffId, setScheduleUphByStaffId] = useState<Record<string, number | null>>({});
   const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
   const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
   const [schedulePrintDate, setSchedulePrintDate] = useState(() => toDateOnly(new Date()));
@@ -1365,9 +1447,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   const refreshSchedulePanel = async () => {
     await resetScheduleTransientStatesForWeek();
     await fetchSchedule();
-    await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
+    const latestEmployees = await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
     await fetchSchedulePublishSetting();
     await fetchSchedulePunchPresence();
+    await fetchScheduleUph({ employeesOverride: latestEmployees });
   };
 
   const openScheduleStatePicker = (
@@ -1474,6 +1557,217 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
 
     setSchedulePunchPresenceKeys(found);
+  };
+
+  const fetchScheduleUph = async (options?: { employeesOverride?: EmployeeRow[] | null }) => {
+    const requestId = scheduleUphRequestRef.current + 1;
+    scheduleUphRequestRef.current = requestId;
+    const employeesForUph = options?.employeesOverride ?? employees;
+
+    const positionToStage = (positionRaw: string) => {
+      const position = normalizePositionKey(positionRaw);
+      if (position === 'Pick') return 'picking' as const;
+      if (position === 'Pack') return 'packing' as const;
+      if (position === 'Rebin') return 'sorting' as const;
+      return null;
+    };
+
+    const stageEmployees = new Map<'picking' | 'sorting' | 'packing', Map<string, string[]>>();
+    for (const employee of employeesForUph) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      const name = String(employee.name ?? '').trim();
+      const stage = positionToStage(String(employee.position ?? employee.Position ?? '').trim());
+      if (!staff || !name || !stage) continue;
+      const key = normalizeWorkOperatorKey(name);
+      if (!key) continue;
+      if (!stageEmployees.has(stage)) stageEmployees.set(stage, new Map<string, string[]>());
+      const byKey = stageEmployees.get(stage)!;
+      const list = byKey.get(key) ?? [];
+      list.push(staff);
+      byKey.set(key, list);
+    }
+
+    if (stageEmployees.size === 0 || !obupSupabase) {
+      if (requestId === scheduleUphRequestRef.current) {
+        setScheduleUphByStaffId({});
+      }
+      return;
+    }
+
+    const stages = Array.from(stageEmployees.keys());
+    const endKey = toDateOnly(serverTime);
+    const startKey = toDateOnly(addDays(serverTime, -(SCHEDULE_UPH_DAYS - 1)));
+
+    const uploadRes = await obupSupabase
+      .from(OBUP_UPLOAD_RECORDS_TABLE)
+      .select('work_date, stage')
+      .gte('work_date', startKey)
+      .lte('work_date', endKey)
+      .in('stage', stages as any[]);
+    if (uploadRes.error) {
+      if (requestId === scheduleUphRequestRef.current) setScheduleUphByStaffId({});
+      return;
+    }
+
+    const validWorkStageKeys = new Set<string>();
+    for (const row of ((uploadRes.data as Array<{ work_date?: string | null; stage?: string | null }> | null) ?? [])) {
+      const stage = String(row.stage ?? '').trim().toLowerCase();
+      const workDate = String(row.work_date ?? '').trim();
+      if (!stage || !workDate) continue;
+      validWorkStageKeys.add(`${workDate}__${stage}`);
+    }
+    if (validWorkStageKeys.size === 0) {
+      if (requestId === scheduleUphRequestRef.current) setScheduleUphByStaffId({});
+      return;
+    }
+
+    const reportRowsRes = await obupSupabase
+      .from(OBUP_REPORTS_TABLE)
+      .select('id, work_date, stage, created_at')
+      .gte('work_date', startKey)
+      .lte('work_date', endKey)
+      .in('stage', stages as any[])
+      .order('created_at', { ascending: false });
+    if (reportRowsRes.error) {
+      if (requestId === scheduleUphRequestRef.current) setScheduleUphByStaffId({});
+      return;
+    }
+
+    const latestReportIdByWorkStage = new Map<string, { id: string; stage: 'picking' | 'sorting' | 'packing' }>();
+    for (const row of ((reportRowsRes.data as Array<{ id?: string | null; work_date?: string | null; stage?: string | null }> | null) ?? [])) {
+      const id = String(row.id ?? '').trim();
+      const stage = String(row.stage ?? '').trim().toLowerCase() as 'picking' | 'sorting' | 'packing';
+      const workDate = String(row.work_date ?? '').trim();
+      if (!id || !stage || !workDate) continue;
+      const workStageKey = `${workDate}__${stage}`;
+      if (!validWorkStageKeys.has(workStageKey)) continue;
+      if (!latestReportIdByWorkStage.has(workStageKey)) {
+        latestReportIdByWorkStage.set(workStageKey, { id, stage });
+      }
+    }
+
+    const reportIdToStage = new Map<string, 'picking' | 'sorting' | 'packing'>();
+    for (const item of latestReportIdByWorkStage.values()) {
+      reportIdToStage.set(item.id, item.stage);
+    }
+    const reportIds = Array.from(reportIdToStage.keys());
+    if (reportIds.length === 0) {
+      if (requestId === scheduleUphRequestRef.current) setScheduleUphByStaffId({});
+      return;
+    }
+
+    const batches = chunk(reportIds, 200);
+    const avgByStageOperatorKey = new Map<
+      'picking' | 'sorting' | 'packing',
+      Map<string, { sum: number; count: number }>
+    >();
+
+    for (const batch of batches) {
+      const pageSize = 1000;
+      const maxPages = 20;
+      for (let page = 0; page < maxPages; page += 1) {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const detailsRes = await obupSupabase
+          .from(OBUP_REPORT_DETAILS_TABLE)
+          .select('report_id, operator, uph')
+          .in('report_id', batch as any[])
+          .range(from, to);
+        if (detailsRes.error) {
+          if (requestId === scheduleUphRequestRef.current) setScheduleUphByStaffId({});
+          return;
+        }
+
+        const rows =
+          (detailsRes.data as Array<{ report_id?: string | null; operator?: string | null; uph?: number | null }> | null) ?? [];
+        for (const row of rows) {
+          const reportId = String(row.report_id ?? '').trim();
+          const stage = reportIdToStage.get(reportId);
+          if (!stage) continue;
+          const operatorRaw = String(row.operator ?? '').trim();
+          const key = normalizeWorkOperatorKey(operatorRaw);
+          if (!key) continue;
+          const uph = parseUph(row.uph);
+          if (uph === null) continue;
+          if (!avgByStageOperatorKey.has(stage)) avgByStageOperatorKey.set(stage, new Map());
+          const byOperator = avgByStageOperatorKey.get(stage)!;
+          const prev = byOperator.get(key) ?? { sum: 0, count: 0 };
+          prev.sum += uph;
+          prev.count += 1;
+          byOperator.set(key, prev);
+        }
+
+        if (rows.length < pageSize) break;
+      }
+    }
+
+    const accountLinkMap = new Map<string, string>();
+    const linkRes = await obupSupabase
+      .from(OBUP_ACCOUNT_LINKS_TABLE)
+      .select('source_name, target_name, updated_at')
+      .order('updated_at', { ascending: false })
+      .limit(1000);
+    if (!linkRes.error) {
+      const links = (linkRes.data as Array<{ source_name?: string | null; target_name?: string | null }> | null) ?? [];
+      for (const row of links) {
+        const sourceKey = normalizeWorkOperatorKey(String(row.source_name ?? '').trim());
+        const targetKey = normalizeWorkOperatorKey(String(row.target_name ?? '').trim());
+        if (!sourceKey || !targetKey) continue;
+        if (!accountLinkMap.has(sourceKey)) accountLinkMap.set(sourceKey, targetKey);
+      }
+    }
+
+    const nextMap: Record<string, number | null> = {};
+    for (const [stage, employeesByKey] of stageEmployees.entries()) {
+      const operatorAvgByKey = avgByStageOperatorKey.get(stage) ?? new Map<string, { sum: number; count: number }>();
+      const operatorKeys = Array.from(operatorAvgByKey.keys());
+
+      for (const [employeeKey, staffIds] of employeesByKey.entries()) {
+        let matchedKey: string | null = null;
+
+        const mappedTarget = accountLinkMap.get(employeeKey);
+        if (mappedTarget && operatorAvgByKey.has(mappedTarget)) {
+          matchedKey = mappedTarget;
+        }
+
+        if (!matchedKey && operatorAvgByKey.has(employeeKey)) {
+          matchedKey = employeeKey;
+        }
+
+        if (!matchedKey) {
+          let bestKey = '';
+          let bestScore = 0;
+          for (const operatorKey of operatorKeys) {
+            const score = fuzzyNameSimilarity(employeeKey, operatorKey);
+            if (score > bestScore) {
+              bestScore = score;
+              bestKey = operatorKey;
+            }
+          }
+          if (bestKey && bestScore >= SCHEDULE_UPH_FUZZY_THRESHOLD) {
+            matchedKey = bestKey;
+          }
+        }
+
+        const rec = matchedKey ? operatorAvgByKey.get(matchedKey) : null;
+        const uph = rec && rec.count > 0 ? rec.sum / rec.count : null;
+        for (const staff of staffIds) {
+          nextMap[staff] = uph;
+        }
+      }
+    }
+
+    if (requestId === scheduleUphRequestRef.current) {
+      const resolvedCount = Object.values(nextMap).filter((v) => v !== null && v !== undefined).length;
+      console.info('[UPH] resolved', {
+        total: Object.keys(nextMap).length,
+        resolved: resolvedCount,
+        startKey,
+        endKey,
+        stages
+      });
+      setScheduleUphByStaffId(nextMap);
+    }
   };
 
   const fetchRecentPunches = async (options?: { search?: string; lockUi?: boolean }) => {
@@ -1645,16 +1939,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     agency?: string;
     position?: string;
     labels?: string[];
-  }) => {
+  }): Promise<EmployeeRow[] | null> => {
     if (!supabase) {
       setEmployeesError('缺少 Supabase 配置。');
-      return;
+      return null;
     }
 
     const searchValue = (search ?? employeeSearch).trim().replace(/,/g, ' ');
     const agencyValue = (agency ?? employeeAgency).trim();
     const positionValue = (position ?? employeePosition).trim();
     const labelValues = (labels ?? employeeLabels).map((item) => item.trim()).filter(Boolean);
+
+    let fetchedEmployees: EmployeeRow[] | null = null;
 
     await runLocked('employees', async () => {
       setEmployeesError(null);
@@ -1730,6 +2026,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
       setEmployees(all);
       setEmployeesHasMore(false);
+      fetchedEmployees = all;
 
       const staffIds = all.map((e) => String(e.staff_id ?? '').trim()).filter(Boolean);
       if (staffIds.length === 0) {
@@ -1820,6 +2117,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
       setEmployeeShiftByStaffId(shiftMap);
     });
+    return fetchedEmployees;
   };
 
   const addEmployeeRow = async () => {
@@ -3581,6 +3879,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     if (page !== 'schedule') return;
     void fetchSchedulePunchPresence();
   }, [page, scheduleWeekOffset, employees]);
+
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    void fetchScheduleUph();
+  }, [page, employees]);
 
   const onFileSelected = async (file: File | null) => {
     if (!file) {
@@ -5395,7 +5698,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
                 {!scheduleError && scheduleEmployeesFiltered.length > 0 && (
                   <div className="no-scrollbar mt-4 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
-                    <table className="min-w-[1540px] w-full table-fixed text-left text-xs leading-tight">
+                    <table className="min-w-[1620px] w-full table-fixed text-left text-xs leading-tight">
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
                           <th className="sticky top-0 z-20 w-[100px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">ID</th>
@@ -5405,6 +5708,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           <th className="sticky top-0 z-20 w-[86px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">Position</th>
                           <th className="sticky top-0 z-20 w-[110px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('标签', 'Label')}</th>
                           <th className="sticky top-0 z-20 w-[76px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">Shift</th>
+                          <th className="sticky top-0 z-20 w-[72px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">UPH</th>
                           {scheduleDays.map((day, idx) => (
                             <th key={toDateOnly(day)} className="sticky top-0 z-20 w-[92px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
                               <div className="flex flex-col items-center leading-tight">
@@ -5475,6 +5779,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   return <span className={['inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold tracking-[0.08em]', shiftClass].join(' ')}>{shiftLabel}</span>;
                                 })()}
                               </td>
+                              <td className="px-1.5 py-2 text-center font-mono text-slate-200">{formatUph(scheduleUphByStaffId[staff])}</td>
                               {scheduleDays.map((_, dayIndex) => {
                                 const key = `${staff}__${dayIndex}`;
                                 const row = scheduleRowsByStaffDayIndex.get(key);
