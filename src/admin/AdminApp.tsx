@@ -4361,6 +4361,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
     return totals;
   }, [timecardRowsFiltered]);
+  const timecardDayAttendanceCount = useMemo(() => {
+    const totals = new Array(7).fill(0) as number[];
+    for (const row of timecardRowsFiltered) {
+      for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+        if (Number(row.punchCountByDay?.[dayIndex] ?? 0) > 0) {
+          totals[dayIndex] += 1;
+        }
+      }
+    }
+    return totals;
+  }, [timecardRowsFiltered]);
 
   const timecardPunchRowsVisible = useMemo(() => {
     if (timecardPunchShowAll) return timecardPunchRows;
@@ -6915,6 +6926,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             {days.map((label, idx) => (
                               <th key={label} className="w-[92px] px-2 py-1.5 whitespace-nowrap text-center">
                                 <div className="text-neon">{`${t('总工时', 'Total')} ${formatHours(timecardDayTotalHours[idx]) || '0'}`}</div>
+                                <div className="text-[10px] text-sky-300">{`${t('出勤', 'Present')} ${timecardDayAttendanceCount[idx] ?? 0}`}</div>
                                 <div>{label} {toDateOnly(addDays(weekStart, idx)).slice(5)}</div>
                               </th>
                             ))}
