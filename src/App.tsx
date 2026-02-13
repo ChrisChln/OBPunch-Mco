@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { createSupabaseClient } from './lib/supabase';
+import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib/supabase';
 import { isValidStaffId, normalizeStaffId } from './lib/staffId';
 
 type PunchAction = 'IN' | 'OUT';
@@ -44,6 +44,7 @@ type ArrivalMetric = {
   onClockStaff: string[];
   restWorked: number;
   restWorkedStaff: string[];
+  scheduledNotClockInStaff: string[];
 };
 
 type TomorrowListSetting = {
@@ -58,6 +59,10 @@ const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefine
 const EMPLOYEE_REQUESTS_TABLE = (import.meta.env.VITE_EMPLOYEE_REQUESTS_TABLE as string | undefined) ?? 'ob_employee_requests';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
+const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
+const OBUP_REPORT_DETAILS_TABLE =
+  (import.meta.env.VITE_OBUP_REPORT_DETAILS_TABLE as string | undefined) ?? 'report_details';
+const OBUP_ACCOUNT_LINKS_TABLE = (import.meta.env.VITE_OBUP_ACCOUNT_LINKS_TABLE as string | undefined) ?? 'account_links';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
 const SCHEDULE_REST_NOTE = '__rest__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
@@ -70,6 +75,11 @@ const ABSENT_RESET_HOUR = Number.isFinite(ABSENT_RESET_HOUR_RAW) ? Math.max(0, M
 const LATE_ABSENT_VISIBLE_MINUTES = 16 * 60 + 30; // 16:30
 
 const supabase = createSupabaseClient({ persistSession: false });
+const obupSupabase = createSupabaseClientWithCredentials({
+  persistSession: false,
+  url: import.meta.env.VITE_OBUP_SUPABASE_URL as string | undefined,
+  anonKey: import.meta.env.VITE_OBUP_SUPABASE_ANON_KEY as string | undefined
+});
 
 const formatTime = (value: Date) =>
   value.toLocaleString('zh-CN', {
@@ -220,6 +230,73 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   if (v === 'transfer') return 'Transfer';
   return '';
 };
+const positionToUphStage = (value: string): 'picking' | 'packing' | 'sorting' | null => {
+  const pos = normalizeAllowedPosition(value);
+  if (pos === 'Pick') return 'picking';
+  if (pos === 'Pack') return 'packing';
+  if (pos === 'Rebin') return 'sorting';
+  return null;
+};
+const normalizeWorkOperatorKey = (value: string) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const compact = raw.replace(/\s+/g, '');
+  if (/^ob[a-z]*#?\d+/i.test(compact)) return compact.toLowerCase();
+  const withoutParen = raw.replace(/\s*\([^)]*\)\s*$/g, '');
+  const lowered = withoutParen.toLowerCase();
+  const lettersOnly = lowered.replace(/[^a-z\u00c0-\u024f\u4e00-\u9fff]+/g, ' ');
+  const noDigits = lettersOnly.replace(/\b\d+\b/g, ' ');
+  return noDigits.replace(/\s+/g, ' ').trim();
+};
+const parseUph = (value: unknown) => {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+};
+const formatUph = (value: number | null | undefined) => (value === null || value === undefined ? '-' : value.toFixed(1));
+const splitNameTokens = (value: string) => normalizeWorkOperatorKey(value).split(' ').filter(Boolean);
+const diceSimilarity = (aRaw: string, bRaw: string) => {
+  const a = aRaw.replace(/\s+/g, '');
+  const b = bRaw.replace(/\s+/g, '');
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) return a === b ? 1 : 0;
+  const bigrams = new Map<string, number>();
+  for (let i = 0; i < a.length - 1; i += 1) {
+    const bg = a.slice(i, i + 2);
+    bigrams.set(bg, (bigrams.get(bg) ?? 0) + 1);
+  }
+  let overlap = 0;
+  for (let i = 0; i < b.length - 1; i += 1) {
+    const bg = b.slice(i, i + 2);
+    const count = bigrams.get(bg) ?? 0;
+    if (count > 0) {
+      overlap += 1;
+      bigrams.set(bg, count - 1);
+    }
+  }
+  return (2 * overlap) / (a.length - 1 + b.length - 1);
+};
+const tokenSimilarity = (aRaw: string, bRaw: string) => {
+  const aTokens = splitNameTokens(aRaw);
+  const bTokens = splitNameTokens(bRaw);
+  if (aTokens.length === 0 || bTokens.length === 0) return 0;
+  const aSet = new Set(aTokens);
+  const bSet = new Set(bTokens);
+  let intersect = 0;
+  for (const token of aSet) {
+    if (bSet.has(token)) intersect += 1;
+  }
+  return (2 * intersect) / (aSet.size + bSet.size);
+};
+const fuzzyNameSimilarity = (aRaw: string, bRaw: string) => {
+  const a = normalizeWorkOperatorKey(aRaw);
+  const b = normalizeWorkOperatorKey(bRaw);
+  if (!a || !b) return 0;
+  return Math.max(diceSimilarity(a, b), tokenSimilarity(a, b));
+};
+const PUNCH_LOG_UPH_DAYS = 30;
+const PUNCH_LOG_UPH_FUZZY_THRESHOLD = 0.7;
 const getShiftBucketByInAt = (inAtIso: string): '' | 'early' | 'late' => {
   const dt = new Date(inAtIso);
   if (Number.isNaN(dt.getTime())) return '';
@@ -281,6 +358,7 @@ export default function App() {
   const successOutAudioRef = useRef<HTMLAudioElement | null>(null);
   const errorAudioRef = useRef<HTMLAudioElement | null>(null);
   const arrivalShiftCacheRef = useRef<{ at: number; map: Record<string, '' | 'early' | 'late'> }>({ at: 0, map: {} });
+  const punchBoardUphFetchSeqRef = useRef(0);
 
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
@@ -345,6 +423,7 @@ export default function App() {
   const [punchBoardEmployeeMap, setPunchBoardEmployeeMap] = useState<
     Record<string, { name: string; agency: string; position: string }>
   >({});
+  const [punchBoardUphByStaffId, setPunchBoardUphByStaffId] = useState<Record<string, number | null>>({});
   const [punchLogPositionFilter, setPunchLogPositionFilter] = useState<AllowedPosition | ''>('');
   const [dailyRoster, setDailyRoster] = useState<DailyRosterItem[]>([]);
   const [dailyRosterError, setDailyRosterError] = useState<string | null>(null);
@@ -361,7 +440,8 @@ export default function App() {
         onClock: 0,
         onClockStaff: [],
         restWorked: 0,
-        restWorkedStaff: []
+        restWorkedStaff: [],
+        scheduledNotClockInStaff: []
       }))
     )
   );
@@ -657,6 +737,138 @@ export default function App() {
     }
     return { map, error: null as string | null };
   };
+  const fetchPunchBoardUph = async (
+    staffIds: string[],
+    employeeMap: Record<string, { name: string; agency: string; position: string }>
+  ) => {
+    const seq = punchBoardUphFetchSeqRef.current + 1;
+    punchBoardUphFetchSeqRef.current = seq;
+    if (!obupSupabase || staffIds.length === 0) {
+      if (seq === punchBoardUphFetchSeqRef.current) setPunchBoardUphByStaffId({});
+      return;
+    }
+
+    const stageEmployees = new Map<'picking' | 'sorting' | 'packing', Map<string, string[]>>();
+    const uniqueStaffIds = Array.from(new Set(staffIds.map((s) => normalizeStaffId(s)).filter(Boolean)));
+    for (const staff of uniqueStaffIds) {
+      const profile = employeeMap[staff];
+      const name = String(profile?.name ?? '').trim();
+      const stage = positionToUphStage(String(profile?.position ?? '').trim());
+      if (!name || !stage) continue;
+      const key = normalizeWorkOperatorKey(name);
+      if (!key) continue;
+      if (!stageEmployees.has(stage)) stageEmployees.set(stage, new Map());
+      const byOperator = stageEmployees.get(stage)!;
+      const list = byOperator.get(key) ?? [];
+      list.push(staff);
+      byOperator.set(key, list);
+    }
+    if (stageEmployees.size === 0) {
+      if (seq === punchBoardUphFetchSeqRef.current) setPunchBoardUphByStaffId({});
+      return;
+    }
+
+    const now = new Date();
+    const startKey = toDateOnly(addDays(now, -(PUNCH_LOG_UPH_DAYS - 1)));
+    const endKey = toDateOnly(now);
+    const stages = Array.from(stageEmployees.keys());
+    const reportsRes = await obupSupabase
+      .from(OBUP_REPORTS_TABLE)
+      .select('id, stage')
+      .gte('work_date', startKey)
+      .lte('work_date', endKey)
+      .in('stage', stages as any[])
+      .limit(10000);
+    if (reportsRes.error) {
+      if (seq === punchBoardUphFetchSeqRef.current) setPunchBoardUphByStaffId({});
+      return;
+    }
+
+    const reportIdToStage = new Map<string, 'picking' | 'sorting' | 'packing'>();
+    for (const row of (reportsRes.data as Array<{ id?: string | null; stage?: string | null }> | null) ?? []) {
+      const reportId = String(row.id ?? '').trim();
+      const stageRaw = String(row.stage ?? '').trim().toLowerCase();
+      const stage = stageRaw === 'picking' || stageRaw === 'packing' || stageRaw === 'sorting' ? stageRaw : null;
+      if (!reportId || !stage) continue;
+      reportIdToStage.set(reportId, stage);
+    }
+    const reportIds = Array.from(reportIdToStage.keys());
+    if (reportIds.length === 0) {
+      if (seq === punchBoardUphFetchSeqRef.current) setPunchBoardUphByStaffId({});
+      return;
+    }
+
+    const avgByStageOperator = new Map<'picking' | 'sorting' | 'packing', Map<string, { sum: number; count: number }>>();
+    for (const batch of chunk(reportIds, 100)) {
+      const detailsRes = await obupSupabase
+        .from(OBUP_REPORT_DETAILS_TABLE)
+        .select('report_id, operator, uph')
+        .in('report_id', batch)
+        .limit(20000);
+      if (detailsRes.error) continue;
+      for (const row of
+        (detailsRes.data as Array<{ report_id?: string | null; operator?: string | null; uph?: number | null }> | null) ?? []) {
+        const reportId = String(row.report_id ?? '').trim();
+        const stage = reportIdToStage.get(reportId);
+        if (!stage) continue;
+        const operatorKey = normalizeWorkOperatorKey(String(row.operator ?? '').trim());
+        const uph = parseUph(row.uph);
+        if (!operatorKey || uph === null) continue;
+        if (!avgByStageOperator.has(stage)) avgByStageOperator.set(stage, new Map());
+        const byOperator = avgByStageOperator.get(stage)!;
+        const prev = byOperator.get(operatorKey) ?? { sum: 0, count: 0 };
+        prev.sum += uph;
+        prev.count += 1;
+        byOperator.set(operatorKey, prev);
+      }
+    }
+
+    const accountLinkMap = new Map<string, string>();
+    const linksRes = await obupSupabase
+      .from(OBUP_ACCOUNT_LINKS_TABLE)
+      .select('source_name, target_name, updated_at')
+      .order('updated_at', { ascending: false })
+      .limit(1000);
+    if (!linksRes.error) {
+      for (const row of (linksRes.data as Array<{ source_name?: string | null; target_name?: string | null }> | null) ?? []) {
+        const sourceKey = normalizeWorkOperatorKey(String(row.source_name ?? '').trim());
+        const targetKey = normalizeWorkOperatorKey(String(row.target_name ?? '').trim());
+        if (!sourceKey || !targetKey || accountLinkMap.has(sourceKey)) continue;
+        accountLinkMap.set(sourceKey, targetKey);
+      }
+    }
+
+    const nextMap: Record<string, number | null> = {};
+    for (const [stage, employeesByKey] of stageEmployees.entries()) {
+      const operatorAvgByKey = avgByStageOperator.get(stage) ?? new Map<string, { sum: number; count: number }>();
+      const operatorKeys = Array.from(operatorAvgByKey.keys());
+      for (const [employeeKey, employees] of employeesByKey.entries()) {
+        let matchedKey: string | null = null;
+        const mappedTarget = accountLinkMap.get(employeeKey);
+        if (mappedTarget && operatorAvgByKey.has(mappedTarget)) matchedKey = mappedTarget;
+        if (!matchedKey && operatorAvgByKey.has(employeeKey)) matchedKey = employeeKey;
+        if (!matchedKey) {
+          let bestKey = '';
+          let bestScore = 0;
+          for (const operatorKey of operatorKeys) {
+            const score = fuzzyNameSimilarity(employeeKey, operatorKey);
+            if (score > bestScore) {
+              bestScore = score;
+              bestKey = operatorKey;
+            }
+          }
+          if (bestKey && bestScore >= PUNCH_LOG_UPH_FUZZY_THRESHOLD) matchedKey = bestKey;
+        }
+        const rec = matchedKey ? operatorAvgByKey.get(matchedKey) : null;
+        const avgUph = rec && rec.count > 0 ? rec.sum / rec.count : null;
+        for (const staff of employees) nextMap[staff] = avgUph;
+      }
+    }
+
+    if (seq === punchBoardUphFetchSeqRef.current) {
+      setPunchBoardUphByStaffId(nextMap);
+    }
+  };
   const inferShiftByWorkHoursForStaff = async (staffIds: string[]) => {
     if (!supabase || staffIds.length === 0) {
       return {} as Record<string, '' | 'early' | 'late'>;
@@ -891,7 +1103,8 @@ export default function App() {
         onClock: 0,
         onClockStaff: [],
         restWorked: 0,
-        restWorkedStaff: []
+        restWorkedStaff: [],
+        scheduledNotClockInStaff: []
       }))
     );
     if (!supabase) {
@@ -1036,7 +1249,18 @@ export default function App() {
     const restWorkedStaffIds = Array.from(
       new Set(Array.from(restWorkedByKey.values()).flatMap((set) => Array.from(set)))
     );
-    const displayStaffIds = Array.from(new Set([...onClockStaffIds, ...restWorkedStaffIds]));
+    const scheduledNotClockInByKey = new Map<string, Set<string>>();
+    for (const [key, scheduledSet] of staffByKey.entries()) {
+      for (const staff of scheduledSet) {
+        if (punchedStaff.has(staff)) continue;
+        if (!scheduledNotClockInByKey.has(key)) scheduledNotClockInByKey.set(key, new Set());
+        scheduledNotClockInByKey.get(key)?.add(staff);
+      }
+    }
+    const scheduledNotClockInStaffIds = Array.from(
+      new Set(Array.from(scheduledNotClockInByKey.values()).flatMap((set) => Array.from(set)))
+    );
+    const displayStaffIds = Array.from(new Set([...onClockStaffIds, ...restWorkedStaffIds, ...scheduledNotClockInStaffIds]));
     const displayMapRes = await fetchEmployeeMap(displayStaffIds);
     const displayEmployeeMap = displayMapRes.error ? {} : displayMapRes.map;
 
@@ -1053,6 +1277,13 @@ export default function App() {
           const name = String(displayEmployeeMap[staff]?.name ?? '').trim();
           return name ? `${name} (${staff})` : staff;
         });
+        const scheduledNotClockInIds = Array.from(scheduledNotClockInByKey.get(key) ?? []).sort((a, b) =>
+          a.localeCompare(b, 'en-US')
+        );
+        const scheduledNotClockInStaff = scheduledNotClockInIds.map((staff) => {
+          const name = String(displayEmployeeMap[staff]?.name ?? '').trim();
+          return name ? `${name} (${staff})` : staff;
+        });
         return {
           shift: shift as 'early' | 'late',
           position,
@@ -1061,7 +1292,8 @@ export default function App() {
           onClock: onClockByKey.get(key)?.size ?? 0,
           onClockStaff,
           restWorked: restWorkedByKey.get(key)?.size ?? 0,
-          restWorkedStaff
+          restWorkedStaff,
+          scheduledNotClockInStaff
         };
       })
     );
@@ -1218,6 +1450,7 @@ export default function App() {
       setPunchBoardError(loaded.error);
       setPunchBoard([]);
       setPunchBoardEmployeeMap({});
+      setPunchBoardUphByStaffId({});
       return;
     }
 
@@ -1229,9 +1462,11 @@ export default function App() {
     const mapRes = await fetchEmployeeMap(staffIds);
     if (mapRes.error) {
       setPunchBoardEmployeeMap({});
+      setPunchBoardUphByStaffId({});
       return;
     }
     setPunchBoardEmployeeMap(mapRes.map);
+    void fetchPunchBoardUph(staffIds, mapRes.map);
   };
 
   useEffect(() => {
@@ -1771,9 +2006,9 @@ export default function App() {
 
               {staffIdPanel}
 
-              <div className="glass reveal rounded-3xl px-4 py-4">
+              <div className="glass reveal relative z-40 overflow-visible rounded-3xl px-4 py-4">
                 <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Attendance</div>
-                <div className="space-y-2">
+                <div className="space-y-2 overflow-visible">
                   {ALLOWED_POSITIONS.map((position) => {
                     const positionFrameClass = getPositionFrameClass(position);
                     const early = arrivalMetricByKey[`${position}:early`] ?? {
@@ -1784,7 +2019,8 @@ export default function App() {
                       onClock: 0,
                       onClockStaff: [],
                       restWorked: 0,
-                      restWorkedStaff: []
+                      restWorkedStaff: [],
+                      scheduledNotClockInStaff: []
                     };
                     const late = arrivalMetricByKey[`${position}:late`] ?? {
                       shift: 'late' as const,
@@ -1794,7 +2030,8 @@ export default function App() {
                       onClock: 0,
                       onClockStaff: [],
                       restWorked: 0,
-                      restWorkedStaff: []
+                      restWorkedStaff: [],
+                      scheduledNotClockInStaff: []
                     };
                     const earlyOnClockStaffCombined = Array.from(
                       new Set([...early.onClockStaff, ...early.restWorkedStaff])
@@ -1803,7 +2040,7 @@ export default function App() {
                       new Set([...late.onClockStaff, ...late.restWorkedStaff])
                     );
                     return (
-                      <div key={position} className="grid gap-2 md:grid-cols-2">
+                      <div key={position} className="grid gap-2 overflow-visible md:grid-cols-2">
                         <div className={['rounded-xl border px-3 py-2', positionFrameClass].join(' ')}>
                           <div className="flex items-center justify-between gap-3">
                             <div>
@@ -1814,7 +2051,7 @@ export default function App() {
                                 Expected {early.expected} · Present {early.present}
                               </div>
                             </div>
-                            <div className="group relative rounded-md bg-slate-950/70 px-3 py-1.5 text-center">
+                            <div className="group relative z-10 rounded-md bg-slate-950/70 px-3 py-1.5 text-center hover:z-50">
                               <div className="text-[10px] font-semibold tracking-[0.08em] text-slate-300">On Clock</div>
                               <div
                                 className={[
@@ -1824,8 +2061,8 @@ export default function App() {
                               >
                                 {earlyOnClockStaffCombined.length}
                               </div>
-                              <div className="pointer-events-none absolute right-0 top-full z-30 mt-2 hidden w-[33rem] gap-2 group-hover:flex">
-                                <div className="w-64 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl">
+                              <div className="pointer-events-auto absolute left-1/2 top-full z-30 mt-2 hidden w-[min(50rem,calc(100vw-2rem))] -translate-x-1/2 gap-2 group-hover:grid md:grid-cols-3">
+                                <div className="min-w-0 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl">
                                   <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Attendance Staff</div>
                                   {early.onClockStaff.length === 0 ? (
                                     <div className="text-xs text-slate-300">No one on clock</div>
@@ -1839,7 +2076,7 @@ export default function App() {
                                     </div>
                                   )}
                                 </div>
-                                <div className="w-64 rounded-lg border border-sky-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
+                                <div className="min-w-0 rounded-lg border border-sky-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
                                   <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Rest Worked Staff</div>
                                   {early.restWorkedStaff.length === 0 ? (
                                     <div className="text-xs text-slate-300">No rest-worked staff</div>
@@ -1847,6 +2084,22 @@ export default function App() {
                                     <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
                                       {early.restWorkedStaff.map((staffName) => (
                                         <div key={`early-rest-${position}-${staffName}`} className="truncate py-0.5">
+                                          {staffName}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="min-w-0 rounded-lg border border-amber-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                                    Scheduled Not Clock In
+                                  </div>
+                                  {early.scheduledNotClockInStaff.length === 0 ? (
+                                    <div className="text-xs text-slate-300">No missing clock-in staff</div>
+                                  ) : (
+                                    <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
+                                      {early.scheduledNotClockInStaff.map((staffName) => (
+                                        <div key={`early-missing-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
                                         </div>
                                       ))}
@@ -1867,7 +2120,7 @@ export default function App() {
                                 Expected {late.expected} · Present {late.present}
                               </div>
                             </div>
-                            <div className="group relative rounded-md bg-slate-950/70 px-3 py-1.5 text-center">
+                            <div className="group relative z-10 rounded-md bg-slate-950/70 px-3 py-1.5 text-center hover:z-50">
                               <div className="text-[10px] font-semibold tracking-[0.08em] text-slate-300">On Clock</div>
                               <div
                                 className={[
@@ -1877,8 +2130,8 @@ export default function App() {
                               >
                                 {lateOnClockStaffCombined.length}
                               </div>
-                              <div className="pointer-events-none absolute right-0 top-full z-30 mt-2 hidden w-[33rem] gap-2 group-hover:flex">
-                                <div className="w-64 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl">
+                              <div className="pointer-events-auto absolute left-1/2 top-full z-30 mt-2 hidden w-[min(50rem,calc(100vw-2rem))] -translate-x-1/2 gap-2 group-hover:grid md:grid-cols-3">
+                                <div className="min-w-0 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl">
                                   <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Attendance Staff</div>
                                   {late.onClockStaff.length === 0 ? (
                                     <div className="text-xs text-slate-300">No one on clock</div>
@@ -1892,7 +2145,7 @@ export default function App() {
                                     </div>
                                   )}
                                 </div>
-                                <div className="w-64 rounded-lg border border-sky-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
+                                <div className="min-w-0 rounded-lg border border-sky-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
                                   <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Rest Worked Staff</div>
                                   {late.restWorkedStaff.length === 0 ? (
                                     <div className="text-xs text-slate-300">No rest-worked staff</div>
@@ -1900,6 +2153,22 @@ export default function App() {
                                     <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
                                       {late.restWorkedStaff.map((staffName) => (
                                         <div key={`late-rest-${position}-${staffName}`} className="truncate py-0.5">
+                                          {staffName}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="min-w-0 rounded-lg border border-amber-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                                    Scheduled Not Clock In
+                                  </div>
+                                  {late.scheduledNotClockInStaff.length === 0 ? (
+                                    <div className="text-xs text-slate-300">No missing clock-in staff</div>
+                                  ) : (
+                                    <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
+                                      {late.scheduledNotClockInStaff.map((staffName) => (
+                                        <div key={`late-missing-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
                                         </div>
                                       ))}
@@ -1956,12 +2225,13 @@ export default function App() {
                 {!punchBoardError && punchBoardFiltered.length > 0 && (
                   <div className="mt-4 flex-1 overflow-auto pr-1">
                     <div className="space-y-2">
-                      <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_6.5rem] items-center gap-3 px-4 text-xs uppercase tracking-[0.25em] text-slate-500 sm:grid-cols-[3.5rem_minmax(0,1fr)_7rem_7rem_9.5rem]">
+                      <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_6.5rem] items-center gap-3 px-4 text-xs uppercase tracking-[0.25em] text-slate-500 sm:grid-cols-[3.5rem_minmax(0,1fr)_7rem_7rem_4.5rem_9.5rem]">
                         <div>Action</div>
                         <div className="sm:hidden">Info</div>
                         <div className="hidden sm:block">Name</div>
                         <div className="hidden sm:block">Agency</div>
                         <div className="hidden sm:block">Position</div>
+                        <div className="hidden text-center sm:block">UPH</div>
                         <div className="text-right">Time</div>
                       </div>
                       {punchBoardFiltered.map((p) => {
@@ -1973,16 +2243,17 @@ export default function App() {
                         const name = employee?.name || p.staff_id || '-';
                         const agency = employee?.agency || '-';
                         const position = employee?.position || '-';
+                        const uph = punchBoardUphByStaffId[p.staff_id];
                         return (
                           <div key={String(p.id)} className="rounded-2xl bg-white/5 px-4 py-3">
-                            <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_6.5rem] items-center gap-3 sm:grid-cols-[3.5rem_minmax(0,1fr)_7rem_7rem_9.5rem]">
+                            <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_6.5rem] items-center gap-3 sm:grid-cols-[3.5rem_minmax(0,1fr)_7rem_7rem_4.5rem_9.5rem]">
                               <span className={['font-display text-xl', isIn ? 'text-mint' : 'text-ember'].join(' ')}>
                                 {p.action}
                               </span>
                               <span className="min-w-0">
                                 <span className="block truncate text-sm text-slate-200 sm:hidden">{name}</span>
                                 <span className="mt-0.5 block truncate text-xs text-slate-400 sm:hidden">
-                                  {agency} 路 {position}
+                                  {agency} · {position} · UPH {formatUph(uph)}
                                 </span>
                                 <span className="hidden truncate text-sm text-slate-200 sm:block">{name}</span>
                               </span>
@@ -1997,6 +2268,7 @@ export default function App() {
                                   {position || '-'}
                                 </span>
                               </span>
+                              <span className="hidden text-center font-mono text-sm text-slate-200 sm:block">{formatUph(uph)}</span>
                               <span className="text-right text-xs text-slate-400">{time}</span>
                             </div>
                           </div>
@@ -2056,7 +2328,7 @@ export default function App() {
                   onClick={() => setPage('edit')}
                   className={tabClass(page === 'edit')}
                 >
-                  4 淇敼淇℃伅
+                  4 修改信息
                 </button>
               </nav>
 
@@ -2121,7 +2393,7 @@ export default function App() {
                 onClick={() => void fetchEmployee()}
                 className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                鏌ヨ
+                查询
               </button>
             </div>
             <p className="mt-2 text-xs text-slate-400">
@@ -2177,7 +2449,7 @@ export default function App() {
                 />
               </div>
               <div>
-                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">閮ㄩ棬</label>
+                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">部门</label>
                 <input
                   value={editDept}
                   onChange={(e) => setEditDept(e.target.value)}
@@ -2219,3 +2491,4 @@ export default function App() {
     </div>
   );
 }
+
