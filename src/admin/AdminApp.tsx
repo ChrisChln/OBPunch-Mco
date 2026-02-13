@@ -4486,7 +4486,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (!profile) continue;
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
       const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
-      const shift: 'early' | 'late' = (scheduledShift || inferredShift || 'early') as 'early' | 'late';
+      // Daily list should prefer observed work-hour inference over scheduled shift.
+      const shift: 'early' | 'late' = (inferredShift || scheduledShift || 'early') as 'early' | 'late';
       const item: DailyListRow = {
         staff_id: staff,
         name: profile?.name || '',
