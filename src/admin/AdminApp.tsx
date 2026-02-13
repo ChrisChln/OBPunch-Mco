@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
@@ -864,13 +864,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
 
       const stats: Record<string, { early: number; late: number; active: number }> = {};
+      const shiftByStaffId: Record<string, 'early' | 'late'> = {};
+      for (const staff of activeStaff) {
+        const latest = latestByStaff.get(staff);
+        if (!latest || latest.action !== 'IN') continue;
+        const shift = getShiftBucket(latest.at);
+        if (!shift) continue;
+        shiftByStaffId[staff] = shift;
+      }
       for (const staff of attendanceStaff) {
         const firstIn = firstInByStaff.get(staff);
         if (!firstIn) continue;
         const pos = staffToPosition.get(staff);
         if (!pos) continue;
-        const shift = getShiftBucket(firstIn.at);
+        const shift = shiftByStaffId[staff] ?? getShiftBucket(firstIn.at);
         if (!shift) continue;
+        shiftByStaffId[staff] = shift;
         const s = (stats[pos] ??= { early: 0, late: 0, active: 0 });
         s[shift] += 1;
       }
@@ -1456,8 +1465,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     await fetchSchedule();
     const latestEmployees = await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
     await fetchSchedulePublishSetting();
-    await fetchSchedulePunchPresence();
+    await fetchSchedulePunchPresence({ employeesOverride: latestEmployees });
     await fetchScheduleUph({ employeesOverride: latestEmployees });
+  };
+
+  const refreshHomePanel = async () => {
+    await fetchSchedule();
+    const latestEmployees = await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
+    await fetchSchedulePunchPresence({ employeesOverride: latestEmployees });
   };
 
   const openScheduleStatePicker = (
@@ -1506,14 +1521,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     };
   }, [schedulePicker.open]);
 
-  const fetchSchedulePunchPresence = async () => {
+  const fetchSchedulePunchPresence = async (options?: { employeesOverride?: EmployeeRow[] | null }) => {
     if (!supabase) {
       setSchedulePunchPresenceKeys(new Set());
       return;
     }
 
+    const sourceEmployees = options?.employeesOverride ?? employees;
     const staffSet = new Set(
-      employees
+      sourceEmployees
         .map((e) => normalizeStaffId(String(e.staff_id ?? '').trim()))
         .filter((staff): staff is string => Boolean(staff))
     );
@@ -2198,6 +2214,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const ok = window.confirm(`确定要删除员工 ${staff} 吗？此操作不可撤销。`);
     if (!ok) return;
 
+    let shouldRefresh = false;
     await runLocked('employee_delete', async () => {
       setEmployeesError(null);
       const { error } = await supabase.from(EMPLOYEE_TABLE).delete().eq('staff_id', staff);
@@ -2207,8 +2224,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
       setStatus({ tone: 'success', message: `已删除员工：${staff}` });
       await writeAudit({ action: 'employee_delete', staffId: staff, target: EMPLOYEE_TABLE });
-      await fetchEmployees({ reset: true });
+      shouldRefresh = true;
     });
+    if (shouldRefresh) {
+      await refreshEmployeesPanel();
+    }
   };
 
   const openEmployeeEdit = (payload: { staff: string; name: string; agency: string; position: string; label: string }) => {
@@ -2231,6 +2251,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setEmployeeEditAgency('');
     setEmployeeEditPosition('');
     setEmployeeEditLabel('');
+  };
+
+  const refreshEmployeesPanel = async () => {
+    await fetchEmployees({
+      reset: true,
+      search: employeeSearch,
+      agency: employeeAgency,
+      position: employeePosition,
+      labels: employeeLabels
+    });
   };
 
   const saveEmployeeEdit = async () => {
@@ -3835,6 +3865,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   useEffect(() => {
     // 当切换到页面时自动加载
+    if (page === 'home') {
+      void refreshHomePanel();
+    }
     if (page === 'punches') {
       void fetchRecentPunches({ search: punchesSearch });
     }
@@ -4431,25 +4464,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   const tomorrowDailyList = useMemo(() => {
     const tomorrow = addDays(new Date(serverTime), 1);
     const dayIndex = (tomorrow.getDay() + 6) % 7; // Mon=0..Sun=6
-    const templateDate = getTemplateDateByDayIndex(dayIndex);
-    const byStaff = new Map<string, ScheduleRow>();
-    for (const row of scheduleRows) {
-      const rowTemplateDate = String(row.date ?? '').trim();
-      if (rowTemplateDate !== templateDate) continue;
-      if (!isWorkingScheduleRow(row)) continue;
-      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-      if (!staff || byStaff.has(staff)) continue;
-      byStaff.set(staff, row);
-    }
-
     const earlyRows: DailyListRow[] = [];
     const lateRows: DailyListRow[] = [];
-    for (const [staff, row] of byStaff.entries()) {
+    for (const employee of employees) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff) continue;
+      const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
+      if (!row || !isWorkingScheduleRow(row)) continue;
       const profile = employeeProfileByStaffId.get(staff);
       if (!profile) continue;
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
       const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
-      const shift: 'early' | 'late' = (inferredShift || scheduledShift || 'early') as 'early' | 'late';
+      const shift: 'early' | 'late' = (scheduledShift || inferredShift || 'early') as 'early' | 'late';
       const item: DailyListRow = {
         staff_id: staff,
         name: profile?.name || '',
@@ -4469,7 +4495,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       earlyRows,
       lateRows
     };
-  }, [serverTime, scheduleRows, employeeProfileByStaffId, employeeShiftByStaffId]);
+  }, [serverTime, employees, scheduleRowsByStaffDayIndex, employeeProfileByStaffId, employeeShiftByStaffId]);
   const tomorrowAttendanceCards = useMemo(() => {
     const countByKey: Record<string, number> = {};
     const addRows = (rows: DailyListRow[], shift: 'early' | 'late') => {
@@ -4608,6 +4634,47 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     if (now.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
     return (operationalStart.getDay() + 6) % 7;
   }, [serverTime]);
+  const homeExpectedCards = useMemo(() => {
+    const countByKey: Record<string, number> = {};
+    for (const employee of employees) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff) continue;
+      const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
+      if (!row || !isWorkingScheduleRow(row)) continue;
+      const positionRaw =
+        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || String(row.position ?? '').trim();
+      const normalizedPosition = normalizePositionKey(positionRaw);
+      if (!normalizedPosition) continue;
+      const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
+      const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
+      const shift = (inferredShift || scheduledShift || 'early') as 'early' | 'late';
+      const key = `${shift}:${normalizedPosition}`;
+      countByKey[key] = (countByKey[key] ?? 0) + 1;
+    }
+    return (['early', 'late'] as const).flatMap((shift) =>
+      ALLOWED_POSITIONS.map((position) => ({
+        key: `${shift}:${position}`,
+        shift,
+        position,
+        count: countByKey[`${shift}:${position}`] ?? 0
+      }))
+    );
+  }, [
+    employees,
+    scheduleRowsByStaffDayIndex,
+    homeOperationalDayIndex,
+    employeeProfileByStaffId,
+    employeeShiftByStaffId,
+  ]);
+  const homeExpectedPositionSummaryCards = useMemo(
+    () =>
+      ALLOWED_POSITIONS.map((position) => {
+        const early = homeExpectedCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
+        const late = homeExpectedCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
+        return { position, early, late, total: early + late };
+      }),
+    [homeExpectedCards]
+  );
 
   const homeRosterRows = useMemo(() => {
     const absent: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
@@ -5158,7 +5225,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   <div className="space-y-4">
                     {ALLOWED_POSITIONS.map((position) => {
                       const stats = attendanceStats[position] ?? { early: 0, late: 0, active: 0 };
-                      const plan = tomorrowPositionSummaryCards.find((item) => item.position === position) ?? {
+                      const plan = homeExpectedPositionSummaryCards.find((item) => item.position === position) ?? {
                         position,
                         early: 0,
                         late: 0,
@@ -5240,7 +5307,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         <span>ID</span>
                         <span>{t('姓名', 'Name')}</span>
                         <span>Agency</span>
-                        <span>{t('宀椾綅', 'Position')}</span>
+                        <span>{t('岗位', 'Position')}</span>
                         <span>{t('班次', 'Shift')}</span>
                       </div>
                       <div className="mt-1 max-h-[560px] space-y-1 overflow-auto pr-1">
@@ -5269,7 +5336,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               <section className="glass reveal rounded-3xl px-6 py-8">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="font-display text-2xl tracking-[0.08em]">
-                    {t('打卡流水（只读）', 'Punch Log (Read-only)')}
+                    {t('打卡流水', 'Punch Log')}
                   </h2>
                   <button
                     type="button"
@@ -5308,7 +5375,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     ? lang === 'en'
                       ? `Search: ${punchesSearch.trim()}`
                       : `搜索：${punchesSearch.trim()}`
-                    : t('未搜索（展示最近 30 条）', 'No search (latest 30)')}
+                    : t('未搜索', 'No search (latest 30)')}
                 </p>
                 {recentPunchesError && (
                   <p className="mt-3 text-sm text-ember">
@@ -5372,7 +5439,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       value={auditSearch}
                       onChange={(e) => setAuditSearch(e.target.value)}
                       disabled={isLocked}
-                      placeholder={t('通过工号/操作者/动作搜索', 'Search by staff id / actor / action')}
+                      placeholder={t('通过工号搜索', 'Search by staff id / actor / action')}
                       className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </div>
@@ -5947,7 +6014,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             <p className="mt-2 text-xs text-slate-400">
                               日期：<span className="text-slate-200">{tomorrowDailyList.targetDate}</span> {tomorrowDailyList.weekday}
                             </p>
-                            <p className="mt-1 text-xs text-slate-500">班次按最近工时推断（无推断时回退排班班次）。</p>
+                            <p className="mt-1 text-xs text-slate-500">班次按最近工时推断。</p>
                           </div>
                           <div className="min-w-[520px] flex-1">
                             <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
