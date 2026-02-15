@@ -503,6 +503,7 @@ export default function AdminApp() {
   const timecardFetchSeqRef = useRef(0);
   const punchesFetchSeqRef = useRef(0);
   const attendanceFetchSeqRef = useRef(0);
+  const timecardPunchFetchSeqRef = useRef(0);
   const timecardRecomputeLastRunByWeekRef = useRef<Record<string, number>>({});
   const dailyListResetKeyRef = useRef(getOperationalDateKey(new Date(), DAILY_LIST_RESET_HOUR));
   type EmployeeColumnMode = 'lower' | 'cased';
@@ -2909,7 +2910,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const agencyValue = (agency ?? timecardAgency).trim();
     const positionValue = (position ?? timecardPosition).trim();
     const missingOnly = missingEmployeeOnly ?? timecardMissingEmployeeOnly;
-    const nowMs = Date.now();
+    const nowMs = serverTime.getTime();
     const closedDayByIndex = Array.from({ length: 7 }, (_, dayIndex) => {
       const { end } = getDayRange(weekStart, dayIndex);
       return end.getTime() <= nowMs;
@@ -3248,7 +3249,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           return { rows: [] as TimecardRow[], hasMore: false, error: null as string | null };
         }
 
-        const now = new Date();
+        const now = new Date(serverTime);
         const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
 
         const profilesRes = await fetchProfilesByStaffId(allStaffIds);
@@ -3396,7 +3397,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         eventsByStaff[staff]!.sort((a, b) => a.at.getTime() - b.at.getTime());
       }
 
-      const now = new Date();
+      const now = new Date(serverTime);
       const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
       if (scheduledRes.error) {
         return { rows: [] as TimecardRow[], hasMore: false, error: scheduledRes.error };
@@ -3949,25 +3950,25 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
     setTimecardPunchNew({ inAtLocal: nowLocal, outAtLocal: nowLocal });
 
-    await runLocked('timecard_punches', async () => {
-      const res = await fetchPunchRowsForTimecard(staff, dayIndex);
-      if (res.error) {
-        setTimecardPunchError(res.error);
-        setTimecardPunchRows([]);
-        return;
-      }
-      setTimecardPunchRows(res.rows);
+    const requestId = ++timecardPunchFetchSeqRef.current;
+    const res = await fetchPunchRowsForTimecard(staff, dayIndex);
+    if (requestId !== timecardPunchFetchSeqRef.current) return;
+    if (res.error) {
+      setTimecardPunchError(res.error);
+      setTimecardPunchRows([]);
+      return;
+    }
+    setTimecardPunchRows(res.rows);
 
-      const edits: Record<string, { action: 'IN' | 'OUT'; atLocal: string }> = {};
-      for (const r of res.rows) {
-        const dt = r.created_at ? new Date(r.created_at) : null;
-        edits[String(r.id)] = {
-          action: r.action,
-          atLocal: dt && !Number.isNaN(dt.getTime()) ? toLocalDateTimeInputValue(dt) : ''
-        };
-      }
-      setTimecardPunchEdits(edits);
-    });
+    const edits: Record<string, { action: 'IN' | 'OUT'; atLocal: string }> = {};
+    for (const r of res.rows) {
+      const dt = r.created_at ? new Date(r.created_at) : null;
+      edits[String(r.id)] = {
+        action: r.action,
+        atLocal: dt && !Number.isNaN(dt.getTime()) ? toLocalDateTimeInputValue(dt) : ''
+      };
+    }
+    setTimecardPunchEdits(edits);
   };
 
   const closeTimecardPunchModal = () => {
@@ -4842,7 +4843,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
 
     if (currentIn) {
-      const now = new Date();
+      const now = new Date(serverTime);
       const capEnd = new Date(clamp(now.getTime(), dayStart.getTime(), dayEnd.getTime()));
       if (overlaps(dayStart, dayEnd, currentIn.at, capEnd)) {
         includedIds.add(currentIn.id);
