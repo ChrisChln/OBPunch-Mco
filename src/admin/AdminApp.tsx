@@ -291,6 +291,10 @@ const isAbortLikeError = (error: unknown) => {
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? clamp(DAY_CUTOFF_HOUR_RAW, 0, 23) : 5;
 const DAY_CUTOFF_MS = DAY_CUTOFF_HOUR * 60 * 60 * 1000;
+const TIMECARD_ABSENT_VISIBLE_HOUR_RAW = Number(import.meta.env.VITE_TIMECARD_ABSENT_VISIBLE_HOUR ?? 12);
+const TIMECARD_ABSENT_VISIBLE_HOUR = Number.isFinite(TIMECARD_ABSENT_VISIBLE_HOUR_RAW)
+  ? clamp(TIMECARD_ABSENT_VISIBLE_HOUR_RAW, 0, 23)
+  : 12;
 const ATTENDANCE_RESET_HOUR_RAW = Number(import.meta.env.VITE_ATTENDANCE_RESET_HOUR ?? 5);
 const ATTENDANCE_RESET_HOUR = Number.isFinite(ATTENDANCE_RESET_HOUR_RAW)
   ? clamp(ATTENDANCE_RESET_HOUR_RAW, 0, 23)
@@ -575,6 +579,7 @@ export default function AdminApp() {
   const [schedulePosition, setSchedulePosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
   const [scheduleShift, setScheduleShift] = useState<'' | 'early' | 'late'>('');
+  const [scheduleSortByUphDesc, setScheduleSortByUphDesc] = useState(false);
   const [scheduleWorkDayFilter, setScheduleWorkDayFilter] = useState<number | null>(null);
   const [schedulePublishTomorrow, setSchedulePublishTomorrow] = useState(false);
   const [schedulePublishForDate, setSchedulePublishForDate] = useState<string>('');
@@ -2880,6 +2885,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const tempRestByDay = [...markRec.tempRestByDay];
       const scheduleStates = scheduleStateByStaff[staff] ?? (new Array(7).fill('work') as ScheduleBaseState[]);
       const restByDay = scheduleStates.map((state) => state === 'rest');
+      const absentVisibleByNoon = Array.from({ length: 7 }, (_, idx) => {
+        const workDate = toDateOnly(addDays(weekStart, idx));
+        const noon = new Date(`${workDate}T00:00:00`);
+        if (Number.isNaN(noon.getTime())) return false;
+        noon.setHours(TIMECARD_ABSENT_VISIBLE_HOUR, 0, 0, 0);
+        return capEnd.getTime() >= noon.getTime();
+      });
+      for (let idx = 0; idx < 7; idx += 1) {
+        const isWorking = isWorkingScheduleBaseState(scheduleStates[idx] ?? 'work');
+        if (!isWorking) continue;
+        if (!scheduledByDay[idx]) continue;
+        if (hasPunchByDay[idx]) continue;
+        if (leaveByDay[idx] || tempRestByDay[idx]) continue;
+        if (!absentVisibleByNoon[idx]) continue;
+        absentByDay[idx] = true;
+      }
       const punchCountMismatchByDay = punchCountByDay.map((count, idx) => {
         if (!closedDayByIndex[idx]) return false;
         if (count <= 0) return false;
@@ -3298,8 +3319,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         }
 
         if (!isWorkingScheduleBaseState(state)) continue;
-        const dayRange = getWorkDateRange(workDate);
-        if (!dayRange || dayRange.end.getTime() > now.getTime()) continue;
+        const absentVisibleAt = new Date(`${workDate}T00:00:00`);
+        if (Number.isNaN(absentVisibleAt.getTime())) continue;
+        absentVisibleAt.setHours(TIMECARD_ABSENT_VISIBLE_HOUR, 0, 0, 0);
+        if (absentVisibleAt.getTime() > now.getTime()) continue;
         if (hasPunchByStaffDay.has(key)) continue;
         marksToInsert.push({
           staff_id: staff,
@@ -4616,14 +4639,28 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   const scheduleEmployeesFiltered = useMemo(() => {
     const search = deferredScheduleSearch.trim().toLowerCase();
-    if (!search) return scheduleEmployeesBase;
-    return scheduleEmployeesBase.filter((employee) => {
+    const filtered = !search
+      ? scheduleEmployeesBase
+      : scheduleEmployeesBase.filter((employee) => {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       const name = String(employee.name ?? '').trim();
       const position = String(employee.position ?? employee.Position ?? '').trim();
       return [staff, name, position].join(' ').toLowerCase().includes(search);
     });
-  }, [scheduleEmployeesBase, deferredScheduleSearch]);
+    if (!scheduleSortByUphDesc) return filtered;
+    return [...filtered].sort((a, b) => {
+      const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
+      const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
+      const rawA = Number(scheduleUphByStaffId[staffA]);
+      const rawB = Number(scheduleUphByStaffId[staffB]);
+      const hasA = Number.isFinite(rawA);
+      const hasB = Number.isFinite(rawB);
+      if (hasA && hasB && rawA !== rawB) return rawB - rawA;
+      if (hasA && !hasB) return -1;
+      if (!hasA && hasB) return 1;
+      return staffA.localeCompare(staffB, 'en-US');
+    });
+  }, [scheduleEmployeesBase, deferredScheduleSearch, scheduleSortByUphDesc, scheduleUphByStaffId]);
 
   const scheduleWorkingCountByDayIndex = useMemo(() => {
     const counts = Array.from({ length: 7 }, () => 0);
@@ -5831,7 +5868,21 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           <th className="sticky top-0 z-20 w-[86px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">Position</th>
                           <th className="sticky top-0 z-20 w-[110px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('标签', 'Label')}</th>
                           <th className="sticky top-0 z-20 w-[76px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">Shift</th>
-                          <th className="sticky top-0 z-20 w-[72px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">UPH</th>
+                          <th className="sticky top-0 z-20 w-[72px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">
+                            <button
+                              type="button"
+                              disabled={isLocked}
+                              onClick={() => setScheduleSortByUphDesc((v) => !v)}
+                              className={[
+                                'rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition',
+                                scheduleSortByUphDesc ? 'bg-neon/20 text-neon' : 'text-slate-300 hover:bg-white/10',
+                                isLocked ? 'cursor-not-allowed opacity-60' : ''
+                              ].join(' ')}
+                              title={scheduleSortByUphDesc ? 'Sorted by UPH (high to low)' : 'Sort by UPH (high to low)'}
+                            >
+                              UPH{scheduleSortByUphDesc ? ' ↓' : ''}
+                            </button>
+                          </th>
                           {scheduleDays.map((day, idx) => (
                             <th key={toDateOnly(day)} className="sticky top-0 z-20 w-[92px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
                               <div className="flex flex-col items-center leading-tight">
