@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:host": "vite --host",
+    "start:host": "npm install && npm run dev:host",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint ."
