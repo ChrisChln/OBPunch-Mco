@@ -4287,7 +4287,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       void fetchEmployees({ reset: true });
     }
     if (page === 'timecard') {
-      void fetchTimecard({ reset: true });
+      void fetchTimecard({ reset: true, lockUi: false });
     }
     if (page === 'audit') {
       void fetchAudit({ search: auditSearch });
@@ -6283,8 +6283,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <option value="">All shifts</option>
-                      <option value="early">Early</option>
-                      <option value="late">Late</option>
+                      <option value="early">Morning</option>
+                      <option value="late">Night</option>
                     </select>
                   </div>
                   <div className="md:col-span-2">
@@ -7412,7 +7412,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 (targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000)
                               );
                               setTimecardWeekOffset(nextOffset);
-                              void fetchTimecard({ reset: true, weekOffset: nextOffset });
+                              void fetchTimecard({ reset: true, weekOffset: nextOffset, lockUi: false });
                             }}
                             className="rounded-xl border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-slate-200 outline-none focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
                             title={t('选择任意日期', 'Pick any date')}
@@ -7428,7 +7428,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         setTimecardWeekOffset(next);
                         const baseWeekStart = startOfWeekMonday(serverTime);
                         setTimecardWeekInput(toDateOnly(addDays(baseWeekStart, next * 7)));
-                        void fetchTimecard({ reset: true, weekOffset: next });
+                        void fetchTimecard({ reset: true, weekOffset: next, lockUi: false });
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
@@ -7441,7 +7441,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         setTimecardWeekOffset(0);
                         const baseWeekStart = startOfWeekMonday(serverTime);
                         setTimecardWeekInput(toDateOnly(baseWeekStart));
-                        void fetchTimecard({ reset: true, weekOffset: 0 });
+                        void fetchTimecard({ reset: true, weekOffset: 0, lockUi: false });
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
@@ -7455,7 +7455,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         setTimecardWeekOffset(next);
                         const baseWeekStart = startOfWeekMonday(serverTime);
                         setTimecardWeekInput(toDateOnly(addDays(baseWeekStart, next * 7)));
-                        void fetchTimecard({ reset: true, weekOffset: next });
+                        void fetchTimecard({ reset: true, weekOffset: next, lockUi: false });
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
@@ -7520,7 +7520,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         setTimecardInProgressOnly(false);
                         setTimecardPresentDayFilter(null);
                         setTimecardMissingEmployeeOnly(false);
-                        void fetchTimecard({ reset: true, search: '', agency: '', position: '' });
+                        void fetchTimecard({ reset: true, search: '', agency: '', position: '', lockUi: false });
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
@@ -7581,8 +7581,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <option value="">{t('全部班次', 'All shifts')}</option>
-                      <option value="early">{t('早班（05:00–14:59）', 'Early (05:00–14:59)')}</option>
-                      <option value="late">{t('晚班（15:00+）', 'Late (15:00+)')}</option>
+                      <option value="early">{t('早班', 'Morning')}</option>
+                      <option value="late">{t('晚班', 'Night')}</option>
                     </select>
                   </div>
                   <div className="flex items-end">
