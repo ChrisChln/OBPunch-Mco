@@ -2201,7 +2201,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
             ? 'id, staff_id, name, "Agency", "Position", label, created_at'
             : 'id, staff_id, name, agency, position, label, created_at';
 
-        let q = supabase.from(EMPLOYEE_TABLE).select(select).range(from, to);
+        let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
 
         if (agencyValue) {
           q = q.ilike(agencyCol as any, `%${agencyValue}%`);
@@ -3343,16 +3343,36 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
 
       const employees = employeeRows ?? [];
-      const staffIds = employees.map((e) => String(e.staff_id ?? '').trim()).filter(Boolean);
+      const employeeByStaffId = new Map<string, { staff_id: string; name: string; agency: string; position: string }>();
+      for (const e of employees) {
+        const staff = String(e.staff_id ?? '').trim();
+        if (!staff) continue;
+        const name = String(e.name ?? '').trim();
+        const agency = String(e.agency ?? e.Agency ?? '').trim();
+        const position = String(e.position ?? e.Position ?? '').trim();
+        const existing = employeeByStaffId.get(staff);
+        if (!existing) {
+          employeeByStaffId.set(staff, { staff_id: staff, name, agency, position });
+          continue;
+        }
+        // Keep first row order, but fill missing fields from duplicate rows.
+        if (!existing.name && name) existing.name = name;
+        if (!existing.agency && agency) existing.agency = agency;
+        if (!existing.position && position) existing.position = position;
+      }
+      const uniqueEmployees = Array.from(employeeByStaffId.values());
+      const staffIds = uniqueEmployees.map((e) => e.staff_id);
       if (staffIds.length === 0) {
         return { rows: [] as TimecardRow[], hasMore: false, error: null as string | null };
       }
 
       const fetchPunchesForStaff = async (ids: string[]) => {
-        // chunk to avoid huge IN lists
+        // chunk + paginate to avoid PostgREST row truncation when viewing all staff
         const batches = chunk(ids, 200);
         const all: Array<{ staff_id: string; action: string; created_at: string | null; id?: any }> = [];
         for (const batch of batches) {
+          const pageSize = 1000;
+          const maxPages = 80;
           const base = () =>
             supabase
               .from('ob_punches')
@@ -3361,12 +3381,26 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               .gte('created_at', rangeStart.toISOString())
               .lt('created_at', rangeEnd.toISOString());
 
-          const attemptCreatedAt = await base().order('created_at', { ascending: true });
-          const attempt = attemptCreatedAt.error ? await base().order('id', { ascending: true }) : attemptCreatedAt;
-          if (attempt.error) {
-            return { rows: null as any, error: attempt.error.message };
+          for (let page = 0; page < maxPages; page += 1) {
+            const from = page * pageSize;
+            const to = from + pageSize - 1;
+            const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
+            const attempt = attemptCreatedAt.error
+              ? await base().order('id', { ascending: true }).range(from, to)
+              : attemptCreatedAt;
+            if (attempt.error) {
+              return { rows: null as any, error: attempt.error.message };
+            }
+            const rows = (((attempt.data as any[]) ?? []) as any[]) as Array<{
+              staff_id: string;
+              action: string;
+              created_at: string | null;
+              id?: any;
+            }>;
+            if (rows.length === 0) break;
+            all.push(...rows);
+            if (rows.length < pageSize) break;
           }
-          all.push(...(((attempt.data as any[]) ?? []) as any[]));
         }
         return { rows: all, error: null as string | null };
       };
@@ -3406,11 +3440,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return { rows: [] as TimecardRow[], hasMore: false, error: marksRes.error };
       }
 
-      const rows: TimecardRow[] = employees.map((e) => {
-        const staff = String(e.staff_id ?? '').trim();
-        const name = String(e.name ?? '').trim();
-        const agency = String(e.agency ?? e.Agency ?? '').trim();
-        const position = String(e.position ?? e.Position ?? '').trim();
+      const rows: TimecardRow[] = uniqueEmployees.map((e) => {
+        const staff = e.staff_id;
+        const name = e.name;
+        const agency = e.agency;
+        const position = e.position;
         return buildTimecardRow({
           staff,
           name,
@@ -3458,8 +3492,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (seq !== timecardFetchSeqRef.current) {
         return;
       }
+      const dedupedRows = (() => {
+        const map = new Map<string, TimecardRow>();
+        for (const row of result.rows) {
+          const staff = String(row.staff_id ?? '').trim();
+          if (!staff) continue;
+          if (!map.has(staff)) map.set(staff, row);
+        }
+        return Array.from(map.values());
+      })();
       setTimecardError(isAbortLikeError(result.error) ? null : result.error);
-      setTimecardRows(result.rows);
+      setTimecardRows(dedupedRows);
       setTimecardHasMore(false);
       return;
     }
@@ -3473,7 +3516,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         setTimecardHasMore(false);
         return;
       }
-      setTimecardRows(result.rows);
+      const dedupedRows = (() => {
+        const map = new Map<string, TimecardRow>();
+        for (const row of result.rows) {
+          const staff = String(row.staff_id ?? '').trim();
+          if (!staff) continue;
+          if (!map.has(staff)) map.set(staff, row);
+        }
+        return Array.from(map.values());
+      })();
+      setTimecardRows(dedupedRows);
       setTimecardHasMore(false);
     });
   };
@@ -7608,9 +7660,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       })()}
                     </thead>
                     <tbody>
-                          {timecardRowsRendered.map((r) => (
+                          {timecardRowsRendered.map((r, rowIndex) => (
                             <tr
-                              key={r.staff_id}
+                              key={`${r.staff_id}__${r.position}__${r.agency}__${rowIndex}`}
                               className="border-b border-white/5 transition hover:bg-white/5 last:border-0"
                             >
                               <td className="px-2 py-1.5 font-mono text-slate-200">{r.staff_id}</td>
