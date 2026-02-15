@@ -512,12 +512,21 @@ export default function AdminApp() {
   const [page, setPage] = useState<AdminPage>('home');
 
   type Lang = 'zh' | 'en';
+  type ThemeMode = 'dark' | 'light';
   const [lang, setLang] = useState<Lang>(() => {
     try {
       const v = localStorage.getItem('obpunch_lang');
       return v === 'en' ? 'en' : 'zh';
     } catch {
       return 'zh';
+    }
+  });
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    try {
+      const value = localStorage.getItem('obpunch_admin_theme');
+      return value === 'light' ? 'light' : 'dark';
+    } catch {
+      return 'dark';
     }
   });
   useEffect(() => {
@@ -527,6 +536,17 @@ export default function AdminApp() {
       // ignore
     }
   }, [lang]);
+  useEffect(() => {
+    try {
+      localStorage.setItem('obpunch_admin_theme', themeMode);
+    } catch {
+      // ignore
+    }
+    document.body.dataset.theme = themeMode;
+    return () => {
+      delete document.body.dataset.theme;
+    };
+  }, [themeMode]);
   const locale = lang === 'en' ? 'en-US' : 'zh-CN';
   const t = (zh: string, en: string) => (lang === 'en' ? en : zh);
 
@@ -5534,7 +5554,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   if (!supabase) {
     return (
-      <div className="min-h-screen px-5 py-8">
+      <div className={['min-h-screen px-5 py-8', themeMode === 'light' ? 'admin-theme-light' : 'admin-theme-dark'].join(' ')}>
         <div className="mx-auto w-full max-w-2xl space-y-6">
           <header className="glass rounded-3xl px-6 py-6 shadow-glow">
             <h1 className="font-display text-4xl tracking-[0.08em]">ObPunch Admin</h1>
@@ -5546,7 +5566,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   }
 
   return (
-    <div className="min-h-screen px-5 py-8 text-paper">
+    <div
+      className={[
+        'min-h-screen px-5 py-8 text-paper transition-colors',
+        themeMode === 'light' ? 'admin-theme-light' : 'admin-theme-dark'
+      ].join(' ')}
+    >
       <div className="mx-auto flex w-full max-w-none flex-col gap-6">
         <header className="glass reveal rounded-3xl px-6 py-6 shadow-glow">
           <div className="flex flex-wrap items-start justify-between gap-4">
@@ -5591,6 +5616,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
             <div className="min-w-[260px] text-right">
               <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={isLocked}
+                  onClick={() => setThemeMode((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+                  className={[
+                    'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                    themeMode === 'light' ? 'bg-neon text-ink shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                  ].join(' ')}
+                  title={themeMode === 'dark' ? t('切换到白色主题', 'Switch to light mode') : t('切换到夜间主题', 'Switch to dark mode')}
+                >
+                  {themeMode === 'dark' ? '☀' : '☾'}
+                </button>
                 <button
                   type="button"
                   disabled={isLocked}
