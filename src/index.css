@@ -52,6 +52,14 @@ body[data-theme='light'] {
   background-color: #eef2f7 !important;
 }
 
+.admin-theme-light tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+.admin-theme-light tbody tr:hover td {
+  background-color: #e7eef8 !important;
+}
+
 .admin-theme-light [class*='bg-sky-'][class*='/'] {
   background-color: rgba(3, 105, 161, 0.14) !important;
 }
@@ -154,6 +162,12 @@ body[data-theme='light'] {
 .admin-theme-light input,
 .admin-theme-light select,
 .admin-theme-light textarea {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+  border-color: #d5dbe7 !important;
+}
+
+.admin-theme-light details > summary {
   background-color: #ffffff !important;
   color: #111827 !important;
   border-color: #d5dbe7 !important;
