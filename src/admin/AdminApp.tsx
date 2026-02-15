@@ -42,6 +42,7 @@ const SCHEDULE_REST_NOTE = '__rest__';
 const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
 const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
+const STALE_TIMECARD_REQUEST = '__stale_timecard_request__';
 
 type ScheduleBaseState = 'work' | 'temp_work' | 'leave' | 'temp_rest' | 'rest';
 type ScheduleDisplayState = 'empty' | ScheduleBaseState | 'rest_worked';
@@ -984,10 +985,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const tick = () => {
       setServerTime(new Date(Date.now() + offsetMs));
     };
-    const timer = window.setInterval(tick, 1000);
+    const timer = window.setInterval(tick, page === 'timecard' ? 15000 : 1000);
     tick();
     return () => window.clearInterval(timer);
-  }, [offsetMs]);
+  }, [offsetMs, page]);
 
   const saveDailyListSelectedPositionsGlobal = async (
     next: Record<AllowedPosition, boolean>,
@@ -2898,6 +2899,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return;
     }
 
+    const requestId = ++timecardFetchSeqRef.current;
+    const isStale = () => requestId !== timecardFetchSeqRef.current;
+
     const baseWeekStart = startOfWeekMonday(serverTime);
     const offset = weekOffset ?? timecardWeekOffset;
     const weekStart = addDays(baseWeekStart, offset * 7);
@@ -2919,6 +2923,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const pageSize = 200;
 
     const fetchProfilesByStaffId = async (staffIds: string[]) => {
+      if (isStale()) {
+        return {
+          staffToProfile: new Map<string, { name: string; agency: string; position: string }>(),
+          error: STALE_TIMECARD_REQUEST
+        };
+      }
       const staffToProfile = new Map<string, { name: string; agency: string; position: string }>();
       if (!supabase) {
         return { staffToProfile, error: 'Missing Supabase config.' };
@@ -2928,6 +2938,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
 
       const mode = await resolveEmployeeColumnMode();
+      if (isStale()) {
+        return {
+          staffToProfile: new Map<string, { name: string; agency: string; position: string }>(),
+          error: STALE_TIMECARD_REQUEST
+        };
+      }
       const batches = chunk(staffIds, 200);
       for (const batch of batches) {
         const run = async (m: EmployeeColumnMode) => {
@@ -2936,6 +2952,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         };
 
         let res = await run(mode);
+        if (isStale()) {
+          return {
+            staffToProfile: new Map<string, { name: string; agency: string; position: string }>(),
+            error: STALE_TIMECARD_REQUEST
+          };
+        }
         if (res.error) {
           const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
           employeeColumnModeRef.current = flipped;
@@ -2963,6 +2985,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     };
 
     const fetchScheduledByStaff = async (staffIds: string[]) => {
+      if (isStale()) {
+        return {
+          scheduledByStaff: {} as Record<string, boolean[]>,
+          scheduleStateByStaff: {} as Record<string, ScheduleBaseState[]>,
+          error: STALE_TIMECARD_REQUEST
+        };
+      }
       const scheduledByStaff: Record<string, boolean[]> = {};
       const scheduleStateByStaff: Record<string, ScheduleBaseState[]> = {};
       if (!supabase || staffIds.length === 0) {
@@ -2978,6 +3007,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           .in('staff_id', batch)
           .gte('date', startDate)
           .lte('date', endDate);
+        if (isStale()) {
+          return {
+            scheduledByStaff: {} as Record<string, boolean[]>,
+            scheduleStateByStaff: {} as Record<string, ScheduleBaseState[]>,
+            error: STALE_TIMECARD_REQUEST
+          };
+        }
         if (error) {
           return {
             scheduledByStaff: {} as Record<string, boolean[]>,
@@ -3000,6 +3036,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     };
 
     const fetchAttendanceMarksByStaff = async (staffIds: string[]) => {
+      if (isStale()) {
+        return {
+          marksByStaff: {} as Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }>,
+          error: STALE_TIMECARD_REQUEST
+        };
+      }
       const marksByStaff: Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }> = {};
       if (!supabase || staffIds.length === 0) {
         return { marksByStaff, error: null as string | null };
@@ -3016,6 +3058,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           .gte('work_date', weekStartDate)
           .lte('work_date', weekEndDate)
           .in('mark_type', ['absent', 'excuse', 'temporary_leave'] as any);
+        if (isStale()) {
+          return {
+            marksByStaff: {} as Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }>,
+            error: STALE_TIMECARD_REQUEST
+          };
+        }
         if (error) {
           return {
             marksByStaff: {} as Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }>,
@@ -3045,6 +3093,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     };
 
     const fetchPunchesInRange = async () => {
+      if (isStale()) {
+        return { rows: [] as any[], error: STALE_TIMECARD_REQUEST };
+      }
       if (!supabase) {
         return { rows: [] as any[], error: 'Missing Supabase config.' };
       }
@@ -3056,11 +3107,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const base = () =>
         supabase
           .from('ob_punches')
-          .select('id, staff_id, action, created_at, metadata')
+          .select('id, staff_id, action, created_at')
           .gte('created_at', rangeStart.toISOString())
           .lt('created_at', rangeEnd.toISOString());
 
       for (let page = 0; page < maxPages; page += 1) {
+        if (isStale()) {
+          return { rows: [] as any[], error: STALE_TIMECARD_REQUEST };
+        }
         const from = page * punchPageSize;
         const to = from + punchPageSize - 1;
         const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
@@ -3220,6 +3274,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     };
 
     const exec = async (from: number) => {
+      if (isStale()) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
+      }
       if (missingOnly) {
         const punchesRes = await fetchPunchesInRange();
         if (punchesRes.error) {
@@ -3234,9 +3291,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           if (!staff || (actionRaw !== 'IN' && actionRaw !== 'OUT') || !atRaw) continue;
           const at = new Date(atRaw);
           if (Number.isNaN(at.getTime())) continue;
-          const meta = (p as any).metadata;
-          const kind = typeof meta?.kind === 'string' ? String(meta.kind) : '';
-          const manual = Boolean(meta && (meta.manual === true || kind.startsWith('manual_')));
+          const manual = false;
           const action = (actionRaw === 'OUT' ? 'OUT' : 'IN') as 'IN' | 'OUT';
           (eventsByStaff[staff] ??= []).push({ at, action, manual });
         }
@@ -3315,7 +3370,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const positionCol = m === 'cased' ? 'Position' : 'position';
         const select = m === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
 
-        let q = supabase.from(EMPLOYEE_TABLE).select(select).range(from, to);
+        let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
         if (agencyValue) q = q.ilike(agencyCol as any, agencyValue);
         if (positionValue) {
           const normalized = normalizePositionKey(positionValue);
@@ -3329,6 +3384,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       };
 
       let employeesAttempt = await buildEmployees(mode);
+      if (isStale()) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
+      }
       let employeeRows: EmployeeRow[] | null = null;
       if (employeesAttempt.error) {
         const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
@@ -3376,12 +3434,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           const base = () =>
             supabase
               .from('ob_punches')
-              .select('id, staff_id, action, created_at, metadata')
+              .select('id, staff_id, action, created_at')
               .in('staff_id', batch)
               .gte('created_at', rangeStart.toISOString())
               .lt('created_at', rangeEnd.toISOString());
 
           for (let page = 0; page < maxPages; page += 1) {
+            if (isStale()) {
+              return { rows: [] as any[], error: STALE_TIMECARD_REQUEST };
+            }
             const from = page * pageSize;
             const to = from + pageSize - 1;
             const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
@@ -3410,6 +3471,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         fetchScheduledByStaff(staffIds),
         fetchAttendanceMarksByStaff(staffIds)
       ]);
+      if (isStale()) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
+      }
       if (punchesRes.error) {
         return { rows: [] as TimecardRow[], hasMore: false, error: punchesRes.error };
       }
@@ -3422,9 +3486,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         if (!staff || (action !== 'IN' && action !== 'OUT') || !atRaw) continue;
         const at = new Date(atRaw);
         if (Number.isNaN(at.getTime())) continue;
-        const meta = (p as any).metadata;
-        const kind = typeof meta?.kind === 'string' ? String(meta.kind) : '';
-        const manual = Boolean(meta && (meta.manual === true || kind.startsWith('manual_')));
+        const manual = false;
         (eventsByStaff[staff] ??= []).push({ at, action, manual });
       }
       for (const staff of Object.keys(eventsByStaff)) {
@@ -3466,6 +3528,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       let from = 0;
       let hasMore = true;
       while (hasMore) {
+        if (isStale()) {
+          return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
+        }
         const result = await exec(from);
         if (result.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: result.error };
@@ -3487,9 +3552,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         await fetchTimecard({ reset, weekOffset, search, agency, position, lockUi: true });
         return;
       }
-      const seq = ++timecardFetchSeqRef.current;
       const result = await fetchAll();
-      if (seq !== timecardFetchSeqRef.current) {
+      if (isStale() || result.error === STALE_TIMECARD_REQUEST) {
         return;
       }
       const dedupedRows = (() => {
@@ -3510,6 +3574,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     await runLocked('timecard', async () => {
       setTimecardError(null);
       const result = await fetchAll();
+      if (isStale() || result.error === STALE_TIMECARD_REQUEST) return;
       if (result.error) {
         if (!isAbortLikeError(result.error)) setTimecardError(result.error);
         setTimecardRows([]);
@@ -5152,10 +5217,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   useEffect(() => {
     if (page !== 'timecard') return;
     if (timecardRenderCount >= timecardRowsFiltered.length) return;
-    const timer = window.setTimeout(() => {
-      setTimecardRenderCount((prev) => Math.min(prev + 120, timecardRowsFiltered.length));
-    }, 16);
-    return () => window.clearTimeout(timer);
+    const onScroll = () => {
+      const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+      const viewport = window.innerHeight || document.documentElement.clientHeight || 0;
+      const fullHeight = document.documentElement.scrollHeight || document.body.scrollHeight || 0;
+      if (scrollTop + viewport < fullHeight - 240) return;
+      setTimecardRenderCount((prev) => {
+        if (prev >= timecardRowsFiltered.length) return prev;
+        return Math.min(prev + 120, timecardRowsFiltered.length);
+      });
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
   }, [page, timecardRenderCount, timecardRowsFiltered]);
 
   useEffect(() => {
