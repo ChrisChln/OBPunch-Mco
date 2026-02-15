@@ -1,4 +1,4 @@
-﻿import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
@@ -478,11 +478,8 @@ const EMPLOYEE_KEY_ALIASES: Record<string, string> = {
   '工号': 'staff_id',
   '员工号': 'staff_id',
   name: 'name',
-  '姓名': 'name',
   agency: 'agency',
   'agency ': 'agency',
-  '机构': 'agency',
-  '区域': 'agency',
   position: 'position',
   '岗位': 'position',
   '职位': 'position',
@@ -586,9 +583,9 @@ export default function AdminApp() {
   const [timecardPunchShowAll, setTimecardPunchShowAll] = useState(false);
   const [timecardPunchAddOpen, setTimecardPunchAddOpen] = useState(false);
   const [timecardPunchEdits, setTimecardPunchEdits] = useState<Record<string, { action: 'IN' | 'OUT'; atLocal: string }>>({});
-  const [timecardPunchNew, setTimecardPunchNew] = useState<{ action: 'IN' | 'OUT'; atLocal: string }>({
-    action: 'IN',
-    atLocal: ''
+  const [timecardPunchNew, setTimecardPunchNew] = useState<{ inAtLocal: string; outAtLocal: string }>({
+    inAtLocal: '',
+    outAtLocal: ''
   });
 
   const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
@@ -3737,7 +3734,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setTimecardPunchShowAll(false);
     setTimecardPunchAddOpen(false);
     setTimecardPunchEdits({});
-    setTimecardPunchNew({ action: 'IN', atLocal: toLocalDateTimeInputValue(new Date(serverTime)) });
+    const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
+    setTimecardPunchNew({ inAtLocal: nowLocal, outAtLocal: nowLocal });
 
     await runLocked('timecard_punches', async () => {
       const res = await fetchPunchRowsForTimecard(staff, dayIndex);
@@ -3769,7 +3767,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setTimecardPunchShowAll(false);
     setTimecardPunchAddOpen(false);
     setTimecardPunchEdits({});
-    setTimecardPunchNew({ action: 'IN', atLocal: '' });
+    setTimecardPunchNew({ inAtLocal: '', outAtLocal: '' });
   };
 
   const addTimecardPunchRow = async () => {
@@ -3782,9 +3780,31 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return;
     }
 
-    const createdAt = parseLocalDateTimeInputValue(timecardPunchNew.atLocal);
-    if (!createdAt) {
+    const inCreatedAt = parseLocalDateTimeInputValue(timecardPunchNew.inAtLocal);
+    const outCreatedAt = parseLocalDateTimeInputValue(timecardPunchNew.outAtLocal);
+    if (!inCreatedAt || !outCreatedAt) {
       setTimecardPunchError('时间格式不正确。');
+      return;
+    }
+    if (new Date(outCreatedAt).getTime() <= new Date(inCreatedAt).getTime()) {
+      setTimecardPunchError('OUT 时间必须晚于 IN 时间。');
+      return;
+    }
+    if (timecardPunchDayIndex === null || timecardPunchDayIndex < 0 || timecardPunchDayIndex > 6) {
+      setTimecardPunchError('仅支持在单天视图新增打卡。');
+      return;
+    }
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+    const dayRange = getDayRange(weekStart, timecardPunchDayIndex);
+    const inMs = new Date(inCreatedAt).getTime();
+    const outMs = new Date(outCreatedAt).getTime();
+    const startMs = dayRange.start.getTime();
+    const endMs = dayRange.end.getTime();
+    if (inMs < startMs || inMs >= endMs || outMs < startMs || outMs >= endMs) {
+      const startText = formatTime(dayRange.start);
+      const endText = formatTime(dayRange.end);
+      setTimecardPunchError(`时间必须在单天范围内（${startText} ~ ${endText}，允许跨夜）。`);
       return;
     }
 
@@ -3793,8 +3813,19 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const insertRes = await supabase.from('ob_punches').insert([
           {
             staff_id: staff,
-            action: timecardPunchNew.action,
-            created_at: createdAt,
+            action: 'IN',
+            created_at: inCreatedAt,
+            metadata: {
+              device: 'admin_console',
+              kind: 'manual_add',
+              manual: true,
+              operator: user?.email ?? null
+            }
+          },
+          {
+            staff_id: staff,
+            action: 'OUT',
+            created_at: outCreatedAt,
             metadata: {
               device: 'admin_console',
               kind: 'manual_add',
@@ -3807,16 +3838,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           setTimecardPunchError(insertRes.error.message);
           return;
         }
-        const insertedId = String(((insertRes.data as any[] | null) ?? [])[0]?.id ?? '').trim() || null;
         await writeAudit({
           action: 'punch_manual_add',
           staffId: staff,
           target: 'ob_punches',
           payload: {
-            punch_id: insertedId,
+            punch_ids: ((insertRes.data as any[] | null) ?? []).map((x: any) => String(x?.id ?? '').trim()).filter(Boolean),
             day_index: timecardPunchDayIndex,
-            action: timecardPunchNew.action,
-            created_at: createdAt
+            actions: ['IN', 'OUT'],
+            created_at: { in: inCreatedAt, out: outCreatedAt }
           }
         });
 
@@ -3836,75 +3866,84 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         };
       }
       setTimecardPunchEdits(edits);
-      setTimecardPunchNew((prev) => ({ ...prev, atLocal: toLocalDateTimeInputValue(new Date(serverTime)) }));
+      const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
+      setTimecardPunchNew({ inAtLocal: nowLocal, outAtLocal: nowLocal });
 
-      await fetchTimecard({ reset: true });
+      await fetchTimecard({ reset: true, lockUi: false });
     });
   };
 
-  const saveTimecardPunchRow = async (rowId: string) => {
+  const saveAllTimecardPunchRows = async () => {
     if (!supabase) {
       setTimecardPunchError('缺少 Supabase 配置。');
       return;
     }
     const staff = timecardPunchStaffId;
-    if (!staff) {
-      return;
-    }
+    if (!staff) return;
 
-    const edit = timecardPunchEdits[rowId];
-    if (!edit) {
-      return;
-    }
-    const createdAt = parseLocalDateTimeInputValue(edit.atLocal);
-    if (!createdAt) {
-      setTimecardPunchError('时间格式不正确。');
-      return;
-    }
+    const changed = timecardPunchRowsVisible
+      .map((row) => {
+        const rowId = String(row.id);
+        const edit = timecardPunchEdits[rowId];
+        if (!edit) return null;
+        const rowLocal = row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : '';
+        const changed = edit.action !== row.action || edit.atLocal !== rowLocal;
+        return changed ? { rowId, edit } : null;
+      })
+      .filter(Boolean) as Array<{ rowId: string; edit: { action: 'IN' | 'OUT'; atLocal: string } }>;
 
-    await runLocked('timecard_edit', async () => {
+    if (changed.length === 0) {
       setTimecardPunchError(null);
-      const prevRowRes = await supabase.from('ob_punches').select('action, created_at, staff_id, metadata').eq('id', rowId).maybeSingle();
-      const prevRow = (prevRowRes.data as any) ?? null;
-      const prevMeta = prevRow?.metadata;
-      const nextMeta =
-        prevMeta && typeof prevMeta === 'object'
-          ? {
-              ...prevMeta,
-              device: 'admin_console',
-              kind: 'manual_edit',
-              manual: true,
-              operator: user?.email ?? null,
-              edited_at: new Date(serverTime).toISOString()
-            }
-          : {
-              device: 'admin_console',
-              kind: 'manual_edit',
-              manual: true,
-              operator: user?.email ?? null,
-              edited_at: new Date(serverTime).toISOString()
-            };
+      return;
+    }
 
-      const { error } = await supabase
-        .from('ob_punches')
-        .update({ action: edit.action, created_at: createdAt, metadata: nextMeta })
-        .eq('id', rowId);
-      if (error) {
-        setTimecardPunchError(error.message);
+    for (const item of changed) {
+      const createdAt = parseLocalDateTimeInputValue(item.edit.atLocal);
+      if (!createdAt) {
+        setTimecardPunchError('时间格式不正确。');
         return;
       }
-      await writeAudit({
-        action: 'punch_manual_edit',
-        staffId: staff,
-        target: 'ob_punches',
-        payload: {
-          punch_id: rowId,
-          before: prevRow
-            ? { action: String(prevRow.action ?? ''), created_at: String(prevRow.created_at ?? ''), metadata: prevRow.metadata ?? null }
-            : null,
-          after: { action: edit.action, created_at: createdAt, metadata: nextMeta }
+    }
+
+    await runLocked('timecard_edit_all', async () => {
+      setTimecardPunchError(null);
+      for (const item of changed) {
+        const createdAt = parseLocalDateTimeInputValue(item.edit.atLocal);
+        if (!createdAt) continue;
+        const prevRowRes = await supabase
+          .from('ob_punches')
+          .select('action, created_at, staff_id, metadata')
+          .eq('id', item.rowId)
+          .maybeSingle();
+        const prevRow = (prevRowRes.data as any) ?? null;
+        const prevMeta = prevRow?.metadata;
+        const nextMeta =
+          prevMeta && typeof prevMeta === 'object'
+            ? {
+                ...prevMeta,
+                device: 'admin_console',
+                kind: 'manual_edit',
+                manual: true,
+                operator: user?.email ?? null,
+                edited_at: new Date(serverTime).toISOString()
+              }
+            : {
+                device: 'admin_console',
+                kind: 'manual_edit',
+                manual: true,
+                operator: user?.email ?? null,
+                edited_at: new Date(serverTime).toISOString()
+              };
+
+        const { error } = await supabase
+          .from('ob_punches')
+          .update({ action: item.edit.action, created_at: createdAt, metadata: nextMeta })
+          .eq('id', item.rowId);
+        if (error) {
+          setTimecardPunchError(error.message);
+          return;
         }
-      });
+      }
 
       const res = await fetchPunchRowsForTimecard(staff, timecardPunchDayIndex);
       if (res.error) {
@@ -3913,46 +3952,42 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
       setTimecardPunchRows(res.rows);
 
-      // refresh timecard numbers
-      await fetchTimecard({ reset: true });
+      const edits: Record<string, { action: 'IN' | 'OUT'; atLocal: string }> = {};
+      for (const r of res.rows) {
+        const dt = r.created_at ? new Date(r.created_at) : null;
+        edits[String(r.id)] = {
+          action: r.action,
+          atLocal: dt && !Number.isNaN(dt.getTime()) ? toLocalDateTimeInputValue(dt) : ''
+        };
+      }
+      setTimecardPunchEdits(edits);
+
+      await fetchTimecard({ reset: true, lockUi: false });
     });
   };
-
-  const deleteTimecardPunchRow = async (rowId: string) => {
+  const deleteTimecardPunchPair = async (pair: { inRow?: PunchRow; outRow?: PunchRow }) => {
     if (!supabase) {
       setTimecardPunchError('缺少 Supabase 配置。');
       return;
     }
     const staff = timecardPunchStaffId;
-    if (!staff) {
-      return;
-    }
+    if (!staff) return;
 
-    const ok = window.confirm('确定要删除这条打卡记录吗？此操作不可撤销。');
-    if (!ok) {
-      return;
-    }
+    const ids = [pair.inRow?.id, pair.outRow?.id]
+      .filter((v) => v !== undefined && v !== null)
+      .map((v) => String(v));
+    if (ids.length === 0) return;
 
-    await runLocked('timecard_delete', async () => {
+    const ok = window.confirm(ids.length >= 2 ? '确定要删除这一整行打卡记录吗？' : '确定要删除这条打卡记录吗？');
+    if (!ok) return;
+
+    await runLocked('timecard_delete_pair', async () => {
       setTimecardPunchError(null);
-      const prevRowRes = await supabase.from('ob_punches').select('action, created_at, staff_id, metadata').eq('id', rowId).maybeSingle();
-      const prevRow = (prevRowRes.data as any) ?? null;
-      const { error } = await supabase.from('ob_punches').delete().eq('id', rowId);
+      const { error } = await supabase.from('ob_punches').delete().in('id', ids as any[]);
       if (error) {
         setTimecardPunchError(error.message);
         return;
       }
-      await writeAudit({
-        action: 'punch_manual_delete',
-        staffId: staff,
-        target: 'ob_punches',
-        payload: {
-          punch_id: rowId,
-          before: prevRow
-            ? { action: String(prevRow.action ?? ''), created_at: String(prevRow.created_at ?? ''), metadata: prevRow.metadata ?? null }
-            : null
-        }
-      });
 
       const res = await fetchPunchRowsForTimecard(staff, timecardPunchDayIndex);
       if (res.error) {
@@ -3961,8 +3996,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
       setTimecardPunchRows(res.rows);
 
-      // refresh timecard numbers
-      await fetchTimecard({ reset: true });
+      const edits: Record<string, { action: 'IN' | 'OUT'; atLocal: string }> = {};
+      for (const r of res.rows) {
+        const dt = r.created_at ? new Date(r.created_at) : null;
+        edits[String(r.id)] = {
+          action: r.action,
+          atLocal: dt && !Number.isNaN(dt.getTime()) ? toLocalDateTimeInputValue(dt) : ''
+        };
+      }
+      setTimecardPunchEdits(edits);
+
+      await fetchTimecard({ reset: true, lockUi: false });
     });
   };
 
@@ -4560,6 +4604,38 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
     return timecardPunchRows.filter((r) => includedIds.has(String(r.id)));
   }, [timecardPunchRows, timecardPunchShowAll, timecardPunchDayIndex, timecardWeekOffset, serverTime]);
+  const timecardPunchPairsVisible = useMemo(() => {
+    const rows = [...timecardPunchRowsVisible];
+    rows.sort((a, b) => {
+      const atA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const atB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      if (atA !== atB) return atA - atB;
+      return String(a.id).localeCompare(String(b.id), 'en-US');
+    });
+
+    const pairs: Array<{ key: string; inRow?: PunchRow; outRow?: PunchRow }> = [];
+    let openIn: PunchRow | null = null;
+
+    for (const row of rows) {
+      if (row.action === 'IN') {
+        if (openIn) {
+          pairs.push({ key: `pair-in-${String(openIn.id)}`, inRow: openIn });
+        }
+        openIn = row;
+        continue;
+      }
+      if (openIn) {
+        pairs.push({ key: `pair-${String(openIn.id)}-${String(row.id)}`, inRow: openIn, outRow: row });
+        openIn = null;
+      } else {
+        pairs.push({ key: `pair-out-${String(row.id)}`, outRow: row });
+      }
+    }
+    if (openIn) {
+      pairs.push({ key: `pair-in-${String(openIn.id)}`, inRow: openIn });
+    }
+    return pairs;
+  }, [timecardPunchRowsVisible]);
 
   const timecardPunchReadOnly = timecardPunchDayIndex === null;
 
@@ -7175,13 +7251,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                         const punchCountMismatch = r.punchCountMismatchByDay[idx];
                                         const base =
                                           'rounded px-1.5 py-0.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
+                                        if (manual) return [base, 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'].join(' ');
                                         if (punchCountMismatch) {
                                           return [
                                             base,
                                             'border-2 border-rose-500 bg-rose-500/20 text-rose-100 shadow-[0_0_0_1px_rgba(244,63,94,0.55)] hover:bg-rose-500/30'
                                           ].join(' ');
                                         }
-                                        if (manual) return [base, 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'].join(' ');
                                         if (over8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
                                         if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
                                         return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
@@ -7293,6 +7369,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
                               </button>
                             )}
+                            {!timecardPunchReadOnly && (
+                              <button
+                                type="button"
+                                disabled={isLocked}
+                                onClick={() => void saveAllTimecardPunchRows()}
+                                className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                保存全部
+                              </button>
+                            )}
                             <button
                               type="button"
                               disabled={isLocked}
@@ -7307,33 +7393,23 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         <div className="flex-1 overflow-y-auto px-6 py-5">
                           {!timecardPunchReadOnly && timecardPunchAddOpen && (
                             <div className="rounded-2xl border border-neon/40 bg-black/30 px-4 py-4 shadow-glow">
-                              <div className="grid gap-3 md:grid-cols-[8rem_1fr_7rem] md:items-end">
+                              <div className="grid gap-3 md:grid-cols-[1fr_1fr_7rem] md:items-end">
                                 <div>
-                                  <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Action</div>
-                                  <select
-                                    value={timecardPunchNew.action}
+                                  <div className="text-xs uppercase tracking-[0.25em] text-slate-400">IN Time</div>
+                                  <input
+                                    value={timecardPunchNew.inAtLocal}
                                     disabled={isLocked}
-                                    onChange={(e) =>
-                                      setTimecardPunchNew((prev) => ({
-                                        ...prev,
-                                        action: e.target.value === 'OUT' ? 'OUT' : 'IN'
-                                      }))
-                                    }
-                                    className={[
-                                      'mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 font-display text-xl tracking-[0.08em] outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                                      timecardPunchNew.action === 'IN' ? 'text-mint' : 'text-ember'
-                                    ].join(' ')}
-                                  >
-                                    <option value="IN">IN</option>
-                                    <option value="OUT">OUT</option>
-                                  </select>
+                                    onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, inAtLocal: e.target.value }))}
+                                    type="datetime-local"
+                                    className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                                  />
                                 </div>
                                 <div>
-                                  <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Time</div>
+                                  <div className="text-xs uppercase tracking-[0.25em] text-slate-400">OUT Time</div>
                                   <input
-                                    value={timecardPunchNew.atLocal}
+                                    value={timecardPunchNew.outAtLocal}
                                     disabled={isLocked}
-                                    onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, atLocal: e.target.value }))}
+                                    onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, outAtLocal: e.target.value }))}
                                     type="datetime-local"
                                     className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                                   />
@@ -7347,7 +7423,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   添加
                                 </button>
                               </div>
-                              <p className="mt-3 text-xs text-slate-400">手动添加一条打卡记录。</p>
+                              <p className="mt-3 text-xs text-slate-400">手动一次添加一组 IN / OUT 打卡记录。</p>
                             </div>
                           )}
 
@@ -7356,76 +7432,95 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           <p className="text-sm text-slate-400">暂无记录</p>
                         )}
 
-                        {timecardPunchRowsVisible.length > 0 && (
+                        {timecardPunchPairsVisible.length > 0 && (
                           <div className="mt-3 space-y-2">
-                            {timecardPunchRowsVisible.map((r) => {
-                              const edit = timecardPunchEdits[String(r.id)] ?? {
-                                action: r.action,
-                                atLocal: r.created_at ? toLocalDateTimeInputValue(new Date(r.created_at)) : ''
+                            {timecardPunchPairsVisible.map((pair) => {
+                              const inEdit = pair.inRow
+                                ? (timecardPunchEdits[String(pair.inRow.id)] ?? {
+                                    action: pair.inRow.action,
+                                    atLocal: pair.inRow.created_at ? toLocalDateTimeInputValue(new Date(pair.inRow.created_at)) : ''
+                                  })
+                                : null;
+                              const outEdit = pair.outRow
+                                ? (timecardPunchEdits[String(pair.outRow.id)] ?? {
+                                    action: pair.outRow.action,
+                                    atLocal: pair.outRow.created_at ? toLocalDateTimeInputValue(new Date(pair.outRow.created_at)) : ''
+                                  })
+                                : null;
+
+                              const renderPunchEditor = (row: PunchRow | undefined, edit: { action: 'IN' | 'OUT'; atLocal: string } | null) => {
+                                if (!row || !edit) {
+                                  return (
+                                    <div className="rounded-xl border border-dashed border-white/10 bg-black/20 px-3 py-3 text-xs text-slate-500">
+                                      -
+                                    </div>
+                                  );
+                                }
+                                return (
+                                  <div className="grid gap-3 md:grid-cols-[7rem_1fr_6rem_6rem] md:items-end">
+                                    <div>
+                                      <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Action</div>
+                                      <select
+                                        value={edit.action}
+                                        disabled={isLocked || timecardPunchReadOnly}
+                                        onChange={(e) =>
+                                          setTimecardPunchEdits((prev) => ({
+                                            ...prev,
+                                            [String(row.id)]: { ...edit, action: e.target.value === 'OUT' ? 'OUT' : 'IN' }
+                                          }))
+                                        }
+                                        className={[
+                                          'mt-2 h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 font-display text-lg tracking-[0.08em] outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                                          edit.action === 'IN' ? 'text-mint' : 'text-ember'
+                                        ].join(' ')}
+                                      >
+                                        <option value="IN">IN</option>
+                                        <option value="OUT">OUT</option>
+                                      </select>
+                                    </div>
+                                    <div>
+                                      <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Time</div>
+                                      <input
+                                        value={edit.atLocal}
+                                        disabled={isLocked || timecardPunchReadOnly}
+                                        onChange={(e) =>
+                                          setTimecardPunchEdits((prev) => ({
+                                            ...prev,
+                                            [String(row.id)]: { ...edit, atLocal: e.target.value }
+                                          }))
+                                        }
+                                        type="datetime-local"
+                                        className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                                      />
+                                    </div>
+                                  </div>
+                                );
                               };
                               return (
                                 <div
-                                  key={String(r.id)}
-                                  className="rounded-2xl bg-white/5 px-4 py-4"
+                                  key={pair.key}
+                                  className="relative rounded-2xl bg-white/5 px-4 py-4"
                                 >
-                                  <div className="grid gap-3 md:grid-cols-[8rem_1fr_7rem_7rem] md:items-end">
-                                    <div>
-                                      <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Action</div>
-                                    <select
-                                      value={edit.action}
-                                      disabled={isLocked || timecardPunchReadOnly}
-                                      onChange={(e) =>
-                                        setTimecardPunchEdits((prev) => ({
-                                          ...prev,
-                                          [String(r.id)]: { ...edit, action: e.target.value === 'OUT' ? 'OUT' : 'IN' }
-                                        }))
-                                      }
-                                      className={[
-                                        'mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 font-display text-xl tracking-[0.08em] outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                                        edit.action === 'IN' ? 'text-mint' : 'text-ember'
-                                      ].join(' ')}
+                                  {!timecardPunchReadOnly && (
+                                    <button
+                                      type="button"
+                                      disabled={isLocked}
+                                      onClick={() => void deleteTimecardPunchPair(pair)}
+                                      className="absolute right-3 top-3 h-7 w-7 rounded-full bg-ember/85 text-sm font-bold text-white transition hover:bg-ember disabled:cursor-not-allowed disabled:opacity-60"
+                                      title="删除整行"
                                     >
-                                      <option value="IN">IN</option>
-                                      <option value="OUT">OUT</option>
-                                    </select>
-                                    </div>
-
+                                      ×
+                                    </button>
+                                  )}
+                                  <div className="grid gap-3 md:grid-cols-2">
                                     <div>
-                                      <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Time</div>
-                                    <input
-                                      value={edit.atLocal}
-                                      disabled={isLocked || timecardPunchReadOnly}
-                                      onChange={(e) =>
-                                        setTimecardPunchEdits((prev) => ({
-                                          ...prev,
-                                          [String(r.id)]: { ...edit, atLocal: e.target.value }
-                                        }))
-                                      }
-                                      type="datetime-local"
-                                      className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                                    />
+                                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">IN</div>
+                                      <div className="mt-2">{renderPunchEditor(pair.inRow, inEdit)}</div>
                                     </div>
-
-                                    {!timecardPunchReadOnly && (
-                                      <>
-                                        <button
-                                          type="button"
-                                          disabled={isLocked}
-                                          onClick={() => void saveTimecardPunchRow(String(r.id))}
-                                          className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-                                        >
-                                          保存
-                                        </button>
-                                        <button
-                                          type="button"
-                                          disabled={isLocked}
-                                          onClick={() => void deleteTimecardPunchRow(String(r.id))}
-                                          className="h-11 rounded-2xl bg-ember px-6 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                          删除
-                                        </button>
-                                      </>
-                                    )}
+                                    <div>
+                                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">OUT</div>
+                                      <div className="mt-2">{renderPunchEditor(pair.outRow, outEdit)}</div>
+                                    </div>
                                   </div>
                                 </div>
                               );
@@ -7524,3 +7619,4 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     </div>
   );
 }
+
