@@ -612,17 +612,20 @@ export default function App() {
 
     let active = true;
     const staff = normalizedId;
-    void (async () => {
-      setLastPunchActionLoading(true);
-      const { action, error } = await fetchLastPunch(staff);
-      if (!active) return;
-      setLastPunchAction(action);
-      setLastPunchActionError(error);
-      setLastPunchActionLoading(false);
-    })();
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        setLastPunchActionLoading(true);
+        const { action, error } = await fetchLastPunch(staff);
+        if (!active) return;
+        setLastPunchAction(action);
+        setLastPunchActionError(error);
+        setLastPunchActionLoading(false);
+      })();
+    }, 180);
 
     return () => {
       active = false;
+      window.clearTimeout(timer);
     };
   }, [normalizedId, isValidId]);
 

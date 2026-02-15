@@ -569,6 +569,7 @@ export default function AdminApp() {
   const [timecardInProgressOnly, setTimecardInProgressOnly] = useState(false);
   const [timecardPresentDayFilter, setTimecardPresentDayFilter] = useState<number | null>(null);
   const [timecardMissingEmployeeOnly, setTimecardMissingEmployeeOnly] = useState(false);
+  const [timecardRenderCount, setTimecardRenderCount] = useState(120);
   const [timecardWeekOffset, setTimecardWeekOffset] = useState(0);
   const [timecardWeekInput, setTimecardWeekInput] = useState(() =>
     toDateOnly(startOfWeekMonday(new Date()))
@@ -606,6 +607,7 @@ export default function AdminApp() {
   const [scheduleShift, setScheduleShift] = useState<'' | 'early' | 'late'>('');
   const [scheduleSortByUphDesc, setScheduleSortByUphDesc] = useState(false);
   const [scheduleWorkDayFilter, setScheduleWorkDayFilter] = useState<number | null>(null);
+  const [scheduleRenderCount, setScheduleRenderCount] = useState(120);
   const [schedulePublishTomorrow, setSchedulePublishTomorrow] = useState(false);
   const [schedulePublishForDate, setSchedulePublishForDate] = useState<string>('');
   const [schedulePicker, setSchedulePicker] = useState<SchedulePickerState>({
@@ -4033,7 +4035,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   }, [page]);
 
   useEffect(() => {
-    if (!user) {
+    if (!user || page !== 'home') {
       setAttendanceStats({});
       setAttendanceError(null);
       return;
@@ -4045,12 +4047,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     })();
     const timer = window.setInterval(() => {
       void fetchRealtimeAttendance();
-    }, 10000);
+    }, 30000);
     return () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [user, offsetMs]);
+  }, [user, offsetMs, page]);
 
   useEffect(() => {
     if (page !== 'punches') {
@@ -4083,7 +4085,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     void sync();
     const timer = window.setInterval(() => {
       void sync();
-    }, 10000);
+    }, 20000);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -4520,6 +4522,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return true;
     });
   }, [timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter]);
+  const timecardRowsRendered = useMemo(
+    () => timecardRowsFiltered.slice(0, Math.max(0, timecardRenderCount)),
+    [timecardRowsFiltered, timecardRenderCount]
+  );
   const timecardDayTotalHours = useMemo(() => {
     const totals = new Array(7).fill(0) as number[];
     for (const row of timecardRowsFiltered) {
@@ -4838,6 +4844,40 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return staffA.localeCompare(staffB, 'en-US');
     });
   }, [scheduleEmployeesBase, deferredScheduleSearch, scheduleSortByUphDesc, scheduleUphByStaffId]);
+  const scheduleEmployeesRendered = useMemo(
+    () => scheduleEmployeesFiltered.slice(0, Math.max(0, scheduleRenderCount)),
+    [scheduleEmployeesFiltered, scheduleRenderCount]
+  );
+
+  useEffect(() => {
+    if (page !== 'timecard') return;
+    const total = timecardRowsFiltered.length;
+    setTimecardRenderCount(Math.min(120, total));
+  }, [page, timecardRowsFiltered]);
+
+  useEffect(() => {
+    if (page !== 'timecard') return;
+    if (timecardRenderCount >= timecardRowsFiltered.length) return;
+    const timer = window.setTimeout(() => {
+      setTimecardRenderCount((prev) => Math.min(prev + 120, timecardRowsFiltered.length));
+    }, 16);
+    return () => window.clearTimeout(timer);
+  }, [page, timecardRenderCount, timecardRowsFiltered]);
+
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    const total = scheduleEmployeesFiltered.length;
+    setScheduleRenderCount(Math.min(120, total));
+  }, [page, scheduleEmployeesFiltered]);
+
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    if (scheduleRenderCount >= scheduleEmployeesFiltered.length) return;
+    const timer = window.setTimeout(() => {
+      setScheduleRenderCount((prev) => Math.min(prev + 120, scheduleEmployeesFiltered.length));
+    }, 16);
+    return () => window.clearTimeout(timer);
+  }, [page, scheduleRenderCount, scheduleEmployeesFiltered]);
 
   const scheduleWorkingCountByDayIndex = useMemo(() => {
     const counts = Array.from({ length: 7 }, () => 0);
@@ -6124,7 +6164,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         </tr>
                       </thead>
                       <tbody>
-                        {scheduleEmployeesFiltered.map((employee) => {
+                        {scheduleEmployeesRendered.map((employee) => {
                           const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
                           const name = String(employee.name ?? '').trim();
                           const agency = String(employee.agency ?? employee.Agency ?? '').trim();
@@ -7219,7 +7259,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       })()}
                     </thead>
                     <tbody>
-                          {timecardRowsFiltered.map((r) => (
+                          {timecardRowsRendered.map((r) => (
                             <tr
                               key={r.staff_id}
                               className="border-b border-white/5 transition hover:bg-white/5 last:border-0"
