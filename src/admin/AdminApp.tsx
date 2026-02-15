@@ -337,6 +337,33 @@ const getPositionBadgeClass = (value: string) => {
   if (v === 'transfer') return 'border-violet-400/60 text-violet-200 bg-violet-500/10';
   return 'border-white/20 text-slate-200 bg-white/5';
 };
+const getHomeCardToneClass = (value: string) => {
+  const v = value.trim().toLowerCase();
+  if (v === 'pick') return 'border-sky-400/35 bg-sky-500/[0.05]';
+  if (v === 'pack') return 'border-emerald-400/35 bg-emerald-500/[0.05]';
+  if (v === 'rebin') return 'border-amber-400/35 bg-amber-500/[0.05]';
+  if (v === 'preship') return 'border-rose-400/35 bg-rose-500/[0.05]';
+  if (v === 'transfer') return 'border-violet-400/35 bg-violet-500/[0.05]';
+  return 'border-white/15 bg-white/5';
+};
+const getHomeChipToneClass = (value: string) => {
+  const v = value.trim().toLowerCase();
+  if (v === 'pick') return 'border border-sky-400/40 bg-sky-500/15 text-sky-100';
+  if (v === 'pack') return 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-100';
+  if (v === 'rebin') return 'border border-amber-400/40 bg-amber-500/15 text-amber-100';
+  if (v === 'preship') return 'border border-rose-400/40 bg-rose-500/15 text-rose-100';
+  if (v === 'transfer') return 'border border-violet-400/40 bg-violet-500/15 text-violet-100';
+  return 'bg-white/10 text-slate-300';
+};
+const getHomePanelToneClass = (value: string) => {
+  const v = value.trim().toLowerCase();
+  if (v === 'pick') return 'border border-sky-400/20 bg-sky-950/35';
+  if (v === 'pack') return 'border border-emerald-400/20 bg-emerald-950/35';
+  if (v === 'rebin') return 'border border-amber-400/20 bg-amber-950/35';
+  if (v === 'preship') return 'border border-rose-400/20 bg-rose-950/35';
+  if (v === 'transfer') return 'border border-violet-400/20 bg-violet-950/35';
+  return 'bg-black/30';
+};
 
 const ORDINAL_CN = ['第一次', '第二次', '第三次', '第四次', '第五次', '第六次', '第七次', '第八次', '第九次', '第十次'];
 
@@ -543,6 +570,7 @@ export default function AdminApp() {
   const [timecardPosition, setTimecardPosition] = useState('');
   const [timecardShift, setTimecardShift] = useState<'' | 'early' | 'late'>('');
   const [timecardInProgressOnly, setTimecardInProgressOnly] = useState(false);
+  const [timecardPresentDayFilter, setTimecardPresentDayFilter] = useState<number | null>(null);
   const [timecardMissingEmployeeOnly, setTimecardMissingEmployeeOnly] = useState(false);
   const [timecardWeekOffset, setTimecardWeekOffset] = useState(0);
   const [timecardWeekInput, setTimecardWeekInput] = useState(() =>
@@ -626,14 +654,9 @@ export default function AdminApp() {
     Record<string, { early: number; late: number; active: number }>
   >({});
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
-  const [homeRosterSide, setHomeRosterSide] = useState<'absent' | 'restWorked'>('absent');
-  const [homeRosterPositionFilters, setHomeRosterPositionFilters] = useState<Record<AllowedPosition, boolean>>({
-    Pick: true,
-    Pack: true,
-    Rebin: true,
-    Preship: true,
-    Transfer: true
-  });
+  const [homeOnClockShiftByStaffId, setHomeOnClockShiftByStaffId] = useState<Record<string, 'early' | 'late'>>({});
+  const [homeRosterSide, setHomeRosterSide] = useState<'absent' | 'restWorked' | 'onClock'>('absent');
+  const [homeRosterPositionFilter, setHomeRosterPositionFilter] = useState<'ALL' | AllowedPosition>('ALL');
 
   const resolveEmployeeColumnMode = async (): Promise<EmployeeColumnMode> => {
     const cached = employeeColumnModeRef.current;
@@ -837,6 +860,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
       if (activeStaff.length === 0 && attendanceStaff.length === 0) {
         setAttendanceStats({});
+        setHomeOnClockShiftByStaffId({});
         return;
       }
 
@@ -869,6 +893,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
 
       const stats: Record<string, { early: number; late: number; active: number }> = {};
+      const onClockShiftByStaffId: Record<string, 'early' | 'late'> = {};
       const shiftByStaffId: Record<string, 'early' | 'late'> = {};
       for (const staff of activeStaff) {
         const latest = latestByStaff.get(staff);
@@ -876,6 +901,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const shift = getShiftBucket(latest.at);
         if (!shift) continue;
         shiftByStaffId[staff] = shift;
+        onClockShiftByStaffId[staff] = shift;
       }
       for (const staff of attendanceStaff) {
         const firstIn = firstInByStaff.get(staff);
@@ -897,6 +923,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
 
       setAttendanceStats(stats);
+      setHomeOnClockShiftByStaffId(onClockShiftByStaffId);
     } catch (err: any) {
       if (!isAbortLikeError(err)) {
         setAttendanceError(String(err?.message ?? err));
@@ -1477,7 +1504,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   const refreshHomePanel = async () => {
     await fetchSchedule();
     const latestEmployees = await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
-    await fetchSchedulePunchPresence({ employeesOverride: latestEmployees });
+    // Home dashboard should use current week punch presence, independent of Schedule page week navigation.
+    await fetchSchedulePunchPresence({ employeesOverride: latestEmployees, weekOffsetOverride: 0, mode: 'operational_day' });
   };
 
   const openScheduleStatePicker = (
@@ -1526,7 +1554,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     };
   }, [schedulePicker.open]);
 
-  const fetchSchedulePunchPresence = async (options?: { employeesOverride?: EmployeeRow[] | null }) => {
+  const fetchSchedulePunchPresence = async (options?: {
+    employeesOverride?: EmployeeRow[] | null;
+    weekOffsetOverride?: number;
+    mode?: 'week' | 'operational_day';
+  }) => {
     if (!supabase) {
       setSchedulePunchPresenceKeys(new Set());
       return;
@@ -1543,45 +1575,93 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return;
     }
 
-    const baseWeekStart = startOfWeekMonday(serverTime);
-    const weekStart = addDays(baseWeekStart, scheduleWeekOffset * 7);
-    const { start, end } = getDayRange(weekStart, 0, 7);
-    const day0StartMs = start.getTime();
+    const mode = options?.mode ?? 'week';
     const dayMs = 24 * 60 * 60 * 1000;
     const found = new Set<string>();
+    const staffBatches = chunk(Array.from(staffSet), 120);
 
-    const pageSize = 2000;
-    let page = 0;
-    while (true) {
-      const from = page * pageSize;
-      const to = from + pageSize - 1;
-      const res = await supabase
-        .from('ob_punches')
-        .select('staff_id, created_at')
-        .gte('created_at', start.toISOString())
-        .lt('created_at', end.toISOString())
-        .order('created_at', { ascending: true })
-        .range(from, to);
+    if (mode === 'operational_day') {
+      const now = new Date(serverTime);
+      const operationalStart = new Date(now);
+      operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
+      if (now.getTime() < operationalStart.getTime()) {
+        operationalStart.setDate(operationalStart.getDate() - 1);
+      }
+      const dayIndex = (operationalStart.getDay() + 6) % 7;
 
-      if (res.error) {
-        setSchedulePunchPresenceKeys(new Set());
-        return;
+      for (const batch of staffBatches) {
+        const pageSize = 1000;
+        const maxPages = 40;
+        for (let page = 0; page < maxPages; page += 1) {
+          const from = page * pageSize;
+          const to = from + pageSize - 1;
+          const res = await supabase
+            .from('ob_punches')
+            .select('staff_id')
+            .in('staff_id', batch)
+            .gte('created_at', operationalStart.toISOString())
+            .lte('created_at', now.toISOString())
+            .order('created_at', { ascending: true })
+            .range(from, to);
+
+          if (res.error) {
+            setSchedulePunchPresenceKeys(new Set());
+            return;
+          }
+
+          const rows = (res.data as any[]) ?? [];
+          for (const row of rows) {
+            const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+            if (!staff || !staffSet.has(staff)) continue;
+            found.add(`${staff}__${dayIndex}`);
+          }
+          if (rows.length < pageSize) break;
+        }
       }
 
-      const rows = (res.data as any[]) ?? [];
-      for (const row of rows) {
-        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-        if (!staff || !staffSet.has(staff)) continue;
-        const at = new Date(String(row.created_at ?? ''));
-        if (Number.isNaN(at.getTime())) continue;
-        const dayIndex = Math.floor((at.getTime() - day0StartMs) / dayMs);
-        if (dayIndex < 0 || dayIndex > 6) continue;
-        found.add(`${staff}__${dayIndex}`);
-      }
+      setSchedulePunchPresenceKeys(found);
+      return;
+    }
 
-      if (rows.length < pageSize) break;
-      page += 1;
-      if (page >= 20) break;
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekOffset = options?.weekOffsetOverride ?? scheduleWeekOffset;
+    const weekStart = addDays(baseWeekStart, weekOffset * 7);
+    const { start, end } = getDayRange(weekStart, 0, 7);
+    const day0StartMs = start.getTime();
+
+    for (const batch of staffBatches) {
+      const pageSize = 1000;
+      const maxPages = 40;
+      for (let page = 0; page < maxPages; page += 1) {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const res = await supabase
+          .from('ob_punches')
+          .select('staff_id, created_at')
+          .in('staff_id', batch)
+          .gte('created_at', start.toISOString())
+          .lt('created_at', end.toISOString())
+          .order('created_at', { ascending: true })
+          .range(from, to);
+
+        if (res.error) {
+          setSchedulePunchPresenceKeys(new Set());
+          return;
+        }
+
+        const rows = (res.data as any[]) ?? [];
+        for (const row of rows) {
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          if (!staff || !staffSet.has(staff)) continue;
+          const at = new Date(String(row.created_at ?? ''));
+          if (Number.isNaN(at.getTime())) continue;
+          const dayIndex = Math.floor((at.getTime() - day0StartMs) / dayMs);
+          if (dayIndex < 0 || dayIndex > 6) continue;
+          found.add(`${staff}__${dayIndex}`);
+        }
+
+        if (rows.length < pageSize) break;
+      }
     }
 
     setSchedulePunchPresenceKeys(found);
@@ -3948,6 +4028,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     void fetchScheduleUph();
   }, [page, employees]);
 
+  useEffect(() => {
+    if (page !== 'home' || !user) return;
+    if (employees.length === 0) return;
+    let active = true;
+    const sync = async () => {
+      if (!active) return;
+      await fetchSchedulePunchPresence({ employeesOverride: employees, weekOffsetOverride: 0, mode: 'operational_day' });
+    };
+    void sync();
+    const timer = window.setInterval(() => {
+      void sync();
+    }, 10000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [page, user, employees]);
+
   const onFileSelected = async (file: File | null) => {
     if (!file) {
       setUploadError(null);
@@ -4372,9 +4470,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     return timecardRows.filter((r) => {
       if (timecardShift && r.shift !== timecardShift) return false;
       if (timecardInProgressOnly && !r.inProgressWeek) return false;
+      if (timecardPresentDayFilter !== null && timecardPresentDayFilter >= 0 && timecardPresentDayFilter <= 6) {
+        if (Number(r.punchCountByDay?.[timecardPresentDayFilter] ?? 0) <= 0) return false;
+      }
       return true;
     });
-  }, [timecardRows, timecardShift, timecardInProgressOnly]);
+  }, [timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter]);
   const timecardDayTotalHours = useMemo(() => {
     const totals = new Array(7).fill(0) as number[];
     for (const row of timecardRowsFiltered) {
@@ -4728,7 +4829,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   const homeRosterRows = useMemo(() => {
     const absent: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
     const restWorked: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
+    const onClock: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
     const seen = new Set<string>();
+    const nowMinutes = new Date(serverTime).getHours() * 60 + new Date(serverTime).getMinutes();
+    const lateAbsentVisibleMinutes = 16 * 60 + 30; // 16:30
 
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
@@ -4751,33 +4855,59 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         shift: shift === 'early' ? 'Morning' : shift === 'late' ? 'Night' : '-'
       };
 
-      if (isWorkingScheduleBaseState(baseState) && !hasPunch) absent.push(item);
+      const hideLateAbsent = shift === 'late' && nowMinutes < lateAbsentVisibleMinutes;
+      if (isWorkingScheduleBaseState(baseState) && !hasPunch && !hideLateAbsent) absent.push(item);
       if (isRestLikeScheduleBaseState(baseState) && hasPunch) restWorked.push(item);
     }
 
     absent.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     restWorked.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
-    return { absent, restWorked };
+    for (const [staffRaw, shiftRaw] of Object.entries(homeOnClockShiftByStaffId)) {
+      const staff = normalizeStaffId(String(staffRaw ?? '').trim());
+      if (!staff) continue;
+      const profile = employeeProfileByStaffId.get(staff);
+      const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
+      const fallbackEmp = employees.find((e) => normalizeStaffId(String(e.staff_id ?? '').trim()) === staff);
+      const position = String(profile?.position ?? row?.position ?? fallbackEmp?.position ?? fallbackEmp?.Position ?? '').trim();
+      const shift = shiftRaw === 'early' ? 'Morning' : shiftRaw === 'late' ? 'Night' : '-';
+      onClock.push({
+        staff_id: staff,
+        name: String(profile?.name ?? fallbackEmp?.name ?? '').trim(),
+        agency: String(profile?.agency ?? fallbackEmp?.agency ?? fallbackEmp?.Agency ?? '').trim(),
+        position,
+        shift
+      });
+    }
+    onClock.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
+    return { absent, restWorked, onClock };
   }, [
     employees,
     scheduleRowsByStaffDayIndex,
     homeOperationalDayIndex,
     schedulePunchPresenceKeys,
+    serverTime,
+    homeOnClockShiftByStaffId,
     employeeShiftByStaffId,
     employeeProfileByStaffId
   ]);
   const homeRosterRowsFiltered = useMemo(() => {
-    const enabled = new Set(ALLOWED_POSITIONS.filter((position) => Boolean(homeRosterPositionFilters[position])));
     const filterRows = (rows: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>) =>
       rows.filter((row) => {
+        if (homeRosterPositionFilter === 'ALL') return true;
         const pos = normalizePositionKey(String(row.position ?? '').trim());
-        return Boolean(pos && enabled.has(pos));
+        return pos === homeRosterPositionFilter;
       });
     return {
       absent: filterRows(homeRosterRows.absent),
-      restWorked: filterRows(homeRosterRows.restWorked)
+      restWorked: filterRows(homeRosterRows.restWorked),
+      onClock: filterRows(homeRosterRows.onClock)
     };
-  }, [homeRosterRows, homeRosterPositionFilters]);
+  }, [homeRosterRows, homeRosterPositionFilter]);
+  const homeRosterRowsCurrent = useMemo(() => {
+    if (homeRosterSide === 'restWorked') return homeRosterRowsFiltered.restWorked;
+    if (homeRosterSide === 'onClock') return homeRosterRowsFiltered.onClock;
+    return homeRosterRowsFiltered.absent;
+  }, [homeRosterSide, homeRosterRowsFiltered]);
   const makeDailyListTsv = (rows: DailyListRow[]) =>
     rows
       .map((row) => [row.staff_id, row.name, row.agency, row.position, getPlannedStartTime(row.shift, row.position)].map((c) => String(c ?? '')).join('\t'))
@@ -5268,7 +5398,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               <section className="glass reveal rounded-3xl px-6 py-8">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="font-display text-2xl tracking-[0.08em]">{t('首页看板', 'Home Dashboard')}</h2>
-                  <p className="text-xs text-slate-400">{t('预计来自排班，实时来自打卡', 'Expected from schedule, realtime from punches')}</p>
                 </div>
                 <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_560px]">
                   <div className="space-y-4">
@@ -5281,17 +5410,19 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         total: 0
                       };
                       return (
-                        <article key={position} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-4">
+                        <article key={position} className={['rounded-2xl border px-4 py-4', getHomeCardToneClass(position)].join(' ')}>
                           <div className="flex items-center justify-between gap-3">
-                            <h3 className="font-display text-xl tracking-[0.06em]">{position}</h3>
-                            <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-300">On Clock {stats.active}</span>
+                            <h3 className={['inline-flex items-center rounded-full border px-2.5 py-1 font-display text-base tracking-[0.06em]', getPositionBadgeClass(position)].join(' ')}>
+                              {position}
+                            </h3>
+                            <span className={['rounded-full px-3 py-1 text-xs', getHomeChipToneClass(position)].join(' ')}>On Clock {stats.active}</span>
                           </div>
                           <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                            <div className="rounded-xl bg-black/30 px-3 py-2">
+                            <div className={['rounded-xl px-3 py-2', getHomePanelToneClass(position)].join(' ')}>
                               <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Morning</div>
                               <div className="mt-1 text-sm text-slate-200">Expected {plan.early} · Present {stats.early}</div>
                             </div>
-                            <div className="rounded-xl bg-black/30 px-3 py-2">
+                            <div className={['rounded-xl px-3 py-2', getHomePanelToneClass(position)].join(' ')}>
                               <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Night</div>
                               <div className="mt-1 text-sm text-slate-200">Expected {plan.late} · Present {stats.late}</div>
                             </div>
@@ -5303,7 +5434,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   <aside className="rounded-2xl border border-white/15 bg-white/5 p-4">
                     <div className="flex items-center justify-between gap-2">
                       <h3 className="font-display text-lg tracking-[0.06em]">
-                        {homeRosterSide === 'absent' ? t('缺勤名单', 'Absent List') : t('排休出勤名单', 'Rest Worked List')}
+                        {homeRosterSide === 'absent'
+                          ? t('缺勤名单', 'Absent List')
+                          : homeRosterSide === 'restWorked'
+                            ? t('排休出勤名单', 'Rest Worked List')
+                            : t('打卡中名单', 'On Clock List')}
                       </h3>
                       <div className="flex items-center gap-2">
                         <button
@@ -5326,21 +5461,26 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         >
                           {t('排休出勤', 'Rest Worked')}
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => setHomeRosterSide('onClock')}
+                          className={[
+                            'rounded-xl px-3 py-1 text-xs font-semibold transition',
+                            homeRosterSide === 'onClock' ? 'bg-neon text-ink' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                          ].join(' ')}
+                        >
+                          {t('打卡中', 'On Clock')}
+                        </button>
                       </div>
                     </div>
-                    <div className="mt-3 grid grid-cols-5 gap-2">
-                      {ALLOWED_POSITIONS.map((position) => {
-                        const checked = homeRosterPositionFilters[position];
+                    <div className="mt-3 grid grid-cols-6 gap-2">
+                      {(['ALL', ...ALLOWED_POSITIONS] as Array<'ALL' | AllowedPosition>).map((position) => {
+                        const checked = homeRosterPositionFilter === position;
                         return (
                           <button
                             key={`home-roster-filter-${position}`}
                             type="button"
-                            onClick={() =>
-                              setHomeRosterPositionFilters((prev) => ({
-                                ...prev,
-                                [position]: !prev[position]
-                              }))
-                            }
+                            onClick={() => setHomeRosterPositionFilter(position)}
                             className={[
                               'rounded-xl px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] transition',
                               checked ? 'bg-neon text-ink' : 'bg-white/10 text-slate-200 hover:bg-white/15'
@@ -5360,7 +5500,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         <span>{t('班次', 'Shift')}</span>
                       </div>
                       <div className="mt-1 max-h-[560px] space-y-1 overflow-auto pr-1">
-                        {(homeRosterSide === 'absent' ? homeRosterRowsFiltered.absent : homeRosterRowsFiltered.restWorked).map((row) => (
+                        {homeRosterRowsCurrent.map((row) => (
                           <div
                             key={`${homeRosterSide}-${row.staff_id}`}
                             className="grid grid-cols-[56px_1fr_1fr_1fr_74px] gap-2 rounded-lg bg-white/5 px-2 py-2 text-sm text-slate-200"
@@ -5372,7 +5512,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             <span className="text-xs text-slate-300">{row.shift}</span>
                           </div>
                         ))}
-                        {(homeRosterSide === 'absent' ? homeRosterRowsFiltered.absent : homeRosterRowsFiltered.restWorked).length === 0 && (
+                        {homeRosterRowsCurrent.length === 0 && (
                           <div className="px-2 py-4 text-sm text-slate-400">{t('当前无记录', 'No rows')}</div>
                         )}
                       </div>
@@ -6861,6 +7001,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         setTimecardPosition('');
                         setTimecardShift('');
                         setTimecardInProgressOnly(false);
+                        setTimecardPresentDayFilter(null);
                         setTimecardMissingEmployeeOnly(false);
                         void fetchTimecard({ reset: true, search: '', agency: '', position: '' });
                       }}
@@ -6978,7 +7119,21 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             {days.map((label, idx) => (
                               <th key={label} className="w-[92px] px-2 py-1.5 whitespace-nowrap text-center">
                                 <div className="text-neon">{`${t('总工时', 'Total')} ${formatHours(timecardDayTotalHours[idx]) || '0'}`}</div>
-                                <div className="text-[10px] text-sky-300">{`${t('出勤', 'Present')} ${timecardDayAttendanceCount[idx] ?? 0}`}</div>
+                                <button
+                                  type="button"
+                                  disabled={isLocked}
+                                  onClick={() => setTimecardPresentDayFilter((prev) => (prev === idx ? null : idx))}
+                                  className={[
+                                    'rounded px-1 py-0.5 text-[10px] transition',
+                                    timecardPresentDayFilter === idx
+                                      ? 'bg-sky-500/20 text-sky-100'
+                                      : 'text-sky-300 hover:bg-white/10',
+                                    isLocked ? 'cursor-not-allowed opacity-60' : ''
+                                  ].join(' ')}
+                                  title={timecardPresentDayFilter === idx ? 'Clear present filter' : 'Filter present staff'}
+                                >
+                                  {`${t('出勤', 'Present')} ${timecardDayAttendanceCount[idx] ?? 0}`}
+                                </button>
                                 <div>{label} {toDateOnly(addDays(weekStart, idx)).slice(5)}</div>
                               </th>
                             ))}
