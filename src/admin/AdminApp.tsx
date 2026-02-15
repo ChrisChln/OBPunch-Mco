@@ -3,6 +3,7 @@ import type { User } from '@supabase/supabase-js';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
 import { createPortal } from 'react-dom';
+import QRCode from 'qrcode';
 
 type AdminPage = 'home' | 'employee_upload' | 'punches' | 'employees' | 'timecard' | 'audit' | 'schedule';
 
@@ -559,6 +560,14 @@ export default function AdminApp() {
   const [employeeEditAgency, setEmployeeEditAgency] = useState('');
   const [employeeEditPosition, setEmployeeEditPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [employeeEditLabel, setEmployeeEditLabel] = useState('');
+  const [employeeBadgePrintingStaffId, setEmployeeBadgePrintingStaffId] = useState<string | null>(null);
+  const [employeeBadgePreview, setEmployeeBadgePreview] = useState<{
+    staff: string;
+    name: string;
+    agency: string;
+    position: string;
+    qrDataUrl: string;
+  } | null>(null);
 
   const [timecardRows, setTimecardRows] = useState<TimecardRow[]>([]);
   const [timecardError, setTimecardError] = useState<string | null>(null);
@@ -1809,18 +1818,28 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
 
     const accountLinkMap = new Map<string, string>();
-    const linkRes = await obupSupabase
-      .from(OBUP_ACCOUNT_LINKS_TABLE)
-      .select('source_name, target_name, updated_at')
-      .order('updated_at', { ascending: false })
-      .limit(1000);
-    if (!linkRes.error) {
-      const links = (linkRes.data as Array<{ source_name?: string | null; target_name?: string | null }> | null) ?? [];
-      for (const row of links) {
-        const sourceKey = normalizeWorkOperatorKey(String(row.source_name ?? '').trim());
-        const targetKey = normalizeWorkOperatorKey(String(row.target_name ?? '').trim());
-        if (!sourceKey || !targetKey) continue;
-        if (!accountLinkMap.has(sourceKey)) accountLinkMap.set(sourceKey, targetKey);
+    const accountLinkReverseMap = new Map<string, string>();
+    {
+      const pageSize = 1000;
+      const maxPages = 20;
+      for (let page = 0; page < maxPages; page += 1) {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const linkRes = await obupSupabase
+          .from(OBUP_ACCOUNT_LINKS_TABLE)
+          .select('source_name, target_name, updated_at')
+          .order('updated_at', { ascending: false })
+          .range(from, to);
+        if (linkRes.error) break;
+        const links = (linkRes.data as Array<{ source_name?: string | null; target_name?: string | null }> | null) ?? [];
+        for (const row of links) {
+          const sourceKey = normalizeWorkOperatorKey(String(row.source_name ?? '').trim());
+          const targetKey = normalizeWorkOperatorKey(String(row.target_name ?? '').trim());
+          if (!sourceKey || !targetKey) continue;
+          if (!accountLinkMap.has(sourceKey)) accountLinkMap.set(sourceKey, targetKey);
+          if (!accountLinkReverseMap.has(targetKey)) accountLinkReverseMap.set(targetKey, sourceKey);
+        }
+        if (links.length < pageSize) break;
       }
     }
 
@@ -1835,6 +1854,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const mappedTarget = accountLinkMap.get(employeeKey);
         if (mappedTarget && operatorAvgByKey.has(mappedTarget)) {
           matchedKey = mappedTarget;
+        }
+        if (!matchedKey) {
+          const mappedSource = accountLinkReverseMap.get(employeeKey);
+          if (mappedSource && operatorAvgByKey.has(mappedSource)) {
+            matchedKey = mappedSource;
+          }
         }
 
         if (!matchedKey && operatorAvgByKey.has(employeeKey)) {
@@ -2314,6 +2339,38 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       await refreshEmployeesPanel();
     }
   };
+
+  const printEmployeeTempBadge = async (payload: { staff: string; name: string; agency: string; position: string }) => {
+    const staff = normalizeStaffId(String(payload.staff ?? '').trim());
+    if (!staff) return;
+    setEmployeeBadgePrintingStaffId(staff);
+    try {
+      const qrDataUrl = await QRCode.toDataURL(staff, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 920,
+        color: { dark: '#0b1220', light: '#ffffff' }
+      });
+      setEmployeeBadgePreview({
+        staff,
+        name: payload.name || '-',
+        agency: payload.agency || '-',
+        position: payload.position || '-',
+        qrDataUrl
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err ?? 'unknown error');
+      setStatus({ tone: 'error', message: t(`打印失败：${message}`, `Print failed: ${message}`) });
+    } finally {
+      setEmployeeBadgePrintingStaffId((current) => (current === staff ? null : current));
+    }
+  };
+
+  useEffect(() => {
+    const onAfterPrint = () => setEmployeeBadgePreview(null);
+    window.addEventListener('afterprint', onAfterPrint);
+    return () => window.removeEventListener('afterprint', onAfterPrint);
+  }, []);
 
   const openEmployeeEdit = (payload: { staff: string; name: string; agency: string; position: string; label: string }) => {
     setEmployeesError(null);
@@ -6826,6 +6883,21 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             <td className="px-4 py-3 text-right">
                               <button
                                 type="button"
+                                disabled={isLocked || employeeBadgePrintingStaffId === staff}
+                                onClick={() =>
+                                  void printEmployeeTempBadge({
+                                    staff,
+                                    name,
+                                    agency,
+                                    position
+                                  })
+                                }
+                                className="mr-2 rounded-xl bg-neon px-4 py-1.5 text-xs font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {employeeBadgePrintingStaffId === staff ? t('生成中...', 'Generating...') : t('打印工牌', 'Print badge')}
+                              </button>
+                              <button
+                                type="button"
                                 disabled={isLocked}
                                 onClick={() =>
                                   openEmployeeEdit({
@@ -6964,6 +7036,111 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   </div>,
                   document.body
                 )}
+
+                {employeeBadgePreview && typeof document !== 'undefined' &&
+                  createPortal(
+                    <div className="employee-badge-print-host">
+                      <style>{`
+                        @page { size: 4in 6in; margin: 0; }
+                        @media print {
+                          html, body {
+                            width: 4in !important;
+                            height: 6in !important;
+                            margin: 0 !important;
+                            padding: 0 !important;
+                            overflow: hidden !important;
+                          }
+                          body > * { display: none !important; }
+                          .employee-badge-print-host {
+                            display: block !important;
+                            position: fixed !important;
+                            inset: 0 !important;
+                            margin: 0 !important;
+                            padding: 0 !important;
+                            background: #fff !important;
+                            z-index: 9999 !important;
+                          }
+                          .employee-badge-sheet-wrap {
+                            width: 4in !important;
+                            height: 6in !important;
+                            margin: 0 !important;
+                            border: none !important;
+                            border-radius: 0 !important;
+                            box-shadow: none !important;
+                          }
+                          .employee-badge-preview-overlay {
+                            display: block !important;
+                            position: fixed !important;
+                            inset: 0 !important;
+                            background: #fff !important;
+                            padding: 0 !important;
+                            margin: 0 !important;
+                          }
+                          .employee-badge-preview-chrome { display: none !important; }
+                          .employee-badge-preview-canvas {
+                            overflow: visible !important;
+                            border: none !important;
+                            background: transparent !important;
+                            padding: 0 !important;
+                          }
+                          .employee-badge-preview-scale {
+                            transform: none !important;
+                            margin: 0 !important;
+                          }
+                        }
+                      `}</style>
+                      <div className="employee-badge-preview-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4 py-10">
+                        <div className="w-full max-w-2xl rounded-3xl border border-white/10 bg-slate-950/95 p-5 shadow-2xl backdrop-blur">
+                          <div className="mb-4 flex items-center justify-between employee-badge-preview-chrome">
+                            <h3 className="font-display text-xl tracking-[0.08em] text-white">{t('打印临时工牌', 'Print Temp Badge')}</h3>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => window.setTimeout(() => window.print(), 80)}
+                                className="rounded-xl bg-neon px-4 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl"
+                              >
+                                {t('打印', 'Print')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEmployeeBadgePreview(null)}
+                                className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/15"
+                              >
+                                {t('关闭', 'Close')}
+                              </button>
+                            </div>
+                          </div>
+                          <p className="mb-4 text-xs text-slate-400 employee-badge-preview-chrome">{t('打印尺寸：4 x 6 inch 标签纸。', 'Print size: 4 x 6 inch label.')}</p>
+                          <div className="overflow-auto rounded-2xl border border-white/10 bg-black/20 p-4 employee-badge-preview-canvas">
+                            <div className="mx-auto origin-top scale-[0.52] md:scale-[0.66] employee-badge-preview-scale">
+                              <div className="employee-badge-sheet-wrap" style={{ width: '4in', height: '6in', background: '#fff', color: '#111', fontFamily: 'Arial, \"Microsoft YaHei\", sans-serif', padding: '0.14in 0.16in', display: 'flex', flexDirection: 'column', gap: '0.1in', boxSizing: 'border-box', overflow: 'hidden' }}>
+                                <div style={{ textAlign: 'center', fontSize: '16pt', fontWeight: 800, letterSpacing: '0.04em' }}>TEMP BADGE</div>
+                                <div style={{ height: '2.85in', border: '2px solid #111', borderRadius: '10px', padding: '0.07in', display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box' }}>
+                                  <img src={employeeBadgePreview.qrDataUrl} alt={`QR Code for ${employeeBadgePreview.staff}`} style={{ width: '100%', maxWidth: '2.55in', height: 'auto' }} />
+                                </div>
+                                <div style={{ textAlign: 'center', fontWeight: 800, fontSize: '20pt', letterSpacing: '0.04em' }}>{employeeBadgePreview.staff}</div>
+                                <div style={{ border: '2px solid #111', borderRadius: '10px', padding: '0.08in 0.1in', display: 'grid', gap: '0.06in', boxSizing: 'border-box' }}>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '0.78in 1fr', alignItems: 'baseline', gap: '0.05in' }}>
+                                    <div style={{ fontSize: '9pt', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Name</div>
+                                    <div style={{ fontSize: '12.5pt', fontWeight: 700, lineHeight: 1.1, wordBreak: 'break-word' }}>{employeeBadgePreview.name || '-'}</div>
+                                  </div>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '0.78in 1fr', alignItems: 'baseline', gap: '0.05in' }}>
+                                    <div style={{ fontSize: '9pt', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Position</div>
+                                    <div style={{ fontSize: '12.5pt', fontWeight: 700, lineHeight: 1.1, wordBreak: 'break-word' }}>{employeeBadgePreview.position || '-'}</div>
+                                  </div>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '0.78in 1fr', alignItems: 'baseline', gap: '0.05in' }}>
+                                    <div style={{ fontSize: '9pt', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Agency</div>
+                                    <div style={{ fontSize: '12.5pt', fontWeight: 700, lineHeight: 1.1, wordBreak: 'break-word' }}>{employeeBadgePreview.agency || '-'}</div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>,
+                    document.body
+                  )}
 
               </section>
             )}
