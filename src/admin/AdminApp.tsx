@@ -17,6 +17,13 @@ type Status = {
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
 type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
+const createEmptyPositionFlags = (): Record<AllowedPosition, boolean> => ({
+  Pick: false,
+  Pack: false,
+  Rebin: false,
+  Preship: false,
+  Transfer: false
+});
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
@@ -30,6 +37,7 @@ const SCHEDULE_UPH_DAYS = 30;
 const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
 const SCHEDULE_WEEK_RESET_KEY = 'schedule_transient_reset_week';
+const DAILY_LIST_LIGHTS_KEY = 'daily_list_position_lights';
 const SCHEDULE_REST_NOTE = '__rest__';
 const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
@@ -631,20 +639,12 @@ export default function AdminApp() {
     anchorTop: 0
   });
   const [dailyListOpen, setDailyListOpen] = useState(false);
-  const [dailyListSelectedPositions, setDailyListSelectedPositions] = useState<Record<AllowedPosition, boolean>>({
-    Pick: false,
-    Pack: false,
-    Rebin: false,
-    Preship: false,
-    Transfer: false
-  });
-  const [dailyListFilterPositions, setDailyListFilterPositions] = useState<Record<AllowedPosition, boolean>>({
-    Pick: false,
-    Pack: false,
-    Rebin: false,
-    Preship: false,
-    Transfer: false
-  });
+  const [dailyListSelectedPositions, setDailyListSelectedPositions] = useState<Record<AllowedPosition, boolean>>(
+    createEmptyPositionFlags
+  );
+  const [dailyListFilterPositions, setDailyListFilterPositions] = useState<Record<AllowedPosition, boolean>>(
+    createEmptyPositionFlags
+  );
   const deferredScheduleSearch = useDeferredValue(scheduleSearch);
 
   useEffect(() => {
@@ -965,17 +965,95 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     tick();
     return () => window.clearInterval(timer);
   }, [offsetMs]);
+
+  const saveDailyListSelectedPositionsGlobal = async (
+    next: Record<AllowedPosition, boolean>,
+    operationalDateOverride?: string
+  ) => {
+    if (!supabase) return;
+    const operationalDate = operationalDateOverride ?? getOperationalDateKey(serverTime, DAILY_LIST_RESET_HOUR);
+    const payload = {
+      key: DAILY_LIST_LIGHTS_KEY,
+      value: {
+        operational_date: operationalDate,
+        selected_positions: next,
+        updated_at: new Date(serverTime).toISOString(),
+        operator: user?.email ?? null
+      },
+      updated_at: new Date(serverTime).toISOString()
+    };
+    const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
+    if (!upsertRes.error) return;
+    const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', DAILY_LIST_LIGHTS_KEY);
+    if (!updateRes.error) return;
+    await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
+  };
+
+  const loadDailyListSelectedPositionsGlobal = async (options?: { forceResetWrite?: boolean }) => {
+    if (!supabase) return;
+    const operationalDate = getOperationalDateKey(serverTime, DAILY_LIST_RESET_HOUR);
+    const res = await supabase
+      .from(APP_SETTINGS_TABLE)
+      .select('id, key, value, updated_at')
+      .eq('key', DAILY_LIST_LIGHTS_KEY)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (res.error) return;
+
+    const row = (((res.data as any[]) ?? [])[0] ?? null) as AppSettingRow | null;
+    const empty = createEmptyPositionFlags();
+    let next = empty;
+    let shouldWriteReset = Boolean(options?.forceResetWrite);
+
+    if (row) {
+      const value = (row.value ?? {}) as Record<string, unknown>;
+      const savedOperationalDate = String(value.operational_date ?? '');
+      if (savedOperationalDate === operationalDate) {
+        const rawSelected = (value.selected_positions ?? null) as Record<string, unknown> | null;
+        if (rawSelected && typeof rawSelected === 'object') {
+          next = {
+            Pick: Boolean(rawSelected.Pick),
+            Pack: Boolean(rawSelected.Pack),
+            Rebin: Boolean(rawSelected.Rebin),
+            Preship: Boolean(rawSelected.Preship),
+            Transfer: Boolean(rawSelected.Transfer)
+          };
+        }
+      } else {
+        shouldWriteReset = true;
+      }
+    } else {
+      shouldWriteReset = true;
+    }
+
+    setDailyListSelectedPositions(next);
+    if (shouldWriteReset) {
+      await saveDailyListSelectedPositionsGlobal(empty, operationalDate);
+    }
+  };
+
+  const toggleDailyListSelectedPosition = (position: AllowedPosition) => {
+    setDailyListSelectedPositions((prev) => {
+      const next = {
+        ...prev,
+        [position]: !prev[position]
+      };
+      void saveDailyListSelectedPositionsGlobal(next);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    void loadDailyListSelectedPositionsGlobal({ forceResetWrite: true });
+  }, [user?.email]);
+
   useEffect(() => {
     const key = getOperationalDateKey(serverTime, DAILY_LIST_RESET_HOUR);
     if (dailyListResetKeyRef.current === key) return;
     dailyListResetKeyRef.current = key;
-    setDailyListSelectedPositions({
-      Pick: false,
-      Pack: false,
-      Rebin: false,
-      Preship: false,
-      Transfer: false
-    });
+    const empty = createEmptyPositionFlags();
+    setDailyListSelectedPositions(empty);
+    void saveDailyListSelectedPositionsGlobal(empty, key);
   }, [serverTime]);
 
   useEffect(() => {
@@ -5964,20 +6042,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       type="button"
                       disabled={isLocked}
                       onClick={() => {
-                        setDailyListSelectedPositions({
-                          Pick: false,
-                          Pack: false,
-                          Rebin: false,
-                          Preship: false,
-                          Transfer: false
-                        });
-                        setDailyListFilterPositions({
-                          Pick: false,
-                          Pack: false,
-                          Rebin: false,
-                          Preship: false,
-                          Transfer: false
-                        });
+                        setDailyListFilterPositions(createEmptyPositionFlags());
+                        void loadDailyListSelectedPositionsGlobal();
                         setDailyListOpen(true);
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
@@ -6397,12 +6463,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               {tomorrowPositionSummaryCards.map((card) => (
                                 <button
                                   type="button"
-                                  onClick={() =>
-                                    setDailyListSelectedPositions((prev) => ({
-                                      ...prev,
-                                      [card.position]: !prev[card.position]
-                                    }))
-                                  }
+                                  onClick={() => toggleDailyListSelectedPosition(card.position)}
                                   key={card.position}
                                   className={[
                                     'rounded-xl border px-2.5 py-2 text-left transition',
