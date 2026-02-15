@@ -568,6 +568,8 @@ export default function AdminApp() {
   const [employeeEditAgency, setEmployeeEditAgency] = useState('');
   const [employeeEditPosition, setEmployeeEditPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [employeeEditLabel, setEmployeeEditLabel] = useState('');
+  const [employeeLastPunchAtByStaffId, setEmployeeLastPunchAtByStaffId] = useState<Record<string, string | null>>({});
+  const [employeeSortByLastPunchDesc, setEmployeeSortByLastPunchDesc] = useState(false);
   const [employeeBadgePrintingStaffId, setEmployeeBadgePrintingStaffId] = useState<string | null>(null);
   const [employeeBadgePreview, setEmployeeBadgePreview] = useState<{
     staff: string;
@@ -2241,7 +2243,60 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const staffIds = all.map((e) => String(e.staff_id ?? '').trim()).filter(Boolean);
       if (staffIds.length === 0) {
         setEmployeeShiftByStaffId({});
+        setEmployeeLastPunchAtByStaffId({});
         return;
+      }
+
+      const fetchLatestPunchAtByStaff = async (ids: string[]) => {
+        const out: Record<string, string | null> = {};
+        const batches = chunk(ids, 200);
+        const pageSize = 1000;
+        const maxPages = 60;
+
+        for (const batch of batches) {
+          const found = new Set<string>();
+          const base = () => supabase.from('ob_punches').select('staff_id, created_at, id').in('staff_id', batch);
+
+          for (let page = 0; page < maxPages; page += 1) {
+            const from = page * pageSize;
+            const to = from + pageSize - 1;
+            const attemptCreatedAt = await base().order('created_at', { ascending: false }).range(from, to);
+            const attempt = attemptCreatedAt.error
+              ? await base().order('id', { ascending: false }).range(from, to)
+              : attemptCreatedAt;
+            if (attempt.error) {
+              return { map: {} as Record<string, string | null>, error: attempt.error.message };
+            }
+
+            const rows = (attempt.data as Array<{ staff_id?: string | null; created_at?: string | null }> | null) ?? [];
+            for (const row of rows) {
+              const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+              if (!staff || found.has(staff)) continue;
+              out[staff] = String(row.created_at ?? '').trim() || null;
+              found.add(staff);
+            }
+
+            if (found.size >= batch.length || rows.length < pageSize) break;
+            if (page === maxPages - 1) {
+              return { map: {} as Record<string, string | null>, error: 'Punch data too large when reading latest punch time.' };
+            }
+          }
+
+          for (const staff of batch) {
+            const key = normalizeStaffId(String(staff ?? '').trim());
+            if (!key) continue;
+            if (!(key in out)) out[key] = null;
+          }
+        }
+
+        return { map: out, error: null as string | null };
+      };
+
+      const latestPunchRes = await fetchLatestPunchAtByStaff(staffIds);
+      if (latestPunchRes.error) {
+        setEmployeeLastPunchAtByStaffId({});
+      } else {
+        setEmployeeLastPunchAtByStaffId(latestPunchRes.map);
       }
 
       const fetchPunchesForStaff = async (ids: string[]) => {
@@ -2339,7 +2394,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const staffRaw = employeeNewStaffId.trim();
     const staff = normalizeStaffId(staffRaw);
     if (!staff || !isValidStaffIdValue(staff)) {
-      setEmployeesError('员工ID格式不正确（例如：US010454）。');
+      setEmployeesError('员工ID格式不正确。');
       return;
     }
 
@@ -4617,7 +4672,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const agencyNeedle = employeeAgency.trim().toLowerCase();
     const positionNeedle = employeePosition.trim().toLowerCase();
     const labelNeedles = employeeLabels.map((item) => item.trim().toLowerCase()).filter(Boolean);
-    return employees.filter((e) => {
+    const rows = employees.filter((e) => {
       const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
       const name = String(e.name ?? '').trim();
       const agency = String(e.agency ?? e.Agency ?? '').trim();
@@ -4633,7 +4688,38 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (!searchNeedle) return true;
       return [staff, name, label].join(' ').toLowerCase().includes(searchNeedle);
     });
-  }, [employees, employeeSearch, employeeAgency, employeePosition, employeeLabels]);
+    if (!employeeSortByLastPunchDesc) return rows;
+
+    const dayMs = 24 * 60 * 60 * 1000;
+    const nowMs = serverTime.getTime();
+    const daysAgoForStaff = (staff: string) => {
+      const at = String(employeeLastPunchAtByStaffId[staff] ?? '').trim();
+      if (!at) return null;
+      const dt = new Date(at);
+      if (Number.isNaN(dt.getTime())) return null;
+      return Math.max(0, Math.floor((nowMs - dt.getTime()) / dayMs));
+    };
+
+    return [...rows].sort((a, b) => {
+      const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
+      const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
+      const daysA = daysAgoForStaff(staffA);
+      const daysB = daysAgoForStaff(staffB);
+      const valA = daysA === null ? -1 : daysA;
+      const valB = daysB === null ? -1 : daysB;
+      if (valA !== valB) return valB - valA;
+      return staffA.localeCompare(staffB, 'en-US');
+    });
+  }, [
+    employees,
+    employeeSearch,
+    employeeAgency,
+    employeePosition,
+    employeeLabels,
+    employeeSortByLastPunchDesc,
+    employeeLastPunchAtByStaffId,
+    serverTime
+  ]);
 
   const timecardAgencyOptions = useMemo(() => {
     const out = new Set<string>();
@@ -6893,6 +6979,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         <th className="px-4 py-3">Position</th>
                         <th className="px-4 py-3">{t('标签', 'Label')}</th>
                         <th className="px-4 py-3">{t('班次', 'Shift')}</th>
+                        <th className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => setEmployeeSortByLastPunchDesc((prev) => !prev)}
+                            className="inline-flex items-center gap-1 text-xs uppercase tracking-[0.2em] text-slate-400 transition hover:text-slate-200"
+                            title={t('按天数从高到低排序', 'Sort by days high to low')}
+                          >
+                            {t('最后打卡', 'Last punch')}
+                            {employeeSortByLastPunchDesc ? '↓' : ''}
+                          </button>
+                        </th>
                         <th className="px-4 py-3 text-right">{t('操作', 'Actions')}</th>
                       </tr>
                     </thead>
@@ -6907,6 +7004,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         const shift = shiftInfo?.shift ?? '';
                         const shiftLabel =
                           shift === 'early' ? t('白班', 'Day') : shift === 'late' ? t('晚班', 'Night') : '-';
+                        const lastPunchAt = String(employeeLastPunchAtByStaffId[staff] ?? '').trim();
+                        let lastPunchDaysText = '-';
+                        if (lastPunchAt) {
+                          const at = new Date(lastPunchAt);
+                          if (!Number.isNaN(at.getTime())) {
+                            const days = Math.max(0, Math.floor((serverTime.getTime() - at.getTime()) / (24 * 60 * 60 * 1000)));
+                            lastPunchDaysText = t(`${days}天前`, `${days}d ago`);
+                          }
+                        }
                         const shiftTitle = shiftInfo
                           ? t(
                               `近${SHIFT_ANALYSIS_DAYS}天：白班 ${shiftInfo.earlyHours.toFixed(1)}h / 晚班 ${shiftInfo.lateHours.toFixed(1)}h`,
@@ -6941,6 +7047,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 {shiftLabel}
                               </span>
                             </td>
+                            <td className="px-4 py-3 text-slate-200">{lastPunchDaysText}</td>
                             <td className="px-4 py-3 text-right">
                               <button
                                 type="button"
