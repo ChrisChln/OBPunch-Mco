@@ -5580,40 +5580,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               <h1 className="font-display text-4xl tracking-[0.08em]">{t('后台系统', 'Admin Console')}</h1>
             </div>
 
-            {user && (
-              <div className="grid w-full max-w-[980px] grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                {(
-                  [
-                    { key: 'Pick', label: '拣货', hint: 'Pick' },
-                    { key: 'Pack', label: '打包', hint: 'Pack' },
-                    { key: 'Rebin', label: '二分', hint: 'Rebin' },
-                    { key: 'Preship', label: '尾程', hint: 'Preship' },
-                    { key: 'Transfer', label: '调拨', hint: 'Transfer' }
-                  ] as const
-                ).map((p) => {
-                  const s = attendanceStats[p.key] ?? { early: 0, late: 0, active: 0 };
-                  return (
-                    <div key={p.key} className="rounded-2xl bg-black/30 px-4 py-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-xs uppercase tracking-[0.22em] text-slate-400">{p.hint}</div>
-                          <div className="mt-1 text-base font-semibold text-slate-200">{p.label}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-xs text-slate-400">打卡中</div>
-                          <div className="mt-1 font-display text-2xl tracking-[0.08em] text-neon">{s.active}</div>
-                        </div>
-                      </div>
-                      <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
-                        <span>早班：{s.early}</span>
-                        <span>晚班：{s.late}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
             <div className="min-w-[260px] text-right">
               <div className="flex items-center justify-end gap-2">
                 <button
