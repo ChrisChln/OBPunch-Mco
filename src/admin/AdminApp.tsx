@@ -2393,12 +2393,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
             currentIn = null;
           }
         }
-        if (currentIn && rangeEnd.getTime() > currentIn.getTime()) {
-          intervals.push({ start: currentIn, end: rangeEnd });
-        }
         const { earlyHours, lateHours } = computeShiftHours(intervals);
         let shift: '' | 'early' | 'late' = '';
-        if (earlyHours > lateHours) shift = 'early';
+        // For open sessions (IN without OUT), do not inflate historical hour buckets.
+        // While on clock, infer shift directly from the current IN time.
+        if (currentIn) {
+          shift = getShiftBucketFromDate(currentIn) ?? '';
+        } else if (earlyHours > lateHours) shift = 'early';
         else if (lateHours > earlyHours) shift = 'late';
         shiftMap[staff] = { shift, earlyHours, lateHours };
       }
