@@ -2262,7 +2262,19 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       setEmployeesHasMore(false);
       fetchedEmployees = all;
 
-      const staffIds = all.map((e) => String(e.staff_id ?? '').trim()).filter(Boolean);
+      const staffIdsRaw = all.map((e) => String(e.staff_id ?? '').trim()).filter(Boolean);
+      const staffIds = Array.from(new Set(staffIdsRaw.map((id) => normalizeStaffId(id)).filter(Boolean)));
+      const staffIdsForQuery = Array.from(
+        new Set(
+          staffIdsRaw
+            .flatMap((id) => {
+              const trimmed = String(id ?? '').trim();
+              if (!trimmed) return [] as string[];
+              return [trimmed, trimmed.toUpperCase(), trimmed.toLowerCase(), normalizeStaffId(trimmed)];
+            })
+            .filter(Boolean)
+        )
+      );
       if (staffIds.length === 0) {
         setEmployeeShiftByStaffId({});
         setEmployeeLastPunchAtByStaffId({});
@@ -2314,7 +2326,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return { map: out, error: null as string | null };
       };
 
-      const latestPunchRes = await fetchLatestPunchAtByStaff(staffIds);
+      const latestPunchRes = await fetchLatestPunchAtByStaff(staffIdsForQuery);
       if (latestPunchRes.error) {
         setEmployeeLastPunchAtByStaffId({});
       } else {
@@ -2358,7 +2370,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return { rows: allRows, error: null as string | null };
       };
 
-      const punchesRes = await fetchPunchesForStaff(staffIds);
+      const punchesRes = await fetchPunchesForStaff(staffIdsForQuery);
       if (punchesRes.error) {
         setEmployeeShiftByStaffId({});
         return;
@@ -2366,7 +2378,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
       const eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT' }>> = {};
       for (const p of punchesRes.rows ?? []) {
-        const staff = String(p.staff_id ?? '').trim();
+        const staff = normalizeStaffId(String(p.staff_id ?? '').trim());
         const action = String(p.action ?? '').toUpperCase();
         const atRaw = String(p.created_at ?? '').trim();
         if (!staff || (action !== 'IN' && action !== 'OUT') || !atRaw) continue;
@@ -2379,7 +2391,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
 
       const shiftMap: Record<string, { shift: '' | 'early' | 'late'; earlyHours: number; lateHours: number }> = {};
-      for (const staff of staffIds) {
+      for (const staffRaw of staffIds) {
+        const staff = normalizeStaffId(staffRaw);
+        if (!staff) continue;
         const events = eventsByStaff[staff] ?? [];
         const intervals: Array<{ start: Date; end: Date }> = [];
         let currentIn: Date | null = null;
@@ -4225,6 +4239,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
     if (changed.length === 0) {
       setTimecardPunchError(null);
+      setStatus({ tone: 'idle', message: t('没有可保存的改动。', 'No changes to save.') });
+      closeTimecardPunchModal();
+      void fetchTimecard({ reset: true, lockUi: false });
+      void refreshHomePanel();
+      void refreshSchedulePanel();
       return;
     }
 
@@ -4236,6 +4255,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
     }
 
+    let saveFailed = false;
     await runLocked('timecard_edit_all', async () => {
       setTimecardPunchError(null);
       for (const item of changed) {
@@ -4271,6 +4291,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           .update({ action: item.edit.action, created_at: createdAt, metadata: nextMeta })
           .eq('id', item.rowId);
         if (error) {
+          saveFailed = true;
           setTimecardPunchError(error.message);
           return;
         }
@@ -4278,6 +4299,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
       const res = await fetchPunchRowsForTimecard(staff, timecardPunchDayIndex);
       if (res.error) {
+        saveFailed = true;
         setTimecardPunchError(res.error);
         return;
       }
@@ -4295,6 +4317,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
       await fetchTimecard({ reset: true, lockUi: false });
     });
+    if (saveFailed) return;
+    setStatus({ tone: 'success', message: t('打卡流水已保存。', 'Punch records saved.') });
+    closeTimecardPunchModal();
+    void refreshHomePanel();
+    void refreshSchedulePanel();
   };
   const deleteTimecardPunchPair = async (pair: { inRow?: PunchRow; outRow?: PunchRow }) => {
     if (!supabase) {
@@ -7777,7 +7804,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                         if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
                                         return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
                                       })()}
-                                      title="查看/编辑打卡流水"
+                                      title={t('查看/编辑打卡流水', 'View/Edit Punch Log')}
                                     >
                                       {formatHours(h)}
                                     </button>
@@ -7824,7 +7851,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                       if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
                                       return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
                                     })()}
-                                    title="查看本周打卡流水（只读）"
+                                    title={t('查看本周打卡流水（只读）', 'View this week punch log (read-only)')}
                                   >
                                     {formatHours(r.totalHours)}
                                   </button>
@@ -7842,18 +7869,31 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   typeof document !== 'undefined' &&
                   createPortal(
                     <div
-                      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+                      className={[
+                        'fixed inset-0 z-50 flex items-center justify-center p-4',
+                        themeMode === 'light' ? 'bg-slate-900/35' : 'bg-black/70'
+                      ].join(' ')}
                       role="dialog"
                       aria-modal="true"
                     >
-                      <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-950/90 shadow-2xl backdrop-blur">
-                        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
+                      <div
+                        className={[
+                          'flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-3xl shadow-2xl',
+                          themeMode === 'light' ? 'border border-slate-200 bg-white' : 'border border-white/10 bg-slate-950/90 backdrop-blur'
+                        ].join(' ')}
+                      >
+                        <div
+                          className={[
+                            'flex items-start justify-between gap-4 px-6 py-5',
+                            themeMode === 'light' ? 'border-b border-slate-200' : 'border-b border-white/10'
+                          ].join(' ')}
+                        >
                           <div>
-                            <h3 className="font-display text-2xl tracking-[0.08em]">打卡流水</h3>
-                            <p className="mt-2 text-xs text-slate-400">
-                              工号：<span className="text-slate-200">{timecardPunchStaffId}</span>
+                            <h3 className={['font-display text-2xl tracking-[0.08em]', themeMode === 'light' ? 'text-slate-900' : 'text-white'].join(' ')}>{t('打卡流水', 'Punch Log')}</h3>
+                            <p className={['mt-2 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                              {t('工号：', 'Staff ID:')}<span className={themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'}>{timecardPunchStaffId}</span>
                               {timecardPunchDayIndex === null ? (
-                                <span className="ml-2">（本周范围，仅查看）</span>
+                                <span className="ml-2">{t('（本周范围，仅查看）', '(This week only, read-only)')}</span>
                               ) : (
                                 <span className="ml-2">
                                   {timecardPunchShowAll
@@ -7869,7 +7909,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 type="button"
                                 disabled={isLocked}
                                 onClick={() => setTimecardPunchShowAll((v) => !v)}
-                                className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                                className={[
+                                  'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                                  themeMode === 'light'
+                                    ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                ].join(' ')}
                               >
                                 {timecardPunchShowAll ? t('只看相关', 'Relevant only') : t('显示全部', 'Show all')}
                               </button>
@@ -7879,7 +7924,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 type="button"
                                 disabled={isLocked}
                                 onClick={() => setTimecardPunchAddOpen((prev) => !prev)}
-                                className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                                className={[
+                                  'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                                  themeMode === 'light'
+                                    ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                ].join(' ')}
                               >
                                 {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
                               </button>
@@ -7891,42 +7941,62 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 onClick={() => void saveAllTimecardPunchRows()}
                                 className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                               >
-                                保存全部
+                                {t('保存全部', 'Save all')}
                               </button>
                             )}
                             <button
                               type="button"
                               disabled={isLocked}
                               onClick={closeTimecardPunchModal}
-                              className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                              className={[
+                                'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                                themeMode === 'light'
+                                  ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                  : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                              ].join(' ')}
                             >
-                              关闭
+                              {t('关闭', 'Close')}
                             </button>
                           </div>
                         </div>
 
                         <div className="flex-1 overflow-y-auto px-6 py-5">
                           {!timecardPunchReadOnly && timecardPunchAddOpen && (
-                            <div className="rounded-2xl border border-neon/40 bg-black/30 px-4 py-4 shadow-glow">
+                            <div
+                              className={[
+                                'rounded-2xl px-4 py-4',
+                                themeMode === 'light' ? 'border border-neon/50 bg-emerald-50' : 'border border-neon/40 bg-black/30 shadow-glow'
+                              ].join(' ')}
+                            >
                               <div className="grid gap-3 md:grid-cols-[1fr_1fr_7rem] md:items-end">
                                 <div>
-                                  <div className="text-xs uppercase tracking-[0.25em] text-slate-400">IN Time</div>
+                                  <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>IN Time</div>
                                   <input
                                     value={timecardPunchNew.inAtLocal}
                                     disabled={isLocked}
                                     onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, inAtLocal: e.target.value }))}
                                     type="datetime-local"
-                                    className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                                    className={[
+                                      'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                                      themeMode === 'light'
+                                        ? 'border border-slate-300 bg-white text-slate-900'
+                                        : 'border border-white/10 bg-black/30 text-white'
+                                    ].join(' ')}
                                   />
                                 </div>
                                 <div>
-                                  <div className="text-xs uppercase tracking-[0.25em] text-slate-400">OUT Time</div>
+                                  <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>OUT Time</div>
                                   <input
                                     value={timecardPunchNew.outAtLocal}
                                     disabled={isLocked}
                                     onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, outAtLocal: e.target.value }))}
                                     type="datetime-local"
-                                    className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                                    className={[
+                                      'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                                      themeMode === 'light'
+                                        ? 'border border-slate-300 bg-white text-slate-900'
+                                        : 'border border-white/10 bg-black/30 text-white'
+                                    ].join(' ')}
                                   />
                                 </div>
                                 <button
@@ -7935,16 +8005,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   onClick={() => void addTimecardPunchRow()}
                                   className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                                 >
-                                  添加
+                                  {t('添加', 'Add')}
                                 </button>
                               </div>
-                              <p className="mt-3 text-xs text-slate-400">手动一次添加一组 IN / OUT 打卡记录。</p>
+                              <p className={['mt-3 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{t('手动一次添加一组 IN / OUT 打卡记录。', 'Add one IN/OUT pair manually.')}</p>
                             </div>
                           )}
 
-                        {timecardPunchError && <p className="text-sm text-ember">操作失败：{timecardPunchError}</p>}
+                        {timecardPunchError && <p className="text-sm text-ember">{t('操作失败：', 'Failed: ')}{timecardPunchError}</p>}
                         {!timecardPunchError && timecardPunchRowsVisible.length === 0 && (
-                          <p className="text-sm text-slate-400">暂无记录</p>
+                          <p className={['text-sm', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{t('暂无记录', 'No records')}</p>
                         )}
 
                         {timecardPunchPairsVisible.length > 0 && (
@@ -7966,7 +8036,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               const renderPunchEditor = (row: PunchRow | undefined, edit: { action: 'IN' | 'OUT'; atLocal: string } | null) => {
                                 if (!row || !edit) {
                                   return (
-                                    <div className="rounded-xl border border-dashed border-white/10 bg-black/20 px-3 py-3 text-xs text-slate-500">
+                                    <div
+                                      className={[
+                                        'rounded-xl px-3 py-3 text-xs',
+                                        themeMode === 'light'
+                                          ? 'border border-dashed border-slate-300 bg-slate-50 text-slate-500'
+                                          : 'border border-dashed border-white/10 bg-black/20 text-slate-500'
+                                      ].join(' ')}
+                                    >
                                       -
                                     </div>
                                   );
@@ -7985,7 +8062,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                           }))
                                         }
                                         className={[
-                                          'mt-2 h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 font-display text-lg tracking-[0.08em] outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                                          'mt-2 h-10 w-full rounded-xl px-3 font-display text-lg tracking-[0.08em] outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                                          themeMode === 'light' ? 'border border-slate-300 bg-white' : 'border border-white/10 bg-black/30',
                                           edit.action === 'IN' ? 'text-mint' : 'text-ember'
                                         ].join(' ')}
                                       >
@@ -8005,7 +8083,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                           }))
                                         }
                                         type="datetime-local"
-                                        className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                                        className={[
+                                          'mt-2 h-10 w-full rounded-xl px-3 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                                          themeMode === 'light'
+                                            ? 'border border-slate-300 bg-white text-slate-900'
+                                            : 'border border-white/10 bg-black/30 text-white'
+                                        ].join(' ')}
                                       />
                                     </div>
                                   </div>
@@ -8014,7 +8097,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               return (
                                 <div
                                   key={pair.key}
-                                  className="relative rounded-2xl bg-white/5 px-4 py-4"
+                                  className={[
+                                    'relative rounded-2xl px-4 py-4',
+                                    themeMode === 'light' ? 'border border-slate-200 bg-slate-50' : 'bg-white/5'
+                                  ].join(' ')}
                                 >
                                   {!timecardPunchReadOnly && (
                                     <button
@@ -8022,7 +8108,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                       disabled={isLocked}
                                       onClick={() => void deleteTimecardPunchPair(pair)}
                                       className="absolute right-3 top-3 h-7 w-7 rounded-full bg-ember/85 text-sm font-bold text-white transition hover:bg-ember disabled:cursor-not-allowed disabled:opacity-60"
-                                      title="删除整行"
+                                      title={t('删除整行', 'Delete row')}
                                     >
                                       ×
                                     </button>
