@@ -602,6 +602,22 @@ export default function App() {
     return { action, error: null as string | null };
   };
 
+  const checkEmployeeRegistered = async (staff: string) => {
+    if (!supabase) {
+      return { registered: false, error: 'Missing Supabase configuration.' };
+    }
+
+    const base = () => supabase.from(EMPLOYEE_TABLE).select('staff_id').eq('staff_id', staff).limit(1);
+    const attempt = await base().order('created_at', { ascending: false });
+    const resolved = attempt.error ? await base() : attempt;
+    if (resolved.error) {
+      return { registered: false, error: resolved.error.message };
+    }
+
+    const rows = (resolved.data as Array<{ staff_id?: string | null }> | null) ?? [];
+    return { registered: rows.length > 0, error: null as string | null };
+  };
+
   useEffect(() => {
     if (!supabase || !isValidId) {
       setLastPunchAction(null);
@@ -1544,6 +1560,18 @@ export default function App() {
     setUiStatus({ tone: 'pending', message: `Punching... (${action})` });
 
     await runLocked('punch', async () => {
+      const registered = await checkEmployeeRegistered(normalizedId);
+      if (registered.error) {
+        setUiStatus({ tone: 'error', message: `Failed to verify employee: ${registered.error}` });
+        playError();
+        return;
+      }
+      if (!registered.registered) {
+        setUiStatus({ tone: 'error', message: `Employee not registered: ${normalizedId}` });
+        playError();
+        return;
+      }
+
       const latest = options?.skipLatestFetch
         ? { action: options?.latestAction ?? null, error: null as string | null }
         : await fetchLastPunch(normalizedId);
