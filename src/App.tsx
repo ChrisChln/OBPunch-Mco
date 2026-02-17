@@ -355,6 +355,7 @@ export default function App() {
   const busyRef = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const isLocked = Boolean(busy);
+  const [busyVisible, setBusyVisible] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const successInAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -565,6 +566,17 @@ export default function App() {
       inputRef.current?.focus();
     }
   }, [isLocked, page]);
+
+  useEffect(() => {
+    if (!busy) {
+      setBusyVisible(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setBusyVisible(true);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [busy]);
 
   useEffect(() => {
     const tick = () => {
@@ -2665,7 +2677,7 @@ const fetchPunchBoardUph = async (
           </section>
         )}
 
-        {isLocked && (
+        {busyVisible && (
           <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-sm">
             <div className="glass flex items-center gap-3 rounded-2xl px-5 py-4 shadow-2xl">
               <span className="h-5 w-5 animate-spin rounded-full border-2 border-neon/25 border-t-neon" />

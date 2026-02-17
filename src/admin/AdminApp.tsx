@@ -505,6 +505,7 @@ export default function AdminApp() {
   const busyRef = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const isLocked = Boolean(busy);
+  const [busyVisible, setBusyVisible] = useState(false);
   const timecardFetchSeqRef = useRef(0);
   const punchesFetchSeqRef = useRef(0);
   const attendanceFetchSeqRef = useRef(0);
@@ -994,6 +995,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     return () => window.clearInterval(timer);
   }, [offsetMs, page]);
 
+  useEffect(() => {
+    if (!busy) {
+      setBusyVisible(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setBusyVisible(true);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [busy]);
+
   const saveDailyListSelectedPositionsGlobal = async (
     next: Record<AllowedPosition, boolean>,
     operationalDateOverride?: string
@@ -1273,24 +1285,31 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
     await runLocked('schedule', async () => {
       setScheduleError(null);
-
-      let q = supabase
-        .from(SCHEDULE_TABLE)
-        .select('id, staff_id, date, shift, position, note, operator, updated_at, created_at')
-        .gte('date', startDate)
-        .lte('date', endDate)
-        .order('date', { ascending: false })
-        .order('staff_id', { ascending: true })
-        .limit(2000);
-
-      const res = await q;
-      if (res.error) {
-        if (!isAbortLikeError(res.error.message)) setScheduleError(res.error.message);
-        setScheduleRows([]);
-        return;
+      const pageSize = 1000;
+      const maxPages = 20;
+      const allRows: ScheduleRow[] = [];
+      for (let page = 0; page < maxPages; page += 1) {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const res = await supabase
+          .from(SCHEDULE_TABLE)
+          .select('id, staff_id, date, shift, position, note, operator, updated_at, created_at')
+          .gte('date', startDate)
+          .lte('date', endDate)
+          .order('date', { ascending: false })
+          .order('staff_id', { ascending: true })
+          .range(from, to);
+        if (res.error) {
+          if (!isAbortLikeError(res.error.message)) setScheduleError(res.error.message);
+          setScheduleRows([]);
+          return;
+        }
+        const rows = (((res.data as any[]) ?? []) as ScheduleRow[]);
+        allRows.push(...rows);
+        if (rows.length < pageSize) break;
       }
 
-      setScheduleRows(((res.data as any[]) ?? []) as ScheduleRow[]);
+      setScheduleRows(allRows);
     });
   };
 
@@ -1550,9 +1569,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     });
   };
 
-  const resetScheduleTransientStatesForWeek = async () => {
+  const resetScheduleTransientStatesForWeek = async (options?: { lockUi?: boolean }) => {
     if (!supabase) return;
     const weekStart = toDateOnly(startOfWeekMonday(new Date(serverTime)));
+    const lockUi = options?.lockUi ?? true;
 
     const settingRes = await supabase
       .from(APP_SETTINGS_TABLE)
@@ -1566,7 +1586,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const existingWeek = String(existing?.value?.week_start ?? '');
     if (existingWeek === weekStart) return;
 
-    await runLocked('schedule_week_reset', async () => {
+    const exec = async () => {
       setScheduleError(null);
       const resetRes = await supabase
         .from(SCHEDULE_TABLE)
@@ -1612,21 +1632,29 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           return row;
         })
       );
-    });
+    };
+
+    if (!lockUi) {
+      await exec();
+      return;
+    }
+    await runLocked('schedule_week_reset', exec);
   };
 
-  const refreshSchedulePanel = async () => {
-    await resetScheduleTransientStatesForWeek();
+  const refreshSchedulePanel = async (options?: { lockUi?: boolean }) => {
+    const lockUi = options?.lockUi ?? true;
+    await resetScheduleTransientStatesForWeek({ lockUi });
     await fetchSchedule();
-    const latestEmployees = await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
+    const latestEmployees = await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [], lockUi });
     await fetchSchedulePublishSetting();
     await fetchSchedulePunchPresence({ employeesOverride: latestEmployees });
     await fetchScheduleUph({ employeesOverride: latestEmployees });
   };
 
-  const refreshHomePanel = async () => {
+  const refreshHomePanel = async (options?: { lockUi?: boolean }) => {
+    const lockUi = options?.lockUi ?? true;
     await fetchSchedule();
-    const latestEmployees = await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
+    const latestEmployees = await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [], lockUi });
     // Home dashboard should use current week punch presence, independent of Schedule page week navigation.
     await fetchSchedulePunchPresence({ employeesOverride: latestEmployees, weekOffsetOverride: 0, mode: 'operational_day' });
   };
@@ -2202,13 +2230,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     search,
     agency,
     position,
-    labels
+    labels,
+    lockUi: lockUiOption
   }: {
     reset: boolean;
     search?: string;
     agency?: string;
     position?: string;
     labels?: string[];
+    lockUi?: boolean;
   }): Promise<EmployeeRow[] | null> => {
     if (!supabase) {
       setEmployeesError('缺少 Supabase 配置。');
@@ -2219,10 +2249,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const agencyValue = (agency ?? employeeAgency).trim();
     const positionValue = (position ?? employeePosition).trim();
     const labelValues = (labels ?? employeeLabels).map((item) => item.trim()).filter(Boolean);
+    const lockUi = lockUiOption ?? true;
 
     let fetchedEmployees: EmployeeRow[] | null = null;
 
-    await runLocked('employees', async () => {
+    const exec = async () => {
       setEmployeesError(null);
 
       const pageSize = 200;
@@ -2454,7 +2485,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         shiftMap[staff] = { shift, earlyHours, lateHours };
       }
       setEmployeeShiftByStaffId(shiftMap);
-    });
+    };
+    if (!lockUi) {
+      await exec();
+    } else {
+      await runLocked('employees', exec);
+    }
     return fetchedEmployees;
   };
 
@@ -4407,13 +4443,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   useEffect(() => {
     // 当切换到页面时自动加载
     if (page === 'home') {
-      void refreshHomePanel();
+      void refreshHomePanel({ lockUi: false });
     }
     if (page === 'punches') {
-      void fetchRecentPunches({ search: punchesSearch });
+      void fetchRecentPunches({ search: punchesSearch, lockUi: false });
     }
     if (page === 'employees') {
-      void fetchEmployees({ reset: true });
+      void fetchEmployees({ reset: true, lockUi: false });
     }
     if (page === 'timecard') {
       void fetchTimecard({ reset: true, lockUi: false });
@@ -4422,7 +4458,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       void fetchAudit({ search: auditSearch });
     }
     if (page === 'schedule') {
-      void refreshSchedulePanel();
+      void refreshSchedulePanel({ lockUi: false });
     }
   }, [page]);
 
@@ -5290,10 +5326,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   useEffect(() => {
     if (page !== 'schedule') return;
     if (scheduleRenderCount >= scheduleEmployeesFiltered.length) return;
-    const timer = window.setTimeout(() => {
-      setScheduleRenderCount((prev) => Math.min(prev + 120, scheduleEmployeesFiltered.length));
-    }, 16);
-    return () => window.clearTimeout(timer);
+    const onScroll = () => {
+      const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+      const viewport = window.innerHeight || document.documentElement.clientHeight || 0;
+      const fullHeight = document.documentElement.scrollHeight || document.body.scrollHeight || 0;
+      if (scrollTop + viewport < fullHeight - 240) return;
+      setScheduleRenderCount((prev) => {
+        if (prev >= scheduleEmployeesFiltered.length) return prev;
+        return Math.min(prev + 120, scheduleEmployeesFiltered.length);
+      });
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
   }, [page, scheduleRenderCount, scheduleEmployeesFiltered]);
 
   const scheduleWorkingCountByDayIndex = useMemo(() => {
@@ -8223,7 +8267,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           </>
         )}
 
-        {isLocked && (
+        {busyVisible && (
           <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-sm">
             <div
               className={[
