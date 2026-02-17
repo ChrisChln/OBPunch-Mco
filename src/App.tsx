@@ -73,6 +73,8 @@ const ROSTER_RESET_HOUR = Number.isFinite(ROSTER_RESET_HOUR_RAW) ? Math.max(0, M
 const ABSENT_RESET_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const ABSENT_RESET_HOUR = Number.isFinite(ABSENT_RESET_HOUR_RAW) ? Math.max(0, Math.min(23, ABSENT_RESET_HOUR_RAW)) : 5;
 const LATE_ABSENT_VISIBLE_MINUTES = 16 * 60 + 30; // 16:30
+const ABSENT_ROSTER_CACHE_TTL_MS = 60 * 1000;
+const ARRIVAL_METRICS_CACHE_TTL_MS = 60 * 1000;
 
 const supabase = createSupabaseClient({ persistSession: false });
 const obupSupabase = createSupabaseClientWithCredentials({
@@ -297,6 +299,7 @@ const fuzzyNameSimilarity = (aRaw: string, bRaw: string) => {
 };
 const PUNCH_LOG_UPH_DAYS = 30;
 const PUNCH_LOG_UPH_FUZZY_THRESHOLD = 0.7;
+const PUNCH_LOG_UPH_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const getShiftBucketByInAt = (inAtIso: string): '' | 'early' | 'late' => {
   const dt = new Date(inAtIso);
   if (Number.isNaN(dt.getTime())) return '';
@@ -359,6 +362,21 @@ export default function App() {
   const errorAudioRef = useRef<HTMLAudioElement | null>(null);
   const arrivalShiftCacheRef = useRef<{ at: number; map: Record<string, '' | 'early' | 'late'> }>({ at: 0, map: {} });
   const punchBoardUphFetchSeqRef = useRef(0);
+  const punchBoardUphCacheRef = useRef<{ at: number; key: string; map: Record<string, number | null> }>({
+    at: 0,
+    key: '',
+    map: {}
+  });
+  const absentRosterCacheRef = useRef<{ at: number; key: string; rows: AbsentRosterItem[] }>({
+    at: 0,
+    key: '',
+    rows: []
+  });
+  const arrivalMetricsCacheRef = useRef<{ at: number; key: string; rows: ArrivalMetric[] }>({
+    at: 0,
+    key: '',
+    rows: []
+  });
 
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
@@ -373,7 +391,7 @@ export default function App() {
 
   useEffect(() => {
     if (typeof Audio === 'undefined') return;
-    const successIn = new Audio(encodeURI('/sound/success in.mp3'));
+    const successIn = new Audio('/sound/success.mp3');
     successIn.preload = 'auto';
     successIn.volume = 1;
     successInAudioRef.current = successIn;
@@ -792,7 +810,7 @@ const fetchPunchBoardUph = async (
     punchBoardUphFetchSeqRef.current = seq;
     if (!obupSupabase || staffIds.length === 0) {
       if (seq === punchBoardUphFetchSeqRef.current) setPunchBoardUphByStaffId({});
-      return;
+      return {} as Record<string, number | null>;
     }
 
     const stageEmployees = new Map<'picking' | 'sorting' | 'packing', Map<string, string[]>>();
@@ -812,7 +830,7 @@ const fetchPunchBoardUph = async (
     }
     if (stageEmployees.size === 0) {
       if (seq === punchBoardUphFetchSeqRef.current) setPunchBoardUphByStaffId({});
-      return;
+      return {} as Record<string, number | null>;
     }
 
     const now = new Date();
@@ -834,7 +852,7 @@ const fetchPunchBoardUph = async (
         .range(from, to);
       if (reportsRes.error) {
         if (seq === punchBoardUphFetchSeqRef.current) setPunchBoardUphByStaffId({});
-        return;
+        return {} as Record<string, number | null>;
       }
       const rows = (reportsRes.data as Array<{ id?: string | null; stage?: string | null }> | null) ?? [];
       for (const row of rows) {
@@ -849,7 +867,7 @@ const fetchPunchBoardUph = async (
     const reportIds = Array.from(reportIdToStage.keys());
     if (reportIds.length === 0) {
       if (seq === punchBoardUphFetchSeqRef.current) setPunchBoardUphByStaffId({});
-      return;
+      return {} as Record<string, number | null>;
     }
 
     const avgByStageOperator = new Map<'picking' | 'sorting' | 'packing', Map<string, { sum: number; count: number }>>();
@@ -936,6 +954,7 @@ const fetchPunchBoardUph = async (
     if (seq === punchBoardUphFetchSeqRef.current) {
       setPunchBoardUphByStaffId(nextMap);
     }
+    return nextMap;
   };
   const inferShiftByWorkHoursForStaff = async (staffIds: string[]) => {
     if (!supabase || staffIds.length === 0) {
@@ -1077,7 +1096,7 @@ const fetchPunchBoardUph = async (
     setDailyRoster(list);
   };
 
-  const fetchAbsentRoster = async () => {
+  const fetchAbsentRoster = async (options?: { force?: boolean }) => {
     if (!supabase) {
       setAbsentRoster([]);
       return;
@@ -1086,6 +1105,13 @@ const fetchPunchBoardUph = async (
     const now = new Date();
     const todayDayIndex = getDayIndexByCutoff(now, ABSENT_RESET_HOUR);
     const templateDate = getTemplateDateByDayIndex(todayDayIndex);
+    const force = Boolean(options?.force);
+    const cache = absentRosterCacheRef.current;
+    const cacheFresh = Date.now() - cache.at < ABSENT_ROSTER_CACHE_TTL_MS;
+    if (!force && cacheFresh && cache.key === templateDate) {
+      setAbsentRoster([...cache.rows]);
+      return;
+    }
 
     const scheduleRes = await supabase
       .from(SCHEDULE_TABLE)
@@ -1111,6 +1137,7 @@ const fetchPunchBoardUph = async (
     );
     if (scheduledStaff.length === 0) {
       setAbsentRoster([]);
+      absentRosterCacheRef.current = { at: Date.now(), key: templateDate, rows: [] };
       return;
     }
     const inferredShiftByStaff = await inferShiftByWorkHoursForStaff(scheduledStaff);
@@ -1160,8 +1187,9 @@ const fetchPunchBoardUph = async (
       });
 
     setAbsentRoster(list);
+    absentRosterCacheRef.current = { at: Date.now(), key: templateDate, rows: [...list] };
   };
-  const fetchArrivalMetrics = async () => {
+  const fetchArrivalMetrics = async (options?: { force?: boolean }) => {
     const empty: ArrivalMetric[] = ['early', 'late'].flatMap((shift) =>
       ALLOWED_POSITIONS.map((position) => ({
         shift: shift as 'early' | 'late',
@@ -1183,6 +1211,20 @@ const fetchPunchBoardUph = async (
     const now = new Date();
     const todayDayIndex = getDayIndexByCutoff(now, ABSENT_RESET_HOUR);
     const templateDate = getTemplateDateByDayIndex(todayDayIndex);
+    const force = Boolean(options?.force);
+    const cache = arrivalMetricsCacheRef.current;
+    const cacheFresh = Date.now() - cache.at < ARRIVAL_METRICS_CACHE_TTL_MS;
+    if (!force && cacheFresh && cache.key === templateDate) {
+      setArrivalMetrics(
+        cache.rows.map((row) => ({
+          ...row,
+          onClockStaff: [...row.onClockStaff],
+          restWorkedStaff: [...row.restWorkedStaff],
+          scheduledNotClockInStaff: [...row.scheduledNotClockInStaff]
+        }))
+      );
+      return;
+    }
     const scheduleRes = await supabase
       .from(SCHEDULE_TABLE)
       .select('id, staff_id, position, shift, note, updated_at, created_at')
@@ -1370,6 +1412,16 @@ const fetchPunchBoardUph = async (
       })
     );
     setArrivalMetrics(out);
+    arrivalMetricsCacheRef.current = {
+      at: Date.now(),
+      key: templateDate,
+      rows: out.map((row) => ({
+        ...row,
+        onClockStaff: [...row.onClockStaff],
+        restWorkedStaff: [...row.restWorkedStaff],
+        scheduledNotClockInStaff: [...row.scheduledNotClockInStaff]
+      }))
+    };
   };
   const fetchTomorrowListSetting = async () => {
     if (!supabase) {
@@ -1447,7 +1499,7 @@ const fetchPunchBoardUph = async (
     setRosterShiftByStaffId(out);
   };
 
-  const fetchPunchBoard = async (options?: { position?: AllowedPosition | '' }) => {
+  const fetchPunchBoard = async (options?: { position?: AllowedPosition | ''; forceUph?: boolean }) => {
     if (!supabase) {
       setPunchBoardError('Missing Supabase configuration.');
       return;
@@ -1456,6 +1508,7 @@ const fetchPunchBoardUph = async (
     setPunchBoardError(null);
 
     const position = options?.position ?? '';
+    const forceUph = Boolean(options?.forceUph);
 
     const loadLatestAll = async () => {
       const base = () => supabase.from('ob_punches').select('id, staff_id, action, created_at').limit(30);
@@ -1538,7 +1591,28 @@ const fetchPunchBoardUph = async (
       return;
     }
     setPunchBoardEmployeeMap(mapRes.map);
-    void fetchPunchBoardUph(staffIds, mapRes.map);
+    const normalizedStaffIds = Array.from(new Set(staffIds.map((v) => normalizeStaffId(v)).filter(Boolean))).sort((a, b) =>
+      a.localeCompare(b, 'en-US')
+    );
+    const uphCacheKey = normalizedStaffIds
+      .map((staff) => {
+        const profile = mapRes.map[staff];
+        return `${staff}:${String(profile?.position ?? '').trim()}:${String(profile?.name ?? '').trim()}`;
+      })
+      .join('|');
+    const uphCache = punchBoardUphCacheRef.current;
+    const cacheFresh = Date.now() - uphCache.at < PUNCH_LOG_UPH_CACHE_TTL_MS;
+    if (!forceUph && cacheFresh && uphCache.key === uphCacheKey) {
+      setPunchBoardUphByStaffId(uphCache.map);
+      return;
+    }
+
+    const nextUphMap = await fetchPunchBoardUph(staffIds, mapRes.map);
+    punchBoardUphCacheRef.current = {
+      at: Date.now(),
+      key: uphCacheKey,
+      map: { ...nextUphMap }
+    };
   };
 
   useEffect(() => {
@@ -1559,7 +1633,7 @@ const fetchPunchBoardUph = async (
       void fetchTomorrowListSetting();
       void fetchAbsentRoster();
       void fetchArrivalMetrics();
-    }, 15000);
+    }, 60000);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -2301,7 +2375,7 @@ const fetchPunchBoardUph = async (
                   <button
                     type="button"
                     disabled={isLocked}
-                    onClick={() => void fetchPunchBoard({ position: punchLogPositionFilter })}
+                    onClick={() => void fetchPunchBoard({ position: punchLogPositionFilter, forceUph: true })}
                     className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     Refresh

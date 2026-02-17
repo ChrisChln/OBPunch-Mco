@@ -4433,18 +4433,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return;
     }
     let active = true;
-    void (async () => {
+    const sync = async () => {
       if (!active) return;
       await fetchRealtimeAttendance();
-    })();
+      if (employees.length > 0) {
+        await fetchSchedulePunchPresence({ employeesOverride: employees, weekOffsetOverride: 0, mode: 'operational_day' });
+      }
+    };
+    void sync();
     const timer = window.setInterval(() => {
-      void fetchRealtimeAttendance();
-    }, 30000);
+      void sync();
+    }, 60000);
     return () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [user, offsetMs, page]);
+  }, [user, offsetMs, page, employees]);
 
   useEffect(() => {
     if (page !== 'punches') {
@@ -4465,24 +4469,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     if (page !== 'schedule') return;
     void fetchScheduleUph();
   }, [page, employees]);
-
-  useEffect(() => {
-    if (page !== 'home' || !user) return;
-    if (employees.length === 0) return;
-    let active = true;
-    const sync = async () => {
-      if (!active) return;
-      await fetchSchedulePunchPresence({ employeesOverride: employees, weekOffsetOverride: 0, mode: 'operational_day' });
-    };
-    void sync();
-    const timer = window.setInterval(() => {
-      void sync();
-    }, 20000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [page, user, employees]);
 
   const onFileSelected = async (file: File | null) => {
     if (!file) {
