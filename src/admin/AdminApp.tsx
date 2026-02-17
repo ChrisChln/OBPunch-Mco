@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
@@ -287,6 +287,10 @@ const getDayIndexFromTemplateDate = (dateOnly: string) => {
 };
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const SCHEDULE_PICKER_WIDTH = 176;
+const SCHEDULE_PICKER_HEIGHT_ESTIMATE = 180;
+const SCHEDULE_PICKER_MARGIN = 8;
+const SCHEDULE_PICKER_GAP = 6;
 const isAbortLikeError = (error: unknown) => {
   const message = String((error as any)?.message ?? error ?? '').toLowerCase();
   const name = String((error as any)?.name ?? '');
@@ -1138,11 +1142,20 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (!active) {
         return;
       }
-      setUser(data.session?.user ?? null);
+      const sessionUser = data.session?.user ?? null;
+      setUser(sessionUser);
+      if (sessionUser) {
+        setStatus({ tone: 'success', message: 'Auto-signed in' });
+      } else {
+        setStatus({ tone: 'idle', message: 'Please sign in' });
+      }
     });
 
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
+      if (event === 'SIGNED_OUT') {
+        setStatus({ tone: 'idle', message: 'Signed out' });
+      }
     });
 
     return () => {
@@ -1627,6 +1640,29 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     currentState: ScheduleDisplayState,
     anchorRect: DOMRect
   ) => {
+    if (schedulePicker.open && schedulePicker.cellKey === cellKey) {
+      setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
+      return;
+    }
+
+    const visual = typeof window !== 'undefined' ? window.visualViewport : null;
+    const viewportLeft = visual ? visual.offsetLeft : 0;
+    const viewportTop = visual ? visual.offsetTop : 0;
+    const viewportWidth = visual ? visual.width : window.innerWidth;
+    const viewportHeight = visual ? visual.height : window.innerHeight;
+    const halfWidth = SCHEDULE_PICKER_WIDTH / 2;
+    const minLeft = viewportLeft + halfWidth + SCHEDULE_PICKER_MARGIN;
+    const maxLeft = viewportLeft + viewportWidth - halfWidth - SCHEDULE_PICKER_MARGIN;
+    const preferredLeft = anchorRect.left + anchorRect.width / 2;
+    const anchorLeft = clamp(preferredLeft, minLeft, Math.max(minLeft, maxLeft));
+
+    const minTop = viewportTop + SCHEDULE_PICKER_MARGIN;
+    const maxTop = viewportTop + viewportHeight - SCHEDULE_PICKER_HEIGHT_ESTIMATE - SCHEDULE_PICKER_MARGIN;
+    const belowTop = anchorRect.bottom + SCHEDULE_PICKER_GAP;
+    const aboveTop = anchorRect.top - SCHEDULE_PICKER_HEIGHT_ESTIMATE - SCHEDULE_PICKER_GAP;
+    const preferredTop = belowTop <= maxTop ? belowTop : aboveTop;
+    const anchorTop = clamp(preferredTop, minTop, Math.max(minTop, maxTop));
+
     setSchedulePicker({
       open: true,
       cellKey,
@@ -1635,8 +1671,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       workDate,
       targetShift,
       currentState,
-      anchorLeft: anchorRect.left + anchorRect.width / 2,
-      anchorTop: anchorRect.bottom + 6
+      anchorLeft,
+      anchorTop
     });
   };
 
@@ -6224,7 +6260,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="font-display text-2xl tracking-[0.08em]">Schedule</h2>
-                    <p className="mt-2 text-xs text-slate-400">Weekly matrix: Work / Temp Work / Excuse / Temp Rest / Rest.</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <button
@@ -6355,7 +6390,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       value={scheduleSearchInput}
                       onChange={(e) => setScheduleSearchInput(e.target.value)}
                       disabled={isLocked}
-                      placeholder="Search by staff id / name / position"
+                      placeholder="Search by staff id / name"
                       className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </div>
@@ -7043,11 +7078,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   >
                     {t('搜索', 'Search')}
                   </button>
-                  <div className="text-xs text-slate-400">
-                    {t('已加载：', 'Loaded: ')}
-                    {employeesFiltered.length}
-                    {t(' 条', '')}
-                  </div>
                 </div>
 
                 {employeeAddOpen && (
@@ -7698,12 +7728,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       {t('只看打卡中', 'In progress only')}
                     </label>
                   </div>
-                </div>
-
-                <div className="mt-4 text-xs text-slate-400">
-                  {t('已加载：', 'Loaded: ')}
-                  {timecardRowsFiltered.length} / {timecardRows.length}
-                  {t(' 人', '')}
                 </div>
 
                 {timecardError && <p className="mt-3 text-sm text-ember">加载失败：{timecardError}</p>}
