@@ -819,25 +819,32 @@ const fetchPunchBoardUph = async (
     const startKey = toDateOnly(addDays(now, -(PUNCH_LOG_UPH_DAYS - 1)));
     const endKey = toDateOnly(now);
     const stages = Array.from(stageEmployees.keys());
-    const reportsRes = await obupSupabase
-      .from(OBUP_REPORTS_TABLE)
-      .select('id, stage')
-      .gte('work_date', startKey)
-      .lte('work_date', endKey)
-      .in('stage', stages as any[])
-      .limit(10000);
-    if (reportsRes.error) {
-      if (seq === punchBoardUphFetchSeqRef.current) setPunchBoardUphByStaffId({});
-      return;
-    }
-
     const reportIdToStage = new Map<string, 'picking' | 'sorting' | 'packing'>();
-    for (const row of (reportsRes.data as Array<{ id?: string | null; stage?: string | null }> | null) ?? []) {
-      const reportId = String(row.id ?? '').trim();
-      const stageRaw = String(row.stage ?? '').trim().toLowerCase();
-      const stage = stageRaw === 'picking' || stageRaw === 'packing' || stageRaw === 'sorting' ? stageRaw : null;
-      if (!reportId || !stage) continue;
-      reportIdToStage.set(reportId, stage);
+    const reportPageSize = 1000;
+    const reportMaxPages = 50;
+    for (let page = 0; page < reportMaxPages; page += 1) {
+      const from = page * reportPageSize;
+      const to = from + reportPageSize - 1;
+      const reportsRes = await obupSupabase
+        .from(OBUP_REPORTS_TABLE)
+        .select('id, stage')
+        .gte('work_date', startKey)
+        .lte('work_date', endKey)
+        .in('stage', stages as any[])
+        .range(from, to);
+      if (reportsRes.error) {
+        if (seq === punchBoardUphFetchSeqRef.current) setPunchBoardUphByStaffId({});
+        return;
+      }
+      const rows = (reportsRes.data as Array<{ id?: string | null; stage?: string | null }> | null) ?? [];
+      for (const row of rows) {
+        const reportId = String(row.id ?? '').trim();
+        const stageRaw = String(row.stage ?? '').trim().toLowerCase();
+        const stage = stageRaw === 'picking' || stageRaw === 'packing' || stageRaw === 'sorting' ? stageRaw : null;
+        if (!reportId || !stage) continue;
+        reportIdToStage.set(reportId, stage);
+      }
+      if (rows.length < reportPageSize) break;
     }
     const reportIds = Array.from(reportIdToStage.keys());
     if (reportIds.length === 0) {
@@ -847,30 +854,39 @@ const fetchPunchBoardUph = async (
 
     const avgByStageOperator = new Map<'picking' | 'sorting' | 'packing', Map<string, { sum: number; count: number }>>();
     for (const batch of chunk(reportIds, 100)) {
-      const detailsRes = await obupSupabase
-        .from(OBUP_REPORT_DETAILS_TABLE)
-        .select('report_id, operator, uph')
-        .in('report_id', batch)
-        .limit(20000);
-      if (detailsRes.error) continue;
-      for (const row of
-        (detailsRes.data as Array<{ report_id?: string | null; operator?: string | null; uph?: number | null }> | null) ?? []) {
-        const reportId = String(row.report_id ?? '').trim();
-        const stage = reportIdToStage.get(reportId);
-        if (!stage) continue;
-        const operatorKey = normalizeWorkOperatorKey(String(row.operator ?? '').trim());
-        const uph = parseUph(row.uph);
-        if (!operatorKey || uph === null) continue;
-        if (!avgByStageOperator.has(stage)) avgByStageOperator.set(stage, new Map());
-        const byOperator = avgByStageOperator.get(stage)!;
-        const prev = byOperator.get(operatorKey) ?? { sum: 0, count: 0 };
-        prev.sum += uph;
-        prev.count += 1;
-        byOperator.set(operatorKey, prev);
+      const pageSize = 1000;
+      const maxPages = 30;
+      for (let page = 0; page < maxPages; page += 1) {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const detailsRes = await obupSupabase
+          .from(OBUP_REPORT_DETAILS_TABLE)
+          .select('report_id, operator, uph')
+          .in('report_id', batch)
+          .range(from, to);
+        if (detailsRes.error) break;
+        const rows =
+          (detailsRes.data as Array<{ report_id?: string | null; operator?: string | null; uph?: number | null }> | null) ?? [];
+        for (const row of rows) {
+          const reportId = String(row.report_id ?? '').trim();
+          const stage = reportIdToStage.get(reportId);
+          if (!stage) continue;
+          const operatorKey = normalizeWorkOperatorKey(String(row.operator ?? '').trim());
+          const uph = parseUph(row.uph);
+          if (!operatorKey || uph === null) continue;
+          if (!avgByStageOperator.has(stage)) avgByStageOperator.set(stage, new Map());
+          const byOperator = avgByStageOperator.get(stage)!;
+          const prev = byOperator.get(operatorKey) ?? { sum: 0, count: 0 };
+          prev.sum += uph;
+          prev.count += 1;
+          byOperator.set(operatorKey, prev);
+        }
+        if (rows.length < pageSize) break;
       }
     }
 
     const accountLinkMap = new Map<string, string>();
+    const accountLinkReverseMap = new Map<string, string>();
     const linksRes = await obupSupabase
       .from(OBUP_ACCOUNT_LINKS_TABLE)
       .select('source_name, target_name, updated_at')
@@ -882,6 +898,7 @@ const fetchPunchBoardUph = async (
         const targetKey = normalizeWorkOperatorKey(String(row.target_name ?? '').trim());
         if (!sourceKey || !targetKey || accountLinkMap.has(sourceKey)) continue;
         accountLinkMap.set(sourceKey, targetKey);
+        if (!accountLinkReverseMap.has(targetKey)) accountLinkReverseMap.set(targetKey, sourceKey);
       }
     }
 
@@ -893,6 +910,10 @@ const fetchPunchBoardUph = async (
         let matchedKey: string | null = null;
         const mappedTarget = accountLinkMap.get(employeeKey);
         if (mappedTarget && operatorAvgByKey.has(mappedTarget)) matchedKey = mappedTarget;
+        if (!matchedKey) {
+          const mappedSource = accountLinkReverseMap.get(employeeKey);
+          if (mappedSource && operatorAvgByKey.has(mappedSource)) matchedKey = mappedSource;
+        }
         if (!matchedKey && operatorAvgByKey.has(employeeKey)) matchedKey = employeeKey;
         if (!matchedKey) {
           let bestKey = '';
