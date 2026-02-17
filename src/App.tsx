@@ -421,7 +421,7 @@ export default function App() {
   const [punchBoard, setPunchBoard] = useState<PunchBoardRow[]>([]);
   const [punchBoardError, setPunchBoardError] = useState<string | null>(null);
   const [punchBoardEmployeeMap, setPunchBoardEmployeeMap] = useState<
-    Record<string, { name: string; agency: string; position: string }>
+    Record<string, { name: string; agency: string; position: string; label: string }>
   >({});
   const [punchBoardUphByStaffId, setPunchBoardUphByStaffId] = useState<Record<string, number | null>>({});
   const [punchLogPositionFilter, setPunchLogPositionFilter] = useState<AllowedPosition | ''>('');
@@ -720,17 +720,41 @@ export default function App() {
 
   const fetchEmployeeMap = async (staffIds: string[]) => {
     if (!supabase || staffIds.length === 0) {
-      return { map: {} as Record<string, { name: string; agency: string; position: string }>, error: null as string | null };
+      return {
+        map: {} as Record<string, { name: string; agency: string; position: string; label: string }>,
+        error: null as string | null
+      };
     }
 
     const ids = Array.from(new Set(staffIds.map((s) => s.trim()).filter(Boolean)));
     if (ids.length === 0) {
-      return { map: {} as Record<string, { name: string; agency: string; position: string }>, error: null as string | null };
+      return {
+        map: {} as Record<string, { name: string; agency: string; position: string; label: string }>,
+        error: null as string | null
+      };
     }
 
     const runQuery = async (mode: EmployeeColumnMode) => {
-      const select = mode === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
-      return await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', ids);
+      const selects =
+        mode === 'cased'
+          ? [
+              'staff_id, name, "Agency", "Position", "Label"',
+              'staff_id, name, "Agency", "Position", label',
+              'staff_id, name, "Agency", "Position"'
+            ]
+          : [
+              'staff_id, name, agency, position, label',
+              'staff_id, name, agency, position, "Label"',
+              'staff_id, name, agency, position'
+            ];
+
+      let lastRes: any = null;
+      for (const select of selects) {
+        const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', ids);
+        if (!res.error) return res;
+        lastRes = res;
+      }
+      return lastRes;
     };
 
     const mode = await resolveEmployeeColumnMode();
@@ -741,24 +765,28 @@ export default function App() {
       rows = await runQuery(flipped);
     }
     if (rows.error) {
-      return { map: {} as Record<string, { name: string; agency: string; position: string }>, error: rows.error.message };
+      return {
+        map: {} as Record<string, { name: string; agency: string; position: string; label: string }>,
+        error: rows.error.message
+      };
     }
 
-    const map: Record<string, { name: string; agency: string; position: string }> = {};
+    const map: Record<string, { name: string; agency: string; position: string; label: string }> = {};
     for (const r of (rows.data as any[] | null) ?? []) {
       const staff = String(r.staff_id ?? '').trim();
       if (!staff) continue;
       map[staff] = {
         name: String(r.name ?? '').trim(),
         agency: String(r.agency ?? r.Agency ?? '').trim(),
-        position: String(r.position ?? r.Position ?? '').trim()
+        position: String(r.position ?? r.Position ?? '').trim(),
+        label: String(r.label ?? r.Label ?? '').trim()
       };
     }
     return { map, error: null as string | null };
   };
-  const fetchPunchBoardUph = async (
+const fetchPunchBoardUph = async (
     staffIds: string[],
-    employeeMap: Record<string, { name: string; agency: string; position: string }>
+    employeeMap: Record<string, { name: string; agency: string; position: string; label: string }>
   ) => {
     const seq = punchBoardUphFetchSeqRef.current + 1;
     punchBoardUphFetchSeqRef.current = seq;
@@ -1303,11 +1331,15 @@ export default function App() {
           const name = String(displayEmployeeMap[staff]?.name ?? '').trim();
           return name ? `${name} (${staff})` : staff;
         });
+        const presentIds = new Set<string>([
+          ...Array.from(arrivedByKey.get(key) ?? []),
+          ...Array.from(restWorkedByKey.get(key) ?? [])
+        ]);
         return {
           shift: shift as 'early' | 'late',
           position,
           expected: staffByKey.get(key)?.size ?? 0,
-          present: arrivedByKey.get(key)?.size ?? 0,
+          present: presentIds.size,
           onClock: onClockByKey.get(key)?.size ?? 0,
           onClockStaff,
           restWorked: restWorkedByKey.get(key)?.size ?? 0,
@@ -2079,7 +2111,19 @@ export default function App() {
                                 {formatShiftLabel(early.shift)} {position}
                               </div>
                               <div className="mt-1 text-[11px] text-slate-400">
-                                Expected {early.expected} · Present {early.present}
+                                {early.present}/{early.expected}
+                                <span
+                                  className={[
+                                    'ml-3 font-bold',
+                                    early.expected > 0 && (early.present / early.expected) * 100 < 80
+                                      ? 'text-rose-400'
+                                      : early.expected > 0 && (early.present / early.expected) * 100 >= 90
+                                        ? 'text-emerald-400'
+                                        : 'text-slate-300'
+                                  ].join(' ')}
+                                >
+                                  {early.expected > 0 ? `${((early.present / early.expected) * 100).toFixed(1)}%` : '0.0%'}
+                                </span>
                               </div>
                             </div>
                             <div className="group relative z-10 rounded-md bg-slate-950/70 px-3 py-1.5 text-center hover:z-50">
@@ -2092,13 +2136,13 @@ export default function App() {
                               >
                                 {earlyOnClockStaffCombined.length}
                               </div>
-                              <div className="pointer-events-auto absolute left-1/2 top-full z-30 mt-2 hidden w-[min(50rem,calc(100vw-2rem))] -translate-x-1/2 gap-2 group-hover:grid md:grid-cols-3">
+                              <div className="pointer-events-auto absolute left-1/2 top-full z-30 hidden w-[min(50rem,calc(100vw-2rem))] -translate-x-1/2 gap-2 group-hover:grid md:grid-cols-3">
                                 <div className="min-w-0 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl">
                                   <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Attendance Staff</div>
                                   {early.onClockStaff.length === 0 ? (
                                     <div className="text-xs text-slate-300">No one on clock</div>
                                   ) : (
-                                    <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
+                                    <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
                                       {early.onClockStaff.map((staffName) => (
                                         <div key={`early-on-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
@@ -2112,7 +2156,7 @@ export default function App() {
                                   {early.restWorkedStaff.length === 0 ? (
                                     <div className="text-xs text-slate-300">No rest-worked staff</div>
                                   ) : (
-                                    <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
+                                    <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
                                       {early.restWorkedStaff.map((staffName) => (
                                         <div key={`early-rest-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
@@ -2128,7 +2172,7 @@ export default function App() {
                                   {early.scheduledNotClockInStaff.length === 0 ? (
                                     <div className="text-xs text-slate-300">No missing clock-in staff</div>
                                   ) : (
-                                    <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
+                                    <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
                                       {early.scheduledNotClockInStaff.map((staffName) => (
                                         <div key={`early-missing-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
@@ -2148,7 +2192,19 @@ export default function App() {
                                 {formatShiftLabel(late.shift)} {position}
                               </div>
                               <div className="mt-1 text-[11px] text-slate-400">
-                                Expected {late.expected} · Present {late.present}
+                                {late.present}/{late.expected}
+                                <span
+                                  className={[
+                                    'ml-3 font-bold',
+                                    late.expected > 0 && (late.present / late.expected) * 100 < 80
+                                      ? 'text-rose-400'
+                                      : late.expected > 0 && (late.present / late.expected) * 100 >= 90
+                                        ? 'text-emerald-400'
+                                        : 'text-slate-300'
+                                  ].join(' ')}
+                                >
+                                  {late.expected > 0 ? `${((late.present / late.expected) * 100).toFixed(1)}%` : '0.0%'}
+                                </span>
                               </div>
                             </div>
                             <div className="group relative z-10 rounded-md bg-slate-950/70 px-3 py-1.5 text-center hover:z-50">
@@ -2161,13 +2217,13 @@ export default function App() {
                               >
                                 {lateOnClockStaffCombined.length}
                               </div>
-                              <div className="pointer-events-auto absolute left-1/2 top-full z-30 mt-2 hidden w-[min(50rem,calc(100vw-2rem))] -translate-x-1/2 gap-2 group-hover:grid md:grid-cols-3">
+                              <div className="pointer-events-auto absolute left-1/2 top-full z-30 hidden w-[min(50rem,calc(100vw-2rem))] -translate-x-1/2 gap-2 group-hover:grid md:grid-cols-3">
                                 <div className="min-w-0 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl">
                                   <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Attendance Staff</div>
                                   {late.onClockStaff.length === 0 ? (
                                     <div className="text-xs text-slate-300">No one on clock</div>
                                   ) : (
-                                    <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
+                                    <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
                                       {late.onClockStaff.map((staffName) => (
                                         <div key={`late-on-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
@@ -2181,7 +2237,7 @@ export default function App() {
                                   {late.restWorkedStaff.length === 0 ? (
                                     <div className="text-xs text-slate-300">No rest-worked staff</div>
                                   ) : (
-                                    <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
+                                    <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
                                       {late.restWorkedStaff.map((staffName) => (
                                         <div key={`late-rest-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
@@ -2197,7 +2253,7 @@ export default function App() {
                                   {late.scheduledNotClockInStaff.length === 0 ? (
                                     <div className="text-xs text-slate-300">No missing clock-in staff</div>
                                   ) : (
-                                    <div className="max-h-44 overflow-auto pr-1 text-xs text-slate-200">
+                                    <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
                                       {late.scheduledNotClockInStaff.map((staffName) => (
                                         <div key={`late-missing-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
@@ -2260,8 +2316,8 @@ export default function App() {
                         <div>Action</div>
                         <div className="sm:hidden">Info</div>
                         <div className="hidden sm:block">Name</div>
-                        <div className="hidden sm:block">Agency</div>
                         <div className="hidden sm:block">Position</div>
+                        <div className="hidden sm:block">Label</div>
                         <div className="hidden text-center sm:block">UPH</div>
                         <div className="text-right">Time</div>
                       </div>
@@ -2272,8 +2328,8 @@ export default function App() {
                           : '';
                         const isIn = p.action === 'IN';
                         const name = employee?.name || p.staff_id || '-';
-                        const agency = employee?.agency || '-';
                         const position = employee?.position || '-';
+                        const label = employee?.label || '-';
                         const uph = punchBoardUphByStaffId[p.staff_id];
                         return (
                           <div key={String(p.id)} className="rounded-2xl bg-white/5 px-4 py-3">
@@ -2284,11 +2340,10 @@ export default function App() {
                               <span className="min-w-0">
                                 <span className="block truncate text-sm text-slate-200 sm:hidden">{name}</span>
                                 <span className="mt-0.5 block truncate text-xs text-slate-400 sm:hidden">
-                                  {agency} · {position} · UPH {formatUph(uph)}
+                                  {position} · {label} · UPH {formatUph(uph)}
                                 </span>
                                 <span className="hidden truncate text-sm text-slate-200 sm:block">{name}</span>
                               </span>
-                              <span className="hidden min-w-0 truncate text-sm text-slate-200 sm:block">{agency}</span>
                               <span className="hidden min-w-0 truncate text-sm text-slate-200 sm:block">
                                 <span
                                   className={[
@@ -2299,6 +2354,7 @@ export default function App() {
                                   {position || '-'}
                                 </span>
                               </span>
+                              <span className="hidden min-w-0 truncate text-sm text-slate-200 sm:block">{label}</span>
                               <span className="hidden text-center font-mono text-sm text-slate-200 sm:block">{formatUph(uph)}</span>
                               <span className="text-right text-xs text-slate-400">{time}</span>
                             </div>
@@ -2335,7 +2391,7 @@ export default function App() {
                   onClick={() => setPage('punch')}
                   className={tabClass(false)}
                 >
-                  1 打卡界面
+                  1 鎵撳崱鐣岄潰
                 </button>
                 <button
                   type="button"
@@ -2343,7 +2399,7 @@ export default function App() {
                   onClick={() => setPage('log')}
                   className={tabClass(page === 'log')}
                 >
-                  2 打卡流水
+                  2 鎵撳崱娴佹按
                 </button>
                 <button
                   type="button"
@@ -2351,7 +2407,7 @@ export default function App() {
                   onClick={() => setPage('employee')}
                   className={tabClass(page === 'employee')}
                 >
-                  3 员工信息
+                  3 鍛樺伐淇℃伅
                 </button>
                 <button
                   type="button"
@@ -2359,7 +2415,7 @@ export default function App() {
                   onClick={() => setPage('edit')}
                   className={tabClass(page === 'edit')}
                 >
-                  4 修改信息
+                  4 淇敼淇℃伅
                 </button>
               </nav>
 
@@ -2373,14 +2429,14 @@ export default function App() {
         {page === 'log' && (
           <section className="glass reveal rounded-3xl px-6 py-8">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="font-display text-2xl tracking-[0.08em]">打卡流水</h2>
+              <h2 className="font-display text-2xl tracking-[0.08em]">鎵撳崱娴佹按</h2>
               <button
                 type="button"
                 disabled={isLocked}
                 onClick={() => void fetchPunches()}
                 className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                刷新
+                鍒锋柊
               </button>
             </div>
             <p className="mt-2 text-xs text-slate-400">
@@ -2417,21 +2473,21 @@ export default function App() {
         {page === 'employee' && (
           <section className="glass reveal rounded-3xl px-6 py-8">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="font-display text-2xl tracking-[0.08em]">员工信息</h2>
+              <h2 className="font-display text-2xl tracking-[0.08em]">鍛樺伐淇℃伅</h2>
               <button
                 type="button"
                 disabled={isLocked}
                 onClick={() => void fetchEmployee()}
                 className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                查询
+                鏌ヨ
               </button>
             </div>
             <p className="mt-2 text-xs text-slate-400">
-              默认表：<span className="text-slate-200">{EMPLOYEE_TABLE}</span>（按 created_at 取最新一条）
+              榛樿琛細<span className="text-slate-200">{EMPLOYEE_TABLE}</span>锛堟寜 created_at 鍙栨渶鏂颁竴鏉★級
             </p>
             {employeeError && <p className="mt-4 text-sm text-ember">Query failed: {employeeError}</p>}
-            {!employeeError && !employee && <p className="mt-4 text-sm text-slate-400">请输入工号后查询</p>}
+            {!employeeError && !employee && <p className="mt-4 text-sm text-slate-400">璇疯緭鍏ュ伐鍙峰悗鏌ヨ</p>}
             {employee && (
               <div className="mt-5 space-y-3">
                 <div className="rounded-2xl bg-black/30 px-4 py-3">
@@ -2454,14 +2510,14 @@ export default function App() {
         {page === 'edit' && (
           <section className="glass reveal rounded-3xl px-6 py-8">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="font-display text-2xl tracking-[0.08em]">修改信息（提交申请）</h2>
+              <h2 className="font-display text-2xl tracking-[0.08em]">淇敼淇℃伅锛堟彁浜ょ敵璇凤級</h2>
               <button
                 type="button"
                 disabled={isLocked || !isValidId}
                 onClick={() => void submitEmployeeChange()}
                 className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
               >
-                提交
+                鎻愪氦
               </button>
             </div>
             <p className="mt-2 text-xs text-slate-400">
@@ -2470,7 +2526,7 @@ export default function App() {
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
               <div>
-                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">姓名</label>
+                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">濮撳悕</label>
                 <input
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
@@ -2480,7 +2536,7 @@ export default function App() {
                 />
               </div>
               <div>
-                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">部门</label>
+                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">閮ㄩ棬</label>
                 <input
                   value={editDept}
                   onChange={(e) => setEditDept(e.target.value)}
@@ -2490,7 +2546,7 @@ export default function App() {
                 />
               </div>
               <div className="md:col-span-2">
-                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">电话</label>
+                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">鐢佃瘽</label>
                 <input
                   value={editPhone}
                   onChange={(e) => setEditPhone(e.target.value)}
@@ -2500,7 +2556,7 @@ export default function App() {
                 />
               </div>
               <div className="md:col-span-2">
-                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">说明</label>
+                <label className="text-xs uppercase tracking-[0.25em] text-slate-400">璇存槑</label>
                 <textarea
                   value={editNote}
                   onChange={(e) => setEditNote(e.target.value)}
