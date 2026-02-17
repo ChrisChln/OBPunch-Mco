@@ -2591,6 +2591,15 @@ const fetchPunchBoardUph = async (
           </section>
         )}
 
+        {isLocked && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-sm">
+            <div className="glass flex items-center gap-3 rounded-2xl px-5 py-4 shadow-2xl">
+              <span className="h-5 w-5 animate-spin rounded-full border-2 border-neon/25 border-t-neon" />
+              <span className="text-sm font-semibold text-slate-100">Processing request...</span>
+            </div>
+          </div>
+        )}
+
         <footer className="text-center text-xs text-slate-500">
           {isLocked && "Request in progress; input locked."}
           {!isLocked && 'Ready'}

@@ -8237,6 +8237,20 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           </>
         )}
 
+        {isLocked && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-sm">
+            <div
+              className={[
+                'flex items-center gap-3 rounded-2xl px-5 py-4 shadow-2xl',
+                themeMode === 'light' ? 'border border-slate-300 bg-white text-slate-900' : 'glass text-slate-100'
+              ].join(' ')}
+            >
+              <span className="h-5 w-5 animate-spin rounded-full border-2 border-neon/25 border-t-neon" />
+              <span className="text-sm font-semibold">{t('处理中...', 'Processing...')}</span>
+            </div>
+          </div>
+        )}
+
         <footer className="text-center text-xs text-slate-500">
           {isLocked ? t('请求处理中，已锁定交互', 'Request in progress (locked)') : 'Ready'}
         </footer>
