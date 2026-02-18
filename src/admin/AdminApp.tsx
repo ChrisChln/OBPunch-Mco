@@ -22,15 +22,14 @@ type Status = {
 };
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
-const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'Sort'] as const;
+const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
 type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 const createEmptyPositionFlags = (): Record<AllowedPosition, boolean> => ({
   Pick: false,
   Pack: false,
   Rebin: false,
   Preship: false,
-  Transfer: false,
-  Sort: false
+  Transfer: false
 });
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
@@ -410,7 +409,6 @@ const getDefaultPositionToneKey = (value: string): LabelToneKey => {
   if (pos === 'Pick') return 'sky';
   if (pos === 'Pack') return 'emerald';
   if (pos === 'Rebin') return 'amber';
-  if (pos === 'Sort') return 'amber';
   if (pos === 'Preship') return 'rose';
   if (pos === 'Transfer') return 'violet';
   return 'slate';
@@ -798,8 +796,7 @@ export default function AdminApp() {
     Pack: 'emerald',
     Rebin: 'amber',
     Preship: 'rose',
-    Transfer: 'violet',
-    Sort: 'amber'
+    Transfer: 'violet'
   });
   const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
   const [scheduleLabelToneByName, setScheduleLabelToneByName] = useState<Record<string, LabelToneKey>>(() =>
@@ -984,8 +981,7 @@ export default function AdminApp() {
       Pack: 'emerald',
       Rebin: 'amber',
       Preship: 'rose',
-      Transfer: 'violet',
-      Sort: 'amber'
+      Transfer: 'violet'
     };
     for (const pos of ALLOWED_POSITIONS) {
       const tone = String(raw[pos] ?? '').trim() as LabelToneKey;
@@ -1512,8 +1508,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
             Pack: Boolean(rawSelected.Pack),
             Rebin: Boolean(rawSelected.Rebin),
             Preship: Boolean(rawSelected.Preship),
-            Transfer: Boolean(rawSelected.Transfer),
-            Sort: Boolean(rawSelected.Sort)
+            Transfer: Boolean(rawSelected.Transfer)
           };
         }
       } else {
@@ -8400,8 +8395,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                     Pack: false,
                                     Rebin: false,
                                     Preship: false,
-                                    Transfer: false,
-                                    Sort: false
+                                    Transfer: false
                                   })
                                 }
                                 className={[

@@ -72,7 +72,7 @@ type TomorrowListSetting = {
   publishForDate: string;
 };
 
-const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'Sort'] as const;
+const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
 type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
@@ -86,6 +86,7 @@ const OBUP_REPORT_DETAILS_TABLE =
   (import.meta.env.VITE_OBUP_REPORT_DETAILS_TABLE as string | undefined) ?? 'report_details';
 const OBUP_ACCOUNT_LINKS_TABLE = (import.meta.env.VITE_OBUP_ACCOUNT_LINKS_TABLE as string | undefined) ?? 'account_links';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
+const SCHEDULE_LABEL_TONES_KEY = 'schedule_label_tones_v1';
 const SCHEDULE_POSITION_TONES_KEY = 'schedule_position_tones_v1';
 const SCHEDULE_REST_NOTE = '__rest__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
@@ -213,7 +214,6 @@ const getDefaultPositionToneKey = (value: string): LabelToneKey => {
   if (pos === 'Pick') return 'sky';
   if (pos === 'Pack') return 'emerald';
   if (pos === 'Rebin') return 'amber';
-  if (pos === 'Sort') return 'amber';
   if (pos === 'Preship') return 'rose';
   if (pos === 'Transfer') return 'violet';
   return 'slate';
@@ -297,7 +297,6 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   if (v === 'rebin') return 'Rebin';
   if (v === 'preship') return 'Preship';
   if (v === 'transfer') return 'Transfer';
-  if (v === 'sort') return 'Sort';
   return '';
 };
 const positionToUphStage = (value: string): 'picking' | 'packing' | 'sorting' | null => {
@@ -305,7 +304,6 @@ const positionToUphStage = (value: string): 'picking' | 'packing' | 'sorting' | 
   if (pos === 'Pick') return 'picking';
   if (pos === 'Pack') return 'packing';
   if (pos === 'Rebin') return 'sorting';
-  if (pos === 'Sort') return 'sorting';
   return null;
 };
 const normalizeWorkOperatorKey = (value: string) => {
@@ -628,8 +626,7 @@ export default function App() {
     Pack: 'emerald',
     Rebin: 'amber',
     Preship: 'rose',
-    Transfer: 'violet',
-    Sort: 'amber'
+    Transfer: 'violet'
   });
   const [punchLogPositionFilter, setPunchLogPositionFilter] = useState<AllowedPosition | ''>('');
   const [dailyRoster, setDailyRoster] = useState<DailyRosterItem[]>([]);
@@ -1708,6 +1705,17 @@ const fetchPunchBoardUph = async (
       }))
     };
   };
+  const normalizeLabelToneMap = (value: unknown): Record<string, LabelToneKey> => {
+    const raw = (value ?? {}) as Record<string, unknown>;
+    const next: Record<string, LabelToneKey> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      const name = String(k ?? '').trim().toLowerCase();
+      const tone = String(v ?? '').trim() as LabelToneKey;
+      if (!name || !LABEL_TONE_KEYS.includes(tone)) continue;
+      next[name] = tone;
+    }
+    return next;
+  };
   const normalizePositionToneMap = (value: unknown): Record<AllowedPosition, LabelToneKey> => {
     const raw = (value ?? {}) as Record<string, unknown>;
     const next: Record<AllowedPosition, LabelToneKey> = {
@@ -1715,8 +1723,7 @@ const fetchPunchBoardUph = async (
       Pack: 'emerald',
       Rebin: 'amber',
       Preship: 'rose',
-      Transfer: 'violet',
-      Sort: 'amber'
+      Transfer: 'violet'
     };
     for (const pos of ALLOWED_POSITIONS) {
       const tone = String(raw[pos] ?? '').trim() as LabelToneKey;
@@ -1737,6 +1744,19 @@ const fetchPunchBoardUph = async (
     const row = (((res.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
     const value = (row?.value ?? {}) as Record<string, unknown>;
     setSchedulePositionToneByPosition(normalizePositionToneMap(value.tones ?? {}));
+  };
+  const fetchScheduleLabelToneSetting = async () => {
+    if (!supabase) return;
+    const res = await supabase
+      .from(APP_SETTINGS_TABLE)
+      .select('key, value, updated_at')
+      .eq('key', SCHEDULE_LABEL_TONES_KEY)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (res.error) return;
+    const row = (((res.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
+    const value = (row?.value ?? {}) as Record<string, unknown>;
+    setLabelToneByName(normalizeLabelToneMap(value.tones ?? {}));
   };
   const fetchTomorrowListSetting = async () => {
     if (!supabase) {
@@ -1938,6 +1958,7 @@ const fetchPunchBoardUph = async (
     void (async () => {
       if (!active) return;
       await fetchPunchBoard({ position: punchLogPositionFilter });
+      await fetchScheduleLabelToneSetting();
       await fetchSchedulePositionToneSetting();
       await fetchTomorrowListSetting();
       await fetchAbsentRoster();
@@ -1946,6 +1967,7 @@ const fetchPunchBoardUph = async (
 
     const timer = window.setInterval(() => {
       void fetchPunchBoard({ position: punchLogPositionFilter });
+      void fetchScheduleLabelToneSetting();
       void fetchSchedulePositionToneSetting();
       void fetchTomorrowListSetting();
       void fetchAbsentRoster();

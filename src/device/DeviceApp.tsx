@@ -399,13 +399,15 @@ export default function DeviceApp() {
 
         <section className="mt-4 grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
           <div className="glass rounded-3xl p-4">
-            <div className="mb-3 flex items-center gap-2">
+            <div className="mb-3 grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => setScanMode('borrow')}
                 className={[
-                  'rounded-xl px-3 py-1.5 text-xs font-semibold transition',
-                  scanMode === 'borrow' ? 'bg-neon text-ink shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                  'h-12 w-full rounded-2xl px-3 text-base font-bold transition',
+                  scanMode === 'borrow'
+                    ? 'bg-neon text-ink shadow-glow'
+                    : 'border border-white/15 bg-white/10 text-slate-200 hover:bg-white/15'
                 ].join(' ')}
               >
                 Borrow
@@ -414,8 +416,10 @@ export default function DeviceApp() {
                 type="button"
                 onClick={() => setScanMode('return')}
                 className={[
-                  'rounded-xl px-3 py-1.5 text-xs font-semibold transition',
-                  scanMode === 'return' ? 'bg-neon text-ink shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                  'h-12 w-full rounded-2xl px-3 text-base font-bold transition',
+                  scanMode === 'return'
+                    ? 'bg-neon text-ink shadow-glow'
+                    : 'border border-white/15 bg-white/10 text-slate-200 hover:bg-white/15'
                 ].join(' ')}
               >
                 Return
