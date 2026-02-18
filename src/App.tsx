@@ -72,7 +72,7 @@ type TomorrowListSetting = {
   publishForDate: string;
 };
 
-const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
+const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'Sort'] as const;
 type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
@@ -213,6 +213,7 @@ const getDefaultPositionToneKey = (value: string): LabelToneKey => {
   if (pos === 'Pick') return 'sky';
   if (pos === 'Pack') return 'emerald';
   if (pos === 'Rebin') return 'amber';
+  if (pos === 'Sort') return 'amber';
   if (pos === 'Preship') return 'rose';
   if (pos === 'Transfer') return 'violet';
   return 'slate';
@@ -296,6 +297,7 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   if (v === 'rebin') return 'Rebin';
   if (v === 'preship') return 'Preship';
   if (v === 'transfer') return 'Transfer';
+  if (v === 'sort') return 'Sort';
   return '';
 };
 const positionToUphStage = (value: string): 'picking' | 'packing' | 'sorting' | null => {
@@ -303,6 +305,7 @@ const positionToUphStage = (value: string): 'picking' | 'packing' | 'sorting' | 
   if (pos === 'Pick') return 'picking';
   if (pos === 'Pack') return 'packing';
   if (pos === 'Rebin') return 'sorting';
+  if (pos === 'Sort') return 'sorting';
   return null;
 };
 const normalizeWorkOperatorKey = (value: string) => {
@@ -625,7 +628,8 @@ export default function App() {
     Pack: 'emerald',
     Rebin: 'amber',
     Preship: 'rose',
-    Transfer: 'violet'
+    Transfer: 'violet',
+    Sort: 'amber'
   });
   const [punchLogPositionFilter, setPunchLogPositionFilter] = useState<AllowedPosition | ''>('');
   const [dailyRoster, setDailyRoster] = useState<DailyRosterItem[]>([]);
@@ -1711,7 +1715,8 @@ const fetchPunchBoardUph = async (
       Pack: 'emerald',
       Rebin: 'amber',
       Preship: 'rose',
-      Transfer: 'violet'
+      Transfer: 'violet',
+      Sort: 'amber'
     };
     for (const pos of ALLOWED_POSITIONS) {
       const tone = String(raw[pos] ?? '').trim() as LabelToneKey;

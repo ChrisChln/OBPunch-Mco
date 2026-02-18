@@ -22,14 +22,15 @@ type Status = {
 };
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
-const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
+const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'Sort'] as const;
 type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 const createEmptyPositionFlags = (): Record<AllowedPosition, boolean> => ({
   Pick: false,
   Pack: false,
   Rebin: false,
   Preship: false,
-  Transfer: false
+  Transfer: false,
+  Sort: false
 });
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
@@ -274,6 +275,17 @@ type DeviceLoanRow = {
   note?: string | null;
 };
 
+type DeviceLabelPrintPayload = {
+  sn: string;
+  name: string;
+  position: string;
+  type: string;
+};
+
+type DeviceLabelPrintPreview = DeviceLabelPrintPayload & {
+  qrDataUrl: string;
+};
+
 const formatTime = (value: Date, locale: string = 'zh-CN') =>
   value.toLocaleString(locale, {
     hour12: false,
@@ -398,6 +410,7 @@ const getDefaultPositionToneKey = (value: string): LabelToneKey => {
   if (pos === 'Pick') return 'sky';
   if (pos === 'Pack') return 'emerald';
   if (pos === 'Rebin') return 'amber';
+  if (pos === 'Sort') return 'amber';
   if (pos === 'Preship') return 'rose';
   if (pos === 'Transfer') return 'violet';
   return 'slate';
@@ -631,8 +644,6 @@ export default function AdminApp() {
   const schedulePositionToneHydratingRef = useRef(false);
   const schedulePositionToneLastSavedJsonRef = useRef('');
   const schedulePositionToneReadyRef = useRef(false);
-  const deviceStaffInputRef = useRef<HTMLInputElement | null>(null);
-  const deviceSnInputRef = useRef<HTMLInputElement | null>(null);
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
@@ -726,6 +737,10 @@ export default function AdminApp() {
     position: string;
     qrDataUrl: string;
   } | null>(null);
+  const [deviceLabelPrintingSn, setDeviceLabelPrintingSn] = useState<string | null>(null);
+  const [deviceLabelBatchPrinting, setDeviceLabelBatchPrinting] = useState(false);
+  const [deviceSelectedLabelSns, setDeviceSelectedLabelSns] = useState<string[]>([]);
+  const [deviceLabelPreview, setDeviceLabelPreview] = useState<DeviceLabelPrintPreview | null>(null);
 
   const [timecardRows, setTimecardRows] = useState<TimecardRow[]>([]);
   const [timecardError, setTimecardError] = useState<string | null>(null);
@@ -764,13 +779,9 @@ export default function AdminApp() {
   const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [deviceLoans, setDeviceLoans] = useState<DeviceLoanRow[]>([]);
-  const [deviceLoansError, setDeviceLoansError] = useState<string | null>(null);
   const [deviceSearch, setDeviceSearch] = useState('');
   const [deviceFilterPosition, setDeviceFilterPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [deviceFilterType, setDeviceFilterType] = useState<DeviceType | ''>('');
-  const [deviceScanMode, setDeviceScanMode] = useState<'borrow' | 'return'>('borrow');
-  const [deviceScanStaffId, setDeviceScanStaffId] = useState('');
-  const [deviceScanSn, setDeviceScanSn] = useState('');
 
   const [scheduleRows, setScheduleRows] = useState<ScheduleRow[]>([]);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
@@ -787,7 +798,8 @@ export default function AdminApp() {
     Pack: 'emerald',
     Rebin: 'amber',
     Preship: 'rose',
-    Transfer: 'violet'
+    Transfer: 'violet',
+    Sort: 'amber'
   });
   const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
   const [scheduleLabelToneByName, setScheduleLabelToneByName] = useState<Record<string, LabelToneKey>>(() =>
@@ -850,15 +862,22 @@ export default function AdminApp() {
       } as DeviceLoanRow & { action: 'borrow' | 'return' };
     });
   }, [deviceLoans]);
-  const deviceBySn = useMemo(() => {
-    const map = new Map<string, DeviceRow>();
-    for (const row of canonicalDeviceRows) {
-      const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
-      if (!sn) continue;
-      map.set(sn, row);
+  const employeeNameByStaffId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const [staffRaw, profile] of Object.entries(employeeByStaffId)) {
+      const staff = normalizeStaffId(String(staffRaw ?? '').trim());
+      const name = String(profile?.name ?? '').trim();
+      if (!staff || !name) continue;
+      map.set(staff, name);
+    }
+    for (const row of employees) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      const name = String(row.name ?? '').trim();
+      if (!staff || !name) continue;
+      map.set(staff, name);
     }
     return map;
-  }, [canonicalDeviceRows]);
+  }, [employeeByStaffId, employees]);
   const deviceCurrentBorrowBySn = useMemo(() => {
     const sorted = [...canonicalDeviceLoans].sort((a, b) => {
       const aMs = Date.parse(String(a.created_at ?? '')) || 0;
@@ -866,13 +885,15 @@ export default function AdminApp() {
       if (aMs !== bMs) return aMs - bMs;
       return String(a.id ?? '').localeCompare(String(b.id ?? ''), 'en-US');
     });
-    const map = new Map<string, { staff_id: string; created_at: string; operator: string; note: string }>();
+    const map = new Map<string, { staff_id: string; staff_name: string; created_at: string; operator: string; note: string }>();
     for (const row of sorted) {
       const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
       if (!sn) continue;
       if (row.action === 'borrow') {
+        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
         map.set(sn, {
-          staff_id: normalizeStaffId(String(row.staff_id ?? '').trim()),
+          staff_id: staff,
+          staff_name: employeeNameByStaffId.get(staff) ?? '',
           created_at: String(row.created_at ?? ''),
           operator: String(row.operator ?? '').trim(),
           note: String(row.note ?? '').trim()
@@ -882,7 +903,7 @@ export default function AdminApp() {
       }
     }
     return map;
-  }, [canonicalDeviceLoans]);
+  }, [canonicalDeviceLoans, employeeNameByStaffId]);
   const deviceRowsFiltered = useMemo(() => {
     const search = deviceSearch.trim().toLowerCase();
     return canonicalDeviceRows
@@ -897,14 +918,52 @@ export default function AdminApp() {
       return `${deviceName} ${sn} ${type} ${pos}`.toLowerCase().includes(search);
       })
       .sort((a, b) => {
-        const aName = String(a.device_name ?? '').trim().toLowerCase();
-        const bName = String(b.device_name ?? '').trim().toLowerCase();
-        if (aName !== bName) return aName.localeCompare(bName, 'en-US');
+        const aName = String(a.device_name ?? '').trim();
+        const bName = String(b.device_name ?? '').trim();
+        if (aName !== bName) return aName.localeCompare(bName, 'en-US', { numeric: true, sensitivity: 'base' });
         const aSn = normalizeDeviceSn(String(a.device_sn ?? ''));
         const bSn = normalizeDeviceSn(String(b.device_sn ?? ''));
-        return aSn.localeCompare(bSn, 'en-US');
+        return aSn.localeCompare(bSn, 'en-US', { numeric: true, sensitivity: 'base' });
       });
   }, [canonicalDeviceRows, deviceFilterPosition, deviceFilterType, deviceSearch]);
+  const selectedDeviceLabelSnSet = useMemo(() => new Set(deviceSelectedLabelSns), [deviceSelectedLabelSns]);
+  const isAllFilteredDevicesSelected = useMemo(() => {
+    if (deviceRowsFiltered.length === 0) return false;
+    for (const row of deviceRowsFiltered) {
+      const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
+      if (!sn || !selectedDeviceLabelSnSet.has(sn)) return false;
+    }
+    return true;
+  }, [deviceRowsFiltered, selectedDeviceLabelSnSet]);
+  const deviceSelectedLabelRows = useMemo(() => {
+    const out: DeviceLabelPrintPayload[] = [];
+    for (const row of deviceRowsFiltered) {
+      const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
+      if (!sn || !selectedDeviceLabelSnSet.has(sn)) continue;
+      const type = normalizeDeviceType(String(row.device_type ?? row.type ?? 'PDA'));
+      const name = String(row.device_name ?? row.name ?? '').trim();
+      out.push({
+        sn,
+        name: name || sn,
+        position: String(row.position ?? '').trim() || '-',
+        type
+      });
+    }
+    return out;
+  }, [deviceRowsFiltered, selectedDeviceLabelSnSet]);
+
+  useEffect(() => {
+    const allowed = new Set<string>();
+    for (const row of deviceRowsFiltered) {
+      const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
+      if (sn) allowed.add(sn);
+    }
+    setDeviceSelectedLabelSns((prev) => {
+      const next = prev.filter((sn) => allowed.has(sn));
+      if (next.length === prev.length && next.every((sn, idx) => sn === prev[idx])) return prev;
+      return next;
+    });
+  }, [deviceRowsFiltered]);
 
   const normalizeLabelToneMap = (value: unknown): Record<string, LabelToneKey> => {
     const raw = (value ?? {}) as Record<string, unknown>;
@@ -925,7 +984,8 @@ export default function AdminApp() {
       Pack: 'emerald',
       Rebin: 'amber',
       Preship: 'rose',
-      Transfer: 'violet'
+      Transfer: 'violet',
+      Sort: 'amber'
     };
     for (const pos of ALLOWED_POSITIONS) {
       const tone = String(raw[pos] ?? '').trim() as LabelToneKey;
@@ -1452,7 +1512,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
             Pack: Boolean(rawSelected.Pack),
             Rebin: Boolean(rawSelected.Rebin),
             Preship: Boolean(rawSelected.Preship),
-            Transfer: Boolean(rawSelected.Transfer)
+            Transfer: Boolean(rawSelected.Transfer),
+            Sort: Boolean(rawSelected.Sort)
           };
         }
       } else {
@@ -1715,19 +1776,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   const fetchDeviceLoans = async ({ lockUi = true }: { lockUi?: boolean } = {}) => {
     if (!supabase) {
-      setDeviceLoansError('缺少 Supabase 配置。');
       setDeviceLoans([]);
       return;
     }
     const exec = async () => {
-      setDeviceLoansError(null);
       const res = await supabase
         .from(DEVICE_LOANS_TABLE)
         .select('id, created_at, operator, staff_id, device_sn, action, note')
         .order('created_at', { ascending: false })
         .limit(5000);
       if (res.error) {
-        setDeviceLoansError(res.error.message);
         setDeviceLoans([]);
         return;
       }
@@ -1913,80 +1971,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       });
       setStatus({ tone: 'success', message: nextActive ? t(`设备已启用：${sn}`, `Device enabled: ${sn}`) : t(`设备已停用：${sn}`, `Device disabled: ${sn}`) });
       await refreshDevicePanel({ lockUi: false });
-    });
-  };
-
-  const submitDeviceLoanAction = async (mode: 'borrow' | 'return') => {
-    const staff = normalizeStaffId(deviceScanStaffId.trim());
-    const sn = normalizeDeviceSn(deviceScanSn);
-    if (!staff || !isValidStaffIdValue(staff)) {
-      setStatus({ tone: 'error', message: t('请先扫描有效工牌ID。', 'Please scan a valid staff ID first.') });
-      return;
-    }
-    if (!sn) {
-      setStatus({ tone: 'error', message: t('请先扫描设备SN。', 'Please scan a device SN first.') });
-      return;
-    }
-    const device = deviceBySn.get(sn);
-    if (!device) {
-      setStatus({ tone: 'error', message: t(`设备不存在：${sn}`, `Device not found: ${sn}`) });
-      return;
-    }
-    if (device.active === false) {
-      setStatus({ tone: 'error', message: t(`设备已停用：${sn}`, `Device is disabled: ${sn}`) });
-      return;
-    }
-    const borrowed = deviceCurrentBorrowBySn.get(sn);
-    if (mode === 'borrow' && borrowed) {
-      setStatus({
-        tone: 'error',
-        message: t(`设备已借出：${sn}（${borrowed.staff_id}）`, `Device already borrowed: ${sn} (${borrowed.staff_id})`)
-      });
-      return;
-    }
-    if (mode === 'return' && !borrowed) {
-      setStatus({ tone: 'error', message: t(`设备未借出：${sn}`, `Device is not borrowed: ${sn}`) });
-      return;
-    }
-    if (mode === 'return' && borrowed && borrowed.staff_id !== staff) {
-      setStatus({
-        tone: 'error',
-        message: t(`归还失败：设备当前借用人为 ${borrowed.staff_id}`, `Return blocked: current holder is ${borrowed.staff_id}`)
-      });
-      return;
-    }
-    if (!supabase) {
-      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase configuration.') });
-      return;
-    }
-    await runLocked(mode === 'borrow' ? 'device_borrow' : 'device_return', async () => {
-      const payload = {
-        staff_id: staff,
-        device_sn: sn,
-        action: mode,
-        operator: user?.email ?? null,
-        created_at: new Date(serverTime).toISOString()
-      };
-      const res = await supabase.from(DEVICE_LOANS_TABLE).insert([payload as any]);
-      if (res.error) {
-        setStatus({ tone: 'error', message: t(`操作失败：${res.error.message}`, `Action failed: ${res.error.message}`) });
-        return;
-      }
-      await writeAudit({
-        action: mode === 'borrow' ? 'device_borrow' : 'device_return',
-        staffId: staff,
-        target: DEVICE_LOANS_TABLE,
-        payload: { device_sn: sn }
-      });
-      setStatus({
-        tone: 'success',
-        message: mode === 'borrow' ? t(`借出成功：${staff} -> ${sn}`, `Borrowed: ${staff} -> ${sn}`) : t(`归还成功：${staff} <- ${sn}`, `Returned: ${staff} <- ${sn}`)
-      });
-      setDeviceScanSn('');
-      await refreshDevicePanel({ lockUi: false });
-      setTimeout(() => {
-        deviceStaffInputRef.current?.focus();
-      }, 0);
     });
   };
 
@@ -3326,8 +3310,254 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
   };
 
+  const printDeviceLabel = async (payload: DeviceLabelPrintPayload) => {
+    const sn = normalizeDeviceSn(String(payload.sn ?? '').trim());
+    if (!sn) return;
+    setDeviceLabelPrintingSn(sn);
+    try {
+      const qrDataUrl = await QRCode.toDataURL(sn, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 560,
+        color: { dark: '#0b1220', light: '#ffffff' }
+      });
+      setDeviceLabelPreview({
+        sn,
+        name: String(payload.name ?? '').trim() || sn,
+        position: String(payload.position ?? '').trim() || '-',
+        type: String(payload.type ?? '').trim() || '-',
+        qrDataUrl
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err ?? 'unknown error');
+      setStatus({ tone: 'error', message: t(`打印失败：${message}`, `Print failed: ${message}`) });
+    } finally {
+      setDeviceLabelPrintingSn((current) => (current === sn ? null : current));
+    }
+  };
+
+  const printDeviceLabelBatch = async (payloads: DeviceLabelPrintPayload[]) => {
+    const bySn = new Map<string, DeviceLabelPrintPayload>();
+    for (const raw of payloads) {
+      const sn = normalizeDeviceSn(String(raw.sn ?? '').trim());
+      if (!sn) continue;
+      bySn.set(sn, {
+        sn,
+        name: String(raw.name ?? '').trim() || sn,
+        position: String(raw.position ?? '').trim() || '-',
+        type: String(raw.type ?? '').trim() || '-'
+      });
+    }
+    const list = [...bySn.values()];
+    if (list.length === 0) {
+      setStatus({ tone: 'error', message: t('请先选择要打印的设备。', 'Please select devices to print.') });
+      return;
+    }
+    setDeviceLabelBatchPrinting(true);
+    try {
+      const labels: DeviceLabelPrintPreview[] = [];
+      for (const item of list) {
+        const qrDataUrl = await QRCode.toDataURL(item.sn, {
+          errorCorrectionLevel: 'M',
+          margin: 1,
+          width: 560,
+          color: { dark: '#0b1220', light: '#ffffff' }
+        });
+        labels.push({ ...item, qrDataUrl });
+      }
+      printDeviceLabelSheet(labels);
+      setDeviceSelectedLabelSns([]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err ?? 'unknown error');
+      setStatus({ tone: 'error', message: t(`打印失败：${message}`, `Print failed: ${message}`) });
+    } finally {
+      setDeviceLabelBatchPrinting(false);
+    }
+  };
+
+  const printDeviceLabelSheet = (input: DeviceLabelPrintPreview | DeviceLabelPrintPreview[]) => {
+    const labels = Array.isArray(input) ? input : [input];
+    if (labels.length === 0) return;
+    const isBatch = labels.length > 1;
+    const safe = (v: string) =>
+      String(v ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    const renderSheet = (label: DeviceLabelPrintPreview) => `
+    <div class="sheet">
+      <div class="qr-wrap"><img src="${safe(label.qrDataUrl)}" alt="QR ${safe(label.sn)}" /></div>
+      <div class="meta">
+        <div class="kicker">OUTBOUNT DEVICE</div>
+        <div class="name">${safe(label.name)}</div>
+        <div class="sub">${safe(label.type)} · ${safe(label.position)}</div>
+        <div></div>
+        <div class="sn">${safe(label.sn)}</div>
+      </div>
+    </div>`;
+    const chunks: DeviceLabelPrintPreview[][] = [];
+    if (isBatch) {
+      const perPage = 14; // 4x6 portrait, 2 columns x 7 rows
+      for (let i = 0; i < labels.length; i += perPage) chunks.push(labels.slice(i, i + perPage));
+    }
+    const bodyHtml = isBatch
+      ? chunks
+          .map(
+            (page) => `
+    <section class="page">
+      ${page.map(renderSheet).join('')}
+    </section>`
+          )
+          .join('')
+      : renderSheet(labels[0]);
+    const html = `
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      @page { size: ${isBatch ? '4in 6in' : '2in 0.7in'}; margin: 0; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: ${isBatch ? '4in' : '2in'};
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      body {
+        background: #fff;
+        ${isBatch ? 'padding: 0.12in; box-sizing: border-box;' : ''}
+      }
+      .page {
+        width: 3.76in;
+        min-height: 5.76in;
+        box-sizing: border-box;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        grid-auto-rows: 0.72in;
+        gap: 0.06in 0.08in;
+        align-content: start;
+        page-break-after: always;
+        break-after: page;
+      }
+      .page:last-child { page-break-after: auto; break-after: auto; }
+      .sheet {
+        width: ${isBatch ? '1.84in' : '2in'};
+        height: ${isBatch ? '0.72in' : '0.7in'};
+        box-sizing: border-box;
+        padding: 0.045in;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
+        color: #0f172a;
+        font-family: Arial, "Microsoft YaHei", sans-serif;
+        display: grid;
+        grid-template-columns: 0.58in 1fr;
+        gap: 0.045in;
+        overflow: hidden;
+      }
+      .qr-wrap {
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        background: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.012in;
+      }
+      .qr-wrap img { width: 100%; max-width: 0.5in; height: auto; }
+      .meta {
+        display: grid;
+        grid-template-rows: auto auto auto 1fr auto;
+        gap: 0.008in;
+        min-width: 0;
+      }
+      .kicker { font-size: 7pt; font-weight: 800; letter-spacing: 0.08em; color: #334155; }
+      .name { font-size: 9pt; font-weight: 800; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .sub { font-size: 7pt; color: #475569; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .sn { font-size: 7pt; font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    </style>
+  </head>
+  <body>
+    ${bodyHtml}
+  </body>
+</html>`;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(iframe);
+    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!doc) {
+      iframe.remove();
+      setStatus({ tone: 'error', message: t('打印失败：无法创建打印页。', 'Print failed: cannot create print page.') });
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    const waitImagesReady = async () => {
+      const images = Array.from(doc.images ?? []);
+      if (images.length > 0) {
+        await Promise.all(
+          images.map(
+            (img) =>
+              new Promise<void>((resolve) => {
+                if (img.complete && img.naturalWidth > 0) {
+                  resolve();
+                  return;
+                }
+                const done = () => {
+                  img.removeEventListener('load', done);
+                  img.removeEventListener('error', done);
+                  resolve();
+                };
+                img.addEventListener('load', done);
+                img.addEventListener('error', done);
+                window.setTimeout(done, 1200);
+              })
+          )
+        );
+      }
+      const docWithFonts = doc as Document & { fonts?: { ready?: Promise<unknown> } };
+      if (docWithFonts.fonts?.ready) {
+        try {
+          await docWithFonts.fonts.ready;
+        } catch {
+          // ignore font wait failure
+        }
+      }
+    };
+
+    const doPrint = async () => {
+      const win = iframe.contentWindow;
+      if (!win) {
+        iframe.remove();
+        return;
+      }
+      await waitImagesReady();
+      win.focus();
+      win.print();
+      window.setTimeout(() => iframe.remove(), 1200);
+    };
+
+    if (iframe.contentWindow?.document.readyState === 'complete') void doPrint();
+    else iframe.onload = () => void doPrint();
+  };
+
   useEffect(() => {
-    const onAfterPrint = () => setEmployeeBadgePreview(null);
+    const onAfterPrint = () => {
+      setEmployeeBadgePreview(null);
+      setDeviceLabelPreview(null);
+    };
     window.addEventListener('afterprint', onAfterPrint);
     return () => window.removeEventListener('afterprint', onAfterPrint);
   }, []);
@@ -5238,13 +5468,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       void refreshDevicePanel({ lockUi: false });
     }
   }, [page]);
-  useEffect(() => {
-    if (page !== 'devices') return;
-    const timer = window.setTimeout(() => {
-      deviceStaffInputRef.current?.focus();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [page]);
 
   useEffect(() => {
     if (!user || page !== 'home') {
@@ -6996,16 +7219,51 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               <section className="glass reveal rounded-3xl px-6 py-8">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="font-display text-2xl tracking-[0.08em]">{t('设备管理', 'Devices')}</h2>
-                  <button
-                    type="button"
-                    disabled={isLocked}
-                    onClick={() => void refreshDevicePanel()}
-                    className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {t('刷新', 'Refresh')}
-                  </button>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      disabled={isLocked || deviceRowsFiltered.length === 0}
+                      onClick={() =>
+                        setDeviceSelectedLabelSns((prev) => {
+                          const next = new Set(prev);
+                          if (isAllFilteredDevicesSelected) {
+                            for (const row of deviceRowsFiltered) {
+                              const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
+                              if (sn) next.delete(sn);
+                            }
+                          } else {
+                            for (const row of deviceRowsFiltered) {
+                              const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
+                              if (sn) next.add(sn);
+                            }
+                          }
+                          return [...next];
+                        })
+                      }
+                      className="rounded-2xl bg-white/10 px-3 py-2 text-xs font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isAllFilteredDevicesSelected ? t('取消全选', 'Unselect all') : t('全选当前', 'Select filtered')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => void refreshDevicePanel()}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {t('刷新', 'Refresh')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked || deviceSelectedLabelRows.length === 0 || deviceLabelBatchPrinting}
+                      onClick={() => void printDeviceLabelBatch(deviceSelectedLabelRows)}
+                      className="rounded-2xl bg-neon px-3 py-2 text-xs font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {deviceLabelBatchPrinting ? t('批量生成中...', 'Generating...') : t('批量打印标签', 'Batch print labels')}
+                      <span className="ml-1">({deviceSelectedLabelRows.length})</span>
+                    </button>
+                  </div>
                 </div>
-                <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+                <div className="mt-5">
                   <div className="space-y-4">
                     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                       <div className="mb-2 text-xs text-slate-400">
@@ -7101,165 +7359,120 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
                       {devicesError && <p className="mt-3 text-sm text-ember">{devicesError}</p>}
                       {!devicesError && (
-                        <div className="mt-3 max-h-[520px] space-y-2 overflow-auto pr-1">
+                        <div className="mt-3 grid max-h-[70vh] grid-cols-4 gap-2 overflow-auto pr-1 md:grid-cols-5 xl:grid-cols-7 2xl:grid-cols-8">
                           {deviceRowsFiltered.map((row) => {
                             const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
                             const type = normalizeDeviceType(String(row.device_type ?? row.type ?? 'PDA'));
                             const borrowed = deviceCurrentBorrowBySn.get(sn);
                             const active = row.active !== false;
+                            const selected = selectedDeviceLabelSnSet.has(sn);
+                            const canSelect = Boolean(sn);
                             const deviceName = String(row.device_name ?? '').trim();
+                            const borrowedAtMs = borrowed ? Date.parse(String(borrowed.created_at ?? '')) : 0;
+                            const borrowAgeMs = borrowedAtMs > 0 ? Math.max(0, serverTime.getTime() - borrowedAtMs) : 0;
+                            const isOverdue = Boolean(borrowed) && borrowAgeMs >= 24 * 60 * 60 * 1000;
+                            const pad = (n: number) => String(n).padStart(2, '0');
+                            const durationText = borrowed
+                              ? `${pad(Math.floor(borrowAgeMs / 3600000))}:${pad(Math.floor((borrowAgeMs % 3600000) / 60000))}:${pad(
+                                  Math.floor((borrowAgeMs % 60000) / 1000)
+                                )}`
+                              : '';
+                            const cardToneClass = !active
+                              ? 'border-rose-400/55 bg-rose-500/10'
+                              : !borrowed
+                                ? 'border-emerald-400/45 bg-emerald-500/10'
+                                : isOverdue
+                                  ? 'border-rose-400/55 bg-rose-500/10'
+                                  : 'border-amber-400/55 bg-amber-500/10';
+                            const statusClass = !active
+                              ? 'text-rose-300'
+                              : !borrowed
+                                ? 'text-emerald-300'
+                                : isOverdue
+                                  ? 'text-rose-300'
+                                  : 'text-amber-300';
                             return (
-                              <div key={String(row.id ?? sn)} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-                                <div className="flex items-center justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <div className="truncate text-sm font-semibold text-slate-100">
-                                      {deviceName || '-'} <span className="text-xs text-slate-400">({sn || '-'})</span>
+                              <div
+                                key={String(row.id ?? sn)}
+                                className={[
+                                  'aspect-square rounded-xl border px-3 py-2 transition-colors',
+                                  cardToneClass,
+                                  selected ? 'ring-2 ring-neon/80' : ''
+                                ].join(' ')}
+                              >
+                                <div className="flex h-full flex-col justify-between">
+                                  <div>
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="truncate text-sm font-semibold text-slate-100">{deviceName || '-'}</div>
+                                      <label className="inline-flex h-4 w-4 flex-none cursor-pointer items-center justify-center">
+                                        <input
+                                          type="checkbox"
+                                          checked={selected}
+                                          disabled={isLocked || !canSelect}
+                                          onChange={() =>
+                                            canSelect &&
+                                            setDeviceSelectedLabelSns((prev) =>
+                                              prev.includes(sn) ? prev.filter((item) => item !== sn) : [...prev, sn]
+                                            )
+                                          }
+                                          className="h-4 w-4 cursor-pointer rounded border-white/30 bg-black/30 accent-emerald-400 disabled:cursor-not-allowed"
+                                        />
+                                      </label>
                                     </div>
-                                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
-                                      <span className="rounded-full border border-white/15 px-2 py-0.5">{type}</span>
-                                      {row.position ? (
-                                        <span
-                                          className={[
-                                            'rounded-full border px-2 py-0.5 font-semibold',
-                                            getSchedulePositionBadgeClass(String(row.position))
-                                          ].join(' ')}
-                                        >
-                                          {row.position}
-                                        </span>
-                                      ) : (
-                                        <span className="rounded-full border border-white/15 px-2 py-0.5">{t('无岗位', 'No position')}</span>
-                                      )}
-                                      <span className={active ? 'text-emerald-300' : 'text-rose-300'}>
-                                        {active ? t('可用', 'Active') : t('停用', 'Disabled')}
-                                      </span>
-                                      <span className={borrowed ? 'text-amber-300' : 'text-slate-300'}>
-                                        {borrowed ? `${t('借用中', 'Borrowed')} ${borrowed.staff_id}` : t('空闲', 'Available')}
-                                      </span>
+                                    <div className="mt-1 text-xs text-slate-400">
+                                      {type}
+                                      {row.position ? ` · ${row.position}` : ` · ${t('无岗位', 'No position')}`}
                                     </div>
                                   </div>
-                                  <button
-                                    type="button"
-                                    disabled={isLocked}
-                                    onClick={() => void toggleDeviceActive(row)}
-                                    className="rounded-xl bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-                                  >
-                                    {active ? t('停用', 'Disable') : t('启用', 'Enable')}
-                                  </button>
+                                  <div className="pt-2 text-right">
+                                    <div className={['text-xs font-semibold', statusClass].join(' ')}>
+                                      {!active
+                                        ? t('停用', 'Disabled')
+                                        : !borrowed
+                                          ? t('空闲', 'Available')
+                                          : isOverdue
+                                            ? t('借用超24小时', 'Borrowed >24h')
+                                            : t('借用中', 'Borrowed')}
+                                    </div>
+                                    {borrowed && <div className="text-xs text-slate-200">{borrowed.staff_name || borrowed.staff_id}</div>}
+                                    {borrowed && <div className="text-[11px] text-slate-400">{t('时长', 'Duration')}: {durationText}</div>}
+                                  </div>
+                                  <div className="mt-2 grid grid-cols-2 gap-1.5">
+                                    <button
+                                      type="button"
+                                      disabled={isLocked || deviceLabelPrintingSn === sn || deviceLabelBatchPrinting}
+                                      onClick={() =>
+                                        void printDeviceLabel({
+                                          sn,
+                                          name: deviceName || sn,
+                                          position: String(row.position ?? ''),
+                                          type
+                                        })
+                                      }
+                                      className="rounded-xl bg-white/10 px-2 py-1 text-[11px] font-semibold text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                      {deviceLabelPrintingSn === sn ? t('生成中...', 'Generating...') : t('打印标签', 'Print')}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={isLocked}
+                                      onClick={() => void toggleDeviceActive(row)}
+                                      className="rounded-xl bg-white/10 px-2 py-1 text-[11px] font-semibold text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                      {active ? t('停用', 'Disable') : t('启用', 'Enable')}
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             );
                           })}
                           {deviceRowsFiltered.length === 0 && (
-                            <div className="px-2 py-4 text-sm text-slate-400">{t('暂无设备。', 'No devices.')}</div>
+                            <div className="col-span-full px-2 py-4 text-sm text-slate-400">{t('暂无设备。', 'No devices.')}</div>
                           )}
                         </div>
                       )}
                     </div>
                   </div>
-
-                  <aside className="space-y-4">
-                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <div className="mb-3 flex items-center gap-2">
-                        <button
-                          type="button"
-                          disabled={isLocked}
-                          onClick={() => setDeviceScanMode('borrow')}
-                          className={[
-                            'rounded-xl px-3 py-1.5 text-xs font-semibold transition',
-                            deviceScanMode === 'borrow' ? 'bg-neon text-white shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                          ].join(' ')}
-                        >
-                          {t('借出', 'Borrow')}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isLocked}
-                          onClick={() => setDeviceScanMode('return')}
-                          className={[
-                            'rounded-xl px-3 py-1.5 text-xs font-semibold transition',
-                            deviceScanMode === 'return' ? 'bg-neon text-white shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                          ].join(' ')}
-                        >
-                          {t('归还', 'Return')}
-                        </button>
-                      </div>
-                      <label className="text-xs uppercase tracking-[0.2em] text-slate-400">US ID</label>
-                      <input
-                        ref={deviceStaffInputRef}
-                        value={deviceScanStaffId}
-                        onChange={(e) => setDeviceScanStaffId(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            deviceSnInputRef.current?.focus();
-                          }
-                        }}
-                        disabled={isLocked}
-                        placeholder={t('先扫工牌ID', 'Scan staff ID first')}
-                        className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                      />
-                      <label className="mt-3 block text-xs uppercase tracking-[0.2em] text-slate-400">SN</label>
-                      <input
-                        ref={deviceSnInputRef}
-                        value={deviceScanSn}
-                        onChange={(e) => setDeviceScanSn(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            void submitDeviceLoanAction(deviceScanMode);
-                          }
-                        }}
-                        disabled={isLocked}
-                        placeholder={t('再扫设备SN', 'Then scan device SN')}
-                        className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                      />
-                      <button
-                        type="button"
-                        disabled={isLocked || deviceScanStaffId.trim() === '' || deviceScanSn.trim() === ''}
-                        onClick={() => void submitDeviceLoanAction(deviceScanMode)}
-                        className="mt-3 h-11 w-full rounded-2xl bg-neon px-5 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {deviceScanMode === 'borrow' ? t('确认借出', 'Confirm borrow') : t('确认归还', 'Confirm return')}
-                      </button>
-                    </div>
-
-                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <div className="text-sm font-semibold text-slate-200">{t('当前借出', 'Currently borrowed')}</div>
-                      <div className="mt-2 max-h-44 space-y-1 overflow-auto pr-1 text-xs">
-                        {Array.from(deviceCurrentBorrowBySn.entries()).map(([sn, info]) => (
-                          <div key={`borrow-${sn}`} className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-slate-200">
-                            <span className="font-semibold">{sn}</span> · {info.staff_id}
-                          </div>
-                        ))}
-                        {deviceCurrentBorrowBySn.size === 0 && (
-                          <div className="px-1 py-2 text-slate-400">{t('当前没有借出设备。', 'No borrowed devices.')}</div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <div className="text-sm font-semibold text-slate-200">{t('借还记录', 'Loan history')}</div>
-                      {deviceLoansError && <p className="mt-2 text-sm text-ember">{deviceLoansError}</p>}
-                      {!deviceLoansError && (
-                        <div className="mt-2 max-h-52 space-y-1 overflow-auto pr-1 text-xs">
-                          {canonicalDeviceLoans.slice(0, 80).map((row, idx) => (
-                            <div key={`${row.id ?? idx}`} className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-slate-200">
-                              <span className={row.action === 'borrow' ? 'text-amber-300' : 'text-emerald-300'}>
-                                {row.action === 'borrow' ? t('借出', 'Borrow') : t('归还', 'Return')}
-                              </span>{' '}
-                              · {row.staff_id} · {row.device_sn}
-                              <div className="mt-0.5 text-[11px] text-slate-400">
-                                {row.created_at ? new Date(row.created_at).toLocaleString(locale, { hour12: false }) : '-'}
-                              </div>
-                            </div>
-                          ))}
-                          {canonicalDeviceLoans.length === 0 && (
-                            <div className="px-1 py-2 text-slate-400">{t('暂无记录。', 'No records.')}</div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </aside>
                 </div>
               </section>
             )}
@@ -8187,7 +8400,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                     Pack: false,
                                     Rebin: false,
                                     Preship: false,
-                                    Transfer: false
+                                    Transfer: false,
+                                    Sort: false
                                   })
                                 }
                                 className={[
@@ -9687,6 +9901,121 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
             </div>
           </div>
         )}
+
+        {deviceLabelPreview && typeof document !== 'undefined' &&
+          createPortal(
+            <div className="device-label-print-host">
+              <style>{`
+                @media print {
+                  @page {
+                    size: 2in 0.7in;
+                    margin: 0;
+                  }
+                  body {
+                    background: #fff !important;
+                  }
+                  .device-label-print-host {
+                    position: static !important;
+                    inset: 0 !important;
+                  }
+                  .device-label-preview-overlay {
+                    position: static !important;
+                    background: #fff !important;
+                    padding: 0 !important;
+                    margin: 0 !important;
+                  }
+                  .device-label-preview-chrome { display: none !important; }
+                  .device-label-preview-canvas {
+                    overflow: visible !important;
+                    border: none !important;
+                    background: transparent !important;
+                    padding: 0 !important;
+                  }
+                  .device-label-preview-scale {
+                    transform: none !important;
+                    margin: 0 !important;
+                  }
+                }
+              `}</style>
+              <div className="device-label-preview-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4 py-10">
+                <div className="w-full max-w-3xl rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-2xl backdrop-blur">
+                  <div className="mb-4 flex items-center justify-between device-label-preview-chrome">
+                    <h3 className="font-display text-xl tracking-[0.08em] text-white">{t('打印设备标签', 'Print Device Label')}</h3>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => printDeviceLabelSheet(deviceLabelPreview)}
+                        className="rounded-xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl"
+                      >
+                        {t('打印', 'Print')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeviceLabelPreview(null)}
+                        className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/15"
+                      >
+                        {t('关闭', 'Close')}
+                      </button>
+                    </div>
+                  </div>
+                  <p className="mb-4 text-xs text-slate-400 device-label-preview-chrome">{t('打印尺寸：0.7 x 2 inch 标签纸。', 'Print size: 0.7 x 2 inch label.')}</p>
+                  <div className="overflow-auto rounded-2xl border border-white/10 bg-black/20 p-4 device-label-preview-canvas">
+                    <div className="mx-auto origin-top scale-[2.15] md:scale-[2.45] device-label-preview-scale" style={{ width: '2in' }}>
+                      <div
+                        style={{
+                          width: '2in',
+                          height: '0.7in',
+                          background: 'linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%)',
+                          color: '#0f172a',
+                          fontFamily: 'Arial, "Microsoft YaHei", sans-serif',
+                          border: '1px solid #cbd5e1',
+                          borderRadius: '8px',
+                          boxSizing: 'border-box',
+                          padding: '0.045in',
+                          display: 'grid',
+                          gridTemplateColumns: '0.58in 1fr',
+                          gap: '0.045in',
+                          overflow: 'hidden'
+                        }}
+                      >
+                        <div
+                          style={{
+                            border: '1px solid #cbd5e1',
+                            borderRadius: '6px',
+                            background: '#fff',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '0.012in'
+                          }}
+                        >
+                          <img
+                            src={deviceLabelPreview.qrDataUrl}
+                            alt={`QR ${deviceLabelPreview.sn}`}
+                            style={{ width: '100%', height: 'auto', maxWidth: '0.5in' }}
+                          />
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateRows: 'auto auto auto 1fr auto', gap: '0.008in', minWidth: 0 }}>
+                          <div style={{ fontSize: '7pt', fontWeight: 800, letterSpacing: '0.08em', color: '#334155' }}>OUTBOUNT DEVICE</div>
+                          <div style={{ fontSize: '9pt', fontWeight: 800, lineHeight: 1.05, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {deviceLabelPreview.name}
+                          </div>
+                          <div style={{ fontSize: '7pt', color: '#475569', lineHeight: 1.1 }}>
+                            {deviceLabelPreview.type} · {deviceLabelPreview.position}
+                          </div>
+                          <div />
+                          <div style={{ fontSize: '7pt', fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {deviceLabelPreview.sn}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
 
         <footer className="text-center text-xs text-slate-500">
           {isLocked ? t('请求处理中，已锁定交互', 'Request in progress (locked)') : 'Ready'}
