@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib/supabase';
 import { isValidStaffId, normalizeStaffId } from './lib/staffId';
-import { type LabelToneKey, getLabelToneClass, loadLabelToneMap } from './lib/labelTone';
+import { LABEL_TONE_KEYS, type LabelToneKey, getLabelToneClass, loadLabelToneMap } from './lib/labelTone';
 
 type PunchAction = 'IN' | 'OUT';
 
@@ -65,6 +65,7 @@ const OBUP_REPORT_DETAILS_TABLE =
   (import.meta.env.VITE_OBUP_REPORT_DETAILS_TABLE as string | undefined) ?? 'report_details';
 const OBUP_ACCOUNT_LINKS_TABLE = (import.meta.env.VITE_OBUP_ACCOUNT_LINKS_TABLE as string | undefined) ?? 'account_links';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
+const SCHEDULE_POSITION_TONES_KEY = 'schedule_position_tones_v1';
 const SCHEDULE_REST_NOTE = '__rest__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
 const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
@@ -186,23 +187,66 @@ const getManualTomorrowListVisible = (setting: TomorrowListSetting, now: Date) =
   return now.getTime() < cutoff.getTime();
 };
 
-const getPositionBadgeClass = (value: string) => {
-  const v = value.trim().toLowerCase();
-  if (v === 'pick') return 'border-sky-400/60 text-sky-200 bg-sky-500/10';
-  if (v === 'pack') return 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10';
-  if (v === 'rebin') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
-  if (v === 'preship') return 'border-rose-400/60 text-rose-200 bg-rose-500/10';
-  if (v === 'transfer') return 'border-violet-400/60 text-violet-200 bg-violet-500/10';
-  return 'border-white/20 text-slate-200 bg-white/5';
+const getDefaultPositionToneKey = (value: string): LabelToneKey => {
+  const pos = normalizeAllowedPosition(value);
+  if (pos === 'Pick') return 'sky';
+  if (pos === 'Pack') return 'emerald';
+  if (pos === 'Rebin') return 'amber';
+  if (pos === 'Preship') return 'rose';
+  if (pos === 'Transfer') return 'violet';
+  return 'slate';
 };
-const getPositionFrameClass = (value: AllowedPosition) => {
-  const v = value.trim().toLowerCase();
-  if (v === 'pick') return 'border-sky-400/35 bg-sky-500/[0.04]';
-  if (v === 'pack') return 'border-emerald-400/35 bg-emerald-500/[0.04]';
-  if (v === 'rebin') return 'border-amber-400/35 bg-amber-500/[0.04]';
-  if (v === 'preship') return 'border-rose-400/35 bg-rose-500/[0.04]';
-  if (v === 'transfer') return 'border-violet-400/35 bg-violet-500/[0.04]';
-  return 'border-white/10 bg-white/5';
+const POSITION_BADGE_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
+  sky: 'border-sky-400/60 text-sky-200 bg-sky-500/10',
+  emerald: 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10',
+  amber: 'border-amber-400/60 text-amber-200 bg-amber-500/10',
+  violet: 'border-violet-400/60 text-violet-200 bg-violet-500/10',
+  rose: 'border-rose-400/60 text-rose-200 bg-rose-500/10',
+  slate: 'border-white/20 text-slate-200 bg-white/5'
+};
+const POSITION_FRAME_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
+  sky: 'border-sky-400/35 bg-sky-500/[0.04]',
+  emerald: 'border-emerald-400/35 bg-emerald-500/[0.04]',
+  amber: 'border-amber-400/35 bg-amber-500/[0.04]',
+  violet: 'border-violet-400/35 bg-violet-500/[0.04]',
+  rose: 'border-rose-400/35 bg-rose-500/[0.04]',
+  slate: 'border-white/10 bg-white/5'
+};
+const ON_CLOCK_PANEL_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
+  sky: 'border border-sky-400/25 bg-sky-950/45',
+  emerald: 'border border-emerald-400/25 bg-emerald-950/45',
+  amber: 'border border-amber-400/25 bg-amber-950/45',
+  violet: 'border border-violet-400/25 bg-violet-950/45',
+  rose: 'border border-rose-400/25 bg-rose-950/45',
+  slate: 'border border-white/15 bg-slate-950/70'
+};
+const ON_CLOCK_VALUE_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
+  sky: 'text-sky-300',
+  emerald: 'text-emerald-300',
+  amber: 'text-amber-300',
+  violet: 'text-violet-300',
+  rose: 'text-rose-300',
+  slate: 'text-slate-200'
+};
+const getPositionToneKey = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
+  const pos = normalizeAllowedPosition(value);
+  return (pos ? toneMap?.[pos] : undefined) ?? getDefaultPositionToneKey(value);
+};
+const getPositionBadgeClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
+  const tone = getPositionToneKey(value, toneMap);
+  return POSITION_BADGE_TONE_CLASS_DARK[tone] ?? POSITION_BADGE_TONE_CLASS_DARK.slate;
+};
+const getPositionFrameClass = (value: AllowedPosition, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
+  const tone = getPositionToneKey(value, toneMap);
+  return POSITION_FRAME_TONE_CLASS_DARK[tone] ?? POSITION_FRAME_TONE_CLASS_DARK.slate;
+};
+const getOnClockPanelClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
+  const tone = getPositionToneKey(value, toneMap);
+  return ON_CLOCK_PANEL_TONE_CLASS_DARK[tone] ?? ON_CLOCK_PANEL_TONE_CLASS_DARK.slate;
+};
+const getOnClockValueClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
+  const tone = getPositionToneKey(value, toneMap);
+  return ON_CLOCK_VALUE_TONE_CLASS_DARK[tone] ?? ON_CLOCK_VALUE_TONE_CLASS_DARK.slate;
 };
 
 const getShiftBadgeClass = (value: string) => {
@@ -555,6 +599,13 @@ export default function App() {
   >({});
   const [punchBoardUphByStaffId, setPunchBoardUphByStaffId] = useState<Record<string, number | null>>({});
   const [labelToneByName, setLabelToneByName] = useState<Record<string, LabelToneKey>>(() => loadLabelToneMap());
+  const [schedulePositionToneByPosition, setSchedulePositionToneByPosition] = useState<Record<AllowedPosition, LabelToneKey>>({
+    Pick: 'sky',
+    Pack: 'emerald',
+    Rebin: 'amber',
+    Preship: 'rose',
+    Transfer: 'violet'
+  });
   const [punchLogPositionFilter, setPunchLogPositionFilter] = useState<AllowedPosition | ''>('');
   const [dailyRoster, setDailyRoster] = useState<DailyRosterItem[]>([]);
   const [dailyRosterError, setDailyRosterError] = useState<string | null>(null);
@@ -588,6 +639,10 @@ export default function App() {
     return () => window.removeEventListener('storage', sync);
   }, []);
   const getAppLabelToneClass = (label: string) => getLabelToneClass(label, labelToneByName);
+  const getAppPositionBadgeClass = (position: string) => getPositionBadgeClass(position, schedulePositionToneByPosition);
+  const getAppPositionFrameClass = (position: AllowedPosition) => getPositionFrameClass(position, schedulePositionToneByPosition);
+  const getAppOnClockPanelClass = (position: AllowedPosition) => getOnClockPanelClass(position, schedulePositionToneByPosition);
+  const getAppOnClockValueClass = (position: AllowedPosition) => getOnClockValueClass(position, schedulePositionToneByPosition);
 
   const [lastPunchAction, setLastPunchAction] = useState<PunchAction | null>(null);
   const [lastPunchActionError, setLastPunchActionError] = useState<string | null>(null);
@@ -1553,6 +1608,35 @@ const fetchPunchBoardUph = async (
       }))
     };
   };
+  const normalizePositionToneMap = (value: unknown): Record<AllowedPosition, LabelToneKey> => {
+    const raw = (value ?? {}) as Record<string, unknown>;
+    const next: Record<AllowedPosition, LabelToneKey> = {
+      Pick: 'sky',
+      Pack: 'emerald',
+      Rebin: 'amber',
+      Preship: 'rose',
+      Transfer: 'violet'
+    };
+    for (const pos of ALLOWED_POSITIONS) {
+      const tone = String(raw[pos] ?? '').trim() as LabelToneKey;
+      if (!LABEL_TONE_KEYS.includes(tone)) continue;
+      next[pos] = tone;
+    }
+    return next;
+  };
+  const fetchSchedulePositionToneSetting = async () => {
+    if (!supabase) return;
+    const res = await supabase
+      .from(APP_SETTINGS_TABLE)
+      .select('key, value, updated_at')
+      .eq('key', SCHEDULE_POSITION_TONES_KEY)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (res.error) return;
+    const row = (((res.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
+    const value = (row?.value ?? {}) as Record<string, unknown>;
+    setSchedulePositionToneByPosition(normalizePositionToneMap(value.tones ?? {}));
+  };
   const fetchTomorrowListSetting = async () => {
     if (!supabase) {
       setTomorrowListSetting({ enabled: false, publishForDate: '' });
@@ -1753,6 +1837,7 @@ const fetchPunchBoardUph = async (
     void (async () => {
       if (!active) return;
       await fetchPunchBoard({ position: punchLogPositionFilter });
+      await fetchSchedulePositionToneSetting();
       await fetchTomorrowListSetting();
       await fetchAbsentRoster();
       await fetchArrivalMetrics();
@@ -1760,6 +1845,7 @@ const fetchPunchBoardUph = async (
 
     const timer = window.setInterval(() => {
       void fetchPunchBoard({ position: punchLogPositionFilter });
+      void fetchSchedulePositionToneSetting();
       void fetchTomorrowListSetting();
       void fetchAbsentRoster();
       void fetchArrivalMetrics();
@@ -1984,7 +2070,7 @@ const fetchPunchBoardUph = async (
           onClick={() => setDailyRosterPositionFilter('')}
           className={[
             'rounded-xl px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.15em] transition disabled:cursor-not-allowed disabled:opacity-60',
-            dailyRosterPositionFilter === '' ? 'bg-neon text-ink shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+            dailyRosterPositionFilter === '' ? 'bg-neon text-white shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
           ].join(' ')}
         >
           All
@@ -1997,7 +2083,7 @@ const fetchPunchBoardUph = async (
             onClick={() => setDailyRosterPositionFilter((prev) => (prev === pos ? '' : pos))}
             className={[
               'rounded-xl px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.15em] transition disabled:cursor-not-allowed disabled:opacity-60',
-              dailyRosterPositionFilter === pos ? 'bg-neon text-ink shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+              dailyRosterPositionFilter === pos ? `${getAppPositionBadgeClass(pos)} shadow-glow` : 'bg-white/10 text-slate-200 hover:bg-white/15'
             ].join(' ')}
           >
             {pos}
@@ -2043,7 +2129,7 @@ const fetchPunchBoardUph = async (
                               <span
                                 className={[
                                   'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]',
-                                  getPositionBadgeClass(row.position || '-')
+                                  getAppPositionBadgeClass(row.position || '-')
                                 ].join(' ')}
                               >
                                 {row.position || '-'}
@@ -2084,7 +2170,7 @@ const fetchPunchBoardUph = async (
                           <span
                             className={[
                               'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]',
-                              getPositionBadgeClass(row.position || '-')
+                              getAppPositionBadgeClass(row.position || '-')
                             ].join(' ')}
                           >
                             {row.position || '-'}
@@ -2299,7 +2385,7 @@ const fetchPunchBoardUph = async (
                 <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Attendance</div>
                 <div className="space-y-2 overflow-visible">
                   {ALLOWED_POSITIONS.map((position) => {
-                    const positionFrameClass = getPositionFrameClass(position);
+                    const positionFrameClass = getAppPositionFrameClass(position);
                     const early = arrivalMetricByKey[`${position}:early`] ?? {
                       shift: 'early' as const,
                       position,
@@ -2352,12 +2438,12 @@ const fetchPunchBoardUph = async (
                                 </span>
                               </div>
                             </div>
-                            <div className="group relative z-10 rounded-md bg-slate-950/70 px-3 py-1.5 text-center hover:z-50">
+                            <div className={['group relative z-10 rounded-md px-3 py-1.5 text-center hover:z-50', getAppOnClockPanelClass(position)].join(' ')}>
                               <div className="text-[10px] font-semibold tracking-[0.08em] text-slate-300">On Clock</div>
                               <div
                                 className={[
                                   'mt-0.5 text-2xl font-bold leading-none',
-                                  early.restWorked > 0 ? 'text-sky-400' : 'text-lime-400'
+                                  getAppOnClockValueClass(position)
                                 ].join(' ')}
                               >
                                 {earlyOnClockStaffCombined.length}
@@ -2433,12 +2519,12 @@ const fetchPunchBoardUph = async (
                                 </span>
                               </div>
                             </div>
-                            <div className="group relative z-10 rounded-md bg-slate-950/70 px-3 py-1.5 text-center hover:z-50">
+                            <div className={['group relative z-10 rounded-md px-3 py-1.5 text-center hover:z-50', getAppOnClockPanelClass(position)].join(' ')}>
                               <div className="text-[10px] font-semibold tracking-[0.08em] text-slate-300">On Clock</div>
                               <div
                                 className={[
                                   'mt-0.5 text-2xl font-bold leading-none',
-                                  late.restWorked > 0 ? 'text-sky-400' : 'text-lime-400'
+                                  getAppOnClockValueClass(position)
                                 ].join(' ')}
                               >
                                 {lateOnClockStaffCombined.length}
@@ -2574,7 +2660,7 @@ const fetchPunchBoardUph = async (
                                 <span
                                   className={[
                                     'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
-                                    getPositionBadgeClass(position)
+                                    getAppPositionBadgeClass(position)
                                   ].join(' ')}
                                 >
                                   {position || '-'}
@@ -2822,4 +2908,3 @@ const fetchPunchBoardUph = async (
     </div>
   );
 }
-

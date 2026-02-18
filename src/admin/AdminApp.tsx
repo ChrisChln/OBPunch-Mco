@@ -45,6 +45,8 @@ const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
 const SCHEDULE_WEEK_RESET_KEY = 'schedule_transient_reset_week';
 const DAILY_LIST_LIGHTS_KEY = 'daily_list_position_lights';
+const SCHEDULE_LABEL_TONES_KEY = 'schedule_label_tones_v1';
+const SCHEDULE_POSITION_TONES_KEY = 'schedule_position_tones_v1';
 const SCHEDULE_REST_NOTE = '__rest__';
 const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
@@ -351,42 +353,83 @@ const getOperationalDateKey = (now: Date, cutoffHour: number) => {
   return toDateOnly(operationalStart);
 };
 
-const getPositionBadgeClass = (value: string) => {
-  const v = value.trim().toLowerCase();
-  if (v === 'pick') return 'border-sky-400/60 text-sky-200 bg-sky-500/10';
-  if (v === 'pack') return 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10';
-  if (v === 'rebin') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
-  if (v === 'preship') return 'border-rose-400/60 text-rose-200 bg-rose-500/10';
-  if (v === 'transfer') return 'border-violet-400/60 text-violet-200 bg-violet-500/10';
-  return 'border-white/20 text-slate-200 bg-white/5';
+const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
+  const hit = ALLOWED_POSITIONS.find((p) => p.toLowerCase() === String(value ?? '').trim().toLowerCase());
+  return hit ?? '';
 };
-const getHomeCardToneClass = (value: string) => {
-  const v = value.trim().toLowerCase();
-  if (v === 'pick') return 'border-sky-400/35 bg-sky-500/[0.05]';
-  if (v === 'pack') return 'border-emerald-400/35 bg-emerald-500/[0.05]';
-  if (v === 'rebin') return 'border-amber-400/35 bg-amber-500/[0.05]';
-  if (v === 'preship') return 'border-rose-400/35 bg-rose-500/[0.05]';
-  if (v === 'transfer') return 'border-violet-400/35 bg-violet-500/[0.05]';
-  return 'border-white/15 bg-white/5';
+
+const getDefaultPositionToneKey = (value: string): LabelToneKey => {
+  const pos = normalizeAllowedPosition(value);
+  if (pos === 'Pick') return 'sky';
+  if (pos === 'Pack') return 'emerald';
+  if (pos === 'Rebin') return 'amber';
+  if (pos === 'Preship') return 'rose';
+  if (pos === 'Transfer') return 'violet';
+  return 'slate';
 };
-const getHomeChipToneClass = (value: string) => {
-  const v = value.trim().toLowerCase();
-  if (v === 'pick') return 'border border-sky-400/40 bg-sky-500/15 text-sky-100';
-  if (v === 'pack') return 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-100';
-  if (v === 'rebin') return 'border border-amber-400/40 bg-amber-500/15 text-amber-100';
-  if (v === 'preship') return 'border border-rose-400/40 bg-rose-500/15 text-rose-100';
-  if (v === 'transfer') return 'border border-violet-400/40 bg-violet-500/15 text-violet-100';
-  return 'bg-white/10 text-slate-300';
+
+const POSITION_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
+  sky: 'border-sky-400/60 text-sky-200 bg-sky-500/10',
+  emerald: 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10',
+  amber: 'border-amber-400/60 text-amber-200 bg-amber-500/10',
+  violet: 'border-violet-400/60 text-violet-200 bg-violet-500/10',
+  rose: 'border-rose-400/60 text-rose-200 bg-rose-500/10',
+  slate: 'border-white/20 text-slate-200 bg-white/5'
 };
-const getHomePanelToneClass = (value: string) => {
-  const v = value.trim().toLowerCase();
-  if (v === 'pick') return 'border border-sky-400/20 bg-sky-950/35';
-  if (v === 'pack') return 'border border-emerald-400/20 bg-emerald-950/35';
-  if (v === 'rebin') return 'border border-amber-400/20 bg-amber-950/35';
-  if (v === 'preship') return 'border border-rose-400/20 bg-rose-950/35';
-  if (v === 'transfer') return 'border border-violet-400/20 bg-violet-950/35';
-  return 'bg-black/30';
+
+const POSITION_TONE_CLASS_LIGHT: Record<LabelToneKey, string> = {
+  sky: 'border-sky-300 bg-sky-50 text-sky-700',
+  emerald: 'border-emerald-300 bg-emerald-50 text-emerald-700',
+  amber: 'border-amber-300 bg-amber-50 text-amber-700',
+  violet: 'border-violet-300 bg-violet-50 text-violet-700',
+  rose: 'border-rose-300 bg-rose-50 text-rose-700',
+  slate: 'border-slate-300 bg-slate-100 text-slate-700'
 };
+
+const getPositionBadgeClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
+  const pos = normalizeAllowedPosition(value);
+  const tone = (pos ? toneMap?.[pos] : undefined) ?? getDefaultPositionToneKey(value);
+  return POSITION_TONE_CLASS_DARK[tone] ?? POSITION_TONE_CLASS_DARK.slate;
+};
+const getPositionBadgeClassLight = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
+  const pos = normalizeAllowedPosition(value);
+  const tone = (pos ? toneMap?.[pos] : undefined) ?? getDefaultPositionToneKey(value);
+  return POSITION_TONE_CLASS_LIGHT[tone] ?? POSITION_TONE_CLASS_LIGHT.slate;
+};
+const HOME_CARD_TONE_CLASS: Record<LabelToneKey, string> = {
+  sky: 'border-sky-400/35 bg-sky-500/[0.05]',
+  emerald: 'border-emerald-400/35 bg-emerald-500/[0.05]',
+  amber: 'border-amber-400/35 bg-amber-500/[0.05]',
+  violet: 'border-violet-400/35 bg-violet-500/[0.05]',
+  rose: 'border-rose-400/35 bg-rose-500/[0.05]',
+  slate: 'border-white/15 bg-white/5'
+};
+const HOME_CHIP_TONE_CLASS: Record<LabelToneKey, string> = {
+  sky: 'border border-sky-400/40 bg-sky-500/15 text-sky-100',
+  emerald: 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-100',
+  amber: 'border border-amber-400/40 bg-amber-500/15 text-amber-100',
+  violet: 'border border-violet-400/40 bg-violet-500/15 text-violet-100',
+  rose: 'border border-rose-400/40 bg-rose-500/15 text-rose-100',
+  slate: 'bg-white/10 text-slate-300'
+};
+const HOME_PANEL_TONE_CLASS: Record<LabelToneKey, string> = {
+  sky: 'border border-sky-400/20 bg-sky-950/35',
+  emerald: 'border border-emerald-400/20 bg-emerald-950/35',
+  amber: 'border border-amber-400/20 bg-amber-950/35',
+  violet: 'border border-violet-400/20 bg-violet-950/35',
+  rose: 'border border-rose-400/20 bg-rose-950/35',
+  slate: 'bg-black/30'
+};
+const getHomeToneKey = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
+  const pos = normalizeAllowedPosition(value);
+  return (pos ? toneMap?.[pos] : undefined) ?? getDefaultPositionToneKey(value);
+};
+const getHomeCardToneClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) =>
+  HOME_CARD_TONE_CLASS[getHomeToneKey(value, toneMap)] ?? HOME_CARD_TONE_CLASS.slate;
+const getHomeChipToneClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) =>
+  HOME_CHIP_TONE_CLASS[getHomeToneKey(value, toneMap)] ?? HOME_CHIP_TONE_CLASS.slate;
+const getHomePanelToneClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) =>
+  HOME_PANEL_TONE_CLASS[getHomeToneKey(value, toneMap)] ?? HOME_PANEL_TONE_CLASS.slate;
 
 const ORDINAL_CN = ['第一次', '第二次', '第三次', '第四次', '第五次', '第六次', '第七次', '第八次', '第九次', '第十次'];
 
@@ -521,6 +564,11 @@ export default function AdminApp() {
   const timecardPunchFetchSeqRef = useRef(0);
   const timecardRecomputeLastRunByWeekRef = useRef<Record<string, number>>({});
   const dailyListResetKeyRef = useRef(getOperationalDateKey(new Date(), DAILY_LIST_RESET_HOUR));
+  const scheduleLabelToneHydratingRef = useRef(false);
+  const scheduleLabelToneLastSavedJsonRef = useRef('');
+  const schedulePositionToneHydratingRef = useRef(false);
+  const schedulePositionToneLastSavedJsonRef = useRef('');
+  const schedulePositionToneReadyRef = useRef(false);
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
@@ -637,6 +685,7 @@ export default function AdminApp() {
   const [timecardPunchRows, setTimecardPunchRows] = useState<PunchRow[]>([]);
   const [timecardPunchError, setTimecardPunchError] = useState<string | null>(null);
   const [timecardPunchShowAll, setTimecardPunchShowAll] = useState(false);
+  const [timecardPunchPendingAddRows, setTimecardPunchPendingAddRows] = useState<PunchRow[]>([]);
   const [timecardPunchPendingDeleteIds, setTimecardPunchPendingDeleteIds] = useState<string[]>([]);
   const [timecardPunchAddOpen, setTimecardPunchAddOpen] = useState(false);
   const [timecardPunchEdits, setTimecardPunchEdits] = useState<Record<string, { action: 'IN' | 'OUT'; atLocal: string }>>({});
@@ -659,6 +708,13 @@ export default function AdminApp() {
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [scheduleSearchInput, setScheduleSearchInput] = useState('');
   const [schedulePosition, setSchedulePosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [schedulePositionToneByPosition, setSchedulePositionToneByPosition] = useState<Record<AllowedPosition, LabelToneKey>>({
+    Pick: 'sky',
+    Pack: 'emerald',
+    Rebin: 'amber',
+    Preship: 'rose',
+    Transfer: 'violet'
+  });
   const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
   const [scheduleLabelToneByName, setScheduleLabelToneByName] = useState<Record<string, LabelToneKey>>(() =>
     loadLabelToneMap()
@@ -692,9 +748,169 @@ export default function AdminApp() {
   const deferredScheduleShift = useDeferredValue(scheduleShift);
   const deferredScheduleLabels = useDeferredValue(scheduleLabels);
 
+  const normalizeLabelToneMap = (value: unknown): Record<string, LabelToneKey> => {
+    const raw = (value ?? {}) as Record<string, unknown>;
+    const next: Record<string, LabelToneKey> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      const name = String(k ?? '').trim().toLowerCase();
+      const tone = String(v ?? '').trim() as LabelToneKey;
+      if (!name || !LABEL_TONE_KEYS.includes(tone)) continue;
+      next[name] = tone;
+    }
+    return next;
+  };
+
+  const normalizePositionToneMap = (value: unknown): Record<AllowedPosition, LabelToneKey> => {
+    const raw = (value ?? {}) as Record<string, unknown>;
+    const next: Record<AllowedPosition, LabelToneKey> = {
+      Pick: 'sky',
+      Pack: 'emerald',
+      Rebin: 'amber',
+      Preship: 'rose',
+      Transfer: 'violet'
+    };
+    for (const pos of ALLOWED_POSITIONS) {
+      const tone = String(raw[pos] ?? '').trim() as LabelToneKey;
+      if (!LABEL_TONE_KEYS.includes(tone)) continue;
+      next[pos] = tone;
+    }
+    return next;
+  };
+
+  const saveScheduleLabelToneGlobal = async (next: Record<string, LabelToneKey>) => {
+    if (!supabase) return;
+    const nowIso = new Date(serverTime).toISOString();
+    const payload = {
+      key: SCHEDULE_LABEL_TONES_KEY,
+      value: {
+        tones: next,
+        updated_at: nowIso,
+        operator: user?.email ?? null
+      },
+      updated_at: nowIso
+    };
+    const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
+    if (!upsertRes.error) return;
+    const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', SCHEDULE_LABEL_TONES_KEY);
+    if (!updateRes.error) return;
+    await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
+  };
+
+  const loadScheduleLabelToneGlobal = async () => {
+    if (!supabase) return;
+    const res = await supabase
+      .from(APP_SETTINGS_TABLE)
+      .select('id, key, value, updated_at')
+      .eq('key', SCHEDULE_LABEL_TONES_KEY)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (res.error) return;
+    const row = (((res.data as any[]) ?? [])[0] ?? null) as AppSettingRow | null;
+    if (!row) return;
+    const value = (row.value ?? {}) as Record<string, unknown>;
+    const next = normalizeLabelToneMap(value.tones ?? {});
+    const nextJson = JSON.stringify(next);
+    if (nextJson === scheduleLabelToneLastSavedJsonRef.current) return;
+    scheduleLabelToneHydratingRef.current = true;
+    scheduleLabelToneLastSavedJsonRef.current = nextJson;
+    saveLabelToneMap(next);
+    setScheduleLabelToneByName(next);
+  };
+
+  const saveSchedulePositionToneGlobal = async (next: Record<AllowedPosition, LabelToneKey>) => {
+    if (!supabase) return;
+    const nowIso = new Date(serverTime).toISOString();
+    const payload = {
+      key: SCHEDULE_POSITION_TONES_KEY,
+      value: {
+        tones: next,
+        updated_at: nowIso,
+        operator: user?.email ?? null
+      },
+      updated_at: nowIso
+    };
+    const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
+    if (!upsertRes.error) return;
+    const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', SCHEDULE_POSITION_TONES_KEY);
+    if (!updateRes.error) return;
+    await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
+  };
+
+  const loadSchedulePositionToneGlobal = async () => {
+    if (!supabase) {
+      schedulePositionToneReadyRef.current = true;
+      return;
+    }
+    try {
+      const res = await supabase
+        .from(APP_SETTINGS_TABLE)
+        .select('id, key, value, updated_at')
+        .eq('key', SCHEDULE_POSITION_TONES_KEY)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      if (res.error) return;
+      const row = (((res.data as any[]) ?? [])[0] ?? null) as AppSettingRow | null;
+      if (!row) return;
+      const value = (row.value ?? {}) as Record<string, unknown>;
+      const next = normalizePositionToneMap(value.tones ?? {});
+      const nextJson = JSON.stringify(next);
+      if (nextJson === schedulePositionToneLastSavedJsonRef.current) return;
+      schedulePositionToneHydratingRef.current = true;
+      schedulePositionToneLastSavedJsonRef.current = nextJson;
+      setSchedulePositionToneByPosition(next);
+    } finally {
+      schedulePositionToneReadyRef.current = true;
+    }
+  };
+
   useEffect(() => {
     saveLabelToneMap(scheduleLabelToneByName);
+    const json = JSON.stringify(scheduleLabelToneByName);
+    if (scheduleLabelToneHydratingRef.current) {
+      scheduleLabelToneHydratingRef.current = false;
+      scheduleLabelToneLastSavedJsonRef.current = json;
+      return;
+    }
+    if (json === scheduleLabelToneLastSavedJsonRef.current) return;
+    scheduleLabelToneLastSavedJsonRef.current = json;
+    void saveScheduleLabelToneGlobal(scheduleLabelToneByName);
   }, [scheduleLabelToneByName]);
+
+  useEffect(() => {
+    if (!schedulePositionToneReadyRef.current) return;
+    const json = JSON.stringify(schedulePositionToneByPosition);
+    if (schedulePositionToneHydratingRef.current) {
+      schedulePositionToneHydratingRef.current = false;
+      schedulePositionToneLastSavedJsonRef.current = json;
+      return;
+    }
+    if (json === schedulePositionToneLastSavedJsonRef.current) return;
+    schedulePositionToneLastSavedJsonRef.current = json;
+    void saveSchedulePositionToneGlobal(schedulePositionToneByPosition);
+  }, [schedulePositionToneByPosition]);
+
+  useEffect(() => {
+    schedulePositionToneReadyRef.current = false;
+    void loadScheduleLabelToneGlobal();
+    void loadSchedulePositionToneGlobal();
+  }, [user?.email]);
+
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    let active = true;
+    const sync = async () => {
+      if (!active) return;
+      await loadScheduleLabelToneGlobal();
+      await loadSchedulePositionToneGlobal();
+    };
+    const timer = window.setInterval(() => {
+      void sync();
+    }, 30000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [page, user?.email, offsetMs]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1115,6 +1331,23 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setDailyListSelectedPositions(empty);
     void saveDailyListSelectedPositionsGlobal(empty, key);
   }, [serverTime]);
+
+  useEffect(() => {
+    if (!dailyListOpen) return;
+    let active = true;
+    const sync = async () => {
+      if (!active) return;
+      await loadDailyListSelectedPositionsGlobal();
+    };
+    void sync();
+    const timer = window.setInterval(() => {
+      void sync();
+    }, 4000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [dailyListOpen, user?.email, offsetMs]);
 
   useEffect(() => {
     if (page !== 'timecard') {
@@ -4173,6 +4406,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setTimecardPunchError(null);
     setTimecardPunchRows([]);
     setTimecardPunchShowAll(false);
+    setTimecardPunchPendingAddRows([]);
     setTimecardPunchPendingDeleteIds([]);
     setTimecardPunchAddOpen(false);
     setTimecardPunchEdits({});
@@ -4207,6 +4441,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setTimecardPunchRows([]);
     setTimecardPunchError(null);
     setTimecardPunchShowAll(false);
+    setTimecardPunchPendingAddRows([]);
     setTimecardPunchPendingDeleteIds([]);
     setTimecardPunchAddOpen(false);
     setTimecardPunchEdits({});
@@ -4214,10 +4449,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   };
 
   const addTimecardPunchRow = async () => {
-    if (!supabase) {
-      setTimecardPunchError('缺少 Supabase 配置。');
-      return;
-    }
     const staff = timecardPunchStaffId;
     if (!staff) {
       return;
@@ -4250,70 +4481,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       setTimecardPunchError(`时间必须在单天范围内（${startText} ~ ${endText}，允许跨夜）。`);
       return;
     }
-
-      await runLocked('timecard_add', async () => {
-        setTimecardPunchError(null);
-        const insertRes = await supabase.from('ob_punches').insert([
-          {
-            staff_id: staff,
-            action: 'IN',
-            created_at: inCreatedAt,
-            metadata: {
-              device: 'admin_console',
-              kind: 'manual_add',
-              manual: true,
-              operator: user?.email ?? null
-            }
-          },
-          {
-            staff_id: staff,
-            action: 'OUT',
-            created_at: outCreatedAt,
-            metadata: {
-              device: 'admin_console',
-              kind: 'manual_add',
-              manual: true,
-              operator: user?.email ?? null
-            }
-          }
-        ]).select('id');
-        if (insertRes.error) {
-          setTimecardPunchError(insertRes.error.message);
-          return;
-        }
-        await writeAudit({
-          action: 'punch_manual_add',
-          staffId: staff,
-          target: 'ob_punches',
-          payload: {
-            punch_ids: ((insertRes.data as any[] | null) ?? []).map((x: any) => String(x?.id ?? '').trim()).filter(Boolean),
-            day_index: timecardPunchDayIndex,
-            actions: ['IN', 'OUT'],
-            created_at: { in: inCreatedAt, out: outCreatedAt }
-          }
-        });
-
-      const res = await fetchPunchRowsForTimecard(staff, timecardPunchDayIndex);
-      if (res.error) {
-        setTimecardPunchError(res.error);
-        return;
-      }
-      setTimecardPunchRows(res.rows);
-
-      const edits: Record<string, { action: 'IN' | 'OUT'; atLocal: string }> = {};
-      for (const r of res.rows) {
-        const dt = r.created_at ? new Date(r.created_at) : null;
-        edits[String(r.id)] = {
-          action: r.action,
-          atLocal: dt && !Number.isNaN(dt.getTime()) ? toLocalDateTimeInputValue(dt) : ''
-        };
-      }
-      setTimecardPunchEdits(edits);
-      const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
-      setTimecardPunchNew({ inAtLocal: nowLocal, outAtLocal: nowLocal });
-
-      await fetchTimecard({ reset: true, lockUi: false });
-    });
+    const inTempId = `tmp_add_${Date.now()}_in_${Math.random().toString(36).slice(2, 8)}`;
+    const outTempId = `tmp_add_${Date.now()}_out_${Math.random().toString(36).slice(2, 8)}`;
+    const stagedRows: PunchRow[] = [
+      { id: inTempId, staff_id: staff, action: 'IN', created_at: inCreatedAt },
+      { id: outTempId, staff_id: staff, action: 'OUT', created_at: outCreatedAt }
+    ];
+    setTimecardPunchError(null);
+    setTimecardPunchPendingAddRows((prev) => [...prev, ...stagedRows]);
+    setTimecardPunchEdits((prev) => ({
+      ...prev,
+      [inTempId]: { action: 'IN', atLocal: timecardPunchNew.inAtLocal },
+      [outTempId]: { action: 'OUT', atLocal: timecardPunchNew.outAtLocal }
+    }));
+    const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
+    setTimecardPunchNew({ inAtLocal: nowLocal, outAtLocal: nowLocal });
+    setStatus({ tone: 'idle', message: t('已暂存新增，请点击保存全部提交。', 'Add staged. Click Save all to apply.') });
   };
 
   const saveAllTimecardPunchRows = async () => {
@@ -4323,10 +4506,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
     const staff = timecardPunchStaffId;
     if (!staff) return;
+    const pendingAddIdSet = new Set(timecardPunchPendingAddRows.map((r) => String(r.id)));
 
     const changed = timecardPunchRowsVisible
       .map((row) => {
         const rowId = String(row.id);
+        if (pendingAddIdSet.has(rowId)) return null;
         const edit = timecardPunchEdits[rowId];
         if (!edit) return null;
         const rowLocal = row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : '';
@@ -4334,9 +4519,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return changed ? { rowId, edit } : null;
       })
       .filter(Boolean) as Array<{ rowId: string; edit: { action: 'IN' | 'OUT'; atLocal: string } }>;
-    const deleteIds = timecardPunchPendingDeleteIds;
+    const pendingAdds = timecardPunchPendingAddRows.filter((row) => !timecardPunchPendingDeleteIds.includes(String(row.id)));
+    const deleteIds = timecardPunchPendingDeleteIds.filter((id) => !pendingAddIdSet.has(String(id)));
 
-    if (changed.length === 0 && deleteIds.length === 0) {
+    if (changed.length === 0 && deleteIds.length === 0 && pendingAdds.length === 0) {
       setTimecardPunchError(null);
       setStatus({ tone: 'idle', message: t('没有可保存的改动。', 'No changes to save.') });
       closeTimecardPunchModal();
@@ -4351,6 +4537,52 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (!createdAt) {
         setTimecardPunchError('时间格式不正确。');
         return;
+      }
+    }
+    for (const row of pendingAdds) {
+      const rowId = String(row.id);
+      const edit = timecardPunchEdits[rowId] ?? {
+        action: row.action,
+        atLocal: row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : ''
+      };
+      const createdAt = parseLocalDateTimeInputValue(edit.atLocal);
+      if (!createdAt) {
+        setTimecardPunchError('时间格式不正确。');
+        return;
+      }
+    }
+    if (timecardPunchDayIndex !== null && timecardPunchDayIndex >= 0 && timecardPunchDayIndex <= 6) {
+      const baseWeekStart = startOfWeekMonday(serverTime);
+      const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+      const dayRange = getDayRange(weekStart, timecardPunchDayIndex);
+      const startMs = dayRange.start.getTime();
+      const endMs = dayRange.end.getTime();
+      const startText = formatTime(dayRange.start);
+      const endText = formatTime(dayRange.end);
+      const ensureInRange = (createdAt: string) => {
+        const ms = new Date(createdAt).getTime();
+        return ms >= startMs && ms < endMs;
+      };
+      for (const item of changed) {
+        const createdAt = parseLocalDateTimeInputValue(item.edit.atLocal);
+        if (!createdAt) continue;
+        if (!ensureInRange(createdAt)) {
+          setTimecardPunchError(`编辑时间必须在当前日期范围内（${startText} ~ ${endText}）。`);
+          return;
+        }
+      }
+      for (const row of pendingAdds) {
+        const rowId = String(row.id);
+        const edit = timecardPunchEdits[rowId] ?? {
+          action: row.action,
+          atLocal: row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : ''
+        };
+        const createdAt = parseLocalDateTimeInputValue(edit.atLocal);
+        if (!createdAt) continue;
+        if (!ensureInRange(createdAt)) {
+          setTimecardPunchError(`新增时间必须在当前日期范围内（${startText} ~ ${endText}）。`);
+          return;
+        }
       }
     }
 
@@ -4393,6 +4625,48 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           saveFailed = true;
           setTimecardPunchError(error.message);
           return;
+        }
+      }
+      if (pendingAdds.length > 0) {
+        const rowsToInsert = pendingAdds
+          .map((row) => {
+            const rowId = String(row.id);
+            const edit = timecardPunchEdits[rowId] ?? {
+              action: row.action,
+              atLocal: row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : ''
+            };
+            const createdAt = parseLocalDateTimeInputValue(edit.atLocal);
+            if (!createdAt) return null;
+            return {
+              staff_id: staff,
+              action: edit.action,
+              created_at: createdAt,
+              metadata: {
+                device: 'admin_console',
+                kind: 'manual_add',
+                manual: true,
+                operator: user?.email ?? null
+              }
+            };
+          })
+          .filter(Boolean) as Array<Record<string, unknown>>;
+        if (rowsToInsert.length > 0) {
+          const insertRes = await supabase.from('ob_punches').insert(rowsToInsert).select('id');
+          if (insertRes.error) {
+            saveFailed = true;
+            setTimecardPunchError(insertRes.error.message);
+            return;
+          }
+          await writeAudit({
+            action: 'punch_manual_add',
+            staffId: staff,
+            target: 'ob_punches',
+            payload: {
+              punch_ids: ((insertRes.data as any[] | null) ?? []).map((x: any) => String(x?.id ?? '').trim()).filter(Boolean),
+              day_index: timecardPunchDayIndex,
+              count: rowsToInsert.length
+            }
+          });
         }
       }
       if (deleteIds.length > 0) {
@@ -4439,8 +4713,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const ok = window.confirm(ids.length >= 2 ? '确定要删除这一整行打卡记录吗？' : '确定要删除这条打卡记录吗？');
     if (!ok) return;
 
+    const pendingAddIdSet = new Set(timecardPunchPendingAddRows.map((r) => String(r.id)));
+    const removePendingAddIds = ids.filter((id) => pendingAddIdSet.has(id));
+    const persistedIds = ids.filter((id) => !pendingAddIdSet.has(id));
+
     setTimecardPunchError(null);
-    setTimecardPunchPendingDeleteIds((prev) => Array.from(new Set([...prev, ...ids])));
+    if (removePendingAddIds.length > 0) {
+      const removeSet = new Set(removePendingAddIds);
+      setTimecardPunchPendingAddRows((prev) => prev.filter((row) => !removeSet.has(String(row.id))));
+      setTimecardPunchEdits((prev) => {
+        const next = { ...prev };
+        for (const id of removeSet) delete next[id];
+        return next;
+      });
+      setTimecardPunchPendingDeleteIds((prev) => prev.filter((id) => !removeSet.has(String(id))));
+    }
+    if (persistedIds.length > 0) {
+      setTimecardPunchPendingDeleteIds((prev) => Array.from(new Set([...prev, ...persistedIds])));
+    }
     setStatus({ tone: 'idle', message: t('已暂存删除，请点击保存全部提交。', 'Delete staged. Click Save all to apply.') });
   };
 
@@ -4843,7 +5133,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   const tabClass = (active: boolean) =>
     [
       'rounded-2xl px-4 py-2 text-sm font-medium transition',
-      active ? 'bg-neon text-ink shadow-glow' : 'bg-white/5 text-slate-200 hover:bg-white/10',
+      active ? 'bg-neon text-white shadow-glow' : 'bg-white/5 text-slate-200 hover:bg-white/10',
       isLocked ? 'cursor-not-allowed opacity-60' : ''
     ].join(' ');
 
@@ -4997,7 +5287,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   }, [timecardRowsFiltered]);
 
   const timecardPunchRowsVisible = useMemo(() => {
-    const rowsBase = timecardPunchRows.filter((r) => !timecardPunchPendingDeleteIds.includes(String(r.id)));
+    const rowsAll = [...timecardPunchRows, ...timecardPunchPendingAddRows];
+    const rowsBase = rowsAll.filter((r) => !timecardPunchPendingDeleteIds.includes(String(r.id)));
     if (timecardPunchShowAll) return rowsBase;
     if (timecardPunchDayIndex === null) return rowsBase; // week view
 
@@ -5060,7 +5351,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
 
     return rowsBase.filter((r) => includedIds.has(String(r.id)));
-  }, [timecardPunchRows, timecardPunchPendingDeleteIds, timecardPunchShowAll, timecardPunchDayIndex, timecardWeekOffset, serverTime]);
+  }, [
+    timecardPunchRows,
+    timecardPunchPendingAddRows,
+    timecardPunchPendingDeleteIds,
+    timecardPunchShowAll,
+    timecardPunchDayIndex,
+    timecardWeekOffset,
+    serverTime
+  ]);
   const timecardPunchPairsVisible = useMemo(() => {
     const rows = [...timecardPunchRowsVisible];
     rows.sort((a, b) => {
@@ -5095,6 +5394,75 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   }, [timecardPunchRowsVisible]);
 
   const timecardPunchReadOnly = timecardPunchDayIndex === null;
+  const timecardPunchHeaderMeta = useMemo(() => {
+    const staff = normalizeStaffId(String(timecardPunchStaffId ?? '').trim());
+    if (!staff) {
+      return { name: '-', position: '-', label: '-', finalHoursText: '0' };
+    }
+    const row = timecardRows.find((r) => normalizeStaffId(String(r.staff_id ?? '').trim()) === staff);
+    const employee = employees.find((e) => normalizeStaffId(String(e.staff_id ?? '').trim()) === staff);
+    const name = String(row?.name ?? employee?.name ?? '').trim() || '-';
+    const position = String(row?.position ?? employee?.position ?? employee?.Position ?? '').trim() || '-';
+    const label = String(employee?.label ?? employee?.Label ?? '').trim() || '-';
+
+    if (timecardPunchDayIndex === null || timecardPunchDayIndex < 0 || timecardPunchDayIndex > 6) {
+      return {
+        name,
+        position,
+        label,
+        finalHoursText: formatHours(Number(row?.totalHours ?? 0)) || '0'
+      };
+    }
+
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+    const { start: dayStart, end: dayEnd } = getDayRange(weekStart, timecardPunchDayIndex);
+    const deletedIdSet = new Set(timecardPunchPendingDeleteIds.map((id) => String(id)));
+    const rowsAll = [...timecardPunchRows, ...timecardPunchPendingAddRows].filter((r) => !deletedIdSet.has(String(r.id)));
+    const events: Array<{ action: 'IN' | 'OUT'; at: Date }> = [];
+    for (const rowItem of rowsAll) {
+      const rowId = String(rowItem.id);
+      const edit = timecardPunchEdits[rowId];
+      const action = edit?.action ?? rowItem.action;
+      const atRaw = edit?.atLocal ? parseLocalDateTimeInputValue(edit.atLocal) : rowItem.created_at;
+      const at = atRaw ? new Date(atRaw) : null;
+      if (!at || Number.isNaN(at.getTime())) continue;
+      events.push({ action, at });
+    }
+    events.sort((a, b) => a.at.getTime() - b.at.getTime());
+
+    let openIn: Date | null = null;
+    let totalMs = 0;
+    for (const ev of events) {
+      if (ev.action === 'IN') {
+        openIn = ev.at;
+        continue;
+      }
+      if (!openIn || ev.at.getTime() <= openIn.getTime()) continue;
+      const overlapStart = Math.max(openIn.getTime(), dayStart.getTime());
+      const overlapEnd = Math.min(ev.at.getTime(), dayEnd.getTime());
+      if (overlapEnd > overlapStart) totalMs += overlapEnd - overlapStart;
+      openIn = null;
+    }
+
+    return {
+      name,
+      position,
+      label,
+      finalHoursText: formatHours(totalMs / 3600000) || '0'
+    };
+  }, [
+    timecardPunchStaffId,
+    timecardPunchDayIndex,
+    timecardRows,
+    employees,
+    timecardPunchRows,
+    timecardPunchPendingAddRows,
+    timecardPunchPendingDeleteIds,
+    timecardPunchEdits,
+    serverTime,
+    timecardWeekOffset
+  ]);
 
   const scheduleWeekStart = useMemo(() => {
     const baseWeekStart = startOfWeekMonday(serverTime);
@@ -5204,6 +5572,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     [dailyListFilterPositions]
   );
   const canCopyDailyList = selectedDailyPositions.length > 0;
+  const canCopyDailyListAll = selectedDailyPositions.length === ALLOWED_POSITIONS.length;
   const tomorrowDailyRowsForCopy = useMemo(() => {
     if (!canCopyDailyList) {
       return { earlyRows: [] as DailyListRow[], lateRows: [] as DailyListRow[] };
@@ -5218,6 +5587,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       lateRows: tomorrowDailyList.lateRows.filter(match)
     };
   }, [tomorrowDailyList, selectedDailyPositions, canCopyDailyList]);
+  const canCopyDailyListEarly = tomorrowDailyRowsForCopy.earlyRows.length > 0;
+  const canCopyDailyListLate = tomorrowDailyRowsForCopy.lateRows.length > 0;
   const tomorrowDailyRowsDisplayed = useMemo(() => {
     if (selectedDailyFilterPositions.length === 0) {
       return { earlyRows: tomorrowDailyList.earlyRows, lateRows: tomorrowDailyList.lateRows };
@@ -5278,6 +5649,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
   }, [employees, deferredSchedulePosition]);
+  const getSchedulePositionBadgeClass = (position: string) =>
+    getPositionBadgeClass(position, schedulePositionToneByPosition);
+  const getSchedulePositionBadgeClassLight = (position: string) =>
+    getPositionBadgeClassLight(position, schedulePositionToneByPosition);
+  const cycleSchedulePositionTone = (position: AllowedPosition) => {
+    setSchedulePositionToneByPosition((prev) => {
+      const current = prev[position] ?? getDefaultPositionToneKey(position);
+      const idx = LABEL_TONE_KEYS.indexOf(current);
+      const next = LABEL_TONE_KEYS[(idx + 1) % LABEL_TONE_KEYS.length];
+      return { ...prev, [position]: next };
+    });
+  };
   const getScheduleLabelToneClass = (label: string) => getLabelToneClass(label, scheduleLabelToneByName);
   const cycleScheduleLabelTone = (label: string) => {
     const key = String(label ?? '').trim().toLowerCase();
@@ -5833,7 +6216,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   onClick={() => setThemeMode((prev) => (prev === 'dark' ? 'light' : 'dark'))}
                   className={[
                     'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                    themeMode === 'light' ? 'bg-neon text-ink shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                    themeMode === 'light' ? 'bg-neon text-white shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                   ].join(' ')}
                   title={themeMode === 'dark' ? t('切换到白色主题', 'Switch to light mode') : t('切换到夜间主题', 'Switch to dark mode')}
                 >
@@ -5845,7 +6228,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   onClick={() => setLang('zh')}
                   className={[
                     'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                    lang === 'zh' ? 'bg-neon text-ink shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                    lang === 'zh' ? 'bg-neon text-white shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                   ].join(' ')}
                   title="中文"
                 >
@@ -5857,7 +6240,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   onClick={() => setLang('en')}
                   className={[
                     'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                    lang === 'en' ? 'bg-neon text-ink shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                    lang === 'en' ? 'bg-neon text-white shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                   ].join(' ')}
                   title="English"
                 >
@@ -5913,7 +6296,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               type="button"
               disabled={isLocked || email.trim() === '' || password === ''}
               onClick={doLogin}
-              className="mt-5 h-12 w-full rounded-2xl bg-neon text-base font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-5 h-12 w-full rounded-2xl bg-neon text-base font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
             >
               登录
             </button>
@@ -5995,19 +6378,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         total: 0
                       };
                       return (
-                        <article key={position} className={['rounded-2xl border px-4 py-4', getHomeCardToneClass(position)].join(' ')}>
+                        <article
+                          key={position}
+                          className={['rounded-2xl border px-4 py-4', getHomeCardToneClass(position, schedulePositionToneByPosition)].join(' ')}
+                        >
                           <div className="flex items-center justify-between gap-3">
-                            <h3 className={['inline-flex items-center rounded-full border px-2.5 py-1 font-display text-base tracking-[0.06em]', getPositionBadgeClass(position)].join(' ')}>
+                            <h3 className={['inline-flex items-center rounded-full border px-2.5 py-1 font-display text-base tracking-[0.06em]', getSchedulePositionBadgeClass(position)].join(' ')}>
                               {position}
                             </h3>
-                            <span className={['rounded-full px-3 py-1 text-xs', getHomeChipToneClass(position)].join(' ')}>On Clock {stats.active}</span>
+                            <span className={['rounded-full px-3 py-1 text-xs', getHomeChipToneClass(position, schedulePositionToneByPosition)].join(' ')}>
+                              On Clock {stats.active}
+                            </span>
                           </div>
                           <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                            <div className={['rounded-xl px-3 py-2', getHomePanelToneClass(position)].join(' ')}>
+                            <div className={['rounded-xl px-3 py-2', getHomePanelToneClass(position, schedulePositionToneByPosition)].join(' ')}>
                               <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Morning</div>
                               <div className="mt-1 text-sm text-slate-200">Expected {plan.early} · Present {stats.early}</div>
                             </div>
-                            <div className={['rounded-xl px-3 py-2', getHomePanelToneClass(position)].join(' ')}>
+                            <div className={['rounded-xl px-3 py-2', getHomePanelToneClass(position, schedulePositionToneByPosition)].join(' ')}>
                               <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Night</div>
                               <div className="mt-1 text-sm text-slate-200">Expected {plan.late} · Present {stats.late}</div>
                             </div>
@@ -6031,7 +6419,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           onClick={() => setHomeRosterSide('absent')}
                           className={[
                             'rounded-xl px-3 py-1 text-xs font-semibold transition',
-                            homeRosterSide === 'absent' ? 'bg-neon text-ink' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                            homeRosterSide === 'absent' ? 'bg-neon text-white' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                           ].join(' ')}
                         >
                           {t('缺勤', 'Absent')}
@@ -6041,7 +6429,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           onClick={() => setHomeRosterSide('restWorked')}
                           className={[
                             'rounded-xl px-3 py-1 text-xs font-semibold transition',
-                            homeRosterSide === 'restWorked' ? 'bg-neon text-ink' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                            homeRosterSide === 'restWorked' ? 'bg-neon text-white' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                           ].join(' ')}
                         >
                           {t('排休出勤', 'Rest Worked')}
@@ -6051,7 +6439,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           onClick={() => setHomeRosterSide('onClock')}
                           className={[
                             'rounded-xl px-3 py-1 text-xs font-semibold transition',
-                            homeRosterSide === 'onClock' ? 'bg-neon text-ink' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                            homeRosterSide === 'onClock' ? 'bg-neon text-white' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                           ].join(' ')}
                         >
                           {t('打卡中', 'On Clock')}
@@ -6068,7 +6456,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             onClick={() => setHomeRosterPositionFilter(position)}
                             className={[
                               'rounded-xl px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] transition',
-                              checked ? 'bg-neon text-ink' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                              checked ? 'bg-neon text-white' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                             ].join(' ')}
                           >
                             {position}
@@ -6222,7 +6610,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       type="button"
                       disabled={isLocked}
                       onClick={() => void fetchAudit({ search: auditSearch })}
-                      className="h-12 flex-1 rounded-2xl bg-neon px-6 text-base font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                      className="h-12 flex-1 rounded-2xl bg-neon px-6 text-base font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {t('查询', 'Search')}
                     </button>
@@ -6411,7 +6799,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       type="button"
                       disabled={isLocked}
                       onClick={() => void refreshSchedulePanel()}
-                      className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {t('刷新', 'Refresh')}
                     </button>
@@ -6464,6 +6852,47 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         </option>
                       ))}
                     </select>
+                    <details className="relative mt-2">
+                      <summary
+                        className={[
+                          'flex h-12 cursor-pointer list-none items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition',
+                          'hover:border-white/20',
+                          isLocked ? 'pointer-events-none cursor-not-allowed opacity-60' : ''
+                        ].join(' ')}
+                      >
+                        <span>{t('岗位颜色', 'Position colors')}</span>
+                        <span className="ml-3 text-xs text-slate-400">{ALLOWED_POSITIONS.length}</span>
+                      </summary>
+                      <div className="absolute z-30 mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/95 p-3 shadow-2xl backdrop-blur">
+                        <div className="max-h-56 space-y-1 overflow-auto pr-1">
+                          {ALLOWED_POSITIONS.map((p) => (
+                            <div key={`pos-tone-${p}`} className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-2 py-1.5">
+                              <span
+                                className={[
+                                  'inline-flex max-w-[70%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold',
+                                  getSchedulePositionBadgeClass(p)
+                                ].join(' ')}
+                              >
+                                {p}
+                              </span>
+                              <button
+                                type="button"
+                                disabled={isLocked}
+                                onClick={() => cycleSchedulePositionTone(p)}
+                                title={t('点击切换岗位颜色', 'Click to cycle position color')}
+                                className={[
+                                  'rounded-md border px-2 py-1 text-[11px] font-semibold transition',
+                                  getSchedulePositionBadgeClass(p),
+                                  isLocked ? 'cursor-not-allowed opacity-60' : 'hover:brightness-110'
+                                ].join(' ')}
+                              >
+                                {t('颜色', 'Color')}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </details>
                   </div>
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('班次', 'Shift')}</label>
@@ -6674,7 +7103,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               </td>
                               <td className="px-1.5 py-2 text-slate-200 truncate">{agency || '-'}</td>
                               <td className="px-1.5 py-2 text-slate-200">
-                                <span className={['inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]', getPositionBadgeClass(position)].join(' ')}>
+                                <span className={['inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]', getSchedulePositionBadgeClass(position)].join(' ')}>
                                   {position || '-'}
                                 </span>
                               </td>
@@ -6730,9 +7159,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                         className={[
                                           'h-7 min-w-[42px] rounded-md px-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55',
                                           state === 'work'
-                                            ? 'bg-neon text-ink shadow-glow'
+                                            ? 'bg-neon text-white shadow-glow'
                                             : state === 'temp_work'
-                                              ? 'bg-emerald-700 text-emerald-100'
+                                              ? 'bg-emerald-700 text-white'
                                             : state === 'leave'
                                               ? 'bg-violet-500 text-white'
                                             : state === 'rest_worked'
@@ -6781,8 +7210,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     >
                       {(
                         [
-                          { key: 'work', labelZh: '工作', labelEn: 'Work', cls: 'bg-neon text-ink' },
-                          { key: 'temp_work', labelZh: '临时工作', labelEn: 'Temporary Work', cls: 'bg-emerald-700 text-emerald-100' },
+                          { key: 'work', labelZh: '工作', labelEn: 'Work', cls: 'bg-neon text-white' },
+                          { key: 'temp_work', labelZh: '临时工作', labelEn: 'Temporary Work', cls: 'bg-emerald-700 text-white' },
                           { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white' },
                           { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Temporary Rest', cls: 'bg-red-800 text-red-100' },
                           { key: 'rest', labelZh: '休息', labelEn: 'Rest', cls: 'bg-ember text-white' }
@@ -6816,15 +7245,36 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 {dailyListOpen &&
                   typeof document !== 'undefined' &&
                   createPortal(
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
-                      <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-950/95 shadow-2xl backdrop-blur">
-                        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 px-6 py-5">
+                    <div
+                      className={[
+                        'fixed inset-0 z-50 flex items-center justify-center p-4',
+                        themeMode === 'light' ? 'bg-slate-900/35' : 'bg-black/70'
+                      ].join(' ')}
+                      role="dialog"
+                      aria-modal="true"
+                    >
+                      <div
+                        className={[
+                          'flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-3xl shadow-2xl',
+                          themeMode === 'light'
+                            ? 'border border-slate-200 bg-white'
+                            : 'border border-white/10 bg-slate-950/95 backdrop-blur'
+                        ].join(' ')}
+                      >
+                        <div
+                          className={[
+                            'flex flex-wrap items-start justify-between gap-3 px-6 py-5',
+                            themeMode === 'light' ? 'border-b border-slate-200' : 'border-b border-white/10'
+                          ].join(' ')}
+                        >
                           <div>
-                            <h3 className="font-display text-2xl tracking-[0.08em]">{t('每日名单', 'Daily list')}</h3>
-                            <p className="mt-2 text-xs text-slate-400">
-                              日期：<span className="text-slate-200">{tomorrowDailyList.targetDate}</span> {tomorrowDailyList.weekday}
+                            <h3 className={['font-display text-2xl tracking-[0.08em]', themeMode === 'light' ? 'text-slate-900' : 'text-white'].join(' ')}>
+                              {t('每日名单', 'Daily list')}
+                            </h3>
+                            <p className={['mt-2 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                              日期：<span className={themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'}>{tomorrowDailyList.targetDate}</span> {tomorrowDailyList.weekday}
                             </p>
-                            <p className="mt-1 text-xs text-slate-500">班次按最近工时推断。</p>
+                            <p className={['mt-1 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-500'].join(' ')}>班次按最近工时推断。</p>
                           </div>
                           <div className="min-w-[520px] flex-1">
                             <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
@@ -6836,8 +7286,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   className={[
                                     'rounded-xl border px-2.5 py-2 text-left transition',
                                     dailyListSelectedPositions[card.position]
-                                      ? getPositionBadgeClass(card.position)
-                                      : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
+                                      ? themeMode === 'light'
+                                        ? getSchedulePositionBadgeClassLight(card.position)
+                                        : getSchedulePositionBadgeClass(card.position)
+                                      : themeMode === 'light'
+                                        ? 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
+                                        : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
                                   ].join(' ')}
                                 >
                                   <div className="text-[10px] font-semibold uppercase tracking-[0.12em]">
@@ -6852,16 +7306,21 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           <div className="flex flex-wrap items-center gap-2">
                             <button
                               type="button"
-                              disabled={!canCopyDailyList}
+                              disabled={!canCopyDailyListAll}
                               onClick={() => void copyDailyList('all')}
-                              className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                              className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               {t('复制全部', 'Copy all')}
                             </button>
                             <button
                               type="button"
                               onClick={() => setDailyListOpen(false)}
-                              className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15"
+                              className={[
+                                'rounded-2xl px-4 py-2 text-sm font-medium transition',
+                                themeMode === 'light'
+                                  ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                  : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                              ].join(' ')}
                             >
                               关闭
                             </button>
@@ -6869,8 +7328,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         </div>
                         <div className="grid flex-1 gap-4 overflow-y-auto px-6 py-5 md:grid-cols-2">
                           <div className="md:col-span-2">
-                            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-black/25 px-3 py-2">
-                              <span className="text-xs uppercase tracking-[0.14em] text-slate-400">{t('筛选', 'Filter')}</span>
+                            <div
+                              className={[
+                                'flex flex-wrap items-center gap-2 rounded-2xl border px-3 py-2',
+                                themeMode === 'light' ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/25'
+                              ].join(' ')}
+                            >
+                              <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                {t('筛选', 'Filter')}
+                              </span>
                               {ALLOWED_POSITIONS.map((position) => (
                                 <button
                                   key={`filter-${position}`}
@@ -6884,8 +7350,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   className={[
                                     'rounded-lg border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] transition',
                                     dailyListFilterPositions[position]
-                                      ? getPositionBadgeClass(position)
-                                      : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
+                                      ? themeMode === 'light'
+                                        ? getSchedulePositionBadgeClassLight(position)
+                                        : getSchedulePositionBadgeClass(position)
+                                      : themeMode === 'light'
+                                        ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                                        : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
                                   ].join(' ')}
                                 >
                                   {position}
@@ -6902,27 +7372,42 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                     Transfer: false
                                   })
                                 }
-                                className="ml-auto rounded-lg bg-white/10 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:bg-white/15"
+                                className={[
+                                  'ml-auto rounded-lg px-3 py-1 text-xs font-semibold transition',
+                                  themeMode === 'light'
+                                    ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                ].join(' ')}
                               >
                                 {t('清空筛选', 'Clear filters')}
                               </button>
                             </div>
                           </div>
-                          <div className="rounded-2xl border border-emerald-400/30 bg-emerald-500/[0.04] p-4">
+                          <div className={['rounded-2xl border p-4', themeMode === 'light' ? 'border-emerald-200 bg-emerald-50/50' : 'border-emerald-400/30 bg-emerald-500/[0.04]'].join(' ')}>
                             <div className="mb-3 flex items-center justify-between">
                               <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-200">{t('早班', 'Morning')}</h4>
                               <button
                                 type="button"
-                                disabled={!canCopyDailyList}
+                                disabled={!canCopyDailyListEarly}
                                 onClick={() => void copyDailyList('early')}
-                                className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                                className={[
+                                  'rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50',
+                                  themeMode === 'light'
+                                    ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                ].join(' ')}
                               >
                                 {t('复制', 'Copy')}
                               </button>
                             </div>
-                            <div className="max-h-[55vh] overflow-auto rounded-xl border border-white/10 bg-black/25">
+                            <div className={['max-h-[55vh] overflow-auto rounded-xl border', themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/25'].join(' ')}>
                               <table className="min-w-full text-left text-xs">
-                                <thead className="sticky top-0 bg-slate-950/95 text-[10px] uppercase tracking-[0.15em] text-slate-400">
+                                <thead
+                                  className={[
+                                    'sticky top-0 text-[10px] uppercase tracking-[0.15em]',
+                                    themeMode === 'light' ? 'bg-slate-50 text-slate-500' : 'bg-slate-950/95 text-slate-400'
+                                  ].join(' ')}
+                                >
                                   <tr>
                                     <th className="px-3 py-2">US ID</th>
                                     <th className="px-3 py-2">NAME</th>
@@ -6934,18 +7419,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 <tbody>
                                   {tomorrowDailyRowsDisplayed.earlyRows.length === 0 ? (
                                     <tr>
-                                      <td colSpan={5} className="px-3 py-3 text-center text-slate-400">
+                                      <td colSpan={5} className={['px-3 py-3 text-center', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                                         {t('无数据', 'No data')}
                                       </td>
                                     </tr>
                                   ) : (
                                     tomorrowDailyRowsDisplayed.earlyRows.map((row) => (
-                                      <tr key={`early-${row.staff_id}`} className="border-t border-white/5">
-                                        <td className="px-3 py-2 font-mono text-slate-200">{row.staff_id}</td>
-                                        <td className="px-3 py-2 text-slate-200">{row.name || '-'}</td>
-                                        <td className="px-3 py-2 text-slate-200">{row.agency || '-'}</td>
-                                        <td className="px-3 py-2 text-slate-200">{row.position || '-'}</td>
-                                        <td className="px-3 py-2 text-slate-200">{getPlannedStartTime('early', row.position)}</td>
+                                      <tr key={`early-${row.staff_id}`} className={themeMode === 'light' ? 'border-t border-slate-100' : 'border-t border-white/5'}>
+                                        <td className={['px-3 py-2 font-mono', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.staff_id}</td>
+                                        <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.name || '-'}</td>
+                                        <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.agency || '-'}</td>
+                                        <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.position || '-'}</td>
+                                        <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{getPlannedStartTime('early', row.position)}</td>
                                       </tr>
                                     ))
                                   )}
@@ -6954,21 +7439,31 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             </div>
                           </div>
 
-                          <div className="rounded-2xl border border-indigo-400/30 bg-indigo-500/[0.04] p-4">
+                          <div className={['rounded-2xl border p-4', themeMode === 'light' ? 'border-indigo-200 bg-indigo-50/50' : 'border-indigo-400/30 bg-indigo-500/[0.04]'].join(' ')}>
                             <div className="mb-3 flex items-center justify-between">
                               <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-indigo-200">{t('晚班', 'Night')}</h4>
                               <button
                                 type="button"
-                                disabled={!canCopyDailyList}
+                                disabled={!canCopyDailyListLate}
                                 onClick={() => void copyDailyList('late')}
-                                className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                                className={[
+                                  'rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50',
+                                  themeMode === 'light'
+                                    ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                ].join(' ')}
                               >
                                 {t('复制', 'Copy')}
                               </button>
                             </div>
-                            <div className="max-h-[55vh] overflow-auto rounded-xl border border-white/10 bg-black/25">
+                            <div className={['max-h-[55vh] overflow-auto rounded-xl border', themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/25'].join(' ')}>
                               <table className="min-w-full text-left text-xs">
-                                <thead className="sticky top-0 bg-slate-950/95 text-[10px] uppercase tracking-[0.15em] text-slate-400">
+                                <thead
+                                  className={[
+                                    'sticky top-0 text-[10px] uppercase tracking-[0.15em]',
+                                    themeMode === 'light' ? 'bg-slate-50 text-slate-500' : 'bg-slate-950/95 text-slate-400'
+                                  ].join(' ')}
+                                >
                                   <tr>
                                     <th className="px-3 py-2">US ID</th>
                                     <th className="px-3 py-2">NAME</th>
@@ -6980,18 +7475,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 <tbody>
                                   {tomorrowDailyRowsDisplayed.lateRows.length === 0 ? (
                                     <tr>
-                                      <td colSpan={5} className="px-3 py-3 text-center text-slate-400">
+                                      <td colSpan={5} className={['px-3 py-3 text-center', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                                         {t('无数据', 'No data')}
                                       </td>
                                     </tr>
                                   ) : (
                                     tomorrowDailyRowsDisplayed.lateRows.map((row) => (
-                                      <tr key={`late-${row.staff_id}`} className="border-t border-white/5">
-                                        <td className="px-3 py-2 font-mono text-slate-200">{row.staff_id}</td>
-                                        <td className="px-3 py-2 text-slate-200">{row.name || '-'}</td>
-                                        <td className="px-3 py-2 text-slate-200">{row.agency || '-'}</td>
-                                        <td className="px-3 py-2 text-slate-200">{row.position || '-'}</td>
-                                        <td className="px-3 py-2 text-slate-200">{getPlannedStartTime('late', row.position)}</td>
+                                      <tr key={`late-${row.staff_id}`} className={themeMode === 'light' ? 'border-t border-slate-100' : 'border-t border-white/5'}>
+                                        <td className={['px-3 py-2 font-mono', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.staff_id}</td>
+                                        <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.name || '-'}</td>
+                                        <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.agency || '-'}</td>
+                                        <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.position || '-'}</td>
+                                        <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{getPlannedStartTime('late', row.position)}</td>
                                       </tr>
                                     ))
                                   )}
@@ -7011,7 +7506,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               <section className="glass reveal rounded-3xl px-6 py-8">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="font-display text-2xl tracking-[0.08em]">{t('员工信息', 'Employees')}</h2>
-                  <div className="flex gap-3">
+                  <div className="flex shrink-0 items-center gap-3">
                     <button
                       type="button"
                       disabled={isLocked}
@@ -7186,7 +7681,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     type="button"
                     disabled={isLocked}
                     onClick={() => void fetchEmployees({ reset: true })}
-                    className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {t('搜索', 'Search')}
                   </button>
@@ -7247,14 +7742,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         type="button"
                         disabled={isLocked}
                         onClick={() => void addEmployeeRow()}
-                        className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                        className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {t('添加', 'Add')}
                       </button>
                     </div>
-                    <p className="mt-2 text-xs text-slate-400">
-                      {t('Position 仅允许 5 个岗位，添加时会自动统一大小写。', 'Position only allows 5 roles; case will be normalized.')}
-                    </p>
                   </div>
                 )}
 
@@ -7328,7 +7820,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               <span
                                 className={[
                                   'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
-                                  getPositionBadgeClass(position)
+                                  getSchedulePositionBadgeClass(position)
                                 ].join(' ')}
                               >
                                 {position || '-'}
@@ -7372,7 +7864,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                     position
                                   })
                                 }
-                                className="mr-2 rounded-xl bg-neon px-4 py-1.5 text-xs font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                                className="mr-2 rounded-xl bg-neon px-4 py-1.5 text-xs font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 {employeeBadgePrintingStaffId === staff ? t('生成中...', 'Generating...') : t('打印工牌', 'Print badge')}
                               </button>
@@ -7507,7 +7999,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           type="button"
                           disabled={isLocked || !employeeEditStaffId}
                           onClick={() => void saveEmployeeEdit()}
-                          className="rounded-2xl bg-neon px-6 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                          className="rounded-2xl bg-neon px-6 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {t('保存', 'Save')}
                         </button>
@@ -7577,7 +8069,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               <button
                                 type="button"
                                 onClick={() => window.setTimeout(() => window.print(), 80)}
-                                className="rounded-xl bg-neon px-4 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl"
+                                className="rounded-xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl"
                               >
                                 {t('打印', 'Print')}
                               </button>
@@ -7721,7 +8213,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       type="button"
                       disabled={isLocked}
                       onClick={() => void recomputeTimecardAttendanceMarks()}
-                      className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {t('刷新', 'Refresh')}
                     </button>
@@ -7922,7 +8414,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 <span
                                   className={[
                                     'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
-                                    getPositionBadgeClass(r.position)
+                                    getSchedulePositionBadgeClass(r.position)
                                   ].join(' ')}
                                 >
                                   {r.position || '-'}
@@ -8038,36 +8530,25 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           ].join(' ')}
                         >
                           <div>
-                            <h3 className={['font-display text-2xl tracking-[0.08em]', themeMode === 'light' ? 'text-slate-900' : 'text-white'].join(' ')}>{t('打卡流水', 'Punch Log')}</h3>
-                            <p className={['mt-2 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
-                              {t('工号：', 'Staff ID:')}<span className={themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'}>{timecardPunchStaffId}</span>
-                              {timecardPunchDayIndex === null ? (
-                                <span className="ml-2">{t('（本周范围，仅查看）', '(This week only, read-only)')}</span>
-                              ) : (
-                                <span className="ml-2">
-                                  {timecardPunchShowAll
-                                    ? t('（显示全部记录）', '(All punches)')
-                                    : t('（只显示参与工时计算的记录）', '(Only punches used for hour calc)')}
-                                </span>
-                              )}
-                            </p>
+                            <div className={['text-base font-semibold tracking-[0.06em]', themeMode === 'light' ? 'text-slate-800' : 'text-slate-100'].join(' ')}>
+                              工时校正
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                            <span className={['rounded-full px-2 py-0.5', themeMode === 'light' ? 'bg-slate-100 text-slate-700' : 'bg-white/10 text-slate-200'].join(' ')}>
+                              {timecardPunchHeaderMeta.name}
+                            </span>
+                            <span className={['rounded-full px-2 py-0.5', themeMode === 'light' ? 'bg-slate-100 text-slate-700' : 'bg-white/10 text-slate-200'].join(' ')}>
+                              {timecardPunchHeaderMeta.position}
+                            </span>
+                            <span className={['rounded-full px-2 py-0.5', themeMode === 'light' ? 'bg-slate-100 text-slate-700' : 'bg-white/10 text-slate-200'].join(' ')}>
+                              {timecardPunchHeaderMeta.label}
+                            </span>
+                            <span className={['rounded-full px-2 py-0.5 font-semibold', themeMode === 'light' ? 'bg-emerald-50 text-emerald-700' : 'bg-emerald-500/15 text-emerald-200'].join(' ')}>
+                              {timecardPunchHeaderMeta.finalHoursText}
+                            </span>
+                            </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            {timecardPunchDayIndex !== null && (
-                              <button
-                                type="button"
-                                disabled={isLocked}
-                                onClick={() => setTimecardPunchShowAll((v) => !v)}
-                                className={[
-                                  'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-                                  themeMode === 'light'
-                                    ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
-                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                                ].join(' ')}
-                              >
-                                {timecardPunchShowAll ? t('只看相关', 'Relevant only') : t('显示全部', 'Show all')}
-                              </button>
-                            )}
                             {!timecardPunchReadOnly && (
                               <button
                                 type="button"
@@ -8088,7 +8569,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 type="button"
                                 disabled={isLocked}
                                 onClick={() => void saveAllTimecardPunchRows()}
-                                className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                                className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 {t('保存全部', 'Save all')}
                               </button>
@@ -8152,7 +8633,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   type="button"
                                   disabled={isLocked}
                                   onClick={() => void addTimecardPunchRow()}
-                                  className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                                  className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                   {t('添加', 'Add')}
                                 </button>
@@ -8169,6 +8650,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         {timecardPunchPairsVisible.length > 0 && (
                           <div className="mt-3 space-y-2">
                             {timecardPunchPairsVisible.map((pair) => {
+                              const pendingAddIdSet = new Set(timecardPunchPendingAddRows.map((r) => String(r.id)));
                               const inEdit = pair.inRow
                                 ? (timecardPunchEdits[String(pair.inRow.id)] ?? {
                                     action: pair.inRow.action,
@@ -8197,6 +8679,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                     </div>
                                   );
                                 }
+                                const rowId = String(row.id);
+                                const rowLocal = row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : '';
+                                const isDirty = edit.action !== row.action || edit.atLocal !== rowLocal;
+                                const isPendingAdd = pendingAddIdSet.has(rowId);
+                                const showEditedTone = isDirty || isPendingAdd;
                                 return (
                                   <div className="grid gap-3 md:grid-cols-[7rem_1fr_6rem_6rem] md:items-end">
                                     <div>
@@ -8212,7 +8699,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                         }
                                         className={[
                                           'mt-2 h-10 w-full rounded-xl px-3 font-display text-lg tracking-[0.08em] outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                                          themeMode === 'light' ? 'border border-slate-300 bg-white' : 'border border-white/10 bg-black/30',
+                                          showEditedTone
+                                            ? themeMode === 'light'
+                                              ? 'border border-amber-400 bg-amber-50 text-slate-900'
+                                              : 'border border-amber-400/70 bg-amber-500/10'
+                                            : themeMode === 'light'
+                                              ? 'border border-slate-300 bg-white'
+                                              : 'border border-white/10 bg-black/30',
                                           edit.action === 'IN' ? 'text-mint' : 'text-ember'
                                         ].join(' ')}
                                       >
@@ -8234,9 +8727,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                         type="datetime-local"
                                         className={[
                                           'mt-2 h-10 w-full rounded-xl px-3 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                                          themeMode === 'light'
-                                            ? 'border border-slate-300 bg-white text-slate-900'
-                                            : 'border border-white/10 bg-black/30 text-white'
+                                          showEditedTone
+                                            ? themeMode === 'light'
+                                              ? 'border border-amber-400 bg-amber-50 text-slate-900'
+                                              : 'border border-amber-400/70 bg-amber-500/10 text-white'
+                                            : themeMode === 'light'
+                                              ? 'border border-slate-300 bg-white text-slate-900'
+                                              : 'border border-white/10 bg-black/30 text-white'
                                         ].join(' ')}
                                       />
                                     </div>
@@ -8298,10 +8795,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       disabled={isLocked}
                       className="h-4 w-4 accent-neon disabled:cursor-not-allowed disabled:opacity-60"
                     />
-                    {t(
-                      '重复时补全信息（仅填充数据库里为空的 name/agency/position/label）',
-                      'Fill missing fields on duplicates (only empty name/agency/position/label)'
-                    )}
+                    {t('重复时补全信息', 'Fill missing fields on duplicates')}
                   </label>
                 </div>
 
@@ -8319,7 +8813,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       type="button"
                       disabled={isLocked}
                       onClick={uploadEmployees}
-                      className="h-12 rounded-2xl bg-neon px-6 text-base font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                      className="h-12 min-w-[88px] whitespace-nowrap rounded-2xl bg-neon px-6 text-base font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {t('上传', 'Upload')}
                     </button>
@@ -8350,7 +8844,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           URL.revokeObjectURL(url);
                         }
                       }}
-                      className="h-12 rounded-2xl bg-white/10 px-6 text-base font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="h-12 min-w-[120px] whitespace-nowrap rounded-2xl bg-white/10 px-6 text-base font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {t('下载模版', 'Download template')}
                     </button>
