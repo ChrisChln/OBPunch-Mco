@@ -2070,7 +2070,7 @@ const fetchPunchBoardUph = async (
           onClick={() => setDailyRosterPositionFilter('')}
           className={[
             'rounded-xl px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.15em] transition disabled:cursor-not-allowed disabled:opacity-60',
-            dailyRosterPositionFilter === '' ? 'bg-neon text-white shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+            dailyRosterPositionFilter === '' ? 'bg-neon roster-all-active shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
           ].join(' ')}
         >
           All
@@ -2589,14 +2589,25 @@ const fetchPunchBoardUph = async (
               <section className="glass reveal flex h-full flex-col rounded-3xl px-6 py-6 shadow-glow">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="font-display text-2xl tracking-[0.08em]">Punch Log</h2>
-                  <button
-                    type="button"
-                    disabled={isLocked}
-                    onClick={() => void fetchPunchBoard({ position: punchLogPositionFilter, forceUph: true })}
-                    className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Refresh
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        window.location.href = '/device.html';
+                      }}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15"
+                    >
+                      Device
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => void fetchPunchBoard({ position: punchLogPositionFilter, forceUph: true })}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Refresh
+                    </button>
+                  </div>
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   {ALLOWED_POSITIONS.map((pos) => (

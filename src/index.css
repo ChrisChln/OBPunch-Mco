@@ -25,6 +25,15 @@ body[data-theme='light'] {
   background: #ffffff;
 }
 
+.roster-all-active {
+  color: #05070d !important;
+}
+
+body[data-theme='light'] .roster-all-active,
+.admin-theme-light .roster-all-active {
+  color: #ffffff !important;
+}
+
 .admin-theme-light {
   color: #111827;
 }

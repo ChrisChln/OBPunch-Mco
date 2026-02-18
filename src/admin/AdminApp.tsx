@@ -12,7 +12,7 @@ import {
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 
-type AdminPage = 'home' | 'employee_upload' | 'punches' | 'employees' | 'timecard' | 'audit' | 'schedule';
+type AdminPage = 'home' | 'employee_upload' | 'punches' | 'employees' | 'timecard' | 'audit' | 'schedule' | 'devices';
 
 type StatusTone = 'idle' | 'pending' | 'success' | 'error';
 
@@ -35,6 +35,8 @@ const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
+const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
+const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
 const OBUP_REPORT_DETAILS_TABLE =
   (import.meta.env.VITE_OBUP_REPORT_DETAILS_TABLE as string | undefined) ?? 'report_details';
@@ -52,6 +54,8 @@ const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
 const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
 const STALE_TIMECARD_REQUEST = '__stale_timecard_request__';
+const DEVICE_TYPES = ['PDA', 'CAR'] as const;
+type DeviceType = (typeof DEVICE_TYPES)[number];
 
 type ScheduleBaseState = 'work' | 'temp_work' | 'leave' | 'temp_rest' | 'rest';
 type ScheduleDisplayState = 'empty' | ScheduleBaseState | 'rest_worked';
@@ -245,6 +249,31 @@ type DailyListRow = {
   shift: 'early' | 'late';
 };
 
+type DeviceRow = {
+  id?: number | string;
+  device_name?: string | null;
+  name?: string | null;
+  device_sn?: string | null;
+  sn?: string | null;
+  device_type?: string | null;
+  type?: string | null;
+  position?: string | null;
+  active?: boolean | null;
+  note?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type DeviceLoanRow = {
+  id?: number | string;
+  created_at?: string | null;
+  operator?: string | null;
+  staff_id?: string | null;
+  device_sn?: string | null;
+  action?: 'borrow' | 'return' | string | null;
+  note?: string | null;
+};
+
 const formatTime = (value: Date, locale: string = 'zh-CN') =>
   value.toLocaleString(locale, {
     hour12: false,
@@ -356,6 +385,12 @@ const getOperationalDateKey = (now: Date, cutoffHour: number) => {
 const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   const hit = ALLOWED_POSITIONS.find((p) => p.toLowerCase() === String(value ?? '').trim().toLowerCase());
   return hit ?? '';
+};
+const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperCase();
+const normalizeDeviceType = (value: string): DeviceType => {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (raw === 'CAR' || raw === '车') return 'CAR';
+  return 'PDA';
 };
 
 const getDefaultPositionToneKey = (value: string): LabelToneKey => {
@@ -569,6 +604,8 @@ export default function AdminApp() {
   const schedulePositionToneHydratingRef = useRef(false);
   const schedulePositionToneLastSavedJsonRef = useRef('');
   const schedulePositionToneReadyRef = useRef(false);
+  const deviceStaffInputRef = useRef<HTMLInputElement | null>(null);
+  const deviceSnInputRef = useRef<HTMLInputElement | null>(null);
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
@@ -697,6 +734,21 @@ export default function AdminApp() {
   const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [auditSearch, setAuditSearch] = useState('');
+  const [devices, setDevices] = useState<DeviceRow[]>([]);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
+  const [deviceLoans, setDeviceLoans] = useState<DeviceLoanRow[]>([]);
+  const [deviceLoansError, setDeviceLoansError] = useState<string | null>(null);
+  const [deviceSearch, setDeviceSearch] = useState('');
+  const [deviceFilterPosition, setDeviceFilterPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [deviceFilterType, setDeviceFilterType] = useState<DeviceType | ''>('');
+  const [deviceNewName, setDeviceNewName] = useState('');
+  const [deviceNewSn, setDeviceNewSn] = useState('');
+  const [deviceNewType, setDeviceNewType] = useState<DeviceType>('PDA');
+  const [deviceNewPosition, setDeviceNewPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [deviceNewNote, setDeviceNewNote] = useState('');
+  const [deviceScanMode, setDeviceScanMode] = useState<'borrow' | 'return'>('borrow');
+  const [deviceScanStaffId, setDeviceScanStaffId] = useState('');
+  const [deviceScanSn, setDeviceScanSn] = useState('');
 
   const [scheduleRows, setScheduleRows] = useState<ScheduleRow[]>([]);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
@@ -747,6 +799,81 @@ export default function AdminApp() {
   const deferredSchedulePosition = useDeferredValue(schedulePosition);
   const deferredScheduleShift = useDeferredValue(scheduleShift);
   const deferredScheduleLabels = useDeferredValue(scheduleLabels);
+  const canonicalDeviceRows = useMemo(() => {
+    return devices.map((row) => {
+      const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
+      const deviceName = String(row.device_name ?? row.name ?? '').trim();
+      const type = normalizeDeviceType(String(row.device_type ?? row.type ?? 'PDA'));
+      const position = normalizeAllowedPosition(String(row.position ?? ''));
+      return {
+        ...row,
+        device_name: deviceName || null,
+        device_sn: sn,
+        device_type: type,
+        position: position || null,
+        active: row.active !== false
+      };
+    });
+  }, [devices]);
+  const canonicalDeviceLoans = useMemo(() => {
+    return deviceLoans.map((row) => {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
+      const action = String(row.action ?? '').trim().toLowerCase() === 'return' ? 'return' : 'borrow';
+      return {
+        ...row,
+        staff_id: staff,
+        device_sn: sn,
+        action
+      } as DeviceLoanRow & { action: 'borrow' | 'return' };
+    });
+  }, [deviceLoans]);
+  const deviceBySn = useMemo(() => {
+    const map = new Map<string, DeviceRow>();
+    for (const row of canonicalDeviceRows) {
+      const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
+      if (!sn) continue;
+      map.set(sn, row);
+    }
+    return map;
+  }, [canonicalDeviceRows]);
+  const deviceCurrentBorrowBySn = useMemo(() => {
+    const sorted = [...canonicalDeviceLoans].sort((a, b) => {
+      const aMs = Date.parse(String(a.created_at ?? '')) || 0;
+      const bMs = Date.parse(String(b.created_at ?? '')) || 0;
+      if (aMs !== bMs) return aMs - bMs;
+      return String(a.id ?? '').localeCompare(String(b.id ?? ''), 'en-US');
+    });
+    const map = new Map<string, { staff_id: string; created_at: string; operator: string; note: string }>();
+    for (const row of sorted) {
+      const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
+      if (!sn) continue;
+      if (row.action === 'borrow') {
+        map.set(sn, {
+          staff_id: normalizeStaffId(String(row.staff_id ?? '').trim()),
+          created_at: String(row.created_at ?? ''),
+          operator: String(row.operator ?? '').trim(),
+          note: String(row.note ?? '').trim()
+        });
+      } else {
+        map.delete(sn);
+      }
+    }
+    return map;
+  }, [canonicalDeviceLoans]);
+  const deviceRowsFiltered = useMemo(() => {
+    const search = deviceSearch.trim().toLowerCase();
+    return canonicalDeviceRows.filter((row) => {
+      const deviceName = String(row.device_name ?? '').trim();
+      const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
+      const pos = String(row.position ?? '');
+      const type = normalizeDeviceType(String(row.device_type ?? 'PDA'));
+      if (deviceFilterPosition && pos !== deviceFilterPosition) return false;
+      if (deviceFilterType && type !== deviceFilterType) return false;
+      if (!search) return true;
+      return `${deviceName} ${sn} ${type} ${pos}`.toLowerCase().includes(search);
+    });
+  }, [canonicalDeviceRows, deviceFilterPosition, deviceFilterType, deviceSearch]);
 
   const normalizeLabelToneMap = (value: unknown): Record<string, LabelToneKey> => {
     const raw = (value ?? {}) as Record<string, unknown>;
@@ -1523,6 +1650,215 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return;
       }
       setAuditRows(((res.data as any[]) ?? []) as AuditRow[]);
+    });
+  };
+
+  const fetchDevices = async ({ lockUi = true }: { lockUi?: boolean } = {}) => {
+    if (!supabase) {
+      setDevicesError('缺少 Supabase 配置。');
+      setDevices([]);
+      return;
+    }
+    const exec = async () => {
+      setDevicesError(null);
+      const res = await supabase
+        .from(DEVICE_TABLE)
+        .select('id, device_name, device_sn, device_type, position, active, note, created_at, updated_at')
+        .order('created_at', { ascending: false })
+        .limit(2000);
+      if (res.error) {
+        setDevicesError(res.error.message);
+        setDevices([]);
+        return;
+      }
+      setDevices(((res.data as any[]) ?? []) as DeviceRow[]);
+    };
+    if (lockUi) {
+      await runLocked('devices', exec);
+    } else {
+      await exec();
+    }
+  };
+
+  const fetchDeviceLoans = async ({ lockUi = true }: { lockUi?: boolean } = {}) => {
+    if (!supabase) {
+      setDeviceLoansError('缺少 Supabase 配置。');
+      setDeviceLoans([]);
+      return;
+    }
+    const exec = async () => {
+      setDeviceLoansError(null);
+      const res = await supabase
+        .from(DEVICE_LOANS_TABLE)
+        .select('id, created_at, operator, staff_id, device_sn, action, note')
+        .order('created_at', { ascending: false })
+        .limit(5000);
+      if (res.error) {
+        setDeviceLoansError(res.error.message);
+        setDeviceLoans([]);
+        return;
+      }
+      setDeviceLoans(((res.data as any[]) ?? []) as DeviceLoanRow[]);
+    };
+    if (lockUi) {
+      await runLocked('device_loans', exec);
+    } else {
+      await exec();
+    }
+  };
+
+  const refreshDevicePanel = async ({ lockUi = true }: { lockUi?: boolean } = {}) => {
+    if (lockUi) {
+      await runLocked('devices_refresh', async () => {
+        await fetchDevices({ lockUi: false });
+        await fetchDeviceLoans({ lockUi: false });
+      });
+      return;
+    }
+    await fetchDevices({ lockUi: false });
+    await fetchDeviceLoans({ lockUi: false });
+  };
+
+  const createDevice = async () => {
+    const deviceName = deviceNewName.trim();
+    const sn = normalizeDeviceSn(deviceNewSn);
+    const type = normalizeDeviceType(deviceNewType);
+    const position = deviceNewPosition || null;
+    const note = deviceNewNote.trim();
+    if (!sn) {
+      setStatus({ tone: 'error', message: t('请先输入设备SN。', 'Please enter device SN.') });
+      return;
+    }
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase configuration.') });
+      return;
+    }
+    await runLocked('device_add', async () => {
+      const duplicate = deviceBySn.get(sn);
+      if (duplicate) {
+        setStatus({ tone: 'error', message: t(`设备已存在：${sn}`, `Device already exists: ${sn}`) });
+        return;
+      }
+      const payload = {
+        device_name: deviceName || null,
+        device_sn: sn,
+        device_type: type,
+        position,
+        active: true,
+        note: note || null,
+        updated_at: new Date(serverTime).toISOString()
+      };
+      const res = await supabase.from(DEVICE_TABLE).insert([payload as any]);
+      if (res.error) {
+        setStatus({ tone: 'error', message: t(`新增设备失败：${res.error.message}`, `Add device failed: ${res.error.message}`) });
+        return;
+      }
+      await writeAudit({
+        action: 'device_add',
+        target: DEVICE_TABLE,
+        payload
+      });
+      setDeviceNewSn('');
+      setDeviceNewName('');
+      setDeviceNewType('PDA');
+      setDeviceNewPosition('');
+      setDeviceNewNote('');
+      setStatus({ tone: 'success', message: t(`设备已添加：${sn}`, `Device added: ${sn}`) });
+      await refreshDevicePanel({ lockUi: false });
+    });
+  };
+
+  const toggleDeviceActive = async (row: DeviceRow) => {
+    const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
+    if (!sn || !supabase) return;
+    const nextActive = !(row.active !== false);
+    await runLocked('device_toggle', async () => {
+      const res = await supabase.from(DEVICE_TABLE).update({ active: nextActive }).eq('device_sn', sn);
+      if (res.error) {
+        setStatus({ tone: 'error', message: t(`更新设备状态失败：${res.error.message}`, `Update device status failed: ${res.error.message}`) });
+        return;
+      }
+      await writeAudit({
+        action: 'device_update',
+        target: DEVICE_TABLE,
+        payload: { device_sn: sn, active: nextActive }
+      });
+      setStatus({ tone: 'success', message: nextActive ? t(`设备已启用：${sn}`, `Device enabled: ${sn}`) : t(`设备已停用：${sn}`, `Device disabled: ${sn}`) });
+      await refreshDevicePanel({ lockUi: false });
+    });
+  };
+
+  const submitDeviceLoanAction = async (mode: 'borrow' | 'return') => {
+    const staff = normalizeStaffId(deviceScanStaffId.trim());
+    const sn = normalizeDeviceSn(deviceScanSn);
+    if (!staff || !isValidStaffIdValue(staff)) {
+      setStatus({ tone: 'error', message: t('请先扫描有效工牌ID。', 'Please scan a valid staff ID first.') });
+      return;
+    }
+    if (!sn) {
+      setStatus({ tone: 'error', message: t('请先扫描设备SN。', 'Please scan a device SN first.') });
+      return;
+    }
+    const device = deviceBySn.get(sn);
+    if (!device) {
+      setStatus({ tone: 'error', message: t(`设备不存在：${sn}`, `Device not found: ${sn}`) });
+      return;
+    }
+    if (device.active === false) {
+      setStatus({ tone: 'error', message: t(`设备已停用：${sn}`, `Device is disabled: ${sn}`) });
+      return;
+    }
+    const borrowed = deviceCurrentBorrowBySn.get(sn);
+    if (mode === 'borrow' && borrowed) {
+      setStatus({
+        tone: 'error',
+        message: t(`设备已借出：${sn}（${borrowed.staff_id}）`, `Device already borrowed: ${sn} (${borrowed.staff_id})`)
+      });
+      return;
+    }
+    if (mode === 'return' && !borrowed) {
+      setStatus({ tone: 'error', message: t(`设备未借出：${sn}`, `Device is not borrowed: ${sn}`) });
+      return;
+    }
+    if (mode === 'return' && borrowed && borrowed.staff_id !== staff) {
+      setStatus({
+        tone: 'error',
+        message: t(`归还失败：设备当前借用人为 ${borrowed.staff_id}`, `Return blocked: current holder is ${borrowed.staff_id}`)
+      });
+      return;
+    }
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase configuration.') });
+      return;
+    }
+    await runLocked(mode === 'borrow' ? 'device_borrow' : 'device_return', async () => {
+      const payload = {
+        staff_id: staff,
+        device_sn: sn,
+        action: mode,
+        operator: user?.email ?? null,
+        created_at: new Date(serverTime).toISOString()
+      };
+      const res = await supabase.from(DEVICE_LOANS_TABLE).insert([payload as any]);
+      if (res.error) {
+        setStatus({ tone: 'error', message: t(`操作失败：${res.error.message}`, `Action failed: ${res.error.message}`) });
+        return;
+      }
+      await writeAudit({
+        action: mode === 'borrow' ? 'device_borrow' : 'device_return',
+        staffId: staff,
+        target: DEVICE_LOANS_TABLE,
+        payload: { device_sn: sn }
+      });
+      setStatus({
+        tone: 'success',
+        message: mode === 'borrow' ? t(`借出成功：${staff} -> ${sn}`, `Borrowed: ${staff} -> ${sn}`) : t(`归还成功：${staff} <- ${sn}`, `Returned: ${staff} <- ${sn}`)
+      });
+      setDeviceScanSn('');
+      await refreshDevicePanel({ lockUi: false });
+      setTimeout(() => {
+        deviceStaffInputRef.current?.focus();
+      }, 0);
     });
   };
 
@@ -3165,6 +3501,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const beforeText = before ? `${fmtAction(before.action)} @ ${fmtTime(before.created_at)}` : '';
       push(t('删除记录', 'Deleted'), beforeText);
       push(t('记录ID', 'Punch ID'), payload?.punch_id);
+    } else if (action === 'device_add') {
+      summary = t('新增设备', 'Device added');
+      push(t('设备名', 'Device name'), payload?.device_name);
+      push('SN', payload?.device_sn);
+      push(t('类型', 'Type'), payload?.device_type);
+      push(t('岗位', 'Position'), payload?.position);
+    } else if (action === 'device_update') {
+      summary = t('更新设备', 'Device updated');
+      push('SN', payload?.device_sn);
+      push(t('启用', 'Active'), payload?.active);
+    } else if (action === 'device_borrow') {
+      summary = t('设备借出', 'Device borrowed');
+      push('SN', payload?.device_sn);
+    } else if (action === 'device_return') {
+      summary = t('设备归还', 'Device returned');
+      push('SN', payload?.device_sn);
     }
 
     if (action === 'schedule_work') {
@@ -4754,6 +5106,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     if (page === 'schedule') {
       void refreshSchedulePanel({ lockUi: false });
     }
+    if (page === 'devices') {
+      void refreshDevicePanel({ lockUi: false });
+    }
+  }, [page]);
+  useEffect(() => {
+    if (page !== 'devices') return;
+    const timer = window.setTimeout(() => {
+      deviceStaffInputRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [page]);
 
   useEffect(() => {
@@ -6360,6 +6722,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               >
                 {t('排班', 'Schedule')}
               </button>
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={() => setPage('devices')}
+                className={tabClass(page === 'devices')}
+              >
+                {t('设备管理', 'Devices')}
+              </button>
             </nav>
 
                         {page === 'home' && (
@@ -6489,6 +6859,296 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           <div className="px-2 py-4 text-sm text-slate-400">{t('当前无记录', 'No rows')}</div>
                         )}
                       </div>
+                    </div>
+                  </aside>
+                </div>
+              </section>
+            )}
+            {page === 'devices' && (
+              <section className="glass reveal rounded-3xl px-6 py-8">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h2 className="font-display text-2xl tracking-[0.08em]">{t('设备管理', 'Devices')}</h2>
+                  <button
+                    type="button"
+                    disabled={isLocked}
+                    onClick={() => void refreshDevicePanel()}
+                    className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {t('刷新', 'Refresh')}
+                  </button>
+                </div>
+                <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div>
+                          <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('设备名', 'Device name')}</label>
+                          <input
+                            value={deviceNewName}
+                            onChange={(e) => setDeviceNewName(e.target.value)}
+                            disabled={isLocked}
+                            placeholder={t('例如：PDA 01 / Forklift A', 'e.g. PDA 01 / Forklift A')}
+                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs uppercase tracking-[0.2em] text-slate-400">SN</label>
+                          <input
+                            value={deviceNewSn}
+                            onChange={(e) => setDeviceNewSn(e.target.value)}
+                            disabled={isLocked}
+                            placeholder={t('例如：PDA-0001', 'e.g. PDA-0001')}
+                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('类型', 'Type')}</label>
+                          <select
+                            value={deviceNewType}
+                            onChange={(e) => setDeviceNewType(normalizeDeviceType(e.target.value))}
+                            disabled={isLocked}
+                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {DEVICE_TYPES.map((item) => (
+                              <option key={item} value={item}>
+                                {item}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('岗位', 'Position')}</label>
+                          <select
+                            value={deviceNewPosition}
+                            onChange={(e) => setDeviceNewPosition((e.target.value as any) ?? '')}
+                            disabled={isLocked}
+                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <option value="">{t('不限定岗位', 'No position')}</option>
+                            {ALLOWED_POSITIONS.map((p) => (
+                              <option key={p} value={p}>
+                                {p}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('备注', 'Note')}</label>
+                          <input
+                            value={deviceNewNote}
+                            onChange={(e) => setDeviceNewNote(e.target.value)}
+                            disabled={isLocked}
+                            placeholder={t('可选', 'Optional')}
+                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isLocked || deviceNewSn.trim() === ''}
+                        onClick={() => void createDevice()}
+                        className="mt-3 h-11 rounded-2xl bg-neon px-5 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {t('新增设备', 'Add device')}
+                      </button>
+                    </div>
+
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <input
+                          value={deviceSearch}
+                          onChange={(e) => setDeviceSearch(e.target.value)}
+                          disabled={isLocked}
+                          placeholder={t('搜索设备名/SN/类型/岗位', 'Search name / SN / type / position')}
+                          className="h-10 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                        />
+                        <select
+                          value={deviceFilterType}
+                          onChange={(e) => setDeviceFilterType((e.target.value as DeviceType | '') ?? '')}
+                          disabled={isLocked}
+                          className="h-10 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="">{t('全部类型', 'All types')}</option>
+                          {DEVICE_TYPES.map((item) => (
+                            <option key={item} value={item}>
+                              {item}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={deviceFilterPosition}
+                          onChange={(e) => setDeviceFilterPosition((e.target.value as any) ?? '')}
+                          disabled={isLocked}
+                          className="h-10 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="">{t('全部岗位', 'All positions')}</option>
+                          {ALLOWED_POSITIONS.map((p) => (
+                            <option key={p} value={p}>
+                              {p}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {devicesError && <p className="mt-3 text-sm text-ember">{devicesError}</p>}
+                      {!devicesError && (
+                        <div className="mt-3 max-h-[520px] space-y-2 overflow-auto pr-1">
+                          {deviceRowsFiltered.map((row) => {
+                            const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
+                            const type = normalizeDeviceType(String(row.device_type ?? row.type ?? 'PDA'));
+                            const borrowed = deviceCurrentBorrowBySn.get(sn);
+                            const active = row.active !== false;
+                            const deviceName = String(row.device_name ?? '').trim();
+                            return (
+                              <div key={String(row.id ?? sn)} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="truncate text-sm font-semibold text-slate-100">
+                                      {deviceName || '-'} <span className="text-xs text-slate-400">({sn || '-'})</span>
+                                    </div>
+                                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+                                      <span className="rounded-full border border-white/15 px-2 py-0.5">{type}</span>
+                                      {row.position ? (
+                                        <span
+                                          className={[
+                                            'rounded-full border px-2 py-0.5 font-semibold',
+                                            getSchedulePositionBadgeClass(String(row.position))
+                                          ].join(' ')}
+                                        >
+                                          {row.position}
+                                        </span>
+                                      ) : (
+                                        <span className="rounded-full border border-white/15 px-2 py-0.5">{t('无岗位', 'No position')}</span>
+                                      )}
+                                      <span className={active ? 'text-emerald-300' : 'text-rose-300'}>
+                                        {active ? t('可用', 'Active') : t('停用', 'Disabled')}
+                                      </span>
+                                      <span className={borrowed ? 'text-amber-300' : 'text-slate-300'}>
+                                        {borrowed ? `${t('借用中', 'Borrowed')} ${borrowed.staff_id}` : t('空闲', 'Available')}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    disabled={isLocked}
+                                    onClick={() => void toggleDeviceActive(row)}
+                                    className="rounded-xl bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {active ? t('停用', 'Disable') : t('启用', 'Enable')}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {deviceRowsFiltered.length === 0 && (
+                            <div className="px-2 py-4 text-sm text-slate-400">{t('暂无设备。', 'No devices.')}</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <aside className="space-y-4">
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <div className="mb-3 flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={isLocked}
+                          onClick={() => setDeviceScanMode('borrow')}
+                          className={[
+                            'rounded-xl px-3 py-1.5 text-xs font-semibold transition',
+                            deviceScanMode === 'borrow' ? 'bg-neon text-white shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                          ].join(' ')}
+                        >
+                          {t('借出', 'Borrow')}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isLocked}
+                          onClick={() => setDeviceScanMode('return')}
+                          className={[
+                            'rounded-xl px-3 py-1.5 text-xs font-semibold transition',
+                            deviceScanMode === 'return' ? 'bg-neon text-white shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                          ].join(' ')}
+                        >
+                          {t('归还', 'Return')}
+                        </button>
+                      </div>
+                      <label className="text-xs uppercase tracking-[0.2em] text-slate-400">US ID</label>
+                      <input
+                        ref={deviceStaffInputRef}
+                        value={deviceScanStaffId}
+                        onChange={(e) => setDeviceScanStaffId(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            deviceSnInputRef.current?.focus();
+                          }
+                        }}
+                        disabled={isLocked}
+                        placeholder={t('先扫工牌ID', 'Scan staff ID first')}
+                        className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <label className="mt-3 block text-xs uppercase tracking-[0.2em] text-slate-400">SN</label>
+                      <input
+                        ref={deviceSnInputRef}
+                        value={deviceScanSn}
+                        onChange={(e) => setDeviceScanSn(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void submitDeviceLoanAction(deviceScanMode);
+                          }
+                        }}
+                        disabled={isLocked}
+                        placeholder={t('再扫设备SN', 'Then scan device SN')}
+                        className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <button
+                        type="button"
+                        disabled={isLocked || deviceScanStaffId.trim() === '' || deviceScanSn.trim() === ''}
+                        onClick={() => void submitDeviceLoanAction(deviceScanMode)}
+                        className="mt-3 h-11 w-full rounded-2xl bg-neon px-5 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {deviceScanMode === 'borrow' ? t('确认借出', 'Confirm borrow') : t('确认归还', 'Confirm return')}
+                      </button>
+                    </div>
+
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <div className="text-sm font-semibold text-slate-200">{t('当前借出', 'Currently borrowed')}</div>
+                      <div className="mt-2 max-h-44 space-y-1 overflow-auto pr-1 text-xs">
+                        {Array.from(deviceCurrentBorrowBySn.entries()).map(([sn, info]) => (
+                          <div key={`borrow-${sn}`} className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-slate-200">
+                            <span className="font-semibold">{sn}</span> · {info.staff_id}
+                          </div>
+                        ))}
+                        {deviceCurrentBorrowBySn.size === 0 && (
+                          <div className="px-1 py-2 text-slate-400">{t('当前没有借出设备。', 'No borrowed devices.')}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <div className="text-sm font-semibold text-slate-200">{t('借还记录', 'Loan history')}</div>
+                      {deviceLoansError && <p className="mt-2 text-sm text-ember">{deviceLoansError}</p>}
+                      {!deviceLoansError && (
+                        <div className="mt-2 max-h-52 space-y-1 overflow-auto pr-1 text-xs">
+                          {canonicalDeviceLoans.slice(0, 80).map((row, idx) => (
+                            <div key={`${row.id ?? idx}`} className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-slate-200">
+                              <span className={row.action === 'borrow' ? 'text-amber-300' : 'text-emerald-300'}>
+                                {row.action === 'borrow' ? t('借出', 'Borrow') : t('归还', 'Return')}
+                              </span>{' '}
+                              · {row.staff_id} · {row.device_sn}
+                              <div className="mt-0.5 text-[11px] text-slate-400">
+                                {row.created_at ? new Date(row.created_at).toLocaleString(locale, { hour12: false }) : '-'}
+                              </div>
+                            </div>
+                          ))}
+                          {canonicalDeviceLoans.length === 0 && (
+                            <div className="px-1 py-2 text-slate-400">{t('暂无记录。', 'No records.')}</div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </aside>
                 </div>
