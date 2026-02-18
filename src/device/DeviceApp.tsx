@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createSupabaseClient } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
 
-type DeviceType = 'PDA' | 'CAR';
+type DeviceType = 'PDA' | 'CART';
 type LoanAction = 'borrow' | 'return';
 type StatusTone = 'idle' | 'pending' | 'success' | 'error';
 
@@ -41,7 +41,7 @@ const supabase = createSupabaseClient({ persistSession: false });
 const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperCase();
 const normalizeDeviceType = (value: unknown): DeviceType => {
   const raw = String(value ?? '').trim().toUpperCase();
-  return raw === 'CAR' ? 'CAR' : 'PDA';
+  return raw === 'CAR' || raw === 'CART' ? 'CART' : 'PDA';
 };
 
 const playDeviceSound = (kind: 'successIn' | 'successOut' | 'error') => {
@@ -450,7 +450,7 @@ export default function DeviceApp() {
               >
                 <option value="">All types</option>
                 <option value="PDA">PDA</option>
-                <option value="CAR">CAR</option>
+                <option value="CART">CART</option>
               </select>
               <label className="flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-200">
                 <input

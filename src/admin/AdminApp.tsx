@@ -54,7 +54,7 @@ const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
 const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
 const STALE_TIMECARD_REQUEST = '__stale_timecard_request__';
-const DEVICE_TYPES = ['PDA', 'CAR'] as const;
+const DEVICE_TYPES = ['PDA', 'CART'] as const;
 type DeviceType = (typeof DEVICE_TYPES)[number];
 
 type ScheduleBaseState = 'work' | 'temp_work' | 'leave' | 'temp_rest' | 'rest';
@@ -389,7 +389,7 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
 const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperCase();
 const normalizeDeviceType = (value: string): DeviceType => {
   const raw = String(value ?? '').trim().toUpperCase();
-  if (raw === 'CAR' || raw === '车') return 'CAR';
+  if (raw === 'CAR' || raw === 'CART' || raw === '车') return 'CART';
   return 'PDA';
 };
 
@@ -588,6 +588,33 @@ const EMPLOYEE_KEY_ALIASES: Record<string, string> = {
   '标签': 'label'
 };
 
+const DEVICE_KEY_ALIASES: Record<string, string> = {
+  device_name: 'device_name',
+  devicename: 'device_name',
+  name: 'device_name',
+  device: 'device_name',
+  '设备名': 'device_name',
+  '设备名称': 'device_name',
+  device_sn: 'device_sn',
+  devicesn: 'device_sn',
+  sn: 'device_sn',
+  '序列号': 'device_sn',
+  'sn码': 'device_sn',
+  type: 'device_type',
+  device_type: 'device_type',
+  '类型': 'device_type',
+  position: 'position',
+  '岗位': 'position',
+  note: 'note',
+  remark: 'note',
+  '备注': 'note',
+  active: 'active',
+  enabled: 'active',
+  status: 'active',
+  '启用': 'active',
+  '状态': 'active'
+};
+
 export default function AdminApp() {
   const busyRef = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -741,11 +768,6 @@ export default function AdminApp() {
   const [deviceSearch, setDeviceSearch] = useState('');
   const [deviceFilterPosition, setDeviceFilterPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [deviceFilterType, setDeviceFilterType] = useState<DeviceType | ''>('');
-  const [deviceNewName, setDeviceNewName] = useState('');
-  const [deviceNewSn, setDeviceNewSn] = useState('');
-  const [deviceNewType, setDeviceNewType] = useState<DeviceType>('PDA');
-  const [deviceNewPosition, setDeviceNewPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
-  const [deviceNewNote, setDeviceNewNote] = useState('');
   const [deviceScanMode, setDeviceScanMode] = useState<'borrow' | 'return'>('borrow');
   const [deviceScanStaffId, setDeviceScanStaffId] = useState('');
   const [deviceScanSn, setDeviceScanSn] = useState('');
@@ -863,7 +885,8 @@ export default function AdminApp() {
   }, [canonicalDeviceLoans]);
   const deviceRowsFiltered = useMemo(() => {
     const search = deviceSearch.trim().toLowerCase();
-    return canonicalDeviceRows.filter((row) => {
+    return canonicalDeviceRows
+      .filter((row) => {
       const deviceName = String(row.device_name ?? '').trim();
       const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
       const pos = String(row.position ?? '');
@@ -872,7 +895,15 @@ export default function AdminApp() {
       if (deviceFilterType && type !== deviceFilterType) return false;
       if (!search) return true;
       return `${deviceName} ${sn} ${type} ${pos}`.toLowerCase().includes(search);
-    });
+      })
+      .sort((a, b) => {
+        const aName = String(a.device_name ?? '').trim().toLowerCase();
+        const bName = String(b.device_name ?? '').trim().toLowerCase();
+        if (aName !== bName) return aName.localeCompare(bName, 'en-US');
+        const aSn = normalizeDeviceSn(String(a.device_sn ?? ''));
+        const bSn = normalizeDeviceSn(String(b.device_sn ?? ''));
+        return aSn.localeCompare(bSn, 'en-US');
+      });
   }, [canonicalDeviceRows, deviceFilterPosition, deviceFilterType, deviceSearch]);
 
   const normalizeLabelToneMap = (value: unknown): Record<string, LabelToneKey> => {
@@ -1049,6 +1080,8 @@ export default function AdminApp() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFillDuplicates, setUploadFillDuplicates] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [deviceUploadError, setDeviceUploadError] = useState<string | null>(null);
+  const deviceFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [attendanceStats, setAttendanceStats] = useState<
     Record<string, { early: number; late: number; active: number }>
@@ -1719,51 +1752,146 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     await fetchDeviceLoans({ lockUi: false });
   };
 
-  const createDevice = async () => {
-    const deviceName = deviceNewName.trim();
-    const sn = normalizeDeviceSn(deviceNewSn);
-    const type = normalizeDeviceType(deviceNewType);
-    const position = deviceNewPosition || null;
-    const note = deviceNewNote.trim();
-    if (!sn) {
-      setStatus({ tone: 'error', message: t('请先输入设备SN。', 'Please enter device SN.') });
+  const onDeviceFileSelected = async (file: File | null) => {
+    if (!file) {
+      setDeviceUploadError(null);
       return;
     }
+    const name = (file.name ?? '').toLowerCase();
+    if (
+      name.endsWith('.csv') ||
+      name.endsWith('.xlsx') ||
+      name.endsWith('.xls') ||
+      file.type === 'text/csv' ||
+      file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      file.type === 'application/vnd.ms-excel'
+    ) {
+      setDeviceUploadError(null);
+      return;
+    }
+    setDeviceUploadError(t('不支持的文件类型，请上传 CSV 或 Excel。', 'Unsupported file type. Please upload CSV or Excel.'));
+  };
+
+  const uploadDevices = async () => {
     if (!supabase) {
-      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase configuration.') });
+      setDeviceUploadError(t('缺少 Supabase 配置。', 'Missing Supabase configuration.'));
       return;
     }
-    await runLocked('device_add', async () => {
-      const duplicate = deviceBySn.get(sn);
-      if (duplicate) {
-        setStatus({ tone: 'error', message: t(`设备已存在：${sn}`, `Device already exists: ${sn}`) });
+    const file = deviceFileInputRef.current?.files?.[0] ?? null;
+    if (!file) {
+      setDeviceUploadError(t('请先选择设备 Excel/CSV 文件。', 'Please choose a device Excel/CSV file first.'));
+      return;
+    }
+
+    let parsedRows: Record<string, string>[] = [];
+    const name = (file.name ?? '').toLowerCase();
+    if (name.endsWith('.csv') || file.type === 'text/csv') {
+      const parsed = parseCsv(await file.text());
+      parsedRows = parsed.rows;
+    } else {
+      try {
+        const XLSX = await import('xlsx');
+        const ab = await file.arrayBuffer();
+        const workbook = XLSX.read(ab, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[firstSheetName];
+        const rows = (XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][]) || [];
+        const headerRow = (rows[0] ?? []).map((h: any) => String(h ?? '').trim());
+        parsedRows = rows
+          .slice(1)
+          .map((r) => {
+            const obj: Record<string, string> = {};
+            for (let i = 0; i < headerRow.length; i += 1) {
+              const key = headerRow[i] ?? '';
+              obj[key] = String(r[i] ?? '').trim();
+            }
+            return obj;
+          })
+          .filter((r) => Object.values(r).some((v) => String(v).trim() !== ''));
+      } catch {
+        setDeviceUploadError(t('无法解析上传文件，请确保是 CSV 或 Excel。', 'Cannot parse uploaded file. Please use CSV or Excel.'));
         return;
       }
-      const payload = {
-        device_name: deviceName || null,
+    }
+
+    const parseActiveFlag = (raw: string) => {
+      const v = String(raw ?? '').trim().toLowerCase();
+      if (!v) return true;
+      if (['0', 'false', 'no', 'n', 'disabled', 'disable', 'off', '停用', '否'].includes(v)) return false;
+      return true;
+    };
+
+    const uniqueBySn = new Map<
+      string,
+      { device_name: string | null; device_sn: string; device_type: DeviceType; position: AllowedPosition | null; note: string | null; active: boolean }
+    >();
+    let duplicateInFileCount = 0;
+    for (const r of parsedRows) {
+      const canonical: Record<string, string> = {};
+      for (const [rawKey, rawValue] of Object.entries(r)) {
+        if (!rawKey) continue;
+        const value = String(rawValue ?? '').trim();
+        if (!value) continue;
+        const normalized = normalizeHeaderKey(rawKey);
+        const mapped = DEVICE_KEY_ALIASES[normalized] ?? normalized;
+        if (!canonical[mapped]) canonical[mapped] = value;
+      }
+
+      const sn = normalizeDeviceSn(canonical.device_sn ?? '');
+      if (!sn) continue;
+      if (uniqueBySn.has(sn)) {
+        duplicateInFileCount += 1;
+        continue;
+      }
+      const deviceName = String(canonical.device_name ?? '').trim() || null;
+      const type = normalizeDeviceType(String(canonical.device_type ?? 'PDA'));
+      const positionRaw = String(canonical.position ?? '').trim();
+      const position = positionRaw ? normalizeAllowedPosition(positionRaw) : '';
+      const note = String(canonical.note ?? '').trim() || null;
+      const active = parseActiveFlag(canonical.active ?? '');
+      uniqueBySn.set(sn, {
+        device_name: deviceName,
         device_sn: sn,
         device_type: type,
-        position,
-        active: true,
-        note: note || null,
-        updated_at: new Date(serverTime).toISOString()
-      };
-      const res = await supabase.from(DEVICE_TABLE).insert([payload as any]);
+        position: position || null,
+        note,
+        active
+      });
+    }
+
+    const rows = Array.from(uniqueBySn.values());
+    if (rows.length === 0) {
+      setDeviceUploadError(t('文件没有可用设备数据（device_sn 为空）。', 'No valid device rows found (device_sn is empty).'));
+      return;
+    }
+
+    const invalidPositions = rows.filter((r) => r.position && !ALLOWED_POSITIONS.includes(r.position as any));
+    if (invalidPositions.length > 0) {
+      setDeviceUploadError(t('岗位仅支持 Pick/Pack/Rebin/Preship/Transfer。', 'Position must be Pick/Pack/Rebin/Preship/Transfer.'));
+      return;
+    }
+
+    await runLocked('device_upload', async () => {
+      const res = await supabase.from(DEVICE_TABLE).upsert(rows as any[], { onConflict: 'device_sn' });
       if (res.error) {
-        setStatus({ tone: 'error', message: t(`新增设备失败：${res.error.message}`, `Add device failed: ${res.error.message}`) });
+        setDeviceUploadError(t(`导入失败：${res.error.message}`, `Import failed: ${res.error.message}`));
         return;
       }
       await writeAudit({
-        action: 'device_add',
+        action: 'device_upload',
         target: DEVICE_TABLE,
-        payload
+        payload: {
+          file_name: file.name,
+          total_rows: rows.length,
+          duplicate_in_file: duplicateInFileCount
+        }
       });
-      setDeviceNewSn('');
-      setDeviceNewName('');
-      setDeviceNewType('PDA');
-      setDeviceNewPosition('');
-      setDeviceNewNote('');
-      setStatus({ tone: 'success', message: t(`设备已添加：${sn}`, `Device added: ${sn}`) });
+      setDeviceUploadError(null);
+      if (deviceFileInputRef.current) deviceFileInputRef.current.value = '';
+      setStatus({
+        tone: 'success',
+        message: t(`设备导入成功：${rows.length} 条。`, `Devices imported: ${rows.length}.`)
+      });
       await refreshDevicePanel({ lockUi: false });
     });
   };
@@ -6880,77 +7008,58 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
                   <div className="space-y-4">
                     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div>
-                          <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('设备名', 'Device name')}</label>
-                          <input
-                            value={deviceNewName}
-                            onChange={(e) => setDeviceNewName(e.target.value)}
-                            disabled={isLocked}
-                            placeholder={t('例如：PDA 01 / Forklift A', 'e.g. PDA 01 / Forklift A')}
-                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs uppercase tracking-[0.2em] text-slate-400">SN</label>
-                          <input
-                            value={deviceNewSn}
-                            onChange={(e) => setDeviceNewSn(e.target.value)}
-                            disabled={isLocked}
-                            placeholder={t('例如：PDA-0001', 'e.g. PDA-0001')}
-                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('类型', 'Type')}</label>
-                          <select
-                            value={deviceNewType}
-                            onChange={(e) => setDeviceNewType(normalizeDeviceType(e.target.value))}
-                            disabled={isLocked}
-                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {DEVICE_TYPES.map((item) => (
-                              <option key={item} value={item}>
-                                {item}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('岗位', 'Position')}</label>
-                          <select
-                            value={deviceNewPosition}
-                            onChange={(e) => setDeviceNewPosition((e.target.value as any) ?? '')}
-                            disabled={isLocked}
-                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            <option value="">{t('不限定岗位', 'No position')}</option>
-                            {ALLOWED_POSITIONS.map((p) => (
-                              <option key={p} value={p}>
-                                {p}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('备注', 'Note')}</label>
-                          <input
-                            value={deviceNewNote}
-                            onChange={(e) => setDeviceNewNote(e.target.value)}
-                            disabled={isLocked}
-                            placeholder={t('可选', 'Optional')}
-                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                          />
-                        </div>
+                      <div className="mb-2 text-xs text-slate-400">
+                        {t('仅支持通过 Excel/CSV 导入设备。', 'Only Excel/CSV import is supported for adding devices.')}
                       </div>
-                      <button
-                        type="button"
-                        disabled={isLocked || deviceNewSn.trim() === ''}
-                        onClick={() => void createDevice()}
-                        className="mt-3 h-11 rounded-2xl bg-neon px-5 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {t('新增设备', 'Add device')}
-                      </button>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <label className="inline-flex h-11 cursor-pointer items-center rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-slate-200 transition hover:border-white/20">
+                          <input
+                            ref={deviceFileInputRef}
+                            type="file"
+                            accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                            className="hidden"
+                            disabled={isLocked}
+                            onChange={(e) => void onDeviceFileSelected(e.target.files?.[0] ?? null)}
+                          />
+                          {t('选择设备文件', 'Choose file')}
+                        </label>
+                        <button
+                          type="button"
+                          disabled={isLocked}
+                          onClick={() => void uploadDevices()}
+                          className="h-11 rounded-2xl bg-neon px-5 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {t('导入设备', 'Import devices')}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isLocked}
+                          onClick={async () => {
+                            try {
+                              const headers = ['device_name', 'device_sn', 'device_type', 'position', 'note', 'active'];
+                              const sample = ['PDA 01', 'PDA-0001', 'PDA', 'Pick', 'optional', 'true'];
+                              const XLSX = await import('xlsx');
+                              const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
+                              const wb = XLSX.utils.book_new();
+                              XLSX.utils.book_append_sheet(wb, ws, 'template');
+                              XLSX.writeFile(wb, 'ob_devices_template.xlsx');
+                            } catch {
+                              const csv = 'device_name,device_sn,device_type,position,note,active\\nPDA 01,PDA-0001,PDA,Pick,optional,true\\n';
+                              const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = 'ob_devices_template.csv';
+                              a.click();
+                              URL.revokeObjectURL(url);
+                            }
+                          }}
+                          className="h-11 rounded-2xl bg-white/10 px-5 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {t('下载模版', 'Download template')}
+                        </button>
+                      </div>
+                      {deviceUploadError && <p className="mt-3 text-sm text-ember">{deviceUploadError}</p>}
                     </div>
 
                     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
