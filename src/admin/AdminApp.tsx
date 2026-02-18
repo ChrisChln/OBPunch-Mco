@@ -2,6 +2,13 @@
 import type { User } from '@supabase/supabase-js';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
+import {
+  LABEL_TONE_KEYS,
+  type LabelToneKey,
+  getLabelToneClass,
+  loadLabelToneMap,
+  saveLabelToneMap
+} from '../lib/labelTone';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 
@@ -325,6 +332,8 @@ const getDayRange = (weekStart: Date, dayIndex: number, dayCount = 1) => {
     end: new Date(endBase.getTime() + DAY_CUTOFF_MS)
   };
 };
+// Day bucketing uses [start, end). Shift OUT by 1ms so exact-cutoff OUT belongs to previous operational day.
+const getOperationalBucketTimeMs = (at: Date, action: 'IN' | 'OUT') => at.getTime() - (action === 'OUT' ? 1 : 0);
 const getWorkDateRange = (workDate: string) => {
   const base = new Date(`${workDate}T00:00:00`);
   if (Number.isNaN(base.getTime())) return null;
@@ -628,6 +637,7 @@ export default function AdminApp() {
   const [timecardPunchRows, setTimecardPunchRows] = useState<PunchRow[]>([]);
   const [timecardPunchError, setTimecardPunchError] = useState<string | null>(null);
   const [timecardPunchShowAll, setTimecardPunchShowAll] = useState(false);
+  const [timecardPunchPendingDeleteIds, setTimecardPunchPendingDeleteIds] = useState<string[]>([]);
   const [timecardPunchAddOpen, setTimecardPunchAddOpen] = useState(false);
   const [timecardPunchEdits, setTimecardPunchEdits] = useState<Record<string, { action: 'IN' | 'OUT'; atLocal: string }>>({});
   const [timecardPunchNew, setTimecardPunchNew] = useState<{ inAtLocal: string; outAtLocal: string }>({
@@ -650,6 +660,9 @@ export default function AdminApp() {
   const [scheduleSearchInput, setScheduleSearchInput] = useState('');
   const [schedulePosition, setSchedulePosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
+  const [scheduleLabelToneByName, setScheduleLabelToneByName] = useState<Record<string, LabelToneKey>>(() =>
+    loadLabelToneMap()
+  );
   const [scheduleShift, setScheduleShift] = useState<'' | 'early' | 'late'>('');
   const [scheduleSortByUphDesc, setScheduleSortByUphDesc] = useState(false);
   const [scheduleWorkDayFilter, setScheduleWorkDayFilter] = useState<number | null>(null);
@@ -675,6 +688,13 @@ export default function AdminApp() {
     createEmptyPositionFlags
   );
   const deferredScheduleSearch = useDeferredValue(scheduleSearch);
+  const deferredSchedulePosition = useDeferredValue(schedulePosition);
+  const deferredScheduleShift = useDeferredValue(scheduleShift);
+  const deferredScheduleLabels = useDeferredValue(scheduleLabels);
+
+  useEffect(() => {
+    saveLabelToneMap(scheduleLabelToneByName);
+  }, [scheduleLabelToneByName]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1811,7 +1831,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const to = from + pageSize - 1;
         const res = await supabase
           .from('ob_punches')
-          .select('staff_id, created_at')
+          .select('staff_id, action, created_at')
           .in('staff_id', batch)
           .gte('created_at', start.toISOString())
           .lt('created_at', end.toISOString())
@@ -1829,7 +1849,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           if (!staff || !staffSet.has(staff)) continue;
           const at = new Date(String(row.created_at ?? ''));
           if (Number.isNaN(at.getTime())) continue;
-          const dayIndex = Math.floor((at.getTime() - day0StartMs) / dayMs);
+          const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+          const dayIndex = Math.floor((getOperationalBucketTimeMs(at, action) - day0StartMs) / dayMs);
           if (dayIndex < 0 || dayIndex > 6) continue;
           found.add(`${staff}__${dayIndex}`);
         }
@@ -3282,9 +3303,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const punchCountByDay = new Array(7).fill(0) as number[];
       const hasPunchByDay = new Array(7).fill(false) as boolean[];
       for (const ev of events) {
+        const bucketTimeMs = getOperationalBucketTimeMs(ev.at, ev.action);
         for (let idx = 0; idx < 7; idx += 1) {
           const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
-          if (ev.at.getTime() >= dayStart.getTime() && ev.at.getTime() < dayEnd.getTime()) {
+          if (bucketTimeMs >= dayStart.getTime() && bucketTimeMs < dayEnd.getTime()) {
             punchCountByDay[idx] += 1;
             hasPunchByDay[idx] = true;
             break;
@@ -3294,9 +3316,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const manualByDay = new Array(7).fill(false) as boolean[];
       for (const ev of events) {
         if (!ev.manual) continue;
+        const bucketTimeMs = getOperationalBucketTimeMs(ev.at, ev.action);
         for (let idx = 0; idx < 7; idx++) {
           const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
-          if (ev.at.getTime() >= dayStart.getTime() && ev.at.getTime() < dayEnd.getTime()) {
+          if (bucketTimeMs >= dayStart.getTime() && bucketTimeMs < dayEnd.getTime()) {
             manualByDay[idx] = true;
             break;
           }
@@ -3743,7 +3766,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const to = from + pageSize - 1;
         const res = await supabase
           .from('ob_punches')
-          .select('staff_id, created_at, id')
+          .select('staff_id, action, created_at, id')
           .gte('created_at', weekRange.start.toISOString())
           .lt('created_at', weekRange.end.toISOString())
           .order('created_at', { ascending: true })
@@ -3760,7 +3783,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           if (!staff || !atRaw) continue;
           const at = new Date(atRaw);
           if (Number.isNaN(at.getTime())) continue;
-          const opDayDate = new Date(at.getTime() - DAY_CUTOFF_MS);
+          const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+          const opDayDate = new Date(getOperationalBucketTimeMs(at, action) - DAY_CUTOFF_MS);
           const workDate = toDateOnly(opDayDate);
           const dayIndex = dayIndexByDate.get(workDate);
           if (dayIndex == null) continue;
@@ -4149,6 +4173,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setTimecardPunchError(null);
     setTimecardPunchRows([]);
     setTimecardPunchShowAll(false);
+    setTimecardPunchPendingDeleteIds([]);
     setTimecardPunchAddOpen(false);
     setTimecardPunchEdits({});
     const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
@@ -4182,6 +4207,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setTimecardPunchRows([]);
     setTimecardPunchError(null);
     setTimecardPunchShowAll(false);
+    setTimecardPunchPendingDeleteIds([]);
     setTimecardPunchAddOpen(false);
     setTimecardPunchEdits({});
     setTimecardPunchNew({ inAtLocal: '', outAtLocal: '' });
@@ -4308,8 +4334,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return changed ? { rowId, edit } : null;
       })
       .filter(Boolean) as Array<{ rowId: string; edit: { action: 'IN' | 'OUT'; atLocal: string } }>;
+    const deleteIds = timecardPunchPendingDeleteIds;
 
-    if (changed.length === 0) {
+    if (changed.length === 0 && deleteIds.length === 0) {
       setTimecardPunchError(null);
       setStatus({ tone: 'idle', message: t('没有可保存的改动。', 'No changes to save.') });
       closeTimecardPunchModal();
@@ -4368,6 +4395,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           return;
         }
       }
+      if (deleteIds.length > 0) {
+        const { error: deleteError } = await supabase.from('ob_punches').delete().in('id', deleteIds as any[]);
+        if (deleteError) {
+          saveFailed = true;
+          setTimecardPunchError(deleteError.message);
+          return;
+        }
+      }
 
       const res = await fetchPunchRowsForTimecard(staff, timecardPunchDayIndex);
       if (res.error) {
@@ -4396,13 +4431,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     void refreshSchedulePanel();
   };
   const deleteTimecardPunchPair = async (pair: { inRow?: PunchRow; outRow?: PunchRow }) => {
-    if (!supabase) {
-      setTimecardPunchError('缺少 Supabase 配置。');
-      return;
-    }
-    const staff = timecardPunchStaffId;
-    if (!staff) return;
-
     const ids = [pair.inRow?.id, pair.outRow?.id]
       .filter((v) => v !== undefined && v !== null)
       .map((v) => String(v));
@@ -4411,33 +4439,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const ok = window.confirm(ids.length >= 2 ? '确定要删除这一整行打卡记录吗？' : '确定要删除这条打卡记录吗？');
     if (!ok) return;
 
-    await runLocked('timecard_delete_pair', async () => {
-      setTimecardPunchError(null);
-      const { error } = await supabase.from('ob_punches').delete().in('id', ids as any[]);
-      if (error) {
-        setTimecardPunchError(error.message);
-        return;
-      }
-
-      const res = await fetchPunchRowsForTimecard(staff, timecardPunchDayIndex);
-      if (res.error) {
-        setTimecardPunchError(res.error);
-        return;
-      }
-      setTimecardPunchRows(res.rows);
-
-      const edits: Record<string, { action: 'IN' | 'OUT'; atLocal: string }> = {};
-      for (const r of res.rows) {
-        const dt = r.created_at ? new Date(r.created_at) : null;
-        edits[String(r.id)] = {
-          action: r.action,
-          atLocal: dt && !Number.isNaN(dt.getTime()) ? toLocalDateTimeInputValue(dt) : ''
-        };
-      }
-      setTimecardPunchEdits(edits);
-
-      await fetchTimecard({ reset: true, lockUi: false });
-    });
+    setTimecardPunchError(null);
+    setTimecardPunchPendingDeleteIds((prev) => Array.from(new Set([...prev, ...ids])));
+    setStatus({ tone: 'idle', message: t('已暂存删除，请点击保存全部提交。', 'Delete staged. Click Save all to apply.') });
   };
 
   useEffect(() => {
@@ -4993,11 +4997,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   }, [timecardRowsFiltered]);
 
   const timecardPunchRowsVisible = useMemo(() => {
-    if (timecardPunchShowAll) return timecardPunchRows;
-    if (timecardPunchDayIndex === null) return timecardPunchRows; // week view
+    const rowsBase = timecardPunchRows.filter((r) => !timecardPunchPendingDeleteIds.includes(String(r.id)));
+    if (timecardPunchShowAll) return rowsBase;
+    if (timecardPunchDayIndex === null) return rowsBase; // week view
 
     const idx = timecardPunchDayIndex;
-    if (idx < 0 || idx > 6) return timecardPunchRows;
+    if (idx < 0 || idx > 6) return rowsBase;
 
     const baseWeekStart = startOfWeekMonday(serverTime);
     const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
@@ -5005,7 +5010,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
     const includedIds = new Set<string>();
 
-    const events = timecardPunchRows
+    const events = rowsBase
       .map((r) => {
         const at = r.created_at ? new Date(r.created_at) : null;
         if (!at || Number.isNaN(at.getTime())) return null;
@@ -5040,7 +5045,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
 
     for (const ev of events) {
-      if (ev.at.getTime() >= dayStart.getTime() && ev.at.getTime() < dayEnd.getTime()) {
+      const bucketTimeMs = getOperationalBucketTimeMs(ev.at, ev.action);
+      if (bucketTimeMs >= dayStart.getTime() && bucketTimeMs < dayEnd.getTime()) {
         includedIds.add(ev.id);
       }
     }
@@ -5053,8 +5059,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
     }
 
-    return timecardPunchRows.filter((r) => includedIds.has(String(r.id)));
-  }, [timecardPunchRows, timecardPunchShowAll, timecardPunchDayIndex, timecardWeekOffset, serverTime]);
+    return rowsBase.filter((r) => includedIds.has(String(r.id)));
+  }, [timecardPunchRows, timecardPunchPendingDeleteIds, timecardPunchShowAll, timecardPunchDayIndex, timecardWeekOffset, serverTime]);
   const timecardPunchPairsVisible = useMemo(() => {
     const rows = [...timecardPunchRowsVisible];
     rows.sort((a, b) => {
@@ -5239,31 +5245,50 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           const isWork = isWorkingScheduleRow(row);
           if (!isWork) return false;
         }
-        if (schedulePosition && position.toLowerCase() !== schedulePosition.toLowerCase()) return false;
-        if (scheduleLabels.length > 0) {
+        if (deferredSchedulePosition && position.toLowerCase() !== deferredSchedulePosition.toLowerCase()) return false;
+        if (deferredScheduleLabels.length > 0) {
           const normalizedLabel = label.toLowerCase();
-          const hit = scheduleLabels.some((item) => normalizedLabel === item.toLowerCase());
+          const hit = deferredScheduleLabels.some((item) => normalizedLabel === item.toLowerCase());
           if (!hit) return false;
         }
-        if (scheduleShift) {
+        if (deferredScheduleShift) {
           const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-          if (inferredShift !== scheduleShift) return false;
+          if (inferredShift !== deferredScheduleShift) return false;
         }
         return true;
       })
       .sort((a, b) => String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US'));
-  }, [employees, schedulePosition, scheduleLabels, scheduleShift, employeeShiftByStaffId, scheduleWorkDayFilter, scheduleRowsByStaffDayIndex]);
+  }, [
+    employees,
+    deferredSchedulePosition,
+    deferredScheduleLabels,
+    deferredScheduleShift,
+    employeeShiftByStaffId,
+    scheduleWorkDayFilter,
+    scheduleRowsByStaffDayIndex
+  ]);
 
   const scheduleLabelOptions = useMemo(() => {
     const out = new Set<string>();
     for (const employee of employees) {
       const position = String(employee.position ?? employee.Position ?? '').trim();
-      if (schedulePosition && position.toLowerCase() !== schedulePosition.toLowerCase()) continue;
+      if (deferredSchedulePosition && position.toLowerCase() !== deferredSchedulePosition.toLowerCase()) continue;
       const label = String(employee.label ?? employee.Label ?? '').trim();
       if (label) out.add(label);
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
-  }, [employees, schedulePosition]);
+  }, [employees, deferredSchedulePosition]);
+  const getScheduleLabelToneClass = (label: string) => getLabelToneClass(label, scheduleLabelToneByName);
+  const cycleScheduleLabelTone = (label: string) => {
+    const key = String(label ?? '').trim().toLowerCase();
+    if (!key) return;
+    setScheduleLabelToneByName((prev) => {
+      const current = prev[key] ?? 'slate';
+      const idx = LABEL_TONE_KEYS.indexOf(current);
+      const next = LABEL_TONE_KEYS[(idx + 1) % LABEL_TONE_KEYS.length];
+      return { ...prev, [key]: next };
+    });
+  };
 
   const scheduleEmployeesFiltered = useMemo(() => {
     const search = deferredScheduleSearch.trim().toLowerCase();
@@ -5320,7 +5345,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   useEffect(() => {
     if (page !== 'schedule') return;
     const total = scheduleEmployeesFiltered.length;
-    setScheduleRenderCount(Math.min(120, total));
+    setScheduleRenderCount(Math.min(60, total));
   }, [page, scheduleEmployeesFiltered]);
 
   useEffect(() => {
@@ -5333,7 +5358,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (scrollTop + viewport < fullHeight - 240) return;
       setScheduleRenderCount((prev) => {
         if (prev >= scheduleEmployeesFiltered.length) return prev;
-        return Math.min(prev + 120, scheduleEmployeesFiltered.length);
+        return Math.min(prev + 60, scheduleEmployeesFiltered.length);
       });
     };
     window.addEventListener('scroll', onScroll, { passive: true });
@@ -6289,7 +6314,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               <section className="glass reveal rounded-3xl px-6 py-8">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h2 className="font-display text-2xl tracking-[0.08em]">Schedule</h2>
+                    <h2 className="font-display text-2xl tracking-[0.08em]">{t('排班', 'Schedule')}</h2>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <button
@@ -6302,11 +6327,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/60'
                           : 'bg-white/10 text-slate-200 hover:bg-white/15'
                       ].join(' ')}
-                      title="Manual publish tomorrow roster"
+                      title={t('手动发布明日名单', 'Manual publish tomorrow roster')}
                     >
                       {schedulePublishTomorrow
-                        ? `Tomorrow list ON (${schedulePublishForDate || '-'})`
-                        : 'Tomorrow list OFF'}
+                        ? t(`明日名单已开启 (${schedulePublishForDate || '-'})`, `Tomorrow list ON (${schedulePublishForDate || '-'})`)
+                        : t('明日名单已关闭', 'Tomorrow list OFF')}
                     </button>
                     <button
                       type="button"
@@ -6319,7 +6344,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      Prev
+                      {t('上一周', 'Prev')}
                     </button>
                     <button
                       type="button"
@@ -6331,7 +6356,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      This week
+                      {t('本周', 'This week')}
                     </button>
                     <button
                       type="button"
@@ -6344,7 +6369,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      Next
+                      {t('下一周', 'Next')}
                     </button>
                     <button
                       type="button"
@@ -6388,14 +6413,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       onClick={() => void refreshSchedulePanel()}
                       className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Refresh
+                      {t('刷新', 'Refresh')}
                     </button>
                   </div>
                 </div>
 
                 <div className="mt-5 grid gap-4 md:grid-cols-10">
                   <div className="md:col-span-2">
-                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Week</label>
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('周', 'Week')}</label>
                     <input
                       type="date"
                       value={scheduleWeekInput}
@@ -6415,24 +6440,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     />
                   </div>
                   <div className="md:col-span-2">
-                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Search</label>
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('搜索', 'Search')}</label>
                     <input
                       value={scheduleSearchInput}
                       onChange={(e) => setScheduleSearchInput(e.target.value)}
                       disabled={isLocked}
-                      placeholder="Search by staff id / name"
+                      placeholder={t('按工号 / 姓名搜索', 'Search by staff id / name')}
                       className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </div>
                   <div className="md:col-span-2">
-                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Position</label>
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('岗位', 'Position')}</label>
                     <select
                       value={schedulePosition}
                       onChange={(e) => setSchedulePosition((e.target.value as any) ?? '')}
                       disabled={isLocked}
                       className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      <option value="">All positions</option>
+                      <option value="">{t('全部岗位', 'All positions')}</option>
                       {ALLOWED_POSITIONS.map((p) => (
                         <option key={p} value={p}>
                           {p}
@@ -6441,16 +6466,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     </select>
                   </div>
                   <div className="md:col-span-2">
-                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Shift</label>
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('班次', 'Shift')}</label>
                     <select
                       value={scheduleShift}
                       onChange={(e) => setScheduleShift((e.target.value as any) ?? '')}
                       disabled={isLocked}
                       className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      <option value="">All shifts</option>
-                      <option value="early">Morning</option>
-                      <option value="late">Night</option>
+                      <option value="">{t('全部班次', 'All shifts')}</option>
+                      <option value="early">{t('早班', 'Morning')}</option>
+                      <option value="late">{t('晚班', 'Night')}</option>
                     </select>
                   </div>
                   <div className="md:col-span-2">
@@ -6503,17 +6528,39 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                       : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
                                   ].join(' ')}
                                 >
-                                  <span className="truncate">{item}</span>
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() =>
-                                      setScheduleLabels((prev) =>
-                                        prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]
-                                      )
-                                    }
-                                    className="h-3.5 w-3.5 accent-lime-400"
-                                  />
+                                  <span
+                                    className={[
+                                      'inline-flex max-w-[65%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold',
+                                      getScheduleLabelToneClass(item)
+                                    ].join(' ')}
+                                  >
+                                    {item}
+                                  </span>
+                                  <div className="ml-2 flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      disabled={isLocked}
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        cycleScheduleLabelTone(item);
+                                      }}
+                                      className={['rounded-md border px-1.5 py-0.5 text-[10px] font-semibold', getScheduleLabelToneClass(item)].join(' ')}
+                                      title={t('切换标签颜色', 'Cycle label color')}
+                                    >
+                                      {t('颜色', 'Color')}
+                                    </button>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() =>
+                                        setScheduleLabels((prev) =>
+                                          prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]
+                                        )
+                                      }
+                                      className="h-3.5 w-3.5 accent-lime-400"
+                                    />
+                                  </div>
                                 </label>
                               );
                             })
@@ -6525,7 +6572,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 </div>
 
                 <div className="mt-4 text-xs text-slate-400">
-                  Loaded: {scheduleEmployeesFiltered.length} / {employees.length}
+                  {t('已加载', 'Loaded')}: {scheduleEmployeesFiltered.length} / {employees.length}
                   {scheduleWorkDayFilter !== null && (
                     <button
                       type="button"
@@ -6533,14 +6580,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       onClick={() => setScheduleWorkDayFilter(null)}
                       className="ml-3 rounded-md bg-white/10 px-2 py-0.5 text-[11px] text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      Day filter: {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][scheduleWorkDayFilter]} (Clear)
+                      {t('日期筛选', 'Day filter')}: {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][scheduleWorkDayFilter]} ({t('清空', 'Clear')})
                     </button>
                   )}
                 </div>
 
-                {scheduleError && <p className="mt-3 text-sm text-ember">Load failed: {scheduleError}</p>}
+                {scheduleError && <p className="mt-3 text-sm text-ember">{t('加载失败', 'Load failed')}: {scheduleError}</p>}
                 {!scheduleError && scheduleEmployeesFiltered.length === 0 && (
-                  <p className="mt-3 text-sm text-slate-400">No employees found.</p>
+                  <p className="mt-3 text-sm text-slate-400">{t('未找到员工。', 'No employees found.')}</p>
                 )}
 
                 {!scheduleError && scheduleEmployeesFiltered.length > 0 && (
@@ -6548,13 +6595,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     <table className="min-w-[1620px] w-full table-fixed text-left text-xs leading-tight">
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
-                          <th className="sticky top-0 z-20 w-[100px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">ID</th>
-                          <th className="sticky top-0 z-20 w-[155px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">Name</th>
-                          <th className="sticky top-0 z-20 w-[96px] bg-slate-950/95 px-2 py-2 text-center backdrop-blur">Work Days</th>
-                          <th className="sticky top-0 z-20 w-[108px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">Agency</th>
-                          <th className="sticky top-0 z-20 w-[86px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">Position</th>
+                          <th className="sticky top-0 z-20 w-[100px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('工号', 'ID')}</th>
+                          <th className="sticky top-0 z-20 w-[155px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('姓名', 'Name')}</th>
+                          <th className="sticky top-0 z-20 w-[96px] bg-slate-950/95 px-2 py-2 text-center backdrop-blur">{t('工作天数', 'Work Days')}</th>
+                          <th className="sticky top-0 z-20 w-[108px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('中介', 'Agency')}</th>
+                          <th className="sticky top-0 z-20 w-[86px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('岗位', 'Position')}</th>
                           <th className="sticky top-0 z-20 w-[110px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('标签', 'Label')}</th>
-                          <th className="sticky top-0 z-20 w-[76px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">Shift</th>
+                          <th className="sticky top-0 z-20 w-[76px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">{t('班次', 'Shift')}</th>
                           <th className="sticky top-0 z-20 w-[72px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">
                             <button
                               type="button"
@@ -6631,7 +6678,20 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   {position || '-'}
                                 </span>
                               </td>
-                              <td className="px-1.5 py-2 text-slate-200 truncate">{label || '-'}</td>
+                              <td className="px-1.5 py-2 text-slate-200">
+                                {label ? (
+                                  <span
+                                    className={[
+                                      'inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+                                      getScheduleLabelToneClass(label)
+                                    ].join(' ')}
+                                  >
+                                    <span className="truncate">{label}</span>
+                                  </span>
+                                ) : (
+                                  '-'
+                                )}
+                              </td>
                               <td className="px-2 py-2 text-center text-slate-200">
                                 {(() => {
                                   const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
@@ -7078,17 +7138,39 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                       : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
                                   ].join(' ')}
                                 >
-                                  <span className="truncate">{item}</span>
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() =>
-                                      setEmployeeLabels((prev) =>
-                                        prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]
-                                      )
-                                    }
-                                    className="h-3.5 w-3.5 accent-lime-400"
-                                  />
+                                  <span
+                                    className={[
+                                      'inline-flex max-w-[62%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold',
+                                      getScheduleLabelToneClass(item)
+                                    ].join(' ')}
+                                  >
+                                    {item}
+                                  </span>
+                                  <div className="ml-2 flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      disabled={isLocked}
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        cycleScheduleLabelTone(item);
+                                      }}
+                                      className={['rounded-md border px-1.5 py-0.5 text-[10px] font-semibold', getScheduleLabelToneClass(item)].join(' ')}
+                                      title={t('切换标签颜色', 'Cycle label color')}
+                                    >
+                                      {t('颜色', 'Color')}
+                                    </button>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() =>
+                                        setEmployeeLabels((prev) =>
+                                          prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]
+                                        )
+                                      }
+                                      className="h-3.5 w-3.5 accent-lime-400"
+                                    />
+                                  </div>
                                 </label>
                               );
                             })
@@ -7252,7 +7334,20 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 {position || '-'}
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-slate-200">{label || '-'}</td>
+                            <td className="px-4 py-3 text-slate-200">
+                              {label ? (
+                                <span
+                                  className={[
+                                    'inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+                                    getScheduleLabelToneClass(label)
+                                  ].join(' ')}
+                                >
+                                  <span className="truncate">{label}</span>
+                                </span>
+                              ) : (
+                                '-'
+                              )}
+                            </td>
                             <td className="px-4 py-3 text-slate-200">
                               <span
                                 title={shiftTitle}
