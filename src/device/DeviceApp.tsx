@@ -35,6 +35,7 @@ type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
+const BORROW_OVERDUE_MS = 24 * 60 * 60 * 1000;
 
 const supabase = createSupabaseClient({ persistSession: false });
 
@@ -163,7 +164,13 @@ export default function DeviceApp() {
         const matchesBorrowed = !borrowedOnly || Boolean(holder);
         return matchesPosition && matchesType && matchesBorrowed;
       })
-      .sort((a, b) => a.device_sn!.localeCompare(b.device_sn!, 'en-US'));
+      .sort((a, b) => {
+        const nameA = String(a.device_name ?? '').trim();
+        const nameB = String(b.device_name ?? '').trim();
+        const byName = nameA.localeCompare(nameB, 'en-US', { sensitivity: 'base', numeric: true });
+        if (byName !== 0) return byName;
+        return a.device_sn!.localeCompare(b.device_sn!, 'en-US', { numeric: true, sensitivity: 'base' });
+      });
   }, [borrowedOnly, canonicalDevices, currentBorrowBySn, nameByStaffId, positionFilter, search, typeFilter]);
 
   const toneClass = useMemo(() => {
@@ -182,6 +189,12 @@ export default function DeviceApp() {
     const seconds = sec % 60;
     const pad = (n: number) => String(n).padStart(2, '0');
     return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  };
+
+  const getBorrowAgeMs = (borrowedAt: string) => {
+    const startMs = Date.parse(String(borrowedAt ?? ''));
+    if (!Number.isFinite(startMs) || startMs <= 0) return 0;
+    return Math.max(0, nowMs - startMs);
   };
 
   const fetchAll = async () => {
@@ -259,6 +272,26 @@ export default function DeviceApp() {
       playDeviceSound('error');
       return;
     }
+    if (!supabase) {
+      setMessage({ tone: 'error', text: 'Missing Supabase configuration.' });
+      playDeviceSound('error');
+      return;
+    }
+
+    const employeeCheck = await supabase.from(EMPLOYEE_TABLE).select('staff_id').eq('staff_id', staffId).limit(1);
+    if (employeeCheck.error) {
+      setMessage({ tone: 'error', text: `Failed to verify employee: ${employeeCheck.error.message}` });
+      playDeviceSound('error');
+      return;
+    }
+    const employeeRows = ((employeeCheck.data as Array<{ staff_id?: string | null }>) ?? []).filter((row) =>
+      normalizeStaffId(String(row.staff_id ?? '').trim())
+    );
+    if (employeeRows.length === 0) {
+      setMessage({ tone: 'error', text: `Employee not registered: ${staffId}` });
+      playDeviceSound('error');
+      return;
+    }
     const device = deviceBySn.get(sn);
     if (!device) {
       setMessage({ tone: 'error', text: `Device not found: ${sn}` });
@@ -288,12 +321,6 @@ export default function DeviceApp() {
       playDeviceSound('error');
       return;
     }
-    if (!supabase) {
-      setMessage({ tone: 'error', text: 'Missing Supabase configuration.' });
-      playDeviceSound('error');
-      return;
-    }
-
     setMessage({ tone: 'pending', text: mode === 'borrow' ? 'Borrowing...' : 'Returning...' });
     const res = await supabase.from(DEVICE_LOANS_TABLE).insert([
       {
@@ -315,9 +342,10 @@ export default function DeviceApp() {
       text: mode === 'borrow' ? `Borrowed: ${staffId} -> ${sn}` : `Returned: ${staffId} <- ${sn}`
     });
     playDeviceSound(mode === 'borrow' ? 'successIn' : 'successOut');
+    setStaffIdInput('');
     setSnInput('');
     await fetchAll();
-    snRef.current?.focus();
+    staffRef.current?.focus();
   };
 
   useEffect(() => {
@@ -342,18 +370,29 @@ export default function DeviceApp() {
 
   return (
     <div className="min-h-screen bg-ink text-paper">
-      <main className="mx-auto max-w-6xl px-4 py-6">
+      <main className="w-full px-4 py-6 md:px-6 xl:px-8">
         <header className="glass rounded-3xl p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h1 className="font-display text-2xl tracking-[0.08em]">Device Borrow/Return</h1>
-            <button
-              type="button"
-              onClick={() => void fetchAll()}
-              disabled={loading}
-              className="rounded-xl bg-white/10 px-3 py-2 text-sm text-slate-200 transition hover:bg-white/15 disabled:opacity-50"
-            >
-              Refresh
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = '/';
+                }}
+                className="rounded-xl bg-white/10 px-3 py-2 text-sm text-slate-200 transition hover:bg-white/15"
+              >
+                Punch
+              </button>
+              <button
+                type="button"
+                onClick={() => void fetchAll()}
+                disabled={loading}
+                className="rounded-xl bg-white/10 px-3 py-2 text-sm text-slate-200 transition hover:bg-white/15 disabled:opacity-50"
+              >
+                Refresh
+              </button>
+            </div>
           </div>
           <p className={['mt-2 text-sm', toneClass].join(' ')}>{message.text}</p>
         </header>
@@ -462,38 +501,52 @@ export default function DeviceApp() {
                 Borrowed only
               </label>
             </div>
-            <div className="max-h-[70vh] space-y-2 overflow-auto pr-1">
+            <div className="grid max-h-[70vh] grid-cols-5 gap-2 overflow-auto pr-1 md:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8">
               {statusRows.map((row) => {
                 const sn = row.device_sn!;
                 const borrowed = currentBorrowBySn.get(sn);
                 const holderName = borrowed ? nameByStaffId[borrowed.staffId] ?? borrowed.staffId : '';
+                const borrowAgeMs = borrowed ? getBorrowAgeMs(borrowed.createdAt) : 0;
+                const statusTone = !borrowed ? 'available' : borrowAgeMs >= BORROW_OVERDUE_MS ? 'overdue' : 'borrowed';
+                const cardClass =
+                  statusTone === 'available'
+                    ? 'border-emerald-400/45 bg-emerald-500/10'
+                    : statusTone === 'overdue'
+                      ? 'border-rose-400/55 bg-rose-500/10'
+                      : 'border-amber-400/55 bg-amber-500/10';
+                const statusTextClass =
+                  statusTone === 'available'
+                    ? 'text-emerald-300'
+                    : statusTone === 'overdue'
+                      ? 'text-rose-300'
+                      : 'text-amber-300';
                 return (
-                  <div key={sn} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div key={sn} className={['aspect-square rounded-xl border px-3 py-3 transition-colors', cardClass].join(' ')}>
+                    <div className="flex h-full flex-col justify-between">
                       <div>
-                        <div className="text-sm font-semibold text-slate-100">
-                          {row.device_name || '-'}
-                        </div>
+                        <div className="text-sm font-semibold text-slate-100">{row.device_name || '-'}</div>
                         <div className="mt-1 text-xs text-slate-400">
                           {row.device_type} · {row.position || 'No position'}
                         </div>
                       </div>
-                      <div className="text-right">
+                      <div className="border-t border-white/10 pt-2 text-right">
                         {borrowed ? (
                           <>
-                            <div className="text-xs font-semibold text-amber-300">Borrowed</div>
+                            <div className={['text-xs font-semibold', statusTextClass].join(' ')}>
+                              {statusTone === 'overdue' ? 'Borrowed >24h' : 'Borrowed'}
+                            </div>
                             <div className="text-xs text-slate-200">{holderName}</div>
                             <div className="text-[11px] text-slate-400">Duration: {formatBorrowDuration(borrowed.createdAt)}</div>
                           </>
                         ) : (
-                          <div className="text-xs font-semibold text-emerald-300">Available</div>
+                          <div className={['text-xs font-semibold', statusTextClass].join(' ')}>Available</div>
                         )}
                       </div>
                     </div>
                   </div>
                 );
               })}
-              {statusRows.length === 0 && <div className="py-6 text-sm text-slate-400">No device data.</div>}
+              {statusRows.length === 0 && <div className="col-span-full py-6 text-sm text-slate-400">No device data.</div>}
             </div>
           </div>
         </section>

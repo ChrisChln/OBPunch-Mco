@@ -47,6 +47,25 @@ type ArrivalMetric = {
   restWorkedStaff: string[];
   scheduledNotClockInStaff: string[];
 };
+type DeviceLoanEventRow = {
+  id?: number | string | null;
+  created_at?: string | null;
+  action?: string | null;
+  device_sn?: string | null;
+};
+type DeviceCatalogRow = {
+  device_sn?: string | null;
+  device_name?: string | null;
+  device_type?: string | null;
+  position?: string | null;
+};
+type DeviceOutstandingItem = {
+  deviceSn: string;
+  deviceName: string;
+  deviceType: string;
+  position: string;
+  borrowedAt: string;
+};
 
 type TomorrowListSetting = {
   enabled: boolean;
@@ -57,6 +76,8 @@ const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as co
 type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
+const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
+const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const EMPLOYEE_REQUESTS_TABLE = (import.meta.env.VITE_EMPLOYEE_REQUESTS_TABLE as string | undefined) ?? 'ob_employee_requests';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
@@ -646,6 +667,10 @@ export default function App() {
 
   const [lastPunchAction, setLastPunchAction] = useState<PunchAction | null>(null);
   const [lastPunchActionError, setLastPunchActionError] = useState<string | null>(null);
+  const [deviceReturnReminder, setDeviceReturnReminder] = useState<{
+    staffId: string;
+    items: DeviceOutstandingItem[];
+  } | null>(null);
 
   const punchBoardFiltered = useMemo(() => {
     if (!punchLogPositionFilter) return punchBoard;
@@ -819,6 +844,77 @@ export default function App() {
 
     const rows = (resolved.data as Array<{ staff_id?: string | null }> | null) ?? [];
     return { registered: rows.length > 0, error: null as string | null };
+  };
+
+  const fetchOutstandingDevicesByStaff = async (staff: string) => {
+    if (!supabase) {
+      return { items: [] as DeviceOutstandingItem[], error: 'Missing Supabase configuration.' };
+    }
+
+    const loanRes = await supabase
+      .from(DEVICE_LOANS_TABLE)
+      .select('id, created_at, action, device_sn')
+      .eq('staff_id', staff)
+      .order('created_at', { ascending: true })
+      .limit(5000);
+    if (loanRes.error) {
+      return { items: [] as DeviceOutstandingItem[], error: loanRes.error.message };
+    }
+
+    const rows = ((loanRes.data as any[]) ?? []) as DeviceLoanEventRow[];
+    const borrowedBySn = new Map<string, { borrowedAt: string }>();
+    for (const row of rows) {
+      const sn = String(row.device_sn ?? '').trim().toUpperCase();
+      if (!sn) continue;
+      const action = String(row.action ?? '').trim().toLowerCase();
+      if (action === 'borrow') {
+        borrowedBySn.set(sn, { borrowedAt: String(row.created_at ?? '') });
+      } else if (action === 'return') {
+        borrowedBySn.delete(sn);
+      }
+    }
+    if (borrowedBySn.size === 0) {
+      return { items: [] as DeviceOutstandingItem[], error: null as string | null };
+    }
+
+    const sns = Array.from(borrowedBySn.keys());
+    const deviceRes = await supabase
+      .from(DEVICE_TABLE)
+      .select('device_sn, device_name, device_type, position')
+      .in('device_sn', sns);
+    if (deviceRes.error) {
+      return {
+        items: sns.map((sn) => ({
+          deviceSn: sn,
+          deviceName: sn,
+          deviceType: '',
+          position: '',
+          borrowedAt: borrowedBySn.get(sn)?.borrowedAt ?? ''
+        })),
+        error: null as string | null
+      };
+    }
+
+    const catalog = new Map<string, DeviceCatalogRow>();
+    for (const row of (((deviceRes.data as any[]) ?? []) as DeviceCatalogRow[])) {
+      const sn = String(row.device_sn ?? '').trim().toUpperCase();
+      if (!sn) continue;
+      catalog.set(sn, row);
+    }
+    const items = sns
+      .map((sn) => {
+        const detail = catalog.get(sn);
+        const deviceName = String(detail?.device_name ?? '').trim() || sn;
+        return {
+          deviceSn: sn,
+          deviceName,
+          deviceType: String(detail?.device_type ?? '').trim(),
+          position: String(detail?.position ?? '').trim(),
+          borrowedAt: borrowedBySn.get(sn)?.borrowedAt ?? ''
+        };
+      })
+      .sort((a, b) => a.deviceName.localeCompare(b.deviceName, 'en-US', { numeric: true, sensitivity: 'base' }));
+    return { items, error: null as string | null };
   };
 
   useEffect(() => {
@@ -1965,6 +2061,12 @@ const fetchPunchBoardUph = async (
       if (options?.clearInput ?? true) {
         setStaffId('');
       }
+      if (action === 'OUT') {
+        const outstanding = await fetchOutstandingDevicesByStaff(normalizedId);
+        if (!outstanding.error && outstanding.items.length > 0) {
+          setDeviceReturnReminder({ staffId: normalizedId, items: outstanding.items });
+        }
+      }
       void fetchPunchBoard({ position: punchLogPositionFilter });
       void fetchAbsentRoster();
       void fetchArrivalMetrics();
@@ -2907,6 +3009,45 @@ const fetchPunchBoardUph = async (
             <div className="glass flex items-center gap-3 rounded-2xl px-5 py-4 shadow-2xl">
               <span className="h-5 w-5 animate-spin rounded-full border-2 border-neon/25 border-t-neon" />
               <span className="text-sm font-semibold text-slate-100">Processing request...</span>
+            </div>
+          </div>
+        )}
+
+        {deviceReturnReminder && (
+          <div className="fixed inset-0 z-[115] flex items-center justify-center bg-black/45 px-4">
+            <div className="glass w-full max-w-xl rounded-2xl border border-amber-300/40 p-5 shadow-2xl">
+              <div className="text-lg font-semibold text-amber-200">Device Return Reminder</div>
+              <div className="mt-2 text-sm text-slate-200">
+                {deviceReturnReminder.staffId} punched OUT but still has {deviceReturnReminder.items.length} borrowed device(s).
+              </div>
+              <div className="mt-3 max-h-60 space-y-2 overflow-auto pr-1">
+                {deviceReturnReminder.items.map((item) => (
+                  <div key={item.deviceSn} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                    <div className="text-sm font-semibold text-slate-100">{item.deviceName}</div>
+                    <div className="text-xs text-slate-300">
+                      {item.deviceType || 'Device'} {item.position ? `· ${item.position}` : ''} · SN {item.deviceSn}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.location.href = '/device.html';
+                  }}
+                  className="rounded-xl bg-neon px-3 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5"
+                >
+                  Go Device
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeviceReturnReminder(null)}
+                  className="rounded-xl bg-white/10 px-3 py-2 text-sm text-slate-200 transition hover:bg-white/15"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         )}

@@ -7608,19 +7608,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   </div>
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('岗位', 'Position')}</label>
-                    <select
-                      value={schedulePosition}
-                      onChange={(e) => setSchedulePosition((e.target.value as any) ?? '')}
-                      disabled={isLocked}
-                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <option value="">{t('全部岗位', 'All positions')}</option>
-                      {ALLOWED_POSITIONS.map((p) => (
-                        <option key={p} value={p}>
-                          {p}
-                        </option>
-                      ))}
-                    </select>
                     <details className="relative mt-2">
                       <summary
                         className={[
@@ -7629,34 +7616,96 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           isLocked ? 'pointer-events-none cursor-not-allowed opacity-60' : ''
                         ].join(' ')}
                       >
-                        <span>{t('岗位颜色', 'Position colors')}</span>
-                        <span className="ml-3 text-xs text-slate-400">{ALLOWED_POSITIONS.length}</span>
+                        <span className="truncate">{schedulePosition || t('全部岗位', 'All positions')}</span>
+                        <span className="ml-3 text-xs text-slate-400">{schedulePosition ? 1 : 0}</span>
                       </summary>
                       <div className="absolute z-30 mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/95 p-3 shadow-2xl backdrop-blur">
+                        <div className="mb-2 flex items-center justify-between text-[11px] text-slate-400">
+                          <span>{t('单选', 'Single-select')}</span>
+                          <button
+                            type="button"
+                            disabled={isLocked || !schedulePosition}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setSchedulePosition('');
+                            }}
+                            className="rounded-md bg-white/10 px-2 py-1 text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {t('清空', 'Clear')}
+                          </button>
+                        </div>
                         <div className="max-h-56 space-y-1 overflow-auto pr-1">
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setSchedulePosition('')}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                setSchedulePosition('');
+                              }
+                            }}
+                            className={[
+                              'flex cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-sm transition',
+                              schedulePosition === ''
+                                ? themeMode === 'light'
+                                  ? 'border-emerald-700/50 bg-emerald-100 text-emerald-900'
+                                  : 'border-neon/50 bg-neon/10 text-neon'
+                                : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                            ].join(' ')}
+                          >
+                            <span className="inline-flex items-center rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">
+                              {t('全部岗位', 'All positions')}
+                            </span>
+                          </div>
                           {ALLOWED_POSITIONS.map((p) => (
-                            <div key={`pos-tone-${p}`} className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-2 py-1.5">
+                            <div
+                              key={`pos-tone-${p}`}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => setSchedulePosition(p)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  setSchedulePosition(p);
+                                }
+                              }}
+                              className={[
+                                'flex cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-sm transition',
+                                schedulePosition === p
+                                  ? themeMode === 'light'
+                                    ? 'border-emerald-700/50 bg-emerald-100 text-emerald-900'
+                                    : 'border-neon/50 bg-neon/10 text-neon'
+                                  : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                              ].join(' ')}
+                            >
                               <span
                                 className={[
-                                  'inline-flex max-w-[70%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold',
+                                  'inline-flex max-w-[65%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold',
                                   getSchedulePositionBadgeClass(p)
                                 ].join(' ')}
                               >
                                 {p}
                               </span>
-                              <button
-                                type="button"
-                                disabled={isLocked}
-                                onClick={() => cycleSchedulePositionTone(p)}
-                                title={t('点击切换岗位颜色', 'Click to cycle position color')}
-                                className={[
-                                  'rounded-md border px-2 py-1 text-[11px] font-semibold transition',
-                                  getSchedulePositionBadgeClass(p),
-                                  isLocked ? 'cursor-not-allowed opacity-60' : 'hover:brightness-110'
-                                ].join(' ')}
-                              >
-                                {t('颜色', 'Color')}
-                              </button>
+                              <div className="ml-2 flex items-center">
+                                <button
+                                  type="button"
+                                  disabled={isLocked}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    cycleSchedulePositionTone(p);
+                                  }}
+                                  title={t('点击切换岗位颜色', 'Click to cycle position color')}
+                                  className={[
+                                    'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition',
+                                    getSchedulePositionBadgeClass(p),
+                                    isLocked ? 'cursor-not-allowed opacity-60' : 'hover:brightness-110'
+                                  ].join(' ')}
+                                >
+                                  {t('颜色', 'Color')}
+                                </button>
+                              </div>
                             </div>
                           ))}
                         </div>
