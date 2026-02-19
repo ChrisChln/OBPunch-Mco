@@ -774,6 +774,7 @@ export default function AdminApp() {
   const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [auditSearch, setAuditSearch] = useState('');
+  const [cellAuditRows, setCellAuditRows] = useState<AuditRow[]>([]);
   const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [deviceLoans, setDeviceLoans] = useState<DeviceLoanRow[]>([]);
@@ -1693,6 +1694,19 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       payload: payload ?? null
     };
     setAuditRows((prev) => [row, ...prev].slice(0, 200));
+    if (
+      action === 'schedule_work' ||
+      action === 'schedule_temp_work' ||
+      action === 'schedule_leave' ||
+      action === 'schedule_temp_rest' ||
+      action === 'schedule_rest' ||
+      action === 'schedule_clear' ||
+      action === 'punch_manual_add' ||
+      action === 'punch_manual_edit' ||
+      action === 'punch_manual_delete'
+    ) {
+      setCellAuditRows((prev) => [row, ...prev].slice(0, 1200));
+    }
 
     if (!supabase) return;
     try {
@@ -1740,6 +1754,34 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
       setAuditRows(((res.data as any[]) ?? []) as AuditRow[]);
     });
+  };
+
+  const fetchCellAuditLogs = async () => {
+    if (!supabase) {
+      setCellAuditRows([]);
+      return;
+    }
+    const actions = [
+      'schedule_work',
+      'schedule_temp_work',
+      'schedule_leave',
+      'schedule_temp_rest',
+      'schedule_rest',
+      'schedule_clear',
+      'punch_manual_add',
+      'punch_manual_edit',
+      'punch_manual_delete'
+    ];
+    const res = await supabase
+      .from(AUDIT_TABLE)
+      .select('id, created_at, actor, action, staff_id, target, payload')
+      .in('action', actions as any)
+      .order('created_at', { ascending: false })
+      .limit(1200);
+    if (res.error) {
+      return;
+    }
+    setCellAuditRows((((res.data as any[]) ?? []) as AuditRow[]).slice(0, 1200));
   };
 
   const fetchDevices = async ({ lockUi = true }: { lockUi?: boolean } = {}) => {
@@ -3806,13 +3848,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const text = String(value ?? '').trim();
       if (text) details.push({ label, value: text });
     };
-    const fmtTime = (value: any) => {
-      const raw = String(value ?? '').trim();
-      if (!raw) return '';
-      const dt = new Date(raw);
-      return Number.isNaN(dt.getTime()) ? raw : dt.toLocaleString(locale, { hour12: false });
+    const fmtHoursValue = (value: any) => {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return '';
+      return formatHours(n) || '0';
     };
-    const fmtAction = (value: any) => (String(value ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN');
+    const fmtHoursDelta = (before: any, after: any) => {
+      const beforeText = fmtHoursValue(before);
+      const afterText = fmtHoursValue(after);
+      if (!beforeText || !afterText) return '';
+      return `${beforeText}h -> ${afterText}h`;
+    };
 
     let summary = action || '-';
     if (action === 'employee_upsert') {
@@ -3836,24 +3882,28 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       push(t('跳过', 'Skipped'), payload?.skipped_total);
     } else if (action === 'punch_manual_add') {
       summary = t('手动新增打卡', 'Manual punch add');
-      push(t('动作', 'Action'), fmtAction(payload?.action));
-      push(t('时间', 'Time'), fmtTime(payload?.created_at));
-      push(t('记录ID', 'Punch ID'), payload?.punch_id);
+      const beforeText = fmtHoursValue(payload?.hours_before);
+      const afterText = fmtHoursValue(payload?.hours_after);
+      const hoursText = fmtHoursDelta(payload?.hours_before, payload?.hours_after);
+      if (hoursText) summary = `${summary}: ${hoursText}`;
+      push(t('变动前工时', 'Hours before'), beforeText ? `${beforeText}h` : '-');
+      push(t('变动后工时', 'Hours after'), afterText ? `${afterText}h` : '-');
     } else if (action === 'punch_manual_edit') {
       summary = t('手动修改打卡', 'Manual punch edit');
-      const before = payload?.before ?? null;
-      const after = payload?.after ?? null;
-      const beforeText = before ? `${fmtAction(before.action)} @ ${fmtTime(before.created_at)}` : '';
-      const afterText = after ? `${fmtAction(after.action)} @ ${fmtTime(after.created_at)}` : '';
-      push(t('修改前', 'Before'), beforeText);
-      push(t('修改后', 'After'), afterText);
-      push(t('记录ID', 'Punch ID'), payload?.punch_id);
+      const beforeText = fmtHoursValue(payload?.hours_before);
+      const afterText = fmtHoursValue(payload?.hours_after);
+      const hoursText = fmtHoursDelta(payload?.hours_before, payload?.hours_after);
+      if (hoursText) summary = `${summary}: ${hoursText}`;
+      push(t('变动前工时', 'Hours before'), beforeText ? `${beforeText}h` : '-');
+      push(t('变动后工时', 'Hours after'), afterText ? `${afterText}h` : '-');
     } else if (action === 'punch_manual_delete') {
       summary = t('手动删除打卡', 'Manual punch delete');
-      const before = payload?.before ?? null;
-      const beforeText = before ? `${fmtAction(before.action)} @ ${fmtTime(before.created_at)}` : '';
-      push(t('删除记录', 'Deleted'), beforeText);
-      push(t('记录ID', 'Punch ID'), payload?.punch_id);
+      const beforeText = fmtHoursValue(payload?.hours_before);
+      const afterText = fmtHoursValue(payload?.hours_after);
+      const hoursText = fmtHoursDelta(payload?.hours_before, payload?.hours_after);
+      if (hoursText) summary = `${summary}: ${hoursText}`;
+      push(t('变动前工时', 'Hours before'), beforeText ? `${beforeText}h` : '-');
+      push(t('变动后工时', 'Hours after'), afterText ? `${afterText}h` : '-');
     } else if (action === 'device_add') {
       summary = t('新增设备', 'Device added');
       push(t('设备名', 'Device name'), payload?.device_name);
@@ -3921,6 +3971,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
 
     return { summary, details };
+  };
+
+  const formatCellAuditTime = (value: string | null | undefined) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '-';
+    const dt = new Date(raw);
+    if (Number.isNaN(dt.getTime())) return raw;
+    return dt.toLocaleString(locale, { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
   };
 
   const fetchTimecard = async ({
@@ -5226,6 +5284,59 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       .filter(Boolean) as Array<{ rowId: string; edit: { action: 'IN' | 'OUT'; atLocal: string } }>;
     const pendingAdds = timecardPunchPendingAddRows.filter((row) => !timecardPunchPendingDeleteIds.includes(String(row.id)));
     const deleteIds = timecardPunchPendingDeleteIds.filter((id) => !pendingAddIdSet.has(String(id)));
+    const canCalcDayHours =
+      timecardPunchDayIndex !== null && Number.isInteger(timecardPunchDayIndex) && timecardPunchDayIndex >= 0 && timecardPunchDayIndex <= 6;
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+    const dayRangeForAudit = canCalcDayHours ? getDayRange(weekStart, timecardPunchDayIndex as number) : null;
+    const punchSnapshot = new Map<string, { action: 'IN' | 'OUT'; created_at: string }>();
+    for (const row of timecardPunchRows) {
+      const rowId = String(row.id ?? '').trim();
+      const createdAt = String(row.created_at ?? '').trim();
+      if (!rowId || !createdAt) continue;
+      punchSnapshot.set(rowId, {
+        action: row.action === 'OUT' ? 'OUT' : 'IN',
+        created_at: createdAt
+      });
+    }
+    const computeSnapshotDayHours = () => {
+      if (!dayRangeForAudit) return Number.NaN;
+      const events = Array.from(punchSnapshot.entries())
+        .map(([id, row]) => {
+          const at = new Date(row.created_at);
+          if (Number.isNaN(at.getTime())) return null;
+          return { id, action: row.action, at };
+        })
+        .filter(Boolean) as Array<{ id: string; action: 'IN' | 'OUT'; at: Date }>;
+      events.sort((a, b) => {
+        const diff = a.at.getTime() - b.at.getTime();
+        if (diff !== 0) return diff;
+        return a.id.localeCompare(b.id, 'en-US');
+      });
+      let openIn: Date | null = null;
+      let totalMs = 0;
+      for (const ev of events) {
+        if (ev.action === 'IN') {
+          openIn = ev.at;
+          continue;
+        }
+        if (!openIn || ev.at.getTime() <= openIn.getTime()) continue;
+        const overlapStart = Math.max(openIn.getTime(), dayRangeForAudit.start.getTime());
+        const overlapEnd = Math.min(ev.at.getTime(), dayRangeForAudit.end.getTime());
+        if (overlapEnd > overlapStart) totalMs += overlapEnd - overlapStart;
+        openIn = null;
+      }
+      if (openIn) {
+        const capEnd = new Date(
+          clamp(new Date(serverTime).getTime(), dayRangeForAudit.start.getTime(), dayRangeForAudit.end.getTime())
+        );
+        const overlapStart = Math.max(openIn.getTime(), dayRangeForAudit.start.getTime());
+        const overlapEnd = Math.min(capEnd.getTime(), dayRangeForAudit.end.getTime());
+        if (overlapEnd > overlapStart) totalMs += overlapEnd - overlapStart;
+      }
+      return totalMs / 3600000;
+    };
+    const dayDateForAudit = dayRangeForAudit ? toDateOnly(dayRangeForAudit.start) : '';
 
     if (changed.length === 0 && deleteIds.length === 0 && pendingAdds.length === 0) {
       setTimecardPunchError(null);
@@ -5257,8 +5368,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
     }
     if (timecardPunchDayIndex !== null && timecardPunchDayIndex >= 0 && timecardPunchDayIndex <= 6) {
-      const baseWeekStart = startOfWeekMonday(serverTime);
-      const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
       const dayRange = getDayRange(weekStart, timecardPunchDayIndex);
       const startMs = dayRange.start.getTime();
       const endMs = dayRange.end.getTime();
@@ -5294,6 +5403,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     let saveFailed = false;
     await runLocked('timecard_edit_all', async () => {
       setTimecardPunchError(null);
+      const hoursBeforeBatch = computeSnapshotDayHours();
+      let editedCount = 0;
+      let addedCount = 0;
+      let deletedCount = 0;
       for (const item of changed) {
         const createdAt = parseLocalDateTimeInputValue(item.edit.atLocal);
         if (!createdAt) continue;
@@ -5331,6 +5444,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           setTimecardPunchError(error.message);
           return;
         }
+        punchSnapshot.set(item.rowId, {
+          action: item.edit.action,
+          created_at: createdAt
+        });
+        editedCount += 1;
       }
       if (pendingAdds.length > 0) {
         const rowsToInsert = pendingAdds
@@ -5362,25 +5480,63 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
             setTimecardPunchError(insertRes.error.message);
             return;
           }
-          await writeAudit({
-            action: 'punch_manual_add',
-            staffId: staff,
-            target: 'ob_punches',
-            payload: {
-              punch_ids: ((insertRes.data as any[] | null) ?? []).map((x: any) => String(x?.id ?? '').trim()).filter(Boolean),
-              day_index: timecardPunchDayIndex,
-              count: rowsToInsert.length
+          const insertedIds = ((insertRes.data as any[] | null) ?? []).map((x: any) => String(x?.id ?? '').trim());
+          for (let i = 0; i < rowsToInsert.length; i += 1) {
+            const row = rowsToInsert[i] as { action?: string; created_at?: string };
+            const insertedId = insertedIds[i] || null;
+            const rowAction = String(row.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+            const rowCreatedAt = String(row.created_at ?? '');
+            if (insertedId && rowCreatedAt) {
+              punchSnapshot.set(insertedId, { action: rowAction, created_at: rowCreatedAt });
             }
-          });
+            addedCount += 1;
+          }
         }
       }
       if (deleteIds.length > 0) {
+        const beforeDeleteRes = await supabase
+          .from('ob_punches')
+          .select('id, action, created_at')
+          .in('id', deleteIds as any[]);
+        if (beforeDeleteRes.error) {
+          saveFailed = true;
+          setTimecardPunchError(beforeDeleteRes.error.message);
+          return;
+        }
         const { error: deleteError } = await supabase.from('ob_punches').delete().in('id', deleteIds as any[]);
         if (deleteError) {
           saveFailed = true;
           setTimecardPunchError(deleteError.message);
           return;
         }
+        const beforeRows = ((beforeDeleteRes.data as any[]) ?? []) as Array<{ id?: string | number; action?: string; created_at?: string }>;
+        for (const row of beforeRows) {
+          const rowId = String(row.id ?? '').trim();
+          if (rowId) punchSnapshot.delete(rowId);
+          deletedCount += 1;
+        }
+      }
+
+      const totalChanged = editedCount + addedCount + deletedCount;
+      if (totalChanged > 0) {
+        const hoursAfterBatch = computeSnapshotDayHours();
+        let batchAction = 'punch_manual_edit';
+        if (editedCount === 0 && addedCount > 0 && deletedCount === 0) batchAction = 'punch_manual_add';
+        else if (editedCount === 0 && addedCount === 0 && deletedCount > 0) batchAction = 'punch_manual_delete';
+        await writeAudit({
+          action: batchAction,
+          staffId: staff,
+          target: 'ob_punches',
+          payload: {
+            changed_rows: totalChanged,
+            edited_rows: editedCount,
+            added_rows: addedCount,
+            deleted_rows: deletedCount,
+            work_date: dayDateForAudit || null,
+            hours_before: Number.isFinite(hoursBeforeBatch) ? Math.round(hoursBeforeBatch * 100) / 100 : null,
+            hours_after: Number.isFinite(hoursAfterBatch) ? Math.round(hoursAfterBatch * 100) / 100 : null
+          }
+        });
       }
 
       const res = await fetchPunchRowsForTimecard(staff, timecardPunchDayIndex);
@@ -5462,6 +5618,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     if (page === 'devices') {
       void refreshDevicePanel({ lockUi: false });
     }
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== 'timecard' && page !== 'schedule') return;
+    void fetchCellAuditLogs();
+    const timer = window.setInterval(() => {
+      void fetchCellAuditLogs();
+    }, 60000);
+    return () => window.clearInterval(timer);
   }, [page]);
 
   useEffect(() => {
@@ -6196,6 +6361,92 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     () => Array.from({ length: 7 }, (_, idx) => addDays(scheduleWeekStart, idx)),
     [scheduleWeekStart]
   );
+  const timecardWeekStart = useMemo(() => {
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    return addDays(baseWeekStart, timecardWeekOffset * 7);
+  }, [serverTime, timecardWeekOffset]);
+
+  const toOperationalDateFromAudit = (atRaw: string, actionRaw?: string) => {
+    const at = new Date(atRaw);
+    if (Number.isNaN(at.getTime())) return '';
+    const action = String(actionRaw ?? '').trim().toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+    const bucketMs = getOperationalBucketTimeMs(at, action);
+    const shifted = new Date(bucketMs - DAY_CUTOFF_MS);
+    return toDateOnly(shifted);
+  };
+
+  const scheduleAuditByStaffDate = useMemo(() => {
+    const map = new Map<string, AuditRow[]>();
+    const scheduleActions = new Set([
+      'schedule_work',
+      'schedule_temp_work',
+      'schedule_leave',
+      'schedule_temp_rest',
+      'schedule_rest',
+      'schedule_clear'
+    ]);
+    for (const row of cellAuditRows) {
+      const action = String(row.action ?? '').trim();
+      if (!scheduleActions.has(action)) continue;
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) continue;
+      const payload = (row.payload ?? {}) as Record<string, unknown>;
+      const date = String(payload.template_date ?? '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+      const key = `${staff}__${date}`;
+      const list = map.get(key) ?? [];
+      if (list.length < 5) list.push(row);
+      map.set(key, list);
+    }
+    return map;
+  }, [cellAuditRows]);
+
+  const timecardAuditByStaffDate = useMemo(() => {
+    const map = new Map<string, AuditRow[]>();
+    for (const row of cellAuditRows) {
+      const action = String(row.action ?? '').trim();
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) continue;
+      const payload = (row.payload ?? {}) as Record<string, any>;
+      const dateKeys = new Set<string>();
+      const workDate = String(payload.work_date ?? '').trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(workDate)) {
+        dateKeys.add(workDate);
+      }
+      if (action === 'punch_manual_add') {
+        const key = toOperationalDateFromAudit(String(payload.created_at ?? ''), String(payload.action ?? ''));
+        if (key) dateKeys.add(key);
+      } else if (action === 'punch_manual_edit') {
+        const before = (payload.before ?? null) as Record<string, any> | null;
+        const after = (payload.after ?? null) as Record<string, any> | null;
+        const keyBefore = before
+          ? toOperationalDateFromAudit(String(before.created_at ?? ''), String(before.action ?? ''))
+          : '';
+        const keyAfter = after ? toOperationalDateFromAudit(String(after.created_at ?? ''), String(after.action ?? '')) : '';
+        if (keyBefore) dateKeys.add(keyBefore);
+        if (keyAfter) dateKeys.add(keyAfter);
+      } else if (action === 'punch_manual_delete') {
+        const before = (payload.before ?? null) as Record<string, any> | null;
+        const key = before
+          ? toOperationalDateFromAudit(String(before.created_at ?? ''), String(before.action ?? ''))
+          : '';
+        if (key) dateKeys.add(key);
+      } else {
+        continue;
+      }
+      if (dateKeys.size === 0) {
+        const fallback = toOperationalDateFromAudit(String(row.created_at ?? ''));
+        if (fallback) dateKeys.add(fallback);
+      }
+      for (const dateKey of dateKeys) {
+        const key = `${staff}__${dateKey}`;
+        const list = map.get(key) ?? [];
+        if (list.length < 5) list.push(row);
+        map.set(key, list);
+      }
+    }
+    return map;
+  }, [cellAuditRows]);
 
   const scheduleRowsByStaffDayIndex = useMemo(() => {
     const map = new Map<string, ScheduleRow>();
@@ -8134,7 +8385,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 : 'border-rose-400/60 text-rose-200 bg-rose-500/10';
 
                           return (
-                            <tr className="group border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-0" key={staff}>
+                            <tr className="border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-0" key={staff}>
                               <td className="px-1.5 py-2 font-mono text-slate-200">{staff}</td>
                               <td className="px-1.5 py-2 text-slate-200 truncate">{name || '-'}</td>
                               <td className="px-2 py-2 text-center">
@@ -8177,57 +8428,97 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 const hasPunch = schedulePunchPresenceKeys.has(key);
                                 const state: ScheduleDisplayState = getScheduleDisplayState(row, hasPunch);
                                 const targetShift = scheduleShift || ((row?.shift as 'early' | 'late' | null) ?? 'early');
+                                const scheduleAuditKey = `${staff}__${getTemplateDateByDayIndex(dayIndex)}`;
+                                const scheduleCellAudit = scheduleAuditByStaffDate.get(scheduleAuditKey) ?? [];
 
                                 return (
                                   <td key={key} className="px-1 py-1.5 align-middle">
-                                    <div className="relative flex items-center justify-center">
-                                      <button
-                                        type="button"
-                                        data-schedule-trigger="true"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
-                                          openScheduleStatePicker(
-                                            key,
-                                            employee,
-                                            dayIndex,
-                                            toDateOnly(scheduleDays[dayIndex] as Date),
-                                            targetShift,
-                                            state,
-                                            rect
-                                          );
-                                        }}
-                                        className={[
-                                          'h-7 min-w-[42px] rounded-md px-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55',
-                                          state === 'work'
-                                            ? 'bg-neon text-white shadow-glow'
+                                    <div className="group relative flex items-center justify-center">
+                                      <span className="relative inline-flex">
+                                        <button
+                                          type="button"
+                                          data-schedule-trigger="true"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                                            openScheduleStatePicker(
+                                              key,
+                                              employee,
+                                              dayIndex,
+                                              toDateOnly(scheduleDays[dayIndex] as Date),
+                                              targetShift,
+                                              state,
+                                              rect
+                                            );
+                                          }}
+                                          className={[
+                                            'h-7 min-w-[42px] rounded-md px-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55',
+                                            state === 'work'
+                                              ? 'bg-neon text-white shadow-glow'
+                                              : state === 'temp_work'
+                                                ? 'bg-emerald-700 text-white'
+                                              : state === 'leave'
+                                                ? 'bg-violet-500 text-white'
+                                              : state === 'rest_worked'
+                                                ? 'bg-sky-500 text-white'
+                                              : state === 'temp_rest'
+                                                ? 'bg-red-800 text-red-100'
+                                              : state === 'rest'
+                                                ? 'bg-ember text-white'
+                                                : 'border border-white/20 bg-white/5 text-slate-200 hover:bg-white/10'
+                                          ].join(' ')}
+                                        >
+                                          {state === 'work'
+                                            ? t('工作', 'Work')
                                             : state === 'temp_work'
-                                              ? 'bg-emerald-700 text-white'
+                                              ? t('临时工作', 'Temporary Work')
                                             : state === 'leave'
-                                              ? 'bg-violet-500 text-white'
+                                              ? t('请假', 'Excuse')
                                             : state === 'rest_worked'
-                                              ? 'bg-sky-500 text-white'
-                                            : state === 'temp_rest'
-                                              ? 'bg-red-800 text-red-100'
-                                            : state === 'rest'
-                                              ? 'bg-ember text-white'
-                                              : 'border border-white/20 bg-white/5 text-slate-200 hover:bg-white/10'
-                                        ].join(' ')}
-                                      >
-                                        {state === 'work'
-                                          ? t('工作', 'Work')
-                                          : state === 'temp_work'
-                                            ? t('临时工作', 'Temporary Work')
-                                          : state === 'leave'
-                                            ? t('请假', 'Excuse')
-                                          : state === 'rest_worked'
-                                            ? t('排休出勤', 'Rest Worked')
-                                            : state === 'temp_rest'
-                                              ? t('临时排休', 'Temporary Rest')
-                                            : state === 'rest'
-                                              ? t('休息', 'Rest')
-                                              : t('空', 'Empty')}
-                                      </button>
+                                              ? t('排休出勤', 'Rest Worked')
+                                              : state === 'temp_rest'
+                                                ? t('临时排休', 'Temporary Rest')
+                                              : state === 'rest'
+                                                ? t('休息', 'Rest')
+                                                : t('空', 'Empty')}
+                                        </button>
+                                        {scheduleCellAudit.length > 0 && (
+                                          <span
+                                            className={[
+                                              'pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full',
+                                              state === 'rest' || state === 'temp_rest'
+                                                ? 'bg-neon shadow-glow'
+                                                : 'bg-rose-500 shadow-[0_0_0_1px_rgba(244,63,94,0.55)]'
+                                            ].join(' ')}
+                                          />
+                                        )}
+                                      </span>
+                                      {scheduleCellAudit.length > 0 && (
+                                        <div className="pointer-events-none invisible absolute left-1/2 top-full z-40 mt-1 w-64 -translate-x-1/2 rounded-xl border border-white/15 bg-slate-950/95 p-2 text-[11px] text-slate-200 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100">
+                                          <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-neon">
+                                            {t('最近操作', 'Recent changes')}
+                                          </div>
+                                          <div className="space-y-1">
+                                            {scheduleCellAudit.slice(0, 3).map((item) => {
+                                              const detail = formatAuditDetail(item);
+                                              return (
+                                                <div key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)} className="rounded-md bg-white/5 px-1.5 py-1">
+                                                  <div className="text-[10px] text-slate-400">
+                                                    {formatCellAuditTime(item.created_at)} · {String(item.actor ?? '').trim() || '-'}
+                                                  </div>
+                                                  <div className="whitespace-normal text-[11px] leading-4 text-slate-100">{detail.summary}</div>
+                                                  {detail.details.slice(0, 2).map((d, idx2) => (
+                                                    <div key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`} className="mt-0.5 text-[10px] text-slate-300">
+                                                      <span className="text-slate-400">{d.label}: </span>
+                                                      <span className="whitespace-normal break-words">{d.value}</span>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      )}
                                     </div>
                                   </td>
                                 );
@@ -8802,7 +9093,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 )}
 
                 <div className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
-                  <table className="min-w-[1040px] w-full text-left text-sm">
+                  <table className="min-w-[1120px] w-full text-left text-sm">
                     <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-xs uppercase tracking-[0.2em] text-slate-400 backdrop-blur">
                       <tr>
                         <th className="px-4 py-3">Employee ID</th>
@@ -8810,6 +9101,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         <th className="px-4 py-3">Agency</th>
                         <th className="px-4 py-3">Position</th>
                         <th className="px-4 py-3">{t('标签', 'Label')}</th>
+                        <th className="px-4 py-3">{t('入职日期', 'Hire date')}</th>
                         <th className="px-4 py-3">{t('班次', 'Shift')}</th>
                         <th className="px-4 py-3">
                           <button
@@ -8832,6 +9124,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         const agency = String(e.agency ?? e.Agency ?? '').trim();
                         const position = String(e.position ?? e.Position ?? '').trim();
                         const label = String(e.label ?? e.Label ?? '').trim();
+                        const createdAt = String(e.created_at ?? '').trim();
+                        const hireDate = (() => {
+                          if (!createdAt) return '-';
+                          const dt = new Date(createdAt);
+                          if (Number.isNaN(dt.getTime())) return '-';
+                          return toDateOnly(dt);
+                        })();
                         const shiftInfo = employeeShiftByStaffId[staff];
                         const shift = shiftInfo?.shift ?? '';
                         const shiftLabel =
@@ -8853,7 +9152,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           : '';
 
                         return (
-                          <tr key={String(e.id ?? staff)} className="border-b border-white/5 last:border-0">
+                          <tr
+                            key={String(e.id ?? staff)}
+                            className="border-b border-white/5 transition-colors hover:bg-white/5 last:border-0"
+                          >
                             <td className="px-4 py-3 font-mono text-slate-200">{staff}</td>
                             <td className="px-4 py-3 text-slate-200">{name}</td>
                             <td className="px-4 py-3 text-slate-200">{agency}</td>
@@ -8881,6 +9183,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 '-'
                               )}
                             </td>
+                            <td className="px-4 py-3 text-slate-200">{hireDate}</td>
                             <td className="px-4 py-3 text-slate-200">
                               <span
                                 title={shiftTitle}
@@ -9463,57 +9766,94 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               </td>
                               {r.hoursByDay.map((h, idx) => (
                                 <td key={idx} className="w-[92px] px-2 py-1.5 text-center align-middle text-slate-200">
-                                  {formatHours(h) ? (
-                                    <button
-                                      type="button"
-                                      disabled={isLocked}
-                                      onClick={() => void openTimecardPunchModal(r.staff_id, idx)}
-                                      className={(() => {
-                                        const over8 = h > 8.5;
-                                        const inProgress = r.inProgressByDay[idx];
-                                        const manual = r.manualByDay[idx];
-                                        const punchCountMismatch = r.punchCountMismatchByDay[idx];
-                                        const base =
-                                          'rounded px-1.5 py-0.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
-                                        if (manual) return [base, 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'].join(' ');
-                                        if (punchCountMismatch) {
-                                          return [
-                                            base,
-                                            'border-2 border-rose-500 bg-rose-500/20 text-rose-100 shadow-[0_0_0_1px_rgba(244,63,94,0.55)] hover:bg-rose-500/30'
-                                          ].join(' ');
-                                        }
-                                        if (over8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
-                                        if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
-                                        return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
-                                      })()}
-                                      title={t('查看/编辑打卡流水', 'View/Edit Punch Log')}
-                                    >
-                                      {formatHours(h)}
-                                    </button>
-                                  ) : r.absentByDay[idx] ? (
-                                    <span
-                                      className="inline-flex rounded px-1.5 py-0.5 text-[11px] font-semibold text-rose-200"
-                                      title="Scheduled but no punch"
-                                    >
-                                      {t('缺勤', 'Absent')}
-                                    </span>
-                                  ) : r.leaveByDay[idx] ? (
-                                    <span className="text-[11px] font-semibold text-violet-300" title="Excuse">
-                                      {t('请假', 'Excuse')}
-                                    </span>
-                                  ) : r.tempRestByDay[idx] ? (
-                                    <span className="text-[11px] font-semibold text-amber-300" title="Temporary Rest">
-                                      {t('临时排休', 'Temp Rest')}
-                                    </span>
-                                  ) : r.restByDay[idx] &&
-                                    toDateOnly(addDays(addDays(startOfWeekMonday(serverTime), timecardWeekOffset * 7), idx)) <=
-                                      toDateOnly(serverTime) ? (
-                                    <span className="text-[11px] font-semibold text-amber-300" title="Rest">
-                                      {t('休息', 'Rest')}
-                                    </span>
-                                  ) : (
-                                    ''
-                                  )}
+                                  {(() => {
+                                    const timecardAuditKey = `${r.staff_id}__${toDateOnly(addDays(timecardWeekStart, idx))}`;
+                                    const timecardCellAudit = timecardAuditByStaffDate.get(timecardAuditKey) ?? [];
+                                    return (
+                                      <div className="group relative inline-flex items-center justify-center">
+                                        {formatHours(h) ? (
+                                          <button
+                                            type="button"
+                                            disabled={isLocked}
+                                            onClick={() => void openTimecardPunchModal(r.staff_id, idx)}
+                                            className={(() => {
+                                              const over8 = h > 8.5;
+                                              const inProgress = r.inProgressByDay[idx];
+                                              const manual = r.manualByDay[idx];
+                                              const punchCountMismatch = r.punchCountMismatchByDay[idx];
+                                              const base =
+                                                'rounded px-1.5 py-0.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
+                                              if (manual) return [base, 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'].join(' ');
+                                              if (punchCountMismatch) {
+                                                return [
+                                                  base,
+                                                  'border-2 border-rose-500 bg-rose-500/20 text-rose-100 shadow-[0_0_0_1px_rgba(244,63,94,0.55)] hover:bg-rose-500/30'
+                                                ].join(' ');
+                                              }
+                                              if (over8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
+                                              if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
+                                              return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
+                                            })()}
+                                            title={t('查看/编辑打卡流水', 'View/Edit Punch Log')}
+                                          >
+                                            {formatHours(h)}
+                                          </button>
+                                        ) : r.absentByDay[idx] ? (
+                                          <span
+                                            className="inline-flex rounded px-1.5 py-0.5 text-[11px] font-semibold text-rose-200"
+                                            title="Scheduled but no punch"
+                                          >
+                                            {t('缺勤', 'Absent')}
+                                          </span>
+                                        ) : r.leaveByDay[idx] ? (
+                                          <span className="text-[11px] font-semibold text-violet-300" title="Excuse">
+                                            {t('请假', 'Excuse')}
+                                          </span>
+                                        ) : r.tempRestByDay[idx] ? (
+                                          <span className="text-[11px] font-semibold text-amber-300" title="Temporary Rest">
+                                            {t('临时排休', 'Temp Rest')}
+                                          </span>
+                                        ) : r.restByDay[idx] &&
+                                          toDateOnly(addDays(addDays(startOfWeekMonday(serverTime), timecardWeekOffset * 7), idx)) <=
+                                            toDateOnly(serverTime) ? (
+                                          <span className="text-[11px] font-semibold text-amber-300" title="Rest">
+                                            {t('休息', 'Rest')}
+                                          </span>
+                                        ) : (
+                                          ''
+                                        )}
+                                        {timecardCellAudit.length > 0 && (
+                                          <span className="pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full bg-rose-500 shadow-[0_0_0_1px_rgba(244,63,94,0.55)]" />
+                                        )}
+                                        {timecardCellAudit.length > 0 && (
+                                          <div className="pointer-events-none invisible absolute left-1/2 top-full z-40 mt-1 w-64 -translate-x-1/2 rounded-xl border border-white/15 bg-slate-950/95 p-2 text-[11px] text-slate-200 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100">
+                                            <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-neon">
+                                              {t('最近操作', 'Recent changes')}
+                                            </div>
+                                            <div className="space-y-1">
+                                              {timecardCellAudit.slice(0, 1).map((item) => {
+                                                const detail = formatAuditDetail(item);
+                                                return (
+                                                  <div key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)} className="rounded-md bg-white/5 px-1.5 py-1 text-left">
+                                                    <div className="text-[10px] text-slate-400">
+                                                      {formatCellAuditTime(item.created_at)} · {String(item.actor ?? '').trim() || '-'}
+                                                    </div>
+                                                    <div className="whitespace-normal text-[11px] leading-4 text-slate-100">{detail.summary}</div>
+                                                    {detail.details.slice(0, 2).map((d, idx2) => (
+                                                      <div key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`} className="mt-0.5 text-[10px] text-slate-300">
+                                                        <span className="text-slate-400">{d.label}: </span>
+                                                        <span className="whitespace-normal break-words">{d.value}</span>
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                );
+                                              })}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
                                 </td>
                               ))}
                               <td className="w-[92px] px-2 py-1.5 text-center align-middle font-semibold text-slate-200">
