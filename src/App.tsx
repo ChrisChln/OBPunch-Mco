@@ -515,6 +515,7 @@ export default function App() {
   const isValidId = useMemo(() => isValidStaffId(normalizedId), [normalizedId]);
 
   const [uiStatus, setUiStatus] = useState<Status>({ tone: 'idle', message: 'Enter US ID to start punch' });
+  const [punchSuccessOverlay, setPunchSuccessOverlay] = useState<{ title: string; name: string; at: number } | null>(null);
 
   const createSoundAudio = (kind: SoundKind) => {
     if (typeof Audio === 'undefined') return null;
@@ -732,6 +733,7 @@ export default function App() {
   } | null>(null);
   useEffect(() => {
     if (!deviceReturnReminder) return;
+    setPunchSuccessOverlay(null);
     const timer = window.setTimeout(() => {
       setDeviceReturnReminder(null);
     }, 4000);
@@ -2094,6 +2096,12 @@ const fetchPunchBoardUph = async (
     void fetchRosterShiftByPunches(rosterStaffIds);
   }, [page, rosterStaffIds]);
 
+  useEffect(() => {
+    if (!punchSuccessOverlay) return;
+    const timer = window.setTimeout(() => setPunchSuccessOverlay(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [punchSuccessOverlay]);
+
   const submitPunch = async (
     action: PunchAction,
     options?: { latestAction?: PunchAction | null; skipLatestFetch?: boolean; clearInput?: boolean }
@@ -2171,6 +2179,12 @@ const fetchPunchBoardUph = async (
       }
 
       setUiStatus({ tone: 'success', message: `Punch success: ${action}` });
+      const staffName = String(punchBoardEmployeeMap[normalizedId]?.name ?? '').trim() || normalizedId;
+      setPunchSuccessOverlay({
+        title: action === 'IN' ? 'Hello' : 'Bye',
+        name: staffName,
+        at: Date.now()
+      });
       playSuccess(action);
       setLastPunchAction(action);
       setLastPunchActionError(null);
@@ -2576,6 +2590,52 @@ const fetchPunchBoardUph = async (
 
   return (
     <div className="min-h-screen px-5 py-8 text-paper">
+      {page === 'punch' && punchSuccessOverlay && !deviceReturnReminder && (
+        <div className="pointer-events-none fixed inset-0 z-[120] flex items-center justify-center">
+          {(() => {
+            const isBye = punchSuccessOverlay.title.toLowerCase() === 'bye';
+            return (
+          <div
+            key={punchSuccessOverlay.at}
+            className={[
+              'rounded-3xl bg-[#020612] px-12 py-8 text-center animate-pulse',
+              isBye
+                ? 'border border-rose-500/80 shadow-[0_0_64px_rgba(244,63,94,0.42)]'
+                : 'border border-neon/80 shadow-[0_0_64px_rgba(132,255,0,0.48)]'
+            ].join(' ')}
+          >
+            <div
+              className={[
+                'text-2xl font-black uppercase tracking-[0.32em]',
+                isBye ? 'text-rose-300' : 'text-neon/90'
+              ].join(' ')}
+              style={{
+                fontFamily: '"Black Ops One", Impact, "Arial Black", sans-serif',
+                textShadow: '0 1px 10px rgba(0,0,0,0.35)',
+                WebkitTextStroke: '0.6px rgba(0, 0, 0, 0.6)'
+              }}
+            >
+              {punchSuccessOverlay.title}
+            </div>
+            <div
+              className={[
+                'mt-2 text-6xl font-black tracking-[0.06em]',
+                isBye ? 'text-rose-400' : 'text-neon'
+              ].join(' ')}
+              style={{
+                fontFamily: '"Black Ops One", Impact, "Arial Black", sans-serif',
+                textShadow: '0 2px 14px rgba(0,0,0,0.45)',
+                letterSpacing: '0.02em',
+                WebkitTextStroke: '1px rgba(0, 0, 0, 0.65)'
+              }}
+            >
+              {punchSuccessOverlay.name}
+            </div>
+          </div>
+            );
+          })()}
+        </div>
+      )}
       <div className="flex w-full flex-col gap-6">
         {page === 'punch' ? (
           <section
