@@ -7116,6 +7116,26 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const dayIndex = (dt.getDay() + 6) % 7;
     const weekLabel = dt.toLocaleDateString('en-US', { weekday: 'short' });
     const roleLabel = schedulePosition ? schedulePosition.toUpperCase() : 'ALL POSITIONS';
+    const escapeHtml = (value: string) =>
+      String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    const PRINT_LABEL_TINT_BY_TONE: Record<LabelToneKey, string> = {
+      sky: '#eaf5ff',
+      emerald: '#ecfbf5',
+      amber: '#fff6db',
+      violet: '#f4efff',
+      rose: '#ffeef4',
+      slate: '#f1f5f9'
+    };
+    const getLabelTint = (label: string) => {
+      const key = String(label ?? '').trim().toLowerCase();
+      const tone = (key ? scheduleLabelToneByName[key] : undefined) ?? 'slate';
+      return PRINT_LABEL_TINT_BY_TONE[tone];
+    };
 
     const rows = scheduleEmployeesFiltered
       .map((employee) => {
@@ -7130,32 +7150,49 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           staff_id: staff,
           name: String(employee.name ?? '').trim(),
           agency: String(employee.agency ?? employee.Agency ?? '').trim(),
+          label: String(employee.label ?? employee.Label ?? '').trim(),
           shift
         };
       })
-      .filter(Boolean) as Array<{ staff_id: string; name: string; agency: string; shift: 'early' | 'late' }>;
+      .filter(Boolean) as Array<{ staff_id: string; name: string; agency: string; label: string; shift: 'early' | 'late' }>;
 
-    const earlyRows = rows.filter((r) => r.shift === 'early').sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
-    const lateRows = rows.filter((r) => r.shift === 'late').sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
+    const byLabelThenName = (
+      a: { label: string; name: string; staff_id: string },
+      b: { label: string; name: string; staff_id: string }
+    ) => {
+      const la = a.label.trim().toLowerCase();
+      const lb = b.label.trim().toLowerCase();
+      if (la !== lb) return la.localeCompare(lb, 'en-US');
+      const na = a.name.trim().toLowerCase();
+      const nb = b.name.trim().toLowerCase();
+      if (na !== nb) return na.localeCompare(nb, 'en-US');
+      return a.staff_id.localeCompare(b.staff_id, 'en-US');
+    };
+    const earlyRows = rows.filter((r) => r.shift === 'early').sort(byLabelThenName);
+    const lateRows = rows.filter((r) => r.shift === 'late').sort(byLabelThenName);
 
-    const renderRows = (list: Array<{ staff_id: string; name: string; agency: string }>, bgColor: string) =>
+    const renderRows = (list: Array<{ staff_id: string; name: string; agency: string; label: string }>) =>
       list
         .map(
-          (r, idx) =>
-            `<tr>
-              <td class="num" style="background:${bgColor};">${idx + 1}</td>
-              <td style="background:${bgColor};">${r.staff_id}</td>
-              <td style="background:${bgColor};">${r.name}</td>
-              <td style="background:${bgColor};">${r.agency}</td>
-              <td style="background:${bgColor};"></td>
-              <td style="background:${bgColor};"></td>
-              <td style="background:${bgColor};"></td>
-            </tr>`
+          (r, idx) => {
+            const labelTint = getLabelTint(r.label);
+            return `<tr>
+              <td class="num" style="background:${labelTint};">${idx + 1}</td>
+              <td style="background:${labelTint};">${escapeHtml(r.staff_id)}</td>
+              <td style="background:${labelTint};">${escapeHtml(r.name)}</td>
+              <td style="background:${labelTint};">${escapeHtml(r.agency)}</td>
+              <td style="background:${labelTint};">${escapeHtml(r.label || '-')}</td>
+              <td style="background:${labelTint};"></td>
+              <td style="background:${labelTint};"></td>
+              <td style="background:${labelTint};"></td>
+            </tr>`;
+          }
         )
         .join('');
 
     const renderTable = (rowsHtml: string, klass: 'morning' | 'night') => `
       <section class="block ${klass}">
+        <div class="shift-title">${klass === 'morning' ? 'MORNING SHIFT' : 'NIGHT SHIFT'}</div>
         <table>
           <thead>
             <tr>
@@ -7163,6 +7200,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               <th>ID</th>
               <th>Name</th>
               <th>Agency</th>
+              <th>Label</th>
               <th>Clockin</th>
               <th>Clockout</th>
               <th>Signature</th>
@@ -7173,6 +7211,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       </section>
     `;
 
+    const sections: string[] = [];
+    if (earlyRows.length > 0) sections.push(renderTable(renderRows(earlyRows), 'morning'));
+    if (lateRows.length > 0) sections.push(renderTable(renderRows(lateRows), 'night'));
     const html = `<!doctype html>
 <html>
 <head>
@@ -7187,18 +7228,26 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     h1 { margin: 0; text-align: center; font-size: 32px; letter-spacing: 0.04em; font-weight: 800; }
     .meta { margin: 6px 0 12px; text-align: center; font-size: 16px; font-weight: 700; color: #111827; }
     .block { margin-top: 8px; }
+    .shift-title { margin: 0 0 6px; font-size: 13px; font-weight: 800; letter-spacing: 0.08em; color: #0f172a; text-transform: uppercase; }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 1px solid #111; }
     th, td { border: 1px solid #444; padding: 4px 6px; font-size: 12px; height: 28px; }
     th { background: #111 !important; color: #fff !important; text-align: left; }
     .num { width: 40px; text-align: center; }
+    table th:nth-child(1), table td:nth-child(1) { width: 40px; }
+    table th:nth-child(2), table td:nth-child(2) { width: 110px; }
+    table th:nth-child(3), table td:nth-child(3) { width: 250px; }
+    table th:nth-child(4), table td:nth-child(4) { width: 90px; }
+    table th:nth-child(5), table td:nth-child(5) { width: 90px; }
+    table th:nth-child(6), table td:nth-child(6),
+    table th:nth-child(7), table td:nth-child(7),
+    table th:nth-child(8), table td:nth-child(8) { width: 90px; }
   </style>
 </head>
 <body>
   <main class="sheet">
     <h1>${roleLabel}</h1>
     <div class="meta">Sign-in Sheet ${schedulePrintDate} ${weekLabel}</div>
-    ${renderTable(renderRows(earlyRows, '#eef6ff'), 'morning')}
-    ${renderTable(renderRows(lateRows, '#f3edff'), 'night')}
+    ${sections.join('')}
   </main>
 </body>
 </html>`;
