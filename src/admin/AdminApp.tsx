@@ -637,6 +637,7 @@ export default function AdminApp() {
   const timecardPunchFetchSeqRef = useRef(0);
   const timecardRecomputeLastRunByWeekRef = useRef<Record<string, number>>({});
   const dailyListResetKeyRef = useRef(getOperationalDateKey(new Date(), DAILY_LIST_RESET_HOUR));
+  const scheduleLabelToneReadyRef = useRef(false);
   const scheduleLabelToneHydratingRef = useRef(false);
   const scheduleLabelToneLastSavedJsonRef = useRef('');
   const schedulePositionToneHydratingRef = useRef(false);
@@ -1015,24 +1016,31 @@ export default function AdminApp() {
   };
 
   const loadScheduleLabelToneGlobal = async () => {
-    if (!supabase) return;
-    const res = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('id, key, value, updated_at')
-      .eq('key', SCHEDULE_LABEL_TONES_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    if (res.error) return;
-    const row = (((res.data as any[]) ?? [])[0] ?? null) as AppSettingRow | null;
-    if (!row) return;
-    const value = (row.value ?? {}) as Record<string, unknown>;
-    const next = normalizeLabelToneMap(value.tones ?? {});
-    const nextJson = JSON.stringify(next);
-    if (nextJson === scheduleLabelToneLastSavedJsonRef.current) return;
-    scheduleLabelToneHydratingRef.current = true;
-    scheduleLabelToneLastSavedJsonRef.current = nextJson;
-    saveLabelToneMap(next);
-    setScheduleLabelToneByName(next);
+    if (!supabase) {
+      scheduleLabelToneReadyRef.current = true;
+      return;
+    }
+    try {
+      const res = await supabase
+        .from(APP_SETTINGS_TABLE)
+        .select('id, key, value, updated_at')
+        .eq('key', SCHEDULE_LABEL_TONES_KEY)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      if (res.error) return;
+      const row = (((res.data as any[]) ?? [])[0] ?? null) as AppSettingRow | null;
+      if (!row) return;
+      const value = (row.value ?? {}) as Record<string, unknown>;
+      const next = normalizeLabelToneMap(value.tones ?? {});
+      const nextJson = JSON.stringify(next);
+      if (nextJson === scheduleLabelToneLastSavedJsonRef.current) return;
+      scheduleLabelToneHydratingRef.current = true;
+      scheduleLabelToneLastSavedJsonRef.current = nextJson;
+      saveLabelToneMap(next);
+      setScheduleLabelToneByName(next);
+    } finally {
+      scheduleLabelToneReadyRef.current = true;
+    }
   };
 
   const saveSchedulePositionToneGlobal = async (next: Record<AllowedPosition, LabelToneKey>) => {
@@ -1082,6 +1090,7 @@ export default function AdminApp() {
   };
 
   useEffect(() => {
+    if (!scheduleLabelToneReadyRef.current) return;
     saveLabelToneMap(scheduleLabelToneByName);
     const json = JSON.stringify(scheduleLabelToneByName);
     if (scheduleLabelToneHydratingRef.current) {
@@ -1108,6 +1117,7 @@ export default function AdminApp() {
   }, [schedulePositionToneByPosition]);
 
   useEffect(() => {
+    scheduleLabelToneReadyRef.current = false;
     schedulePositionToneReadyRef.current = false;
     void loadScheduleLabelToneGlobal();
     void loadSchedulePositionToneGlobal();
