@@ -766,6 +766,9 @@ export default function AdminApp() {
   const [timecardPunchPendingDeleteIds, setTimecardPunchPendingDeleteIds] = useState<string[]>([]);
   const [timecardPunchAddOpen, setTimecardPunchAddOpen] = useState(false);
   const [timecardPunchEdits, setTimecardPunchEdits] = useState<Record<string, { action: 'IN' | 'OUT'; atLocal: string }>>({});
+  const [timecardPunchDraggingId, setTimecardPunchDraggingId] = useState<string | null>(null);
+  const [timecardPunchDragOverId, setTimecardPunchDragOverId] = useState<string | null>(null);
+  const [timecardPunchOrderIds, setTimecardPunchOrderIds] = useState<string[]>([]);
   const [timecardPunchNew, setTimecardPunchNew] = useState<{ inAtLocal: string; outAtLocal: string }>({
     inAtLocal: '',
     outAtLocal: ''
@@ -5173,6 +5176,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setTimecardPunchPendingDeleteIds([]);
     setTimecardPunchAddOpen(false);
     setTimecardPunchEdits({});
+    setTimecardPunchDraggingId(null);
+    setTimecardPunchDragOverId(null);
+    setTimecardPunchOrderIds([]);
     const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
     setTimecardPunchNew({ inAtLocal: nowLocal, outAtLocal: nowLocal });
 
@@ -5208,6 +5214,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setTimecardPunchPendingDeleteIds([]);
     setTimecardPunchAddOpen(false);
     setTimecardPunchEdits({});
+    setTimecardPunchDraggingId(null);
+    setTimecardPunchDragOverId(null);
+    setTimecardPunchOrderIds([]);
     setTimecardPunchNew({ inAtLocal: '', outAtLocal: '' });
   };
 
@@ -5407,48 +5416,65 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       let editedCount = 0;
       let addedCount = 0;
       let deletedCount = 0;
-      for (const item of changed) {
-        const createdAt = parseLocalDateTimeInputValue(item.edit.atLocal);
-        if (!createdAt) continue;
-        const prevRowRes = await supabase
-          .from('ob_punches')
-          .select('action, created_at, staff_id, metadata')
-          .eq('id', item.rowId)
-          .maybeSingle();
-        const prevRow = (prevRowRes.data as any) ?? null;
-        const prevMeta = prevRow?.metadata;
-        const nextMeta =
-          prevMeta && typeof prevMeta === 'object'
-            ? {
-                ...prevMeta,
-                device: 'admin_console',
-                kind: 'manual_edit',
-                manual: true,
-                operator: user?.email ?? null,
-                edited_at: new Date(serverTime).toISOString()
-              }
-            : {
-                device: 'admin_console',
-                kind: 'manual_edit',
-                manual: true,
-                operator: user?.email ?? null,
-                edited_at: new Date(serverTime).toISOString()
-              };
-
-        const { error } = await supabase
-          .from('ob_punches')
-          .update({ action: item.edit.action, created_at: createdAt, metadata: nextMeta })
-          .eq('id', item.rowId);
-        if (error) {
+      if (changed.length > 0) {
+        const changedIds = changed.map((item) => item.rowId);
+        const prevRowsRes = await supabase.from('ob_punches').select('id, metadata').in('id', changedIds as any[]);
+        if (prevRowsRes.error) {
           saveFailed = true;
-          setTimecardPunchError(error.message);
+          setTimecardPunchError(prevRowsRes.error.message);
           return;
         }
-        punchSnapshot.set(item.rowId, {
-          action: item.edit.action,
-          created_at: createdAt
+        const prevMetaById = new Map<string, any>();
+        for (const rec of ((prevRowsRes.data as any[]) ?? [])) {
+          const id = String(rec?.id ?? '').trim();
+          if (!id) continue;
+          prevMetaById.set(id, rec?.metadata ?? null);
+        }
+
+        const updateJobs = changed.map(async (item) => {
+          const createdAt = parseLocalDateTimeInputValue(item.edit.atLocal);
+          if (!createdAt) return { ok: false as const, error: '时间格式不正确。', item };
+          const prevMeta = prevMetaById.get(item.rowId);
+          const nextMeta =
+            prevMeta && typeof prevMeta === 'object'
+              ? {
+                  ...prevMeta,
+                  device: 'admin_console',
+                  kind: 'manual_edit',
+                  manual: true,
+                  operator: user?.email ?? null,
+                  edited_at: new Date(serverTime).toISOString()
+                }
+              : {
+                  device: 'admin_console',
+                  kind: 'manual_edit',
+                  manual: true,
+                  operator: user?.email ?? null,
+                  edited_at: new Date(serverTime).toISOString()
+                };
+          const { error } = await supabase
+            .from('ob_punches')
+            .update({ action: item.edit.action, created_at: createdAt, metadata: nextMeta })
+            .eq('id', item.rowId);
+          if (error) return { ok: false as const, error: error.message, item };
+          return { ok: true as const, item, createdAt };
         });
-        editedCount += 1;
+
+        const updateResults = await Promise.all(updateJobs);
+        const firstError = updateResults.find((r) => !r.ok);
+        if (firstError && !firstError.ok) {
+          saveFailed = true;
+          setTimecardPunchError(firstError.error);
+          return;
+        }
+        for (const result of updateResults) {
+          if (!result.ok) continue;
+          punchSnapshot.set(result.item.rowId, {
+            action: result.item.edit.action,
+            created_at: result.createdAt
+          });
+          editedCount += 1;
+        }
       }
       if (pendingAdds.length > 0) {
         const rowsToInsert = pendingAdds
@@ -5538,59 +5564,34 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           }
         });
       }
-
-      const res = await fetchPunchRowsForTimecard(staff, timecardPunchDayIndex);
-      if (res.error) {
-        saveFailed = true;
-        setTimecardPunchError(res.error);
-        return;
-      }
-      setTimecardPunchRows(res.rows);
-
-      const edits: Record<string, { action: 'IN' | 'OUT'; atLocal: string }> = {};
-      for (const r of res.rows) {
-        const dt = r.created_at ? new Date(r.created_at) : null;
-        edits[String(r.id)] = {
-          action: r.action,
-          atLocal: dt && !Number.isNaN(dt.getTime()) ? toLocalDateTimeInputValue(dt) : ''
-        };
-      }
-      setTimecardPunchEdits(edits);
-
-      await fetchTimecard({ reset: true, lockUi: false });
     });
     if (saveFailed) return;
     setStatus({ tone: 'success', message: t('打卡流水已保存。', 'Punch records saved.') });
     closeTimecardPunchModal();
+    void fetchTimecard({ reset: true, lockUi: false });
     void refreshHomePanel();
     void refreshSchedulePanel();
   };
-  const deleteTimecardPunchPair = async (pair: { inRow?: PunchRow; outRow?: PunchRow }) => {
-    const ids = [pair.inRow?.id, pair.outRow?.id]
-      .filter((v) => v !== undefined && v !== null)
-      .map((v) => String(v));
-    if (ids.length === 0) return;
-
-    const ok = window.confirm(ids.length >= 2 ? '确定要删除这一整行打卡记录吗？' : '确定要删除这条打卡记录吗？');
+  const deleteTimecardPunchRow = async (row: PunchRow) => {
+    const rowId = String(row.id ?? '').trim();
+    if (!rowId) return;
+    const ok = window.confirm('确定要删除这条打卡记录吗？');
     if (!ok) return;
 
     const pendingAddIdSet = new Set(timecardPunchPendingAddRows.map((r) => String(r.id)));
-    const removePendingAddIds = ids.filter((id) => pendingAddIdSet.has(id));
-    const persistedIds = ids.filter((id) => !pendingAddIdSet.has(id));
+    const isPendingAdd = pendingAddIdSet.has(rowId);
 
     setTimecardPunchError(null);
-    if (removePendingAddIds.length > 0) {
-      const removeSet = new Set(removePendingAddIds);
-      setTimecardPunchPendingAddRows((prev) => prev.filter((row) => !removeSet.has(String(row.id))));
+    if (isPendingAdd) {
+      setTimecardPunchPendingAddRows((prev) => prev.filter((item) => String(item.id) !== rowId));
       setTimecardPunchEdits((prev) => {
         const next = { ...prev };
-        for (const id of removeSet) delete next[id];
+        delete next[rowId];
         return next;
       });
-      setTimecardPunchPendingDeleteIds((prev) => prev.filter((id) => !removeSet.has(String(id))));
-    }
-    if (persistedIds.length > 0) {
-      setTimecardPunchPendingDeleteIds((prev) => Array.from(new Set([...prev, ...persistedIds])));
+      setTimecardPunchPendingDeleteIds((prev) => prev.filter((id) => String(id) !== rowId));
+    } else {
+      setTimecardPunchPendingDeleteIds((prev) => Array.from(new Set([...prev, rowId])));
     }
     setStatus({ tone: 'idle', message: t('已暂存删除，请点击保存全部提交。', 'Delete staged. Click Save all to apply.') });
   };
@@ -6248,39 +6249,47 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     timecardWeekOffset,
     serverTime
   ]);
-  const timecardPunchPairsVisible = useMemo(() => {
+  const timecardPunchCardsSorted = useMemo(() => {
     const rows = [...timecardPunchRowsVisible];
     rows.sort((a, b) => {
-      const atA = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const atB = b.created_at ? new Date(b.created_at).getTime() : 0;
-      if (atA !== atB) return atA - atB;
-      return String(a.id).localeCompare(String(b.id), 'en-US');
+      const idA = String(a.id);
+      const idB = String(b.id);
+      const editA = timecardPunchEdits[idA];
+      const editB = timecardPunchEdits[idB];
+      const atA = editA?.atLocal ? parseLocalDateTimeInputValue(editA.atLocal) : a.created_at ?? '';
+      const atB = editB?.atLocal ? parseLocalDateTimeInputValue(editB.atLocal) : b.created_at ?? '';
+      const msA = atA ? new Date(atA).getTime() : 0;
+      const msB = atB ? new Date(atB).getTime() : 0;
+      if (msA !== msB) return msA - msB;
+      return idA.localeCompare(idB, 'en-US');
     });
-
-    const pairs: Array<{ key: string; inRow?: PunchRow; outRow?: PunchRow }> = [];
-    let openIn: PunchRow | null = null;
-
-    for (const row of rows) {
-      if (row.action === 'IN') {
-        if (openIn) {
-          pairs.push({ key: `pair-in-${String(openIn.id)}`, inRow: openIn });
-        }
-        openIn = row;
-        continue;
-      }
-      if (openIn) {
-        pairs.push({ key: `pair-${String(openIn.id)}-${String(row.id)}`, inRow: openIn, outRow: row });
-        openIn = null;
-      } else {
-        pairs.push({ key: `pair-out-${String(row.id)}`, outRow: row });
-      }
+    return rows;
+  }, [timecardPunchRowsVisible, timecardPunchEdits]);
+  useEffect(() => {
+    setTimecardPunchOrderIds((prev) => {
+      const visibleIdSet = new Set(timecardPunchCardsSorted.map((r) => String(r.id)));
+      const kept = prev.filter((id) => visibleIdSet.has(id));
+      const keptSet = new Set(kept);
+      const append = timecardPunchCardsSorted
+        .map((r) => String(r.id))
+        .filter((id) => !keptSet.has(id));
+      return [...kept, ...append];
+    });
+  }, [timecardPunchCardsSorted]);
+  const timecardPunchCardsVisible = useMemo(() => {
+    if (timecardPunchOrderIds.length === 0) return timecardPunchCardsSorted;
+    const byId = new Map(timecardPunchCardsSorted.map((r) => [String(r.id), r]));
+    const ordered: PunchRow[] = [];
+    for (const id of timecardPunchOrderIds) {
+      const row = byId.get(id);
+      if (row) ordered.push(row);
     }
-    if (openIn) {
-      pairs.push({ key: `pair-in-${String(openIn.id)}`, inRow: openIn });
+    if (ordered.length >= byId.size) return ordered;
+    for (const row of timecardPunchCardsSorted) {
+      if (!timecardPunchOrderIds.includes(String(row.id))) ordered.push(row);
     }
-    return pairs;
-  }, [timecardPunchRowsVisible]);
-
+    return ordered;
+  }, [timecardPunchCardsSorted, timecardPunchOrderIds]);
   const timecardPunchReadOnly = timecardPunchDayIndex === null;
   const timecardPunchHeaderMeta = useMemo(() => {
     const staff = normalizeStaffId(String(timecardPunchStaffId ?? '').trim());
@@ -10028,45 +10037,99 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           <p className={['text-sm', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{t('暂无记录', 'No records')}</p>
                         )}
 
-                        {timecardPunchPairsVisible.length > 0 && (
-                          <div className="mt-3 space-y-2">
-                            {timecardPunchPairsVisible.map((pair) => {
+                        {timecardPunchCardsVisible.length > 0 && (
+                          <div className="mt-3 grid gap-2 md:grid-cols-2">
+                            {timecardPunchCardsVisible.map((row) => {
                               const pendingAddIdSet = new Set(timecardPunchPendingAddRows.map((r) => String(r.id)));
-                              const inEdit = pair.inRow
-                                ? (timecardPunchEdits[String(pair.inRow.id)] ?? {
-                                    action: pair.inRow.action,
-                                    atLocal: pair.inRow.created_at ? toLocalDateTimeInputValue(new Date(pair.inRow.created_at)) : ''
-                                  })
-                                : null;
-                              const outEdit = pair.outRow
-                                ? (timecardPunchEdits[String(pair.outRow.id)] ?? {
-                                    action: pair.outRow.action,
-                                    atLocal: pair.outRow.created_at ? toLocalDateTimeInputValue(new Date(pair.outRow.created_at)) : ''
-                                  })
-                                : null;
+                              const rowId = String(row.id);
+                              const edit = timecardPunchEdits[rowId] ?? {
+                                action: row.action,
+                                atLocal: row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : ''
+                              };
+                              const rowLocal = row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : '';
+                              const isDirty = edit.action !== row.action || edit.atLocal !== rowLocal;
+                              const isPendingAdd = pendingAddIdSet.has(rowId);
+                              const showEditedTone = isDirty || isPendingAdd;
 
-                              const renderPunchEditor = (row: PunchRow | undefined, edit: { action: 'IN' | 'OUT'; atLocal: string } | null) => {
-                                if (!row || !edit) {
-                                  return (
+                              return (
+                                <div
+                                  key={rowId}
+                                  onDragOver={(e) => {
+                                    if (isLocked || timecardPunchReadOnly || !timecardPunchDraggingId || timecardPunchDraggingId === rowId) return;
+                                    e.preventDefault();
+                                    e.dataTransfer.dropEffect = 'move';
+                                    if (timecardPunchDragOverId !== rowId) setTimecardPunchDragOverId(rowId);
+                                  }}
+                                  onDragEnter={(e) => {
+                                    if (isLocked || timecardPunchReadOnly || !timecardPunchDraggingId || timecardPunchDraggingId === rowId) return;
+                                    e.preventDefault();
+                                    if (timecardPunchDragOverId !== rowId) setTimecardPunchDragOverId(rowId);
+                                    setTimecardPunchOrderIds((prev) => {
+                                      if (prev.length === 0) return prev;
+                                      const fromIdx = prev.findIndex((id) => id === String(timecardPunchDraggingId));
+                                      const toIdx = prev.findIndex((id) => id === rowId);
+                                      if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return prev;
+                                      const next = [...prev];
+                                      const temp = next[fromIdx];
+                                      next[fromIdx] = next[toIdx]!;
+                                      next[toIdx] = temp!;
+                                      return next;
+                                    });
+                                  }}
+                                  onDrop={(e) => {
+                                    if (isLocked || timecardPunchReadOnly) return;
+                                    e.preventDefault();
+                                    setTimecardPunchDraggingId(null);
+                                    setTimecardPunchDragOverId(null);
+                                  }}
+                                  onDragEnd={() => {
+                                    setTimecardPunchDraggingId(null);
+                                    setTimecardPunchDragOverId(null);
+                                  }}
+                                  className={[
+                                    'relative rounded-2xl px-4 py-4',
+                                    themeMode === 'light' ? 'border border-slate-200 bg-slate-50' : 'bg-white/5',
+                                    timecardPunchDraggingId === rowId ? 'opacity-60' : '',
+                                    timecardPunchDragOverId === rowId && timecardPunchDraggingId !== rowId
+                                      ? themeMode === 'light'
+                                        ? 'ring-2 ring-neon/70'
+                                        : 'ring-2 ring-neon/70 shadow-glow'
+                                      : ''
+                                  ].join(' ')}
+                                >
+                                  {!timecardPunchReadOnly && (
                                     <div
+                                      role="button"
+                                      aria-label={t('拖拽互换', 'Drag to swap')}
+                                      draggable={!isLocked}
+                                      onDragStart={(e) => {
+                                        if (isLocked) return;
+                                        setTimecardPunchDraggingId(rowId);
+                                        setTimecardPunchDragOverId(null);
+                                        e.dataTransfer.effectAllowed = 'move';
+                                        e.dataTransfer.setData('text/plain', rowId);
+                                      }}
                                       className={[
-                                        'rounded-xl px-3 py-3 text-xs',
-                                        themeMode === 'light'
-                                          ? 'border border-dashed border-slate-300 bg-slate-50 text-slate-500'
-                                          : 'border border-dashed border-white/10 bg-black/20 text-slate-500'
+                                        'absolute left-3 top-3 inline-flex h-6 min-w-[28px] cursor-grab items-center justify-center rounded-md px-1 text-xs',
+                                        themeMode === 'light' ? 'bg-slate-200 text-slate-700' : 'bg-white/10 text-slate-300'
                                       ].join(' ')}
+                                      title={t('拖拽互换位置', 'Drag to swap')}
                                     >
-                                      -
+                                      ⋮⋮
                                     </div>
-                                  );
-                                }
-                                const rowId = String(row.id);
-                                const rowLocal = row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : '';
-                                const isDirty = edit.action !== row.action || edit.atLocal !== rowLocal;
-                                const isPendingAdd = pendingAddIdSet.has(rowId);
-                                const showEditedTone = isDirty || isPendingAdd;
-                                return (
-                                  <div className="grid gap-3 md:grid-cols-[7rem_1fr_6rem_6rem] md:items-end">
+                                  )}
+                                  {!timecardPunchReadOnly && (
+                                    <button
+                                      type="button"
+                                      disabled={isLocked}
+                                      onClick={() => void deleteTimecardPunchRow(row)}
+                                      className="absolute right-3 top-3 h-7 w-7 rounded-full bg-ember/85 text-sm font-bold text-white transition hover:bg-ember disabled:cursor-not-allowed disabled:opacity-60"
+                                      title={t('删除此条', 'Delete this row')}
+                                    >
+                                      ×
+                                    </button>
+                                  )}
+                                  <div className="grid gap-3 md:grid-cols-[7rem_1fr] md:items-end">
                                     <div>
                                       <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Action</div>
                                       <select
@@ -10075,7 +10138,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                         onChange={(e) =>
                                           setTimecardPunchEdits((prev) => ({
                                             ...prev,
-                                            [String(row.id)]: { ...edit, action: e.target.value === 'OUT' ? 'OUT' : 'IN' }
+                                            [rowId]: { ...edit, action: e.target.value === 'OUT' ? 'OUT' : 'IN' }
                                           }))
                                         }
                                         className={[
@@ -10102,7 +10165,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                         onChange={(e) =>
                                           setTimecardPunchEdits((prev) => ({
                                             ...prev,
-                                            [String(row.id)]: { ...edit, atLocal: e.target.value }
+                                            [rowId]: { ...edit, atLocal: e.target.value }
                                           }))
                                         }
                                         type="datetime-local"
@@ -10119,42 +10182,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                       />
                                     </div>
                                   </div>
-                                );
-                              };
-                              return (
-                                <div
-                                  key={pair.key}
-                                  className={[
-                                    'relative rounded-2xl px-4 py-4',
-                                    themeMode === 'light' ? 'border border-slate-200 bg-slate-50' : 'bg-white/5'
-                                  ].join(' ')}
-                                >
-                                  {!timecardPunchReadOnly && (
-                                    <button
-                                      type="button"
-                                      disabled={isLocked}
-                                      onClick={() => void deleteTimecardPunchPair(pair)}
-                                      className="absolute right-3 top-3 h-7 w-7 rounded-full bg-ember/85 text-sm font-bold text-white transition hover:bg-ember disabled:cursor-not-allowed disabled:opacity-60"
-                                      title={t('删除整行', 'Delete row')}
-                                    >
-                                      ×
-                                    </button>
-                                  )}
-                                  <div className="grid gap-3 md:grid-cols-2">
-                                    <div>
-                                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">IN</div>
-                                      <div className="mt-2">{renderPunchEditor(pair.inRow, inEdit)}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">OUT</div>
-                                      <div className="mt-2">{renderPunchEditor(pair.outRow, outEdit)}</div>
-                                    </div>
-                                  </div>
                                 </div>
                               );
                             })}
                           </div>
-                          )}
+                        )}
                         </div>
                       </div>
                     </div>,

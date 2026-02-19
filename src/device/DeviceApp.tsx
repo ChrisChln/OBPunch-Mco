@@ -262,7 +262,7 @@ export default function DeviceApp() {
   const submit = async (mode: LoanAction) => {
     const staffId = normalizeStaffId(staffIdInput.trim());
     const sn = normalizeDeviceSn(snInput);
-    if (!staffId || !isValidStaffIdValue(staffId)) {
+    if (mode === 'borrow' && (!staffId || !isValidStaffIdValue(staffId))) {
       setMessage({ tone: 'error', text: 'Invalid staff ID. Please scan again.' });
       playDeviceSound('error');
       return;
@@ -278,19 +278,21 @@ export default function DeviceApp() {
       return;
     }
 
-    const employeeCheck = await supabase.from(EMPLOYEE_TABLE).select('staff_id').eq('staff_id', staffId).limit(1);
-    if (employeeCheck.error) {
-      setMessage({ tone: 'error', text: `Failed to verify employee: ${employeeCheck.error.message}` });
-      playDeviceSound('error');
-      return;
-    }
-    const employeeRows = ((employeeCheck.data as Array<{ staff_id?: string | null }>) ?? []).filter((row) =>
-      normalizeStaffId(String(row.staff_id ?? '').trim())
-    );
-    if (employeeRows.length === 0) {
-      setMessage({ tone: 'error', text: `Employee not registered: ${staffId}` });
-      playDeviceSound('error');
-      return;
+    if (mode === 'borrow') {
+      const employeeCheck = await supabase.from(EMPLOYEE_TABLE).select('staff_id').eq('staff_id', staffId).limit(1);
+      if (employeeCheck.error) {
+        setMessage({ tone: 'error', text: `Failed to verify employee: ${employeeCheck.error.message}` });
+        playDeviceSound('error');
+        return;
+      }
+      const employeeRows = ((employeeCheck.data as Array<{ staff_id?: string | null }>) ?? []).filter((row) =>
+        normalizeStaffId(String(row.staff_id ?? '').trim())
+      );
+      if (employeeRows.length === 0) {
+        setMessage({ tone: 'error', text: `Employee not registered: ${staffId}` });
+        playDeviceSound('error');
+        return;
+      }
     }
     const device = deviceBySn.get(sn);
     if (!device) {
@@ -315,16 +317,11 @@ export default function DeviceApp() {
       playDeviceSound('error');
       return;
     }
-    if (mode === 'return' && borrowed && borrowed.staffId !== staffId) {
-      const holderName = nameByStaffId[borrowed.staffId] ?? borrowed.staffId;
-      setMessage({ tone: 'error', text: `Return blocked. Current holder: ${holderName}` });
-      playDeviceSound('error');
-      return;
-    }
     setMessage({ tone: 'pending', text: mode === 'borrow' ? 'Borrowing...' : 'Returning...' });
+    const submitStaffId = mode === 'borrow' ? staffId : borrowed!.staffId;
     const res = await supabase.from(DEVICE_LOANS_TABLE).insert([
       {
-        staff_id: staffId,
+        staff_id: submitStaffId,
         device_sn: sn,
         action: mode,
         operator: 'device_page',
@@ -339,13 +336,14 @@ export default function DeviceApp() {
 
     setMessage({
       tone: 'success',
-      text: mode === 'borrow' ? `Borrowed: ${staffId} -> ${sn}` : `Returned: ${staffId} <- ${sn}`
+      text: mode === 'borrow' ? `Borrowed: ${staffId} -> ${sn}` : `Returned: ${sn}`
     });
     playDeviceSound(mode === 'borrow' ? 'successIn' : 'successOut');
     setStaffIdInput('');
     setSnInput('');
     await fetchAll();
-    staffRef.current?.focus();
+    if (mode === 'borrow') staffRef.current?.focus();
+    else snRef.current?.focus();
   };
 
   useEffect(() => {
@@ -425,20 +423,24 @@ export default function DeviceApp() {
                 Return
               </button>
             </div>
-            <label className="text-xs uppercase tracking-[0.18em] text-slate-400">US ID</label>
-            <input
-              ref={staffRef}
-              value={staffIdInput}
-              onChange={(e) => setStaffIdInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  snRef.current?.focus();
-                }
-              }}
-              placeholder="Scan staff ID first"
-              className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow"
-            />
+            {scanMode === 'borrow' && (
+              <>
+                <label className="text-xs uppercase tracking-[0.18em] text-slate-400">US ID</label>
+                <input
+                  ref={staffRef}
+                  value={staffIdInput}
+                  onChange={(e) => setStaffIdInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      snRef.current?.focus();
+                    }
+                  }}
+                  placeholder="Scan staff ID first"
+                  className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow"
+                />
+              </>
+            )}
             <label className="mt-3 block text-xs uppercase tracking-[0.18em] text-slate-400">SN</label>
             <input
               ref={snRef}
@@ -453,14 +455,6 @@ export default function DeviceApp() {
               placeholder="Then scan device SN"
               className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow"
             />
-            <button
-              type="button"
-              onClick={() => void submit(scanMode)}
-              disabled={loading || staffIdInput.trim() === '' || snInput.trim() === ''}
-              className="mt-3 h-12 w-full rounded-2xl bg-neon text-base font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {scanMode === 'borrow' ? 'Confirm Borrow' : 'Confirm Return'}
-            </button>
           </div>
 
           <div className="glass rounded-3xl p-4">
