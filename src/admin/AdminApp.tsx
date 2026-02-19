@@ -395,6 +395,9 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   const hit = ALLOWED_POSITIONS.find((p) => p.toLowerCase() === String(value ?? '').trim().toLowerCase());
   return hit ?? '';
 };
+const isNewHirePlaceholderStaffId = (value: string) => /^NEWREQ-\d{8}(?:-[A-Z]+)?-\d{3,}$/i.test(String(value ?? '').trim());
+const isNewHirePlaceholderName = (value: string) => /^\d{2}\/\d{2}NEW\s+[A-Z]+(\d+)$/i.test(String(value ?? '').trim());
+const displayStaffId = (value: string) => (isNewHirePlaceholderStaffId(value) ? '' : value);
 const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperCase();
 const normalizeDeviceType = (value: string): DeviceType => {
   const raw = String(value ?? '').trim().toUpperCase();
@@ -824,6 +827,11 @@ export default function AdminApp() {
   });
   const [dailyListOpen, setDailyListOpen] = useState(false);
   const [dailyListDateInput, setDailyListDateInput] = useState(() => toDateOnly(addDays(new Date(), 1)));
+  const [dailyListNewHireOpen, setDailyListNewHireOpen] = useState(false);
+  const [dailyListNewHirePosition, setDailyListNewHirePosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [dailyListNewHireCount, setDailyListNewHireCount] = useState(1);
+  const [dailyListNewHireAgency, setDailyListNewHireAgency] = useState('');
+  const [dailyListNewHireShift, setDailyListNewHireShift] = useState<'' | 'early' | 'late'>('');
   const [dailyListSelectedPositions, setDailyListSelectedPositions] = useState<Record<AllowedPosition, boolean>>(
     createEmptyPositionFlags
   );
@@ -3393,7 +3401,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const ok = window.confirm(`确定要删除员工 ${staff} 吗？此操作不可撤销。`);
     if (!ok) return;
 
-    let shouldRefresh = false;
     await runLocked('employee_delete', async () => {
       setEmployeesError(null);
       const { error } = await supabase.from(EMPLOYEE_TABLE).delete().eq('staff_id', staff);
@@ -3403,11 +3410,23 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
       setStatus({ tone: 'success', message: `已删除员工：${staff}` });
       await writeAudit({ action: 'employee_delete', staffId: staff, target: EMPLOYEE_TABLE });
-      shouldRefresh = true;
+      const normalizedStaff = normalizeStaffId(staff);
+      setEmployees((prev) =>
+        prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== normalizedStaff)
+      );
+      setEmployeeShiftByStaffId((prev) => {
+        if (!(normalizedStaff in prev)) return prev;
+        const next = { ...prev };
+        delete next[normalizedStaff];
+        return next;
+      });
+      setEmployeeLastPunchAtByStaffId((prev) => {
+        if (!(normalizedStaff in prev)) return prev;
+        const next = { ...prev };
+        delete next[normalizedStaff];
+        return next;
+      });
     });
-    if (shouldRefresh) {
-      await refreshEmployeesPanel();
-    }
   };
 
   const printEmployeeTempBadge = async (payload: { staff: string; name: string; agency: string; position: string }) => {
@@ -3691,7 +3710,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   const openEmployeeEdit = (payload: { staff: string; name: string; agency: string; position: string; label: string }) => {
     setEmployeesError(null);
     setEmployeeEditOriginalStaffId(payload.staff);
-    setEmployeeEditStaffId(payload.staff);
+    setEmployeeEditStaffId(isNewHirePlaceholderStaffId(payload.staff) ? '' : payload.staff);
     setEmployeeEditName(payload.name);
     setEmployeeEditAgency(payload.agency);
     const normalized = normalizePositionKey(payload.position);
@@ -3710,30 +3729,28 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setEmployeeEditLabel('');
   };
 
-  const refreshEmployeesPanel = async () => {
-    await fetchEmployees({
-      reset: true,
-      search: employeeSearch,
-      agency: employeeAgency,
-      position: employeePosition,
-      labels: employeeLabels
-    });
-  };
-
   const saveEmployeeEdit = async () => {
     if (!supabase) {
       setEmployeesError('Missing Supabase config.');
       return;
     }
-    const canEditStaffId = String(user?.email ?? '').trim().toLowerCase() === STAFF_ID_EDITOR_EMAIL;
-    const originalStaff = normalizeStaffId(String(employeeEditOriginalStaffId ?? '').trim());
-    const nextStaff = normalizeStaffId(String(employeeEditStaffId ?? '').trim());
+    const canEditStaffIdByEmail = String(user?.email ?? '').trim().toLowerCase() === STAFF_ID_EDITOR_EMAIL;
+    const originalStaffRaw = String(employeeEditOriginalStaffId ?? '').trim();
+    const isPlaceholderOriginal = isNewHirePlaceholderStaffId(originalStaffRaw);
+    const originalStaff = isPlaceholderOriginal ? originalStaffRaw : normalizeStaffId(originalStaffRaw);
+    const nextStaffInputRaw = String(employeeEditStaffId ?? '').trim();
+    const nextStaffNormalized = normalizeStaffId(nextStaffInputRaw);
+    const nextStaff = isPlaceholderOriginal && !nextStaffInputRaw ? originalStaff : nextStaffNormalized;
     if (!originalStaff || !nextStaff) return;
-    if (!canEditStaffId && nextStaff !== originalStaff) {
+    if (!isPlaceholderOriginal && !canEditStaffIdByEmail && nextStaff !== originalStaff) {
       setEmployeesError(`Only ${STAFF_ID_EDITOR_EMAIL} can change staff ID.`);
       return;
     }
-    if (!isValidStaffIdValue(nextStaff)) {
+    if (!isPlaceholderOriginal && !isValidStaffIdValue(nextStaff)) {
+      setEmployeesError('Invalid staff ID format (e.g. US010454).');
+      return;
+    }
+    if (isPlaceholderOriginal && nextStaff !== originalStaff && !isValidStaffIdValue(nextStaff)) {
       setEmployeesError('Invalid staff ID format (e.g. US010454).');
       return;
     }
@@ -7001,7 +7018,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   }, [homeRosterSide, homeRosterRowsFiltered]);
   const makeDailyListTsv = (rows: DailyListRow[]) =>
     rows
-      .map((row) => [row.staff_id, row.name, row.agency, row.position, getPlannedStartTime(row.shift, row.position)].map((c) => String(c ?? '')).join('\t'))
+      .map((row) => [displayStaffId(row.staff_id), row.name, row.agency, row.position, getPlannedStartTime(row.shift, row.position)].map((c) => String(c ?? '')).join('\t'))
       .join('\n');
   const copyDailyList = async (scope: 'early' | 'late' | 'all') => {
     if (!canCopyDailyList) {
@@ -7050,6 +7067,175 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     } catch (err: any) {
       setStatus({ tone: 'error', message: `Copy failed: ${String(err?.message ?? err ?? 'Unknown error')}` });
     }
+  };
+
+  const addDailyListNewHireDemand = async () => {
+    if (!supabase) {
+      setStatus({ tone: 'error', message: 'Missing Supabase config.' });
+      return;
+    }
+    const targetDate = isDateOnlyValue(dailyListDateInput) ? dailyListDateInput : toDateOnly(addDays(new Date(serverTime), 1));
+    const target = new Date(`${targetDate}T00:00:00`);
+    if (Number.isNaN(target.getTime())) {
+      setStatus({ tone: 'error', message: 'Invalid target date.' });
+      return;
+    }
+    const dayIndex = (target.getDay() + 6) % 7;
+    const templateDate = getTemplateDateByDayIndex(dayIndex);
+    const position = normalizePositionKey(dailyListNewHirePosition);
+    const shift = dailyListNewHireShift;
+    const agency = dailyListNewHireAgency.trim();
+    const count = clamp(Number(dailyListNewHireCount) || 0, 1, 200);
+    if (!position) {
+      setStatus({ tone: 'error', message: 'Please choose position.' });
+      return;
+    }
+    if (!shift) {
+      setStatus({ tone: 'error', message: 'Please choose shift.' });
+      return;
+    }
+
+    const mmdd = (() => {
+      const m = String(target.getMonth() + 1).padStart(2, '0');
+      const d = String(target.getDate()).padStart(2, '0');
+      return `${m}/${d}`;
+    })();
+    const positionUpper = String(position).toUpperCase();
+    const seqPrefix = `${mmdd}NEW ${positionUpper}`;
+    const existingSeqSet = new Set<number>();
+    const escapedMmdd = mmdd.replace('/', '\\/');
+    const nameSeqRegex = new RegExp(`^${escapedMmdd}NEW\\s+${positionUpper}(\\d+)$`, 'i');
+    const staffSeqRegex = new RegExp(`^NEWREQ-${targetDate.replace(/-/g, '')}-${positionUpper}-(\\d{3,})$`, 'i');
+    for (const e of employees) {
+      const name = String(e.name ?? '').trim();
+      const staff = String(e.staff_id ?? '').trim();
+      const m1 = name.match(nameSeqRegex);
+      if (m1?.[1]) existingSeqSet.add(Number(m1[1]));
+      const m2 = staff.match(staffSeqRegex);
+      if (m2?.[1]) existingSeqSet.add(Number(m2[1]));
+    }
+    try {
+      const remoteRes = await supabase
+        .from(EMPLOYEE_TABLE)
+        .select('staff_id, name')
+        .ilike('name', `${seqPrefix}%`)
+        .limit(2000);
+      if (!remoteRes.error) {
+        const rows = ((remoteRes.data as any[]) ?? []) as Array<{ staff_id?: string | null; name?: string | null }>;
+        for (const r of rows) {
+          const name = String(r.name ?? '').trim();
+          const staff = String(r.staff_id ?? '').trim();
+          const m1 = name.match(nameSeqRegex);
+          if (m1?.[1]) existingSeqSet.add(Number(m1[1]));
+          const m2 = staff.match(staffSeqRegex);
+          if (m2?.[1]) existingSeqSet.add(Number(m2[1]));
+        }
+      }
+    } catch {
+      // ignore remote scan failures; local set still protects most cases
+    }
+    const nextSeq = existingSeqSet.size > 0 ? Math.max(...Array.from(existingSeqSet)) + 1 : 1;
+
+    await runLocked('daily_list_new_hire', async () => {
+      const mode = await resolveEmployeeColumnMode();
+      const nowIso = new Date(serverTime).toISOString();
+      const employeeRows: Array<Record<string, unknown>> = [];
+      const scheduleRowsToWrite: Array<Record<string, unknown>> = [];
+      const localEmployeesToAdd: EmployeeRow[] = [];
+      const localSchedulesToAdd: ScheduleRow[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const seq = nextSeq + i;
+        const internalStaffId = `NEWREQ-${targetDate.replace(/-/g, '')}-${positionUpper}-${String(seq).padStart(3, '0')}`;
+        const displayName = `${seqPrefix}${seq}`;
+        const employeePayload =
+          mode === 'cased'
+            ? { staff_id: internalStaffId, name: displayName, Agency: agency || null, Position: position, label: null, created_at: nowIso }
+            : { staff_id: internalStaffId, name: displayName, agency: agency || null, position, label: null, created_at: nowIso };
+        employeeRows.push(employeePayload as Record<string, unknown>);
+        scheduleRowsToWrite.push({
+          staff_id: internalStaffId,
+          date: templateDate,
+          shift,
+          position,
+          note: null,
+          operator: user?.email ?? null,
+          updated_at: nowIso
+        });
+        localEmployeesToAdd.push({
+          staff_id: internalStaffId,
+          name: displayName,
+          agency: agency || null,
+          position,
+          label: null,
+          created_at: nowIso
+        });
+        localSchedulesToAdd.push({
+          staff_id: internalStaffId,
+          date: templateDate,
+          shift,
+          position,
+          note: null,
+          operator: user?.email ?? null,
+          updated_at: nowIso
+        });
+      }
+
+      const employeeUpsertRes = await supabase.from(EMPLOYEE_TABLE).upsert(employeeRows as any[], {
+        onConflict: 'staff_id',
+        ignoreDuplicates: false
+      });
+      if (employeeUpsertRes.error) {
+        setStatus({ tone: 'error', message: `New hire create failed: ${employeeUpsertRes.error.message}` });
+        return;
+      }
+
+      const scheduleUpsertRes = await supabase.from(SCHEDULE_TABLE).upsert(scheduleRowsToWrite as any[], {
+        onConflict: 'staff_id,date'
+      });
+      if (scheduleUpsertRes.error) {
+        setStatus({ tone: 'error', message: `New hire schedule failed: ${scheduleUpsertRes.error.message}` });
+        return;
+      }
+
+      setStatus({ tone: 'success', message: `Created ${count} new hire demand row(s).` });
+      setDailyListNewHireOpen(false);
+      setDailyListNewHireCount(1);
+      setDailyListNewHireAgency('');
+      setDailyListNewHirePosition('');
+      setDailyListNewHireShift('');
+      setEmployees((prev) => {
+        const byStaff = new Map<string, EmployeeRow>();
+        for (const row of prev) {
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          if (!staff) continue;
+          byStaff.set(staff, row);
+        }
+        for (const row of localEmployeesToAdd) {
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          if (!staff) continue;
+          byStaff.set(staff, row);
+        }
+        return Array.from(byStaff.values()).sort((a, b) =>
+          String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US')
+        );
+      });
+      setScheduleRows((prev) => {
+        const byKey = new Map<string, ScheduleRow>();
+        for (const row of prev) {
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          const date = String(row.date ?? '').trim();
+          if (!staff || !date) continue;
+          byKey.set(`${staff}__${date}`, row);
+        }
+        for (const row of localSchedulesToAdd) {
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          const date = String(row.date ?? '').trim();
+          if (!staff || !date) continue;
+          byKey.set(`${staff}__${date}`, row);
+        }
+        return Array.from(byKey.values());
+      });
+    });
   };
 
   const exportScheduleTemplate = async () => {
@@ -7205,10 +7391,28 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       })
       .filter(Boolean) as Array<{ staff_id: string; name: string; agency: string; label: string; shift: 'early' | 'late' }>;
 
+    const extractNewSeq = (row: { staff_id: string; name: string }) => {
+      const nameMatch = String(row.name ?? '').trim().match(/NEW\s+[A-Z]+(\d+)$/i);
+      if (nameMatch?.[1]) return Number(nameMatch[1]);
+      const staffMatch = String(row.staff_id ?? '').trim().match(/-(\d{3,})$/);
+      if (staffMatch?.[1]) return Number(staffMatch[1]);
+      return 999999;
+    };
+    const isPlaceholderNewHire = (row: { staff_id: string; name: string }) =>
+      isNewHirePlaceholderStaffId(String(row.staff_id ?? '').trim()) || isNewHirePlaceholderName(String(row.name ?? '').trim());
+
     const byLabelThenName = (
       a: { label: string; name: string; staff_id: string },
       b: { label: string; name: string; staff_id: string }
     ) => {
+      const aIsNew = isPlaceholderNewHire(a);
+      const bIsNew = isPlaceholderNewHire(b);
+      if (aIsNew !== bIsNew) return aIsNew ? 1 : -1;
+      if (aIsNew && bIsNew) {
+        const aSeq = extractNewSeq(a);
+        const bSeq = extractNewSeq(b);
+        if (aSeq !== bSeq) return aSeq - bSeq;
+      }
       const la = a.label.trim().toLowerCase();
       const lb = b.label.trim().toLowerCase();
       if (la !== lb) return la.localeCompare(lb, 'en-US');
@@ -7225,10 +7429,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         .map(
           (r, idx) => {
             const labelTint = getLabelTint(r.label);
+            const isNew = isPlaceholderNewHire(r);
+            const newSeq = extractNewSeq(r);
+            const idText = isNew ? `NEW${newSeq}` : displayStaffId(r.staff_id);
+            const nameText = isNew ? '' : r.name;
             return `<tr>
               <td class="num" style="background:${labelTint};">${idx + 1}</td>
-              <td style="background:${labelTint};">${escapeHtml(r.staff_id)}</td>
-              <td style="background:${labelTint};">${escapeHtml(r.name)}</td>
+              <td style="background:${labelTint};">${escapeHtml(idText)}</td>
+              <td style="background:${labelTint};">${escapeHtml(nameText)}</td>
               <td style="background:${labelTint};">${escapeHtml(r.agency)}</td>
               <td style="background:${labelTint};">${escapeHtml(r.label || '-')}</td>
               <td style="background:${labelTint};"></td>
@@ -8852,6 +9060,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           <div className="flex flex-wrap items-center gap-2">
                             <button
                               type="button"
+                              disabled={isLocked}
+                              onClick={() => setDailyListNewHireOpen(true)}
+                              className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {t('新人需求', 'New Hire Demand')}
+                            </button>
+                            <button
+                              type="button"
                               disabled={!canCopyDailyListAll}
                               onClick={() => void copyDailyList('all')}
                               className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
@@ -8972,7 +9188,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   ) : (
                                     tomorrowDailyRowsDisplayed.earlyRows.map((row) => (
                                       <tr key={`early-${row.staff_id}`} className={themeMode === 'light' ? 'border-t border-slate-100' : 'border-t border-white/5'}>
-                                        <td className={['px-3 py-2 font-mono', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.staff_id}</td>
+                                        <td className={['px-3 py-2 font-mono', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{displayStaffId(row.staff_id)}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.name || '-'}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.agency || '-'}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.position || '-'}</td>
@@ -9028,7 +9244,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   ) : (
                                     tomorrowDailyRowsDisplayed.lateRows.map((row) => (
                                       <tr key={`late-${row.staff_id}`} className={themeMode === 'light' ? 'border-t border-slate-100' : 'border-t border-white/5'}>
-                                        <td className={['px-3 py-2 font-mono', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.staff_id}</td>
+                                        <td className={['px-3 py-2 font-mono', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{displayStaffId(row.staff_id)}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.name || '-'}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.agency || '-'}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.position || '-'}</td>
@@ -9040,6 +9256,97 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               </table>
                             </div>
                           </div>
+                        </div>
+                      </div>
+                    </div>,
+                    document.body
+                  )}
+
+                {dailyListNewHireOpen &&
+                  typeof document !== 'undefined' &&
+                  createPortal(
+                    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
+                      <div className="w-full max-w-xl rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-2xl backdrop-blur">
+                        <div className="flex items-center justify-between">
+                          <h3 className="font-display text-xl tracking-[0.08em] text-white">{t('新人需求', 'New Hire Demand')}</h3>
+                          <button
+                            type="button"
+                            onClick={() => setDailyListNewHireOpen(false)}
+                            className="rounded-xl bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15"
+                          >
+                            {t('关闭', 'Close')}
+                          </button>
+                        </div>
+                        <div className="mt-4 grid gap-3 md:grid-cols-2">
+                          <div>
+                            <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('岗位', 'Position')}</label>
+                            <select
+                              value={dailyListNewHirePosition}
+                              onChange={(e) => setDailyListNewHirePosition((e.target.value as any) ?? '')}
+                              disabled={isLocked}
+                              className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon"
+                            >
+                              <option value="">{t('选择岗位', 'Select position')}</option>
+                              {ALLOWED_POSITIONS.map((p) => (
+                                <option key={p} value={p}>
+                                  {p}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('班次', 'Shift')}</label>
+                            <select
+                              value={dailyListNewHireShift}
+                              onChange={(e) => setDailyListNewHireShift((e.target.value as any) ?? '')}
+                              disabled={isLocked}
+                              className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon"
+                            >
+                              <option value="">{t('选择班次', 'Select shift')}</option>
+                              <option value="early">{t('早班', 'Morning')}</option>
+                              <option value="late">{t('晚班', 'Night')}</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('需求人数', 'Headcount')}</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={200}
+                              value={dailyListNewHireCount}
+                              onChange={(e) => setDailyListNewHireCount(clamp(Number(e.target.value) || 1, 1, 200))}
+                              disabled={isLocked}
+                              className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs uppercase tracking-[0.2em] text-slate-400">Agency ({t('可留空', 'Optional')})</label>
+                            <input
+                              value={dailyListNewHireAgency}
+                              onChange={(e) => setDailyListNewHireAgency(e.target.value)}
+                              disabled={isLocked}
+                              className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon"
+                              placeholder="Agency"
+                            />
+                          </div>
+                        </div>
+                        <p className="mt-3 text-xs text-slate-400">{t('将新增为 MM/DDNEW REBIN1, REBIN2... 并自动加入当天名单。', 'Will create MM/DDNEW REBIN1, REBIN2... and auto-add to that day list.')}</p>
+                        <div className="mt-4 flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setDailyListNewHireOpen(false)}
+                            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15"
+                          >
+                            {t('取消', 'Cancel')}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isLocked}
+                            onClick={() => void addDailyListNewHireDemand()}
+                            className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {t('确定', 'Confirm')}
+                          </button>
                         </div>
                       </div>
                     </div>,
@@ -9346,7 +9653,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           return toDateOnly(dt);
                         })();
                         const shiftInfo = employeeShiftByStaffId[staff];
-                        const shift = shiftInfo?.shift ?? '';
+                        const scheduleRow = scheduleRowsByStaffDayIndex.get(`${normalizeStaffId(staff)}__${homeOperationalDayIndex}`);
+                        const scheduledShift = normalizeShiftValue(String(scheduleRow?.shift ?? '').trim());
+                        const shift = scheduledShift || shiftInfo?.shift || '';
                         const shiftLabel =
                           shift === 'early' ? t('白班', 'Day') : shift === 'late' ? t('晚班', 'Night') : '-';
                         const lastPunchAt = String(employeeLastPunchAtByStaffId[staff] ?? '').trim();
@@ -9358,19 +9667,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             lastPunchDaysText = t(`${days}天前`, `${days}d ago`);
                           }
                         }
-                        const shiftTitle = shiftInfo
+                        const shiftTitle = scheduledShift
                           ? t(
-                              `近${SHIFT_ANALYSIS_DAYS}天：白班 ${shiftInfo.earlyHours.toFixed(1)}h / 晚班 ${shiftInfo.lateHours.toFixed(1)}h`,
-                              `Last ${SHIFT_ANALYSIS_DAYS}d: Day ${shiftInfo.earlyHours.toFixed(1)}h / Night ${shiftInfo.lateHours.toFixed(1)}h`
+                              `当前排班：${scheduledShift === 'early' ? '白班' : '晚班'}`,
+                              `Scheduled now: ${scheduledShift === 'early' ? 'Day' : 'Night'}`
                             )
-                          : '';
+                          : shiftInfo
+                            ? t(
+                                `近${SHIFT_ANALYSIS_DAYS}天：白班 ${shiftInfo.earlyHours.toFixed(1)}h / 晚班 ${shiftInfo.lateHours.toFixed(1)}h`,
+                                `Last ${SHIFT_ANALYSIS_DAYS}d: Day ${shiftInfo.earlyHours.toFixed(1)}h / Night ${shiftInfo.lateHours.toFixed(1)}h`
+                              )
+                            : '';
 
                         return (
                           <tr
                             key={String(e.id ?? staff)}
                             className="border-b border-white/5 transition-colors hover:bg-white/5 last:border-0"
                           >
-                            <td className="px-4 py-3 font-mono text-slate-200">{staff}</td>
+                            <td className="px-4 py-3 font-mono text-slate-200">{displayStaffId(staff)}</td>
                             <td className="px-4 py-3 text-slate-200">{name}</td>
                             <td className="px-4 py-3 text-slate-200">{agency}</td>
                             <td className="px-4 py-3 text-slate-200">
@@ -9467,7 +9781,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           <div className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('编辑员工', 'Edit Employee')}</div>
                           <div className="mt-2 text-sm text-slate-400">
                             {t('当前工号：', 'Current staff: ')}
-                            <span className="text-slate-200">{employeeEditOriginalStaffId || '-'}</span>
+                            <span className="text-slate-200">{displayStaffId(String(employeeEditOriginalStaffId ?? '')) || '-'}</span>
                           </div>
                         </div>
                         <button
@@ -9485,11 +9799,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           <input
                             value={employeeEditStaffId ?? ''}
                             onChange={(e) => setEmployeeEditStaffId(e.target.value)}
-                            disabled={isLocked || String(user?.email ?? '').trim().toLowerCase() !== STAFF_ID_EDITOR_EMAIL}
+                            disabled={
+                              isLocked ||
+                              (!isNewHirePlaceholderStaffId(String(employeeEditOriginalStaffId ?? '').trim()) &&
+                                String(user?.email ?? '').trim().toLowerCase() !== STAFF_ID_EDITOR_EMAIL)
+                            }
                             placeholder={t('例如：US012345', 'e.g. US12345')}
                             className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 font-mono text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                           />
-                          {String(user?.email ?? '').trim().toLowerCase() !== STAFF_ID_EDITOR_EMAIL && (
+                          {!isNewHirePlaceholderStaffId(String(employeeEditOriginalStaffId ?? '').trim()) &&
+                            String(user?.email ?? '').trim().toLowerCase() !== STAFF_ID_EDITOR_EMAIL && (
                             <p className="mt-1 text-[11px] text-slate-500">Only {STAFF_ID_EDITOR_EMAIL} can edit staff ID.</p>
                           )}
                         </div>
