@@ -1004,6 +1004,26 @@ export default function App() {
     return { items, error: null as string | null };
   };
 
+  const fetchTodayOutCount = async (staff: string) => {
+    if (!supabase) {
+      return { count: 0, error: 'Missing Supabase configuration.' };
+    }
+    const dayStartDate = getOperationalDayStart(new Date(), ABSENT_RESET_HOUR);
+    const dayStart = dayStartDate.toISOString();
+    const dayEnd = addDays(dayStartDate, 1).toISOString();
+    const countRes = await supabase
+      .from('ob_punches')
+      .select('id', { count: 'exact', head: true })
+      .eq('staff_id', staff)
+      .eq('action', 'OUT')
+      .gte('created_at', dayStart)
+      .lt('created_at', dayEnd);
+    if (countRes.error) {
+      return { count: 0, error: countRes.error.message };
+    }
+    return { count: countRes.count ?? 0, error: null as string | null };
+  };
+
   useEffect(() => {
     if (!supabase || !isValidId) {
       setLastPunchAction(null);
@@ -2158,8 +2178,11 @@ const fetchPunchBoardUph = async (
         setStaffId('');
       }
       if (action === 'OUT') {
-        const outstanding = await fetchOutstandingDevicesByStaff(normalizedId);
-        if (!outstanding.error && outstanding.items.length > 0) {
+        const [outCountRes, outstanding] = await Promise.all([
+          fetchTodayOutCount(normalizedId),
+          fetchOutstandingDevicesByStaff(normalizedId)
+        ]);
+        if (!outCountRes.error && outCountRes.count >= 2 && !outstanding.error && outstanding.items.length > 0) {
           const reminderName = String(punchBoardEmployeeMap[normalizedId]?.name ?? '').trim() || normalizedId;
           setDeviceReturnReminder({ staffId: normalizedId, staffName: reminderName, items: outstanding.items });
         }
