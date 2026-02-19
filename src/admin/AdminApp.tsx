@@ -1187,8 +1187,8 @@ export default function AdminApp() {
 
 const getShiftBucketFromDate = (dt: Date) => {
   if (Number.isNaN(dt.getTime())) return null;
-  const h = dt.getHours();
-  const m = dt.getMinutes();
+  const h = dt.getUTCHours();
+  const m = dt.getUTCMinutes();
   const minutes = h * 60 + m;
   const earlyStart = 5 * 60;
   const earlyEnd = 15 * 60; // 3pm
@@ -1198,8 +1198,8 @@ const getShiftBucketFromDate = (dt: Date) => {
 const getShiftBucket = (inAtIso: string) => {
     const dt = new Date(inAtIso);
     if (Number.isNaN(dt.getTime())) return null;
-    const h = dt.getHours();
-    const m = dt.getMinutes();
+    const h = dt.getUTCHours();
+    const m = dt.getUTCMinutes();
     const minutes = h * 60 + m;
   const earlyStart = 5 * 60;
   const earlyEnd = 15 * 60; // 3pm
@@ -1234,17 +1234,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const end = interval.end.getTime();
     if (end <= start) continue;
     const cursor = new Date(interval.start);
-    cursor.setHours(0, 0, 0, 0);
+    cursor.setUTCHours(0, 0, 0, 0);
     while (cursor.getTime() < end) {
       const dayStart = new Date(cursor);
       const earlyStart = new Date(dayStart);
-      earlyStart.setHours(5, 0, 0, 0);
+      earlyStart.setUTCHours(5, 0, 0, 0);
       const earlyEnd = new Date(dayStart);
-      earlyEnd.setHours(15, 0, 0, 0);
+      earlyEnd.setUTCHours(15, 0, 0, 0);
       const lateStart = new Date(earlyEnd);
       const lateEnd = new Date(dayStart);
-      lateEnd.setDate(lateEnd.getDate() + 1);
-      lateEnd.setHours(5, 0, 0, 0);
+      lateEnd.setUTCDate(lateEnd.getUTCDate() + 1);
+      lateEnd.setUTCHours(5, 0, 0, 0);
 
       const dayStartMs = dayStart.getTime();
       const dayEndMs = lateEnd.getTime();
@@ -1254,7 +1254,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         earlyMs += overlapMs(segmentStart, segmentEnd, earlyStart.getTime(), earlyEnd.getTime());
         lateMs += overlapMs(segmentStart, segmentEnd, lateStart.getTime(), lateEnd.getTime());
       }
-      cursor.setDate(cursor.getDate() + 1);
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
     }
   }
   return { earlyHours: earlyMs / 3600000, lateHours: lateMs / 3600000 };
@@ -3145,7 +3145,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const fetchPunchesForStaff = async (ids: string[]) => {
         const batches = chunk(ids, 200);
         const allRows: Array<{ staff_id: string; action: string; created_at: string | null; id?: any }> = [];
-        const punchPageSize = 2000;
+        const punchPageSize = 1000;
         const maxPages = 80;
 
         for (const batch of batches) {
@@ -3206,9 +3206,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const events = eventsByStaff[staff] ?? [];
         const intervals: Array<{ start: Date; end: Date }> = [];
         let currentIn: Date | null = null;
+        let latestIn: Date | null = null;
         for (const ev of events) {
           if (ev.action === 'IN') {
             currentIn = ev.at;
+            latestIn = ev.at;
             continue;
           }
           if (ev.action === 'OUT' && currentIn && ev.at.getTime() > currentIn.getTime()) {
@@ -3224,6 +3226,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           shift = getShiftBucketFromDate(currentIn) ?? '';
         } else if (earlyHours > lateHours) shift = 'early';
         else if (lateHours > earlyHours) shift = 'late';
+        else if (latestIn) shift = getShiftBucketFromDate(latestIn) ?? '';
         shiftMap[staff] = { shift, earlyHours, lateHours };
       }
       setEmployeeShiftByStaffId(shiftMap);
@@ -4207,7 +4210,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return { rows: [] as any[], error: 'Missing Supabase config.' };
       }
 
-      const punchPageSize = 2000;
+      const punchPageSize = 1000;
       const maxPages = 80;
       const all: any[] = [];
 
@@ -4758,7 +4761,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       weekDateByIndex.forEach((d, idx) => dayIndexByDate.set(d, idx));
       const hasPunchByStaffDay = new Set<string>();
 
-      const pageSize = 2000;
+      const pageSize = 1000;
       const maxPages = 80;
       for (let page = 0; page < maxPages; page += 1) {
         const from = page * pageSize;
