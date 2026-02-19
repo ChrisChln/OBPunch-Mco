@@ -2236,7 +2236,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           action: 'schedule_clear',
           staffId: staff,
           target: SCHEDULE_TABLE,
-          payload: { weekday: dayIndex + 1, template_date: templateDate, removed_id: existing?.id ?? null }
+          payload: {
+            weekday: dayIndex + 1,
+            template_date: templateDate,
+            removed_id: existing?.id ?? null,
+            from_state: existingState,
+            from_shift: existing?.shift ?? null,
+            from_position: existing?.position ?? null,
+            to_state: 'empty',
+            to_shift: null,
+            to_position: null
+          }
         });
         return;
       }
@@ -2314,7 +2324,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           template_date: templateDate,
           position: normalizedPosition,
           shift: targetShift,
-          state: nextState
+          state: nextState,
+          from_state: existingState,
+          from_shift: existing?.shift ?? null,
+          from_position: existing?.position ?? null,
+          to_state: nextState,
+          to_shift: targetShift,
+          to_position: normalizedPosition
         }
       });
     });
@@ -3875,6 +3891,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (!beforeText || !afterText) return '';
       return `${beforeText}h -> ${afterText}h`;
     };
+    const fmtScheduleState = (value: any) => {
+      const state = String(value ?? '').trim().toLowerCase();
+      if (state === 'work') return t('工作', 'Work');
+      if (state === 'temp_work') return t('临时工作', 'Temporary Work');
+      if (state === 'leave') return t('请假', 'Excuse');
+      if (state === 'temp_rest') return t('临时排休', 'Temporary Rest');
+      if (state === 'rest') return t('休息', 'Rest');
+      if (state === 'empty') return t('空', 'Empty');
+      return '-';
+    };
 
     let summary = action || '-';
     if (action === 'employee_upsert') {
@@ -3939,43 +3965,32 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
 
     if (action === 'schedule_work') {
-      summary = t('排班改为工作', 'Schedule set to Work');
-      push(t('班次', 'Shift'), payload?.shift);
-      push(t('岗位', 'Position'), payload?.position);
-      push(t('星期', 'Weekday'), payload?.weekday);
-      push(t('模板日期', 'Template date'), payload?.template_date);
+      const fromState = payload?.from_state;
+      const toState = payload?.to_state ?? payload?.state ?? 'work';
+      summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_temp_work') {
-      summary = t('排班改为临时工作', 'Schedule set to Temporary Work');
-      push(t('班次', 'Shift'), payload?.shift);
-      push(t('岗位', 'Position'), payload?.position);
-      push(t('星期', 'Weekday'), payload?.weekday);
-      push(t('模板日期', 'Template date'), payload?.template_date);
+      const fromState = payload?.from_state;
+      const toState = payload?.to_state ?? payload?.state ?? 'temp_work';
+      summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_leave') {
-      summary = t('排班改为请假', 'Schedule set to Excuse');
-      push(t('班次', 'Shift'), payload?.shift);
-      push(t('岗位', 'Position'), payload?.position);
-      push(t('星期', 'Weekday'), payload?.weekday);
-      push(t('模板日期', 'Template date'), payload?.template_date);
+      const fromState = payload?.from_state;
+      const toState = payload?.to_state ?? payload?.state ?? 'leave';
+      summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_temp_rest') {
-      summary = t('排班改为临时排休', 'Schedule set to Temporary Rest');
-      push(t('班次', 'Shift'), payload?.shift);
-      push(t('岗位', 'Position'), payload?.position);
-      push(t('星期', 'Weekday'), payload?.weekday);
-      push(t('模板日期', 'Template date'), payload?.template_date);
+      const fromState = payload?.from_state;
+      const toState = payload?.to_state ?? payload?.state ?? 'temp_rest';
+      summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_rest') {
-      summary = t('排班改为休息', 'Schedule set to Rest');
-      push(t('班次', 'Shift'), payload?.shift);
-      push(t('岗位', 'Position'), payload?.position);
-      push(t('星期', 'Weekday'), payload?.weekday);
-      push(t('模板日期', 'Template date'), payload?.template_date);
+      const fromState = payload?.from_state;
+      const toState = payload?.to_state ?? payload?.state ?? 'rest';
+      summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_clear') {
-      summary = t('清空排班', 'Schedule cleared');
-      push(t('星期', 'Weekday'), payload?.weekday);
-      push(t('模板日期', 'Template date'), payload?.template_date);
-      push(t('删除ID', 'Removed ID'), payload?.removed_id);
+      const fromState = payload?.from_state;
+      const toState = payload?.to_state ?? 'empty';
+      summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     }
 
-    if (details.length === 0 && payload) {
+    if (details.length === 0 && payload && !String(action).startsWith('schedule_')) {
       let payloadText = '';
       try {
         payloadText = JSON.stringify(payload, null, 0);
@@ -3995,6 +4010,23 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const dt = new Date(raw);
     if (Number.isNaN(dt.getTime())) return raw;
     return dt.toLocaleString(locale, { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  };
+
+  const renderAuditSummary = (summary: string) => {
+    const text = String(summary ?? '').trim();
+    const arrowMatch = text.match(/^(.+?)\s*->\s*(.+)$/);
+    if (!arrowMatch) {
+      return <span className="whitespace-normal text-[11px] leading-4 text-slate-100">{text || '-'}</span>;
+    }
+    const fromText = String(arrowMatch[1] ?? '').trim() || '-';
+    const toText = String(arrowMatch[2] ?? '').trim() || '-';
+    return (
+      <span className="inline-flex flex-wrap items-center gap-1.5 text-[11px] leading-4">
+        <span className="rounded-md border border-white/20 bg-white/5 px-1.5 py-0.5 text-slate-200">{fromText}</span>
+        <span className="font-semibold text-cyan-300">→</span>
+        <span className="rounded-md border border-neon/40 bg-neon/15 px-1.5 py-0.5 font-semibold text-neon">{toText}</span>
+      </span>
+    );
   };
 
   const fetchTimecard = async ({
@@ -8545,7 +8577,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                         )}
                                       </span>
                                       {scheduleCellAudit.length > 0 && (
-                                        <div className="pointer-events-none invisible absolute left-1/2 top-full z-40 mt-1 w-64 -translate-x-1/2 rounded-xl border border-white/15 bg-slate-950/95 p-2 text-[11px] text-slate-200 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100">
+                                        <div className="pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-white/15 bg-slate-950/95 p-2 text-[11px] text-slate-200 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100">
                                           <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-neon">
                                             {t('最近操作', 'Recent changes')}
                                           </div>
@@ -8557,7 +8589,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                                   <div className="text-[10px] text-slate-400">
                                                     {formatCellAuditTime(item.created_at)} · {String(item.actor ?? '').trim() || '-'}
                                                   </div>
-                                                  <div className="whitespace-normal text-[11px] leading-4 text-slate-100">{detail.summary}</div>
+                                                  <div>{renderAuditSummary(detail.summary)}</div>
                                                   {detail.details.slice(0, 2).map((d, idx2) => (
                                                     <div key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`} className="mt-0.5 text-[10px] text-slate-300">
                                                       <span className="text-slate-400">{d.label}: </span>
@@ -9877,7 +9909,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                           <span className="pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full bg-rose-500 shadow-[0_0_0_1px_rgba(244,63,94,0.55)]" />
                                         )}
                                         {timecardCellAudit.length > 0 && (
-                                          <div className="pointer-events-none invisible absolute left-1/2 top-full z-40 mt-1 w-64 -translate-x-1/2 rounded-xl border border-white/15 bg-slate-950/95 p-2 text-[11px] text-slate-200 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100">
+                                        <div className="pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-white/15 bg-slate-950/95 p-2 text-[11px] text-slate-200 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100">
                                             <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-neon">
                                               {t('最近操作', 'Recent changes')}
                                             </div>
@@ -9889,7 +9921,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                                     <div className="text-[10px] text-slate-400">
                                                       {formatCellAuditTime(item.created_at)} · {String(item.actor ?? '').trim() || '-'}
                                                     </div>
-                                                    <div className="whitespace-normal text-[11px] leading-4 text-slate-100">{detail.summary}</div>
+                                                    <div>{renderAuditSummary(detail.summary)}</div>
                                                     {detail.details.slice(0, 2).map((d, idx2) => (
                                                       <div key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`} className="mt-0.5 text-[10px] text-slate-300">
                                                         <span className="text-slate-400">{d.label}: </span>
