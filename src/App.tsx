@@ -99,6 +99,7 @@ const ABSENT_RESET_HOUR = Number.isFinite(ABSENT_RESET_HOUR_RAW) ? Math.max(0, M
 const LATE_ABSENT_VISIBLE_MINUTES = 16 * 60 + 30; // 16:30
 const ABSENT_ROSTER_CACHE_TTL_MS = 60 * 1000;
 const ARRIVAL_METRICS_CACHE_TTL_MS = 60 * 1000;
+const ARRIVAL_METRICS_STORAGE_KEY = 'obpunch_arrival_metrics_cache_v1';
 
 const supabase = createSupabaseClient({ persistSession: false });
 const obupSupabase = createSupabaseClientWithCredentials({
@@ -209,6 +210,29 @@ const getManualTomorrowListVisible = (setting: TomorrowListSetting, now: Date) =
   return now.getTime() < cutoff.getTime();
 };
 
+const createEmptyArrivalMetrics = (): ArrivalMetric[] =>
+  ['early', 'late'].flatMap((shift) =>
+    ALLOWED_POSITIONS.map((position) => ({
+      shift: shift as 'early' | 'late',
+      position,
+      expected: 0,
+      present: 0,
+      onClock: 0,
+      onClockStaff: [],
+      restWorked: 0,
+      restWorkedStaff: [],
+      scheduledNotClockInStaff: []
+    }))
+  );
+
+const cloneArrivalMetricsRows = (rows: ArrivalMetric[]): ArrivalMetric[] =>
+  rows.map((row) => ({
+    ...row,
+    onClockStaff: [...row.onClockStaff],
+    restWorkedStaff: [...row.restWorkedStaff],
+    scheduledNotClockInStaff: [...row.scheduledNotClockInStaff]
+  }));
+
 const getDefaultPositionToneKey = (value: string): LabelToneKey => {
   const pos = normalizeAllowedPosition(value);
   if (pos === 'Pick') return 'sky';
@@ -298,6 +322,38 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   if (v === 'preship') return 'Preship';
   if (v === 'transfer') return 'Transfer';
   return '';
+};
+
+const hydrateArrivalMetricsRows = (value: unknown): ArrivalMetric[] => {
+  const base = createEmptyArrivalMetrics();
+  const rows = Array.isArray(value) ? value : [];
+  const byKey = new Map<string, ArrivalMetric>();
+  for (const raw of rows) {
+    const row = (raw ?? {}) as Record<string, unknown>;
+    const shift = normalizeShiftValue(String(row.shift ?? ''));
+    const position = normalizeAllowedPosition(String(row.position ?? ''));
+    if (!shift || !position) continue;
+    const toNum = (v: unknown) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    };
+    const toStrArray = (v: unknown) =>
+      Array.isArray(v)
+        ? v.map((item) => String(item ?? '').trim()).filter(Boolean)
+        : [];
+    byKey.set(`${shift}:${position}`, {
+      shift,
+      position,
+      expected: toNum(row.expected),
+      present: toNum(row.present),
+      onClock: toNum(row.onClock),
+      onClockStaff: toStrArray(row.onClockStaff),
+      restWorked: toNum(row.restWorked),
+      restWorkedStaff: toStrArray(row.restWorkedStaff),
+      scheduledNotClockInStaff: toStrArray(row.scheduledNotClockInStaff)
+    });
+  }
+  return base.map((item) => byKey.get(`${item.shift}:${item.position}`) ?? item);
 };
 const positionToUphStage = (value: string): 'picking' | 'packing' | 'sorting' | null => {
   const pos = normalizeAllowedPosition(value);
@@ -634,21 +690,22 @@ export default function App() {
   const [dailyRosterPositionFilter, setDailyRosterPositionFilter] = useState<AllowedPosition | ''>('');
   const [rosterShiftByStaffId, setRosterShiftByStaffId] = useState<Record<string, '' | 'early' | 'late'>>({});
   const [absentRoster, setAbsentRoster] = useState<AbsentRosterItem[]>([]);
-  const [arrivalMetrics, setArrivalMetrics] = useState<ArrivalMetric[]>(() =>
-    ['early', 'late'].flatMap((shift) =>
-      ALLOWED_POSITIONS.map((position) => ({
-        shift: shift as 'early' | 'late',
-        position,
-        expected: 0,
-        present: 0,
-        onClock: 0,
-        onClockStaff: [],
-        restWorked: 0,
-        restWorkedStaff: [],
-        scheduledNotClockInStaff: []
-      }))
-    )
-  );
+  const [arrivalMetrics, setArrivalMetrics] = useState<ArrivalMetric[]>(() => {
+    const fallback = createEmptyArrivalMetrics();
+    try {
+      const raw = localStorage.getItem(ARRIVAL_METRICS_STORAGE_KEY);
+      if (!raw) return fallback;
+      const parsed = JSON.parse(raw) as { key?: unknown; rows?: unknown } | null;
+      const key = String(parsed?.key ?? '').trim();
+      const now = new Date();
+      const todayDayIndex = getDayIndexByCutoff(now, ABSENT_RESET_HOUR);
+      const templateDate = getTemplateDateByDayIndex(todayDayIndex);
+      if (!key || key !== templateDate) return fallback;
+      return hydrateArrivalMetricsRows(parsed?.rows);
+    } catch {
+      return fallback;
+    }
+  });
   const [rosterFlipped, setRosterFlipped] = useState(false);
   const [rosterFlipSeed, setRosterFlipSeed] = useState(0);
   const [tomorrowListSetting, setTomorrowListSetting] = useState<TomorrowListSetting>({
@@ -741,6 +798,27 @@ export default function App() {
   const [editDept, setEditDept] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editNote, setEditNote] = useState('');
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(ARRIVAL_METRICS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { at?: unknown; key?: unknown; rows?: unknown } | null;
+      const key = String(parsed?.key ?? '').trim();
+      const now = new Date();
+      const todayDayIndex = getDayIndexByCutoff(now, ABSENT_RESET_HOUR);
+      const templateDate = getTemplateDateByDayIndex(todayDayIndex);
+      if (!key || key !== templateDate) return;
+      const rows = hydrateArrivalMetricsRows(parsed?.rows);
+      arrivalMetricsCacheRef.current = {
+        at: Number(parsed?.at) || Date.now(),
+        key: templateDate,
+        rows: cloneArrivalMetricsRows(rows)
+      };
+    } catch {
+      // ignore local cache read failures
+    }
+  }, []);
 
   const runLocked = async (reason: string, fn: () => Promise<void>) => {
     if (busyRef.current) {
@@ -1472,19 +1550,7 @@ const fetchPunchBoardUph = async (
     absentRosterCacheRef.current = { at: Date.now(), key: templateDate, rows: [...list] };
   };
   const fetchArrivalMetrics = async (options?: { force?: boolean }) => {
-    const empty: ArrivalMetric[] = ['early', 'late'].flatMap((shift) =>
-      ALLOWED_POSITIONS.map((position) => ({
-        shift: shift as 'early' | 'late',
-        position,
-        expected: 0,
-        present: 0,
-        onClock: 0,
-        onClockStaff: [],
-        restWorked: 0,
-        restWorkedStaff: [],
-        scheduledNotClockInStaff: []
-      }))
-    );
+    const empty = createEmptyArrivalMetrics();
     if (!supabase) {
       setArrivalMetrics(empty);
       return;
@@ -1497,14 +1563,7 @@ const fetchPunchBoardUph = async (
     const cache = arrivalMetricsCacheRef.current;
     const cacheFresh = Date.now() - cache.at < ARRIVAL_METRICS_CACHE_TTL_MS;
     if (!force && cacheFresh && cache.key === templateDate) {
-      setArrivalMetrics(
-        cache.rows.map((row) => ({
-          ...row,
-          onClockStaff: [...row.onClockStaff],
-          restWorkedStaff: [...row.restWorkedStaff],
-          scheduledNotClockInStaff: [...row.scheduledNotClockInStaff]
-        }))
-      );
+      setArrivalMetrics(cloneArrivalMetricsRows(cache.rows));
       return;
     }
     const scheduleRes = await supabase
@@ -1697,13 +1756,20 @@ const fetchPunchBoardUph = async (
     arrivalMetricsCacheRef.current = {
       at: Date.now(),
       key: templateDate,
-      rows: out.map((row) => ({
-        ...row,
-        onClockStaff: [...row.onClockStaff],
-        restWorkedStaff: [...row.restWorkedStaff],
-        scheduledNotClockInStaff: [...row.scheduledNotClockInStaff]
-      }))
+      rows: cloneArrivalMetricsRows(out)
     };
+    try {
+      localStorage.setItem(
+        ARRIVAL_METRICS_STORAGE_KEY,
+        JSON.stringify({
+          at: arrivalMetricsCacheRef.current.at,
+          key: templateDate,
+          rows: arrivalMetricsCacheRef.current.rows
+        })
+      );
+    } catch {
+      // ignore local persistence failures
+    }
   };
   const normalizeLabelToneMap = (value: unknown): Record<string, LabelToneKey> => {
     const raw = (value ?? {}) as Record<string, unknown>;
@@ -1954,27 +2020,22 @@ const fetchPunchBoardUph = async (
     if (!supabase) return;
     if (page !== 'punch') return;
 
-    let active = true;
-    void (async () => {
-      if (!active) return;
-      await fetchPunchBoard({ position: punchLogPositionFilter });
-      await fetchScheduleLabelToneSetting();
-      await fetchSchedulePositionToneSetting();
-      await fetchTomorrowListSetting();
-      await fetchAbsentRoster();
-      await fetchArrivalMetrics();
-    })();
-
-    const timer = window.setInterval(() => {
+    const refreshPunchPage = () => {
+      // Trigger in parallel so Attendance/Absent panels are not blocked by punch log fetch.
+      void fetchArrivalMetrics();
+      void fetchAbsentRoster();
       void fetchPunchBoard({ position: punchLogPositionFilter });
       void fetchScheduleLabelToneSetting();
       void fetchSchedulePositionToneSetting();
       void fetchTomorrowListSetting();
-      void fetchAbsentRoster();
-      void fetchArrivalMetrics();
+    };
+
+    refreshPunchPage();
+
+    const timer = window.setInterval(() => {
+      refreshPunchPage();
     }, 60000);
     return () => {
-      active = false;
       window.clearInterval(timer);
     };
   }, [page, punchLogPositionFilter]);

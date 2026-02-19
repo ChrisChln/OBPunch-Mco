@@ -5960,13 +5960,28 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   const timecardPositionOptions = ALLOWED_POSITIONS;
 
   const timecardRowsFiltered = useMemo(() => {
-    return timecardRows.filter((r) => {
+    const filtered = timecardRows.filter((r) => {
       if (timecardShift && r.shift !== timecardShift) return false;
       if (timecardInProgressOnly && !r.inProgressWeek) return false;
       if (timecardPresentDayFilter !== null && timecardPresentDayFilter >= 0 && timecardPresentDayFilter <= 6) {
         if (Number(r.punchCountByDay?.[timecardPresentDayFilter] ?? 0) <= 0) return false;
       }
       return true;
+    });
+    const getAnomalyScore = (row: TimecardRow) => {
+      let score = 0;
+      for (let idx = 0; idx < 7; idx += 1) {
+        if (row.punchCountMismatchByDay[idx]) score += 100; // most severe
+        if (Number(row.hoursByDay[idx] ?? 0) > 8.5) score += 10;
+        if (row.absentByDay[idx]) score += 1;
+      }
+      return score;
+    };
+    return [...filtered].sort((a, b) => {
+      const anomalyDiff = getAnomalyScore(b) - getAnomalyScore(a);
+      if (anomalyDiff !== 0) return anomalyDiff;
+      if (b.totalHours !== a.totalHours) return b.totalHours - a.totalHours;
+      return String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US');
     });
   }, [timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter]);
   const timecardRowsRendered = useMemo(
