@@ -1197,8 +1197,8 @@ export default function AdminApp() {
 
 const getShiftBucketFromDate = (dt: Date) => {
   if (Number.isNaN(dt.getTime())) return null;
-  const h = dt.getUTCHours();
-  const m = dt.getUTCMinutes();
+  const h = dt.getHours();
+  const m = dt.getMinutes();
   const minutes = h * 60 + m;
   const earlyStart = 5 * 60;
   const earlyEnd = 15 * 60; // 3pm
@@ -1208,8 +1208,8 @@ const getShiftBucketFromDate = (dt: Date) => {
 const getShiftBucket = (inAtIso: string) => {
     const dt = new Date(inAtIso);
     if (Number.isNaN(dt.getTime())) return null;
-    const h = dt.getUTCHours();
-    const m = dt.getUTCMinutes();
+    const h = dt.getHours();
+    const m = dt.getMinutes();
     const minutes = h * 60 + m;
   const earlyStart = 5 * 60;
   const earlyEnd = 15 * 60; // 3pm
@@ -1244,17 +1244,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const end = interval.end.getTime();
     if (end <= start) continue;
     const cursor = new Date(interval.start);
-    cursor.setUTCHours(0, 0, 0, 0);
+    cursor.setHours(0, 0, 0, 0);
     while (cursor.getTime() < end) {
       const dayStart = new Date(cursor);
       const earlyStart = new Date(dayStart);
-      earlyStart.setUTCHours(5, 0, 0, 0);
+      earlyStart.setHours(5, 0, 0, 0);
       const earlyEnd = new Date(dayStart);
-      earlyEnd.setUTCHours(15, 0, 0, 0);
+      earlyEnd.setHours(15, 0, 0, 0);
       const lateStart = new Date(earlyEnd);
       const lateEnd = new Date(dayStart);
-      lateEnd.setUTCDate(lateEnd.getUTCDate() + 1);
-      lateEnd.setUTCHours(5, 0, 0, 0);
+      lateEnd.setDate(lateEnd.getDate() + 1);
+      lateEnd.setHours(5, 0, 0, 0);
 
       const dayStartMs = dayStart.getTime();
       const dayEndMs = lateEnd.getTime();
@@ -1264,7 +1264,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         earlyMs += overlapMs(segmentStart, segmentEnd, earlyStart.getTime(), earlyEnd.getTime());
         lateMs += overlapMs(segmentStart, segmentEnd, lateStart.getTime(), lateEnd.getTime());
       }
-      cursor.setUTCDate(cursor.getUTCDate() + 1);
+      cursor.setDate(cursor.getDate() + 1);
     }
   }
   return { earlyHours: earlyMs / 3600000, lateHours: lateMs / 3600000 };
