@@ -5595,6 +5595,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
     setStatus({ tone: 'idle', message: t('已暂存删除，请点击保存全部提交。', 'Delete staged. Click Save all to apply.') });
   };
+  const swapTimecardPunchOrder = (dragIdRaw: string | null | undefined, dropIdRaw: string | null | undefined) => {
+    const dragId = String(dragIdRaw ?? '').trim();
+    const dropId = String(dropIdRaw ?? '').trim();
+    if (!dragId || !dropId || dragId === dropId) return;
+    setTimecardPunchOrderIds((prev) => {
+      if (prev.length === 0) return prev;
+      const fromIdx = prev.findIndex((id) => id === dragId);
+      const toIdx = prev.findIndex((id) => id === dropId);
+      if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return prev;
+      const next = [...prev];
+      const temp = next[fromIdx];
+      next[fromIdx] = next[toIdx]!;
+      next[toIdx] = temp!;
+      return next;
+    });
+  };
 
   useEffect(() => {
     // 当切换到页面时自动加载
@@ -6290,6 +6306,19 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
     return ordered;
   }, [timecardPunchCardsSorted, timecardPunchOrderIds]);
+  const timecardPunchCardsRendered = useMemo(() => {
+    if (!timecardPunchDraggingId || !timecardPunchDragOverId || timecardPunchDraggingId === timecardPunchDragOverId) {
+      return timecardPunchCardsVisible;
+    }
+    const rows = [...timecardPunchCardsVisible];
+    const fromIdx = rows.findIndex((r) => String(r.id) === String(timecardPunchDraggingId));
+    const toIdx = rows.findIndex((r) => String(r.id) === String(timecardPunchDragOverId));
+    if (fromIdx < 0 || toIdx < 0) return timecardPunchCardsVisible;
+    const tmp = rows[fromIdx];
+    rows[fromIdx] = rows[toIdx]!;
+    rows[toIdx] = tmp!;
+    return rows;
+  }, [timecardPunchCardsVisible, timecardPunchDraggingId, timecardPunchDragOverId]);
   const timecardPunchReadOnly = timecardPunchDayIndex === null;
   const timecardPunchHeaderMeta = useMemo(() => {
     const staff = normalizeStaffId(String(timecardPunchStaffId ?? '').trim());
@@ -10039,7 +10068,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
                         {timecardPunchCardsVisible.length > 0 && (
                           <div className="mt-3 grid gap-2 md:grid-cols-2">
-                            {timecardPunchCardsVisible.map((row) => {
+                            {timecardPunchCardsRendered.map((row) => {
                               const pendingAddIdSet = new Set(timecardPunchPendingAddRows.map((r) => String(r.id)));
                               const rowId = String(row.id);
                               const edit = timecardPunchEdits[rowId] ?? {
@@ -10050,10 +10079,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               const isDirty = edit.action !== row.action || edit.atLocal !== rowLocal;
                               const isPendingAdd = pendingAddIdSet.has(rowId);
                               const showEditedTone = isDirty || isPendingAdd;
+                              const isDragSource = timecardPunchDraggingId === rowId;
+                              const isDragTarget = timecardPunchDragOverId === rowId && timecardPunchDraggingId !== rowId;
+                              const isSwapPairHighlighted =
+                                Boolean(timecardPunchDraggingId && timecardPunchDragOverId) && (isDragSource || isDragTarget);
 
                               return (
                                 <div
                                   key={rowId}
+                                  draggable={!isLocked && !timecardPunchReadOnly}
+                                  onDragStart={(e) => {
+                                    if (isLocked || timecardPunchReadOnly) return;
+                                    setTimecardPunchDraggingId(rowId);
+                                    setTimecardPunchDragOverId(null);
+                                    e.dataTransfer.effectAllowed = 'move';
+                                    e.dataTransfer.setData('text/plain', rowId);
+                                  }}
                                   onDragOver={(e) => {
                                     if (isLocked || timecardPunchReadOnly || !timecardPunchDraggingId || timecardPunchDraggingId === rowId) return;
                                     e.preventDefault();
@@ -10064,60 +10105,56 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                     if (isLocked || timecardPunchReadOnly || !timecardPunchDraggingId || timecardPunchDraggingId === rowId) return;
                                     e.preventDefault();
                                     if (timecardPunchDragOverId !== rowId) setTimecardPunchDragOverId(rowId);
-                                    setTimecardPunchOrderIds((prev) => {
-                                      if (prev.length === 0) return prev;
-                                      const fromIdx = prev.findIndex((id) => id === String(timecardPunchDraggingId));
-                                      const toIdx = prev.findIndex((id) => id === rowId);
-                                      if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return prev;
-                                      const next = [...prev];
-                                      const temp = next[fromIdx];
-                                      next[fromIdx] = next[toIdx]!;
-                                      next[toIdx] = temp!;
-                                      return next;
-                                    });
                                   }}
                                   onDrop={(e) => {
                                     if (isLocked || timecardPunchReadOnly) return;
                                     e.preventDefault();
+                                    const dragId = String(timecardPunchDraggingId ?? '').trim();
+                                    const dropId = String(timecardPunchDragOverId || rowId).trim();
+                                    if (dragId && dropId && dragId !== dropId) {
+                                      const targetRow = timecardPunchCardsVisible.find((r) => String(r.id) === dropId);
+                                      if (targetRow) {
+                                        const targetEdit = timecardPunchEdits[dropId] ?? {
+                                          action: targetRow.action,
+                                          atLocal: targetRow.created_at ? toLocalDateTimeInputValue(new Date(targetRow.created_at)) : ''
+                                        };
+                                        const targetAction: 'IN' | 'OUT' = targetEdit.action === 'OUT' ? 'OUT' : 'IN';
+                                        setTimecardPunchEdits((prev) => {
+                                          const sourceRow = timecardPunchCardsVisible.find((r) => String(r.id) === dragId);
+                                          if (!sourceRow) return prev;
+                                          const sourceEdit = prev[dragId] ?? {
+                                            action: sourceRow.action,
+                                            atLocal: sourceRow.created_at ? toLocalDateTimeInputValue(new Date(sourceRow.created_at)) : ''
+                                          };
+                                          if (sourceEdit.action === targetAction) return prev;
+                                          return {
+                                            ...prev,
+                                            [dragId]: { ...sourceEdit, action: targetAction }
+                                          };
+                                        });
+                                      }
+                                    }
+                                    swapTimecardPunchOrder(dragId, dropId);
                                     setTimecardPunchDraggingId(null);
                                     setTimecardPunchDragOverId(null);
                                   }}
                                   onDragEnd={() => {
+                                    swapTimecardPunchOrder(timecardPunchDraggingId, timecardPunchDragOverId);
                                     setTimecardPunchDraggingId(null);
                                     setTimecardPunchDragOverId(null);
                                   }}
                                   className={[
-                                    'relative rounded-2xl px-4 py-4',
+                                    'relative rounded-2xl px-4 py-4 transition-[transform,box-shadow,opacity,background-color] duration-200 ease-out will-change-transform',
                                     themeMode === 'light' ? 'border border-slate-200 bg-slate-50' : 'bg-white/5',
-                                    timecardPunchDraggingId === rowId ? 'opacity-60' : '',
-                                    timecardPunchDragOverId === rowId && timecardPunchDraggingId !== rowId
+                                    !isLocked && !timecardPunchReadOnly ? 'cursor-grab active:cursor-grabbing' : '',
+                                    isDragSource ? 'opacity-70 scale-[0.985]' : '',
+                                    isSwapPairHighlighted
                                       ? themeMode === 'light'
-                                        ? 'ring-2 ring-neon/70'
+                                        ? 'ring-2 ring-neon/70 shadow-[0_0_24px_rgba(132,255,0,0.18)]'
                                         : 'ring-2 ring-neon/70 shadow-glow'
                                       : ''
                                   ].join(' ')}
                                 >
-                                  {!timecardPunchReadOnly && (
-                                    <div
-                                      role="button"
-                                      aria-label={t('拖拽互换', 'Drag to swap')}
-                                      draggable={!isLocked}
-                                      onDragStart={(e) => {
-                                        if (isLocked) return;
-                                        setTimecardPunchDraggingId(rowId);
-                                        setTimecardPunchDragOverId(null);
-                                        e.dataTransfer.effectAllowed = 'move';
-                                        e.dataTransfer.setData('text/plain', rowId);
-                                      }}
-                                      className={[
-                                        'absolute left-3 top-3 inline-flex h-6 min-w-[28px] cursor-grab items-center justify-center rounded-md px-1 text-xs',
-                                        themeMode === 'light' ? 'bg-slate-200 text-slate-700' : 'bg-white/10 text-slate-300'
-                                      ].join(' ')}
-                                      title={t('拖拽互换位置', 'Drag to swap')}
-                                    >
-                                      ⋮⋮
-                                    </div>
-                                  )}
                                   {!timecardPunchReadOnly && (
                                     <button
                                       type="button"
