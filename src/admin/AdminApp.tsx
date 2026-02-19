@@ -37,6 +37,8 @@ const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | 
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
+const DEVICE_COUNTING_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+const DEVICE_COUNTED_AT_NOTE_PATTERN = /\[COUNTED_AT=([^\]]+)\]/i;
 const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
 const OBUP_REPORT_DETAILS_TABLE =
   (import.meta.env.VITE_OBUP_REPORT_DETAILS_TABLE as string | undefined) ?? 'report_details';
@@ -336,6 +338,11 @@ const getDayIndexFromTemplateDate = (dateOnly: string) => {
 };
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const parseDeviceCountedAtFromNote = (note: unknown) => {
+  const text = String(note ?? '');
+  const m = text.match(DEVICE_COUNTED_AT_NOTE_PATTERN);
+  return m?.[1] ? String(m[1]).trim() : '';
+};
 const SCHEDULE_PICKER_WIDTH = 176;
 const SCHEDULE_PICKER_HEIGHT_ESTIMATE = 180;
 const SCHEDULE_PICKER_MARGIN = 8;
@@ -785,6 +792,7 @@ export default function AdminApp() {
   const [deviceSearch, setDeviceSearch] = useState('');
   const [deviceFilterPosition, setDeviceFilterPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [deviceFilterType, setDeviceFilterType] = useState<DeviceType | ''>('');
+  const [deviceBorrowedOnly, setDeviceBorrowedOnly] = useState(false);
 
   const [scheduleRows, setScheduleRows] = useState<ScheduleRow[]>([]);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
@@ -906,6 +914,38 @@ export default function AdminApp() {
     }
     return map;
   }, [canonicalDeviceLoans, employeeNameByStaffId]);
+  const deviceLastLoanAtBySn = useMemo(() => {
+    const sortedDesc = [...canonicalDeviceLoans].sort((a, b) => {
+      const aMs = Date.parse(String(a.created_at ?? '')) || 0;
+      const bMs = Date.parse(String(b.created_at ?? '')) || 0;
+      if (aMs !== bMs) return bMs - aMs;
+      return String(b.id ?? '').localeCompare(String(a.id ?? ''), 'en-US');
+    });
+    const map = new Map<string, string>();
+    for (const row of sortedDesc) {
+      const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
+      if (!sn || map.has(sn)) continue;
+      map.set(sn, String(row.created_at ?? ''));
+    }
+    return map;
+  }, [canonicalDeviceLoans]);
+  const deviceLastUserBySn = useMemo(() => {
+    const sortedDesc = [...canonicalDeviceLoans].sort((a, b) => {
+      const aMs = Date.parse(String(a.created_at ?? '')) || 0;
+      const bMs = Date.parse(String(b.created_at ?? '')) || 0;
+      if (aMs !== bMs) return bMs - aMs;
+      return String(b.id ?? '').localeCompare(String(a.id ?? ''), 'en-US');
+    });
+    const map = new Map<string, string>();
+    for (const row of sortedDesc) {
+      const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
+      if (!sn || map.has(sn)) continue;
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      const staffName = employeeNameByStaffId.get(staff) ?? staff;
+      map.set(sn, staffName || '-');
+    }
+    return map;
+  }, [canonicalDeviceLoans, employeeNameByStaffId]);
   const deviceRowsFiltered = useMemo(() => {
     const search = deviceSearch.trim().toLowerCase();
     return canonicalDeviceRows
@@ -914,8 +954,10 @@ export default function AdminApp() {
       const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
       const pos = String(row.position ?? '');
       const type = normalizeDeviceType(String(row.device_type ?? 'PDA'));
+      const borrowed = deviceCurrentBorrowBySn.get(sn);
       if (deviceFilterPosition && pos !== deviceFilterPosition) return false;
       if (deviceFilterType && type !== deviceFilterType) return false;
+      if (deviceBorrowedOnly && !borrowed) return false;
       if (!search) return true;
       return `${deviceName} ${sn} ${type} ${pos}`.toLowerCase().includes(search);
       })
@@ -927,7 +969,7 @@ export default function AdminApp() {
         const bSn = normalizeDeviceSn(String(b.device_sn ?? ''));
         return aSn.localeCompare(bSn, 'en-US', { numeric: true, sensitivity: 'base' });
       });
-  }, [canonicalDeviceRows, deviceFilterPosition, deviceFilterType, deviceSearch]);
+  }, [canonicalDeviceRows, deviceCurrentBorrowBySn, deviceBorrowedOnly, deviceFilterPosition, deviceFilterType, deviceSearch]);
   const selectedDeviceLabelSnSet = useMemo(() => new Set(deviceSelectedLabelSns), [deviceSelectedLabelSns]);
   const isAllFilteredDevicesSelected = useMemo(() => {
     if (deviceRowsFiltered.length === 0) return false;
@@ -7702,7 +7744,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     </div>
 
                     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <div className="grid gap-3 md:grid-cols-3">
+                      <div className="grid gap-3 md:grid-cols-4">
                         <input
                           value={deviceSearch}
                           onChange={(e) => setDeviceSearch(e.target.value)}
@@ -7736,6 +7778,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             </option>
                           ))}
                         </select>
+                        <label className="flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-200">
+                          <input
+                            type="checkbox"
+                            checked={deviceBorrowedOnly}
+                            onChange={(e) => setDeviceBorrowedOnly(e.target.checked)}
+                            disabled={isLocked}
+                            className="h-4 w-4 accent-lime-400 disabled:cursor-not-allowed"
+                          />
+                          {t('仅看借用中', 'Borrowed only')}
+                        </label>
                       </div>
 
                       {devicesError && <p className="mt-3 text-sm text-ember">{devicesError}</p>}
@@ -7749,9 +7801,21 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             const selected = selectedDeviceLabelSnSet.has(sn);
                             const canSelect = Boolean(sn);
                             const deviceName = String(row.device_name ?? '').trim();
+                            const lastUserName = deviceLastUserBySn.get(sn) ?? '-';
                             const borrowedAtMs = borrowed ? Date.parse(String(borrowed.created_at ?? '')) : 0;
                             const borrowAgeMs = borrowedAtMs > 0 ? Math.max(0, serverTime.getTime() - borrowedAtMs) : 0;
                             const isOverdue = Boolean(borrowed) && borrowAgeMs >= 24 * 60 * 60 * 1000;
+                            const countedAtMs = Date.parse(parseDeviceCountedAtFromNote(row.note)) || 0;
+                            const lastLoanAtMs = Date.parse(String(deviceLastLoanAtBySn.get(sn) ?? '')) || 0;
+                            const createdAtMs = Date.parse(String(row.created_at ?? '')) || 0;
+                            const needCounting = !borrowed
+                              ? (() => {
+                                  if (lastLoanAtMs <= 0 && countedAtMs <= 0) return true;
+                                  const baselineMs = Math.max(lastLoanAtMs, createdAtMs, countedAtMs);
+                                  if (!Number.isFinite(baselineMs) || baselineMs <= 0) return false;
+                                  return serverTime.getTime() - baselineMs >= DEVICE_COUNTING_STALE_MS;
+                                })()
+                              : false;
                             const pad = (n: number) => String(n).padStart(2, '0');
                             const durationText = borrowed
                               ? `${pad(Math.floor(borrowAgeMs / 3600000))}:${pad(Math.floor((borrowAgeMs % 3600000) / 60000))}:${pad(
@@ -7760,6 +7824,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               : '';
                             const cardToneClass = !active
                               ? 'border-rose-400/55 bg-rose-500/10'
+                              : needCounting
+                                ? 'border-sky-400/55 bg-sky-500/12'
                               : !borrowed
                                 ? 'border-emerald-400/45 bg-emerald-500/10'
                                 : isOverdue
@@ -7767,6 +7833,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   : 'border-amber-400/55 bg-amber-500/10';
                             const statusClass = !active
                               ? 'text-rose-300'
+                              : needCounting
+                                ? 'text-sky-300'
                               : !borrowed
                                 ? 'text-emerald-300'
                                 : isOverdue
@@ -7804,11 +7872,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                       {type}
                                       {row.position ? ` · ${row.position}` : ` · ${t('无岗位', 'No position')}`}
                                     </div>
+                                    <div className="mt-0.5 text-[11px] text-slate-400">SN: {sn || '-'}</div>
+                                    <div className="mt-0.5 text-[11px] text-slate-400">{t('最后使用者', 'Last user')}: {lastUserName}</div>
                                   </div>
                                   <div className="pt-2 text-right">
                                     <div className={['text-xs font-semibold', statusClass].join(' ')}>
                                       {!active
                                         ? t('停用', 'Disabled')
+                                        : needCounting
+                                          ? t('需盘点', 'Need Counting')
                                         : !borrowed
                                           ? t('空闲', 'Available')
                                           : isOverdue
