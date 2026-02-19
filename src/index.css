@@ -19,6 +19,8 @@ body {
     radial-gradient(800px 500px at 110% 10%, rgba(255, 59, 48, 0.15), transparent 55%),
     linear-gradient(180deg, #0b0f14 0%, #0a111a 100%);
   min-height: 100vh;
+  min-width: 1280px;
+  min-height: 720px;
 }
 
 body[data-theme='light'] {

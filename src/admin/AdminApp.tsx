@@ -3924,28 +3924,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       push(t('跳过', 'Skipped'), payload?.skipped_total);
     } else if (action === 'punch_manual_add') {
       summary = t('手动新增打卡', 'Manual punch add');
-      const beforeText = fmtHoursValue(payload?.hours_before);
-      const afterText = fmtHoursValue(payload?.hours_after);
       const hoursText = fmtHoursDelta(payload?.hours_before, payload?.hours_after);
       if (hoursText) summary = `${summary}: ${hoursText}`;
-      push(t('变动前工时', 'Hours before'), beforeText ? `${beforeText}h` : '-');
-      push(t('变动后工时', 'Hours after'), afterText ? `${afterText}h` : '-');
     } else if (action === 'punch_manual_edit') {
       summary = t('手动修改打卡', 'Manual punch edit');
-      const beforeText = fmtHoursValue(payload?.hours_before);
-      const afterText = fmtHoursValue(payload?.hours_after);
       const hoursText = fmtHoursDelta(payload?.hours_before, payload?.hours_after);
       if (hoursText) summary = `${summary}: ${hoursText}`;
-      push(t('变动前工时', 'Hours before'), beforeText ? `${beforeText}h` : '-');
-      push(t('变动后工时', 'Hours after'), afterText ? `${afterText}h` : '-');
     } else if (action === 'punch_manual_delete') {
       summary = t('手动删除打卡', 'Manual punch delete');
-      const beforeText = fmtHoursValue(payload?.hours_before);
-      const afterText = fmtHoursValue(payload?.hours_after);
       const hoursText = fmtHoursDelta(payload?.hours_before, payload?.hours_after);
       if (hoursText) summary = `${summary}: ${hoursText}`;
-      push(t('变动前工时', 'Hours before'), beforeText ? `${beforeText}h` : '-');
-      push(t('变动后工时', 'Hours after'), afterText ? `${afterText}h` : '-');
     } else if (action === 'device_add') {
       summary = t('新增设备', 'Device added');
       push(t('设备名', 'Device name'), payload?.device_name);
@@ -8444,7 +8432,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 )}
 
                 {!scheduleError && scheduleEmployeesFiltered.length > 0 && (
-                  <div className="no-scrollbar mt-4 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
+                  <div className="no-scrollbar mt-4 min-h-[320px] max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
                     <table className="min-w-[1620px] w-full table-fixed text-left text-xs leading-tight">
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
@@ -9830,7 +9818,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   </p>
                 )}
 
-                <div className="no-scrollbar mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
+                <div className="no-scrollbar mt-5 min-h-[320px] max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
                   <table className="min-w-[1500px] w-full table-fixed text-left text-xs leading-tight">
                     <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                       {(() => {

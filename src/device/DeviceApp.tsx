@@ -20,6 +20,7 @@ type DeviceRow = {
   position?: string | null;
   active?: boolean | null;
   note?: string | null;
+  created_at?: string | null;
 };
 
 type DeviceLoanRow = {
@@ -42,7 +43,9 @@ const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const BORROW_OVERDUE_MS = 24 * 60 * 60 * 1000;
+const COUNTING_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_FILTERS_STORAGE_KEY = 'ob_device_filters_v1';
+const COUNTING_NOTE_PATTERN = /\[COUNTED_AT=([^\]]+)\]/i;
 
 const supabase = createSupabaseClient({ persistSession: false });
 
@@ -50,6 +53,18 @@ const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperC
 const normalizeDeviceType = (value: unknown): DeviceType => {
   const raw = String(value ?? '').trim().toUpperCase();
   return raw === 'CAR' || raw === 'CART' ? 'CART' : 'PDA';
+};
+const parseCountedAtFromNote = (note: unknown) => {
+  const text = String(note ?? '');
+  const m = text.match(COUNTING_NOTE_PATTERN);
+  return m?.[1] ? String(m[1]).trim() : '';
+};
+const upsertCountedAtNote = (note: unknown, iso: string) => {
+  const marker = `[COUNTED_AT=${iso}]`;
+  const base = String(note ?? '').trim();
+  if (!base) return marker;
+  if (COUNTING_NOTE_PATTERN.test(base)) return base.replace(COUNTING_NOTE_PATTERN, marker).trim();
+  return `${base} ${marker}`.trim();
 };
 
 const playDeviceSound = (kind: 'successIn' | 'successOut' | 'error') => {
@@ -126,8 +141,11 @@ export default function DeviceApp() {
     text: 'Scan to borrow/return devices'
   });
   const [opLogs, setOpLogs] = useState<DeviceOpLog[]>([]);
+  const [countingOpen, setCountingOpen] = useState(false);
+  const [countingSnInput, setCountingSnInput] = useState('');
   const staffRef = useRef<HTMLInputElement | null>(null);
   const snRef = useRef<HTMLInputElement | null>(null);
+  const countingSnRef = useRef<HTMLInputElement | null>(null);
 
   const canonicalDevices = useMemo(() => {
     return devices
@@ -175,6 +193,37 @@ export default function DeviceApp() {
       } else {
         map.delete(row.device_sn!);
       }
+    }
+    return map;
+  }, [canonicalLoans]);
+  const lastUserBySn = useMemo(() => {
+    const sortedDesc = [...canonicalLoans].sort((a, b) => {
+      const aMs = Date.parse(String(a.created_at ?? '')) || 0;
+      const bMs = Date.parse(String(b.created_at ?? '')) || 0;
+      if (aMs !== bMs) return bMs - aMs;
+      return String(b.id ?? '').localeCompare(String(a.id ?? ''), 'en-US');
+    });
+    const map = new Map<string, string>();
+    for (const row of sortedDesc) {
+      const sn = String(row.device_sn ?? '').trim();
+      const staff = String(row.staff_id ?? '').trim();
+      if (!sn || !staff) continue;
+      if (!map.has(sn)) map.set(sn, staff);
+    }
+    return map;
+  }, [canonicalLoans]);
+  const lastLoanAtBySn = useMemo(() => {
+    const map = new Map<string, string>();
+    const sortedDesc = [...canonicalLoans].sort((a, b) => {
+      const aMs = Date.parse(String(a.created_at ?? '')) || 0;
+      const bMs = Date.parse(String(b.created_at ?? '')) || 0;
+      if (aMs !== bMs) return bMs - aMs;
+      return String(b.id ?? '').localeCompare(String(a.id ?? ''), 'en-US');
+    });
+    for (const row of sortedDesc) {
+      const sn = String(row.device_sn ?? '').trim();
+      if (!sn || map.has(sn)) continue;
+      map.set(sn, String(row.created_at ?? ''));
     }
     return map;
   }, [canonicalLoans]);
@@ -247,6 +296,56 @@ export default function DeviceApp() {
     setOpLogs((prev) => [entry, ...prev].slice(0, 16));
   };
 
+  const getNeedCounting = (row: (typeof canonicalDevices)[number]) => {
+    const sn = String(row.device_sn ?? '').trim();
+    if (!sn) return false;
+    if (currentBorrowBySn.get(sn)) return false;
+    const lastLoanAtMs = Date.parse(String(lastLoanAtBySn.get(sn) ?? '')) || 0;
+    const createdAtMs = Date.parse(String(row.created_at ?? '')) || 0;
+    const countedAtMs = Date.parse(parseCountedAtFromNote(row.note)) || 0;
+    if (lastLoanAtMs <= 0 && countedAtMs <= 0) return true;
+    const baselineMs = Math.max(lastLoanAtMs, createdAtMs, countedAtMs);
+    if (!Number.isFinite(baselineMs) || baselineMs <= 0) return false;
+    return nowMs - baselineMs >= COUNTING_STALE_MS;
+  };
+
+  const handleCountingSubmit = async () => {
+    const sn = normalizeDeviceSn(countingSnInput);
+    if (!sn) {
+      setMessage({ tone: 'error', text: 'Counting failed: empty SN' });
+      pushOpLog('error', 'Counting empty SN');
+      return;
+    }
+    const device = deviceBySn.get(sn);
+    if (!device) {
+      setMessage({ tone: 'error', text: `Counting failed: device not found (${sn})` });
+      pushOpLog('error', `Counting device not found (${sn})`);
+      setCountingSnInput('');
+      window.setTimeout(() => countingSnRef.current?.focus(), 0);
+      return;
+    }
+    if (!supabase) {
+      setMessage({ tone: 'error', text: 'Counting failed: missing system configuration' });
+      pushOpLog('error', 'Counting missing system configuration');
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const deviceName = String(device.device_name ?? '').trim() || sn;
+    const nextNote = upsertCountedAtNote(device.note, nowIso);
+    const updateRes = await supabase.from(DEVICE_TABLE).update({ note: nextNote }).eq('device_sn', sn);
+    if (updateRes.error) {
+      setMessage({ tone: 'error', text: `Counting failed: ${updateRes.error.message}` });
+      pushOpLog('error', `Counting ${deviceName} failed`);
+      return;
+    }
+    setMessage({ tone: 'success', text: `Counting success: ${deviceName}` });
+    pushOpLog('success', `Counting ${deviceName}`);
+    setCountingSnInput('');
+    await fetchAll();
+    setNowMs(Date.now());
+    window.setTimeout(() => countingSnRef.current?.focus(), 0);
+  };
+
   const fetchAll = async () => {
     if (!supabase) {
       setMessage({ tone: 'error', text: 'Missing Supabase configuration.' });
@@ -257,7 +356,7 @@ export default function DeviceApp() {
       const [deviceRes, loanRes] = await Promise.all([
         supabase
           .from(DEVICE_TABLE)
-          .select('id, device_name, device_sn, device_type, position, active, note')
+          .select('id, device_name, device_sn, device_type, position, active, note, created_at')
           .order('created_at', { ascending: false })
           .limit(3000),
         supabase
@@ -475,6 +574,20 @@ export default function DeviceApp() {
     return () => window.clearTimeout(timer);
   }, []);
 
+  useEffect(() => {
+    if (!countingOpen) return;
+    const timer = window.setTimeout(() => countingSnRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [countingOpen]);
+
+  const needCountingCount = useMemo(() => {
+    let count = 0;
+    for (const row of statusRows) {
+      if (getNeedCounting(row)) count += 1;
+    }
+    return count;
+  }, [statusRows, nowMs, currentBorrowBySn, lastLoanAtBySn]);
+
   return (
     <div className="min-h-screen bg-ink text-paper">
       <main className="w-full px-4 py-6 md:px-6 xl:px-8">
@@ -482,6 +595,13 @@ export default function DeviceApp() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h1 className="font-display text-2xl tracking-[0.08em]">Device Borrow/Return</h1>
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCountingOpen(true)}
+                className="rounded-xl border border-sky-400/50 bg-sky-500/15 px-3 py-2 text-sm font-semibold text-sky-200 transition hover:bg-sky-500/25"
+              >
+                Counting{needCountingCount > 0 ? ` (${needCountingCount})` : ''}
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -674,17 +794,30 @@ export default function DeviceApp() {
                 const sn = row.device_sn!;
                 const borrowed = currentBorrowBySn.get(sn);
                 const holderName = borrowed ? nameByStaffId[borrowed.staffId] ?? borrowed.staffId : '';
+                const lastUserStaffId = lastUserBySn.get(sn) ?? '';
+                const lastUserName = lastUserStaffId ? nameByStaffId[lastUserStaffId] ?? lastUserStaffId : '-';
                 const borrowAgeMs = borrowed ? getBorrowAgeMs(borrowed.createdAt) : 0;
-                const statusTone = !borrowed ? 'available' : borrowAgeMs >= BORROW_OVERDUE_MS ? 'overdue' : 'borrowed';
+                const needsCounting = getNeedCounting(row);
+                const statusTone = !borrowed
+                  ? needsCounting
+                    ? 'counting'
+                    : 'available'
+                  : borrowAgeMs >= BORROW_OVERDUE_MS
+                    ? 'overdue'
+                    : 'borrowed';
                 const cardClass =
                   statusTone === 'available'
                     ? 'border-emerald-400/45 bg-emerald-500/10'
+                    : statusTone === 'counting'
+                      ? 'border-sky-400/55 bg-sky-500/12'
                     : statusTone === 'overdue'
                       ? 'border-rose-400/55 bg-rose-500/10'
                       : 'border-amber-400/55 bg-amber-500/10';
                 const statusTextClass =
                   statusTone === 'available'
                     ? 'text-emerald-300'
+                    : statusTone === 'counting'
+                      ? 'text-sky-300'
                     : statusTone === 'overdue'
                       ? 'text-rose-300'
                       : 'text-amber-300';
@@ -705,9 +838,15 @@ export default function DeviceApp() {
                             </div>
                             <div className="text-xs text-slate-200">{holderName}</div>
                             <div className="text-[11px] text-slate-400">Duration: {formatBorrowDuration(borrowed.createdAt)}</div>
+                            <div className="mt-0.5 text-[11px] text-slate-400">Last user: {lastUserName}</div>
                           </>
                         ) : (
-                          <div className={['text-xs font-semibold', statusTextClass].join(' ')}>Available</div>
+                          <>
+                            <div className={['text-xs font-semibold', statusTextClass].join(' ')}>
+                              {statusTone === 'counting' ? 'Need Counting' : 'Available'}
+                            </div>
+                            <div className="mt-0.5 text-[11px] text-slate-400">Last user: {lastUserName}</div>
+                          </>
                         )}
                       </div>
                     </div>
@@ -719,6 +858,43 @@ export default function DeviceApp() {
           </div>
         </section>
       </main>
+      {countingOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-sky-400/40 bg-[#071022] p-4 shadow-[0_20px_80px_rgba(56,189,248,0.2)]">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-display text-lg tracking-[0.08em] text-sky-200">Counting</h3>
+              <button
+                type="button"
+                onClick={() => setCountingOpen(false)}
+                className="rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15"
+              >
+                Close
+              </button>
+            </div>
+            <p className="mb-2 text-xs text-slate-400">Scan device SN to clear Need Counting status.</p>
+            <input
+              ref={countingSnRef}
+              value={countingSnInput}
+              onChange={(e) => setCountingSnInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void handleCountingSubmit();
+                }
+              }}
+              placeholder="Scan device SN"
+              className="h-11 w-full rounded-xl border border-sky-400/30 bg-black/40 px-3 text-sm text-white outline-none transition focus:border-sky-300 focus:shadow-[0_0_0_1px_rgba(125,211,252,0.35)]"
+            />
+            <button
+              type="button"
+              onClick={() => void handleCountingSubmit()}
+              className="mt-3 h-10 w-full rounded-xl bg-sky-500/90 text-sm font-bold text-[#061423] transition hover:bg-sky-400"
+            >
+              Confirm Counting
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
