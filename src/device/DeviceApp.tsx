@@ -232,6 +232,7 @@ export default function DeviceApp() {
     const q = search.trim().toLowerCase();
     return canonicalDevices
       .filter((row) => {
+        if (row.active === false) return false;
         const position = String(row.position ?? '').trim() as AllowedPosition | '';
         const type = normalizeDeviceType(row.device_type);
         if (!q) return true;
@@ -246,6 +247,7 @@ export default function DeviceApp() {
         return matchesSearch && matchesPosition && matchesType && matchesBorrowed;
       })
       .filter((row) => {
+        if (row.active === false) return false;
         const position = String(row.position ?? '').trim() as AllowedPosition | '';
         const type = normalizeDeviceType(row.device_type);
         const holder = currentBorrowBySn.get(row.device_sn!);
