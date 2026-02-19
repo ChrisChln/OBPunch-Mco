@@ -1540,7 +1540,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   };
 
   useEffect(() => {
-    void loadDailyListSelectedPositionsGlobal({ forceResetWrite: true });
+    void loadDailyListSelectedPositionsGlobal();
   }, [user?.email]);
 
   useEffect(() => {
