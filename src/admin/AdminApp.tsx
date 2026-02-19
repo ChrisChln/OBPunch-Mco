@@ -98,7 +98,7 @@ const isWorkingScheduleRow = (row: ScheduleRow | null | undefined) =>
   Boolean(row && isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)));
 
 const getScheduleDisplayState = (row: ScheduleRow | undefined, hasPunch: boolean): ScheduleDisplayState => {
-  if (!row) return 'empty';
+  if (!row) return 'rest';
   const base = getScheduleBaseStateFromNote(row.note);
   if (hasPunch && isRestLikeScheduleBaseState(base)) return 'rest_worked';
   return base;
@@ -343,6 +343,7 @@ const parseDeviceCountedAtFromNote = (note: unknown) => {
   const m = text.match(DEVICE_COUNTED_AT_NOTE_PATTERN);
   return m?.[1] ? String(m[1]).trim() : '';
 };
+const isDateOnlyValue = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '').trim());
 const SCHEDULE_PICKER_WIDTH = 176;
 const SCHEDULE_PICKER_HEIGHT_ESTIMATE = 180;
 const SCHEDULE_PICKER_MARGIN = 8;
@@ -371,7 +372,6 @@ const ATTENDANCE_RESET_HOUR = Number.isFinite(ATTENDANCE_RESET_HOUR_RAW)
   : 5;
 const SHIFT_ANALYSIS_DAYS_RAW = Number(import.meta.env.VITE_SHIFT_ANALYSIS_DAYS ?? 30);
 const SHIFT_ANALYSIS_DAYS = Number.isFinite(SHIFT_ANALYSIS_DAYS_RAW) ? clamp(SHIFT_ANALYSIS_DAYS_RAW, 1, 90) : 30;
-const DAILY_LIST_RESET_HOUR = 5;
 
 const getDayRange = (weekStart: Date, dayIndex: number, dayCount = 1) => {
   const startBase = addDays(weekStart, dayIndex);
@@ -391,15 +391,6 @@ const getWorkDateRange = (workDate: string) => {
   const end = addDays(start, 1);
   return { start, end };
 };
-const getOperationalDateKey = (now: Date, cutoffHour: number) => {
-  const operationalStart = new Date(now);
-  operationalStart.setHours(cutoffHour, 0, 0, 0);
-  if (now.getTime() < operationalStart.getTime()) {
-    operationalStart.setDate(operationalStart.getDate() - 1);
-  }
-  return toDateOnly(operationalStart);
-};
-
 const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   const hit = ALLOWED_POSITIONS.find((p) => p.toLowerCase() === String(value ?? '').trim().toLowerCase());
   return hit ?? '';
@@ -643,7 +634,6 @@ export default function AdminApp() {
   const attendanceFetchSeqRef = useRef(0);
   const timecardPunchFetchSeqRef = useRef(0);
   const timecardRecomputeLastRunByWeekRef = useRef<Record<string, number>>({});
-  const dailyListResetKeyRef = useRef(getOperationalDateKey(new Date(), DAILY_LIST_RESET_HOUR));
   const scheduleLabelToneReadyRef = useRef(false);
   const scheduleLabelToneHydratingRef = useRef(false);
   const scheduleLabelToneLastSavedJsonRef = useRef('');
@@ -833,6 +823,7 @@ export default function AdminApp() {
     anchorTop: 0
   });
   const [dailyListOpen, setDailyListOpen] = useState(false);
+  const [dailyListDateInput, setDailyListDateInput] = useState(() => toDateOnly(addDays(new Date(), 1)));
   const [dailyListSelectedPositions, setDailyListSelectedPositions] = useState<Record<AllowedPosition, boolean>>(
     createEmptyPositionFlags
   );
@@ -1516,15 +1507,39 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   const saveDailyListSelectedPositionsGlobal = async (
     next: Record<AllowedPosition, boolean>,
-    operationalDateOverride?: string
+    targetDateOverride?: string
   ) => {
     if (!supabase) return;
-    const operationalDate = operationalDateOverride ?? getOperationalDateKey(serverTime, DAILY_LIST_RESET_HOUR);
+    const fallbackDate = toDateOnly(addDays(new Date(serverTime), 1));
+    const targetDateRaw = targetDateOverride ?? dailyListDateInput;
+    const targetDate = isDateOnlyValue(targetDateRaw) ? targetDateRaw : fallbackDate;
+    const baseRes = await supabase
+      .from(APP_SETTINGS_TABLE)
+      .select('id, key, value, updated_at')
+      .eq('key', DAILY_LIST_LIGHTS_KEY)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    const currentValue = ((((baseRes.data as any[]) ?? [])[0] as AppSettingRow | undefined)?.value ?? {}) as Record<string, unknown>;
+    const selectedByDateRaw = (currentValue.selected_by_date ?? null) as Record<string, unknown> | null;
+    const selectedByDate: Record<string, Record<AllowedPosition, boolean>> = {};
+    if (selectedByDateRaw && typeof selectedByDateRaw === 'object') {
+      for (const [dateKey, flagsRaw] of Object.entries(selectedByDateRaw)) {
+        if (!isDateOnlyValue(dateKey)) continue;
+        const flagsObj = (flagsRaw ?? {}) as Record<string, unknown>;
+        selectedByDate[dateKey] = {
+          Pick: Boolean(flagsObj.Pick),
+          Pack: Boolean(flagsObj.Pack),
+          Rebin: Boolean(flagsObj.Rebin),
+          Preship: Boolean(flagsObj.Preship),
+          Transfer: Boolean(flagsObj.Transfer)
+        };
+      }
+    }
+    selectedByDate[targetDate] = next;
     const payload = {
       key: DAILY_LIST_LIGHTS_KEY,
       value: {
-        operational_date: operationalDate,
-        selected_positions: next,
+        selected_by_date: selectedByDate,
         updated_at: new Date(serverTime).toISOString(),
         operator: user?.email ?? null
       },
@@ -1537,9 +1552,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
   };
 
-  const loadDailyListSelectedPositionsGlobal = async (options?: { forceResetWrite?: boolean }) => {
+  const loadDailyListSelectedPositionsGlobal = async (options?: { targetDateOverride?: string }) => {
     if (!supabase) return;
-    const operationalDate = getOperationalDateKey(serverTime, DAILY_LIST_RESET_HOUR);
+    const fallbackDate = toDateOnly(addDays(new Date(serverTime), 1));
+    const targetDateRaw = options?.targetDateOverride ?? dailyListDateInput;
+    const targetDate = isDateOnlyValue(targetDateRaw) ? targetDateRaw : fallbackDate;
     const res = await supabase
       .from(APP_SETTINGS_TABLE)
       .select('id, key, value, updated_at')
@@ -1551,33 +1568,40 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const row = (((res.data as any[]) ?? [])[0] ?? null) as AppSettingRow | null;
     const empty = createEmptyPositionFlags();
     let next = empty;
-    let shouldWriteReset = Boolean(options?.forceResetWrite);
 
     if (row) {
       const value = (row.value ?? {}) as Record<string, unknown>;
-      const savedOperationalDate = String(value.operational_date ?? '');
-      if (savedOperationalDate === operationalDate) {
-        const rawSelected = (value.selected_positions ?? null) as Record<string, unknown> | null;
-        if (rawSelected && typeof rawSelected === 'object') {
+      const selectedByDateRaw = (value.selected_by_date ?? null) as Record<string, unknown> | null;
+      if (selectedByDateRaw && typeof selectedByDateRaw === 'object') {
+        const byDate = (selectedByDateRaw[targetDate] ?? null) as Record<string, unknown> | null;
+        if (byDate && typeof byDate === 'object') {
           next = {
-            Pick: Boolean(rawSelected.Pick),
-            Pack: Boolean(rawSelected.Pack),
-            Rebin: Boolean(rawSelected.Rebin),
-            Preship: Boolean(rawSelected.Preship),
-            Transfer: Boolean(rawSelected.Transfer)
+            Pick: Boolean(byDate.Pick),
+            Pack: Boolean(byDate.Pack),
+            Rebin: Boolean(byDate.Rebin),
+            Preship: Boolean(byDate.Preship),
+            Transfer: Boolean(byDate.Transfer)
           };
         }
       } else {
-        shouldWriteReset = true;
+        // Backward compatibility for legacy single-day payload.
+        const legacyDate = String(value.operational_date ?? '');
+        if (legacyDate === targetDate) {
+          const rawSelected = (value.selected_positions ?? null) as Record<string, unknown> | null;
+          if (rawSelected && typeof rawSelected === 'object') {
+            next = {
+              Pick: Boolean(rawSelected.Pick),
+              Pack: Boolean(rawSelected.Pack),
+              Rebin: Boolean(rawSelected.Rebin),
+              Preship: Boolean(rawSelected.Preship),
+              Transfer: Boolean(rawSelected.Transfer)
+            };
+          }
+        }
       }
-    } else {
-      shouldWriteReset = true;
     }
 
     setDailyListSelectedPositions(next);
-    if (shouldWriteReset) {
-      await saveDailyListSelectedPositionsGlobal(empty, operationalDate);
-    }
   };
 
   const toggleDailyListSelectedPosition = (position: AllowedPosition) => {
@@ -1586,30 +1610,21 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         ...prev,
         [position]: !prev[position]
       };
-      void saveDailyListSelectedPositionsGlobal(next);
+      void saveDailyListSelectedPositionsGlobal(next, tomorrowDailyList.targetDate);
       return next;
     });
   };
 
   useEffect(() => {
-    void loadDailyListSelectedPositionsGlobal();
-  }, [user?.email]);
-
-  useEffect(() => {
-    const key = getOperationalDateKey(serverTime, DAILY_LIST_RESET_HOUR);
-    if (dailyListResetKeyRef.current === key) return;
-    dailyListResetKeyRef.current = key;
-    const empty = createEmptyPositionFlags();
-    setDailyListSelectedPositions(empty);
-    void saveDailyListSelectedPositionsGlobal(empty, key);
-  }, [serverTime]);
+    void loadDailyListSelectedPositionsGlobal({ targetDateOverride: dailyListDateInput });
+  }, [user?.email, dailyListDateInput]);
 
   useEffect(() => {
     if (!dailyListOpen) return;
     let active = true;
     const sync = async () => {
       if (!active) return;
-      await loadDailyListSelectedPositionsGlobal();
+      await loadDailyListSelectedPositionsGlobal({ targetDateOverride: dailyListDateInput });
     };
     void sync();
     const timer = window.setInterval(() => {
@@ -1619,7 +1634,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [dailyListOpen, user?.email, offsetMs]);
+  }, [dailyListOpen, user?.email, offsetMs, dailyListDateInput]);
 
   useEffect(() => {
     if (page !== 'timecard') {
@@ -3940,7 +3955,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (state === 'leave') return t('请假', 'Excuse');
       if (state === 'temp_rest') return t('临时排休', 'Temporary Rest');
       if (state === 'rest') return t('休息', 'Rest');
-      if (state === 'empty') return t('空', 'Empty');
+      if (state === 'empty') return t('休息', 'Rest');
       return '-';
     };
 
@@ -6585,8 +6600,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     return map;
   }, [employees]);
   const tomorrowDailyList = useMemo(() => {
-    const tomorrow = addDays(new Date(serverTime), 1);
-    const dayIndex = (tomorrow.getDay() + 6) % 7; // Mon=0..Sun=6
+    const parsedTarget =
+      /^\d{4}-\d{2}-\d{2}$/.test(dailyListDateInput)
+        ? new Date(`${dailyListDateInput}T00:00:00`)
+        : addDays(new Date(serverTime), 1);
+    const targetDay = Number.isNaN(parsedTarget.getTime()) ? addDays(new Date(serverTime), 1) : parsedTarget;
+    const dayIndex = (targetDay.getDay() + 6) % 7; // Mon=0..Sun=6
     const earlyRows: DailyListRow[] = [];
     const lateRows: DailyListRow[] = [];
     for (const employee of employees) {
@@ -6614,12 +6633,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     lateRows.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
 
     return {
-      targetDate: toDateOnly(tomorrow),
-      weekday: tomorrow.toLocaleDateString('en-US', { weekday: 'short' }),
+      targetDate: toDateOnly(targetDay),
+      weekday: targetDay.toLocaleDateString('en-US', { weekday: 'short' }),
       earlyRows,
       lateRows
     };
-  }, [serverTime, employees, scheduleRowsByStaffDayIndex, employeeProfileByStaffId, employeeShiftByStaffId]);
+  }, [serverTime, dailyListDateInput, employees, scheduleRowsByStaffDayIndex, employeeProfileByStaffId, employeeShiftByStaffId]);
   const tomorrowAttendanceCards = useMemo(() => {
     const countByKey: Record<string, number> = {};
     const addRows = (rows: DailyListRow[], shift: 'early' | 'late') => {
@@ -6647,7 +6666,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const early = tomorrowAttendanceCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
         const late = tomorrowAttendanceCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
         return { position, early, late, total: early + late };
-      }),
+    }),
     [tomorrowAttendanceCards]
   );
   const selectedDailyPositions = useMemo(
@@ -8198,8 +8217,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       type="button"
                       disabled={isLocked}
                       onClick={() => {
+                        const targetDate = toDateOnly(addDays(new Date(serverTime), 1));
+                        setDailyListDateInput(targetDate);
                         setDailyListFilterPositions(createEmptyPositionFlags());
-                        void loadDailyListSelectedPositionsGlobal();
+                        void loadDailyListSelectedPositionsGlobal({ targetDateOverride: targetDate });
                         setDailyListOpen(true);
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
@@ -8655,9 +8676,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                                 ? 'bg-sky-500 text-white'
                                               : state === 'temp_rest'
                                                 ? 'bg-red-800 text-red-100'
-                                              : state === 'rest'
-                                                ? 'bg-ember text-white'
-                                                : 'border border-white/20 bg-white/5 text-slate-200 hover:bg-white/10'
+                                              : 'bg-ember text-white'
                                           ].join(' ')}
                                         >
                                           {state === 'work'
@@ -8670,9 +8689,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                               ? t('排休出勤', 'Rest Worked')
                                               : state === 'temp_rest'
                                                 ? t('临时排休', 'Temporary Rest')
-                                              : state === 'rest'
-                                                ? t('休息', 'Rest')
-                                                : t('空', 'Empty')}
+                                              : t('休息', 'Rest')}
                                         </button>
                                         {scheduleCellAudit.length > 0 && (
                                           <span
@@ -8795,10 +8812,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             <h3 className={['font-display text-2xl tracking-[0.08em]', themeMode === 'light' ? 'text-slate-900' : 'text-white'].join(' ')}>
                               {t('每日名单', 'Daily list')}
                             </h3>
-                            <p className={['mt-2 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
-                              日期：<span className={themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'}>{tomorrowDailyList.targetDate}</span> {tomorrowDailyList.weekday}
-                            </p>
-                            <p className={['mt-1 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-500'].join(' ')}>班次按最近工时推断。</p>
+                            <div className="mt-2 w-fit">
+                              <input
+                                type="date"
+                                value={dailyListDateInput}
+                                disabled={isLocked}
+                                onChange={(e) => setDailyListDateInput(e.target.value)}
+                                className="h-9 rounded-xl border border-white/10 bg-black/30 px-3 text-xs text-white outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                              />
+                            </div>
                           </div>
                           <div className="min-w-[520px] flex-1">
                             <div className="grid grid-cols-2 gap-2 md:grid-cols-5">

@@ -2071,6 +2071,50 @@ const fetchPunchBoardUph = async (
   }, [page, punchLogPositionFilter]);
 
   useEffect(() => {
+    if (!supabase) return;
+    if (page !== 'punch') return;
+
+    let disposed = false;
+    let refreshTimer: number | null = null;
+
+    const refreshPunchPageRealtime = () => {
+      if (disposed) return;
+      void fetchArrivalMetrics();
+      void fetchAbsentRoster();
+      void fetchPunchBoard({ position: punchLogPositionFilter });
+    };
+
+    const scheduleRefresh = () => {
+      if (disposed) return;
+      if (refreshTimer !== null) return;
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        refreshPunchPageRealtime();
+      }, 250);
+    };
+
+    const channel = supabase
+      .channel(`obpunch-punch-live-${Date.now()}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'ob_punches' },
+        () => {
+          scheduleRefresh();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      disposed = true;
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+        refreshTimer = null;
+      }
+      void supabase.removeChannel(channel);
+    };
+  }, [page, punchLogPositionFilter]);
+
+  useEffect(() => {
     if (page !== 'punch') return;
     if (!showTomorrowListData) {
       setDailyRoster([]);
