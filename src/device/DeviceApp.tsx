@@ -5,6 +5,12 @@ import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/
 type DeviceType = 'PDA' | 'CART';
 type LoanAction = 'borrow' | 'return';
 type StatusTone = 'idle' | 'pending' | 'success' | 'error';
+type DeviceOpLog = {
+  id: string;
+  at: string;
+  tone: Exclude<StatusTone, 'idle' | 'pending'>;
+  text: string;
+};
 
 type DeviceRow = {
   id?: number | string;
@@ -36,6 +42,7 @@ const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const BORROW_OVERDUE_MS = 24 * 60 * 60 * 1000;
+const DEVICE_FILTERS_STORAGE_KEY = 'ob_device_filters_v1';
 
 const supabase = createSupabaseClient({ persistSession: false });
 
@@ -69,13 +76,46 @@ const playDeviceSound = (kind: 'successIn' | 'successOut' | 'error') => {
 };
 
 export default function DeviceApp() {
+  type SavedFilters = {
+    search: string;
+    positionFilter: AllowedPosition | '';
+    typeFilter: DeviceType | '';
+    borrowedOnly: boolean;
+  };
+  const loadSavedFilters = (): SavedFilters => {
+    if (typeof window === 'undefined') {
+      return { search: '', positionFilter: '', typeFilter: '', borrowedOnly: false };
+    }
+    try {
+      const raw = window.localStorage.getItem(DEVICE_FILTERS_STORAGE_KEY);
+      if (!raw) return { search: '', positionFilter: '', typeFilter: '', borrowedOnly: false };
+      const parsed = JSON.parse(raw) as {
+        search?: string;
+        positionFilter?: string;
+        typeFilter?: string;
+        borrowedOnly?: boolean;
+      };
+      const position =
+        ALLOWED_POSITIONS.includes(parsed.positionFilter as AllowedPosition) ? (parsed.positionFilter as AllowedPosition) : '';
+      const type = parsed.typeFilter === 'PDA' || parsed.typeFilter === 'CART' ? (parsed.typeFilter as DeviceType) : '';
+      return {
+        search: String(parsed.search ?? ''),
+        positionFilter: position,
+        typeFilter: type,
+        borrowedOnly: Boolean(parsed.borrowedOnly)
+      };
+    } catch {
+      return { search: '', positionFilter: '', typeFilter: '', borrowedOnly: false };
+    }
+  };
+  const savedFilters = loadSavedFilters();
   const [scanMode, setScanMode] = useState<LoanAction>('borrow');
   const [staffIdInput, setStaffIdInput] = useState('');
   const [snInput, setSnInput] = useState('');
-  const [search, setSearch] = useState('');
-  const [positionFilter, setPositionFilter] = useState<AllowedPosition | ''>('');
-  const [typeFilter, setTypeFilter] = useState<DeviceType | ''>('');
-  const [borrowedOnly, setBorrowedOnly] = useState(false);
+  const [search, setSearch] = useState(savedFilters.search);
+  const [positionFilter, setPositionFilter] = useState<AllowedPosition | ''>(savedFilters.positionFilter);
+  const [typeFilter, setTypeFilter] = useState<DeviceType | ''>(savedFilters.typeFilter);
+  const [borrowedOnly, setBorrowedOnly] = useState(savedFilters.borrowedOnly);
   const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [loans, setLoans] = useState<DeviceLoanRow[]>([]);
   const [nameByStaffId, setNameByStaffId] = useState<Record<string, string>>({});
@@ -85,6 +125,7 @@ export default function DeviceApp() {
     tone: 'idle',
     text: 'Scan to borrow/return devices'
   });
+  const [opLogs, setOpLogs] = useState<DeviceOpLog[]>([]);
   const staffRef = useRef<HTMLInputElement | null>(null);
   const snRef = useRef<HTMLInputElement | null>(null);
 
@@ -196,6 +237,15 @@ export default function DeviceApp() {
     if (!Number.isFinite(startMs) || startMs <= 0) return 0;
     return Math.max(0, nowMs - startMs);
   };
+  const pushOpLog = (tone: DeviceOpLog['tone'], text: string) => {
+    const entry: DeviceOpLog = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      at: new Date().toISOString(),
+      tone,
+      text
+    };
+    setOpLogs((prev) => [entry, ...prev].slice(0, 16));
+  };
 
   const fetchAll = async () => {
     if (!supabase) {
@@ -262,46 +312,74 @@ export default function DeviceApp() {
   const submit = async (mode: LoanAction) => {
     const staffId = normalizeStaffId(staffIdInput.trim());
     const sn = normalizeDeviceSn(snInput);
+    const toDeviceName = (nameRaw: unknown) => {
+      const name = String(nameRaw ?? '').trim();
+      return name || 'Unknown Device';
+    };
+    const getStaffName = (idRaw: unknown) => {
+      const id = normalizeStaffId(String(idRaw ?? '').trim());
+      return String(nameByStaffId[id] ?? '').trim() || 'Unknown Staff';
+    };
+    const clearBorrowInputsOnFailure = () => {
+      if (mode !== 'borrow') return;
+      setStaffIdInput('');
+      setSnInput('');
+      window.setTimeout(() => staffRef.current?.focus(), 0);
+    };
     if (mode === 'borrow' && (!staffId || !isValidStaffIdValue(staffId))) {
       setMessage({ tone: 'error', text: 'Invalid staff ID. Please scan again.' });
+      pushOpLog('error', 'Borrow invalid employee scan');
+      clearBorrowInputsOnFailure();
       playDeviceSound('error');
       return;
     }
     if (!sn) {
       setMessage({ tone: 'error', text: 'Empty device SN. Please scan again.' });
+      pushOpLog('error', 'Return empty device scan');
       playDeviceSound('error');
       return;
     }
     if (!supabase) {
       setMessage({ tone: 'error', text: 'Missing Supabase configuration.' });
+      pushOpLog('error', `${mode === 'borrow' ? 'Borrow' : 'Return'} missing system configuration`);
       playDeviceSound('error');
       return;
     }
 
+    let borrowStaffName = '';
     if (mode === 'borrow') {
-      const employeeCheck = await supabase.from(EMPLOYEE_TABLE).select('staff_id').eq('staff_id', staffId).limit(1);
+      const employeeCheck = await supabase.from(EMPLOYEE_TABLE).select('staff_id, name').eq('staff_id', staffId).limit(1);
       if (employeeCheck.error) {
         setMessage({ tone: 'error', text: `Failed to verify employee: ${employeeCheck.error.message}` });
+        pushOpLog('error', 'Borrow employee verify error');
+        clearBorrowInputsOnFailure();
         playDeviceSound('error');
         return;
       }
-      const employeeRows = ((employeeCheck.data as Array<{ staff_id?: string | null }>) ?? []).filter((row) =>
+      const employeeRows = ((employeeCheck.data as Array<{ staff_id?: string | null; name?: string | null }>) ?? []).filter((row) =>
         normalizeStaffId(String(row.staff_id ?? '').trim())
       );
       if (employeeRows.length === 0) {
         setMessage({ tone: 'error', text: `Employee not registered: ${staffId}` });
+        pushOpLog('error', 'Borrow employee not registered');
+        clearBorrowInputsOnFailure();
         playDeviceSound('error');
         return;
       }
+      borrowStaffName = String(employeeRows[0]?.name ?? '').trim();
     }
     const device = deviceBySn.get(sn);
     if (!device) {
       setMessage({ tone: 'error', text: `Device not found: ${sn}` });
+      pushOpLog('error', `${mode === 'borrow' ? 'Borrow' : 'Return'} device not found`);
       playDeviceSound('error');
       return;
     }
+    const deviceName = toDeviceName(device.device_name);
     if (device.active === false) {
       setMessage({ tone: 'error', text: `Device disabled: ${sn}` });
+      pushOpLog('error', `${mode === 'borrow' ? 'Borrow' : 'Return'} ${deviceName} disabled`);
+      clearBorrowInputsOnFailure();
       playDeviceSound('error');
       return;
     }
@@ -309,11 +387,14 @@ export default function DeviceApp() {
     if (mode === 'borrow' && borrowed) {
       const holderName = nameByStaffId[borrowed.staffId] ?? borrowed.staffId;
       setMessage({ tone: 'error', text: `Already borrowed: ${sn} (${holderName})` });
+      pushOpLog('error', `Borrow ${deviceName} is with ${holderName}`);
+      clearBorrowInputsOnFailure();
       playDeviceSound('error');
       return;
     }
     if (mode === 'return' && !borrowed) {
       setMessage({ tone: 'error', text: `Not currently borrowed: ${sn}` });
+      pushOpLog('error', `Return ${deviceName} not currently borrowed`);
       playDeviceSound('error');
       return;
     }
@@ -330,10 +411,25 @@ export default function DeviceApp() {
     ]);
     if (res.error) {
       setMessage({ tone: 'error', text: `Submit failed: ${res.error.message}` });
+      if (mode === 'borrow') {
+        const staffName = borrowStaffName || getStaffName(staffId);
+        pushOpLog('error', `Borrow ${staffName} / ${deviceName}`);
+        clearBorrowInputsOnFailure();
+      } else {
+        const holderName = getStaffName(borrowed!.staffId);
+        pushOpLog('error', `Return ${holderName} / ${deviceName}`);
+      }
       playDeviceSound('error');
       return;
     }
 
+    if (mode === 'borrow') {
+      const staffName = borrowStaffName || getStaffName(staffId);
+      pushOpLog('success', `Borrow ${staffName} / ${deviceName}`);
+    } else {
+      const holderName = getStaffName(borrowed!.staffId);
+      pushOpLog('success', `Return ${holderName} / ${deviceName}`);
+    }
     setMessage({
       tone: 'success',
       text: mode === 'borrow' ? `Borrowed: ${staffId} -> ${sn}` : `Returned: ${sn}`
@@ -360,6 +456,19 @@ export default function DeviceApp() {
     }, 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(
+      DEVICE_FILTERS_STORAGE_KEY,
+      JSON.stringify({
+        search,
+        positionFilter,
+        typeFilter,
+        borrowedOnly
+      })
+    );
+  }, [search, positionFilter, typeFilter, borrowedOnly]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => staffRef.current?.focus(), 0);
@@ -423,38 +532,99 @@ export default function DeviceApp() {
                 Return
               </button>
             </div>
-            {scanMode === 'borrow' && (
-              <>
-                <label className="text-xs uppercase tracking-[0.18em] text-slate-400">US ID</label>
-                <input
-                  ref={staffRef}
-                  value={staffIdInput}
-                  onChange={(e) => setStaffIdInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      snRef.current?.focus();
-                    }
-                  }}
-                  placeholder="Scan staff ID first"
-                  className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow"
-                />
-              </>
-            )}
-            <label className="mt-3 block text-xs uppercase tracking-[0.18em] text-slate-400">SN</label>
-            <input
-              ref={snRef}
-              value={snInput}
-              onChange={(e) => setSnInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  void submit(scanMode);
-                }
-              }}
-              placeholder="Then scan device SN"
-              className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow"
-            />
+            <div className="min-h-[152px]">
+              <label
+                className={[
+                  'text-xs uppercase tracking-[0.18em] text-slate-400 transition-opacity',
+                  scanMode === 'borrow' ? 'opacity-100' : 'opacity-0'
+                ].join(' ')}
+              >
+                US ID
+              </label>
+              <input
+                ref={staffRef}
+                value={staffIdInput}
+                onChange={(e) => setStaffIdInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    snRef.current?.focus();
+                  }
+                }}
+                placeholder="Scan staff ID first"
+                disabled={scanMode !== 'borrow'}
+                className={[
+                  'mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow',
+                  scanMode === 'borrow' ? 'opacity-100' : 'pointer-events-none opacity-0'
+                ].join(' ')}
+              />
+              <label className="mt-3 block text-xs uppercase tracking-[0.18em] text-slate-400">SN</label>
+              <input
+                ref={snRef}
+                value={snInput}
+                onChange={(e) => setSnInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void submit(scanMode);
+                  }
+                }}
+                placeholder="Then scan device SN"
+                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow"
+              />
+            </div>
+            <div className="mt-3 h-[420px] rounded-2xl border border-white/10 bg-black/25 p-3">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Latest Result</div>
+              <div className="h-[calc(100%-1.5rem)] space-y-2 overflow-auto pr-1">
+                {opLogs.map((row) => (
+                  <div
+                    key={row.id}
+                    className={[
+                      'rounded-xl border bg-white/5 px-2.5 py-1.5',
+                      row.tone === 'success' ? 'border-emerald-400/55' : 'border-rose-400/55'
+                    ].join(' ')}
+                  >
+                    <div className="flex items-center gap-2 text-xs font-semibold leading-none">
+                      <span className="shrink-0 text-[11px] text-slate-400">{new Date(row.at).toLocaleTimeString('en-US', { hour12: false })}</span>
+                      {(() => {
+                        const isBorrow = row.text.startsWith('Borrow');
+                        const isReturn = row.text.startsWith('Return');
+                        const actionLabel = isBorrow ? 'Borrow' : isReturn ? 'Return' : '';
+                        const actionClass = isBorrow
+                          ? 'bg-[#121a24] text-[#00f28a]'
+                          : isReturn
+                            ? 'bg-[#121a24] text-[#ff3b3b]'
+                            : row.tone === 'success'
+                              ? 'bg-[#121a24] text-[#00f28a]'
+                              : 'bg-[#121a24] text-[#ff3b3b]';
+                        return (
+                          <>
+                            {actionLabel && (
+                              <span className={['inline-flex h-5 min-w-[58px] items-center justify-center rounded-lg px-2 text-[10px] font-bold leading-none tracking-[0.06em]', actionClass].join(' ')}>
+                                {actionLabel}
+                              </span>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+                    {(() => {
+                      const isBorrow = row.text.startsWith('Borrow');
+                      const isReturn = row.text.startsWith('Return');
+                      const actionLabel = isBorrow ? 'Borrow' : isReturn ? 'Return' : '';
+                      const detailText = actionLabel ? row.text.slice(actionLabel.length).trimStart() : row.text;
+                      const detailClass = row.tone === 'success' ? 'text-emerald-200' : 'text-rose-200';
+                      return (
+                        <div className={['mt-1 text-xs leading-4 break-words', detailClass].join(' ')} style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }} title={detailText}>
+                          {detailText}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ))}
+                {opLogs.length === 0 && <div className="pt-10 text-center text-xs text-slate-500">No records yet</div>}
+              </div>
+            </div>
           </div>
 
           <div className="glass rounded-3xl p-4">

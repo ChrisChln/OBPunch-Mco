@@ -727,8 +727,16 @@ export default function App() {
   const [lastPunchActionError, setLastPunchActionError] = useState<string | null>(null);
   const [deviceReturnReminder, setDeviceReturnReminder] = useState<{
     staffId: string;
+    staffName: string;
     items: DeviceOutstandingItem[];
   } | null>(null);
+  useEffect(() => {
+    if (!deviceReturnReminder) return;
+    const timer = window.setTimeout(() => {
+      setDeviceReturnReminder(null);
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [deviceReturnReminder]);
 
   const punchBoardFiltered = useMemo(() => {
     if (!punchLogPositionFilter) return punchBoard;
@@ -2152,7 +2160,8 @@ const fetchPunchBoardUph = async (
       if (action === 'OUT') {
         const outstanding = await fetchOutstandingDevicesByStaff(normalizedId);
         if (!outstanding.error && outstanding.items.length > 0) {
-          setDeviceReturnReminder({ staffId: normalizedId, items: outstanding.items });
+          const reminderName = String(punchBoardEmployeeMap[normalizedId]?.name ?? '').trim() || normalizedId;
+          setDeviceReturnReminder({ staffId: normalizedId, staffName: reminderName, items: outstanding.items });
         }
       }
       void fetchPunchBoard({ position: punchLogPositionFilter });
@@ -3106,14 +3115,16 @@ const fetchPunchBoardUph = async (
             <div className="glass w-full max-w-xl rounded-2xl border border-amber-300/40 p-5 shadow-2xl">
               <div className="text-lg font-semibold text-amber-200">Device Return Reminder</div>
               <div className="mt-2 text-sm text-slate-200">
-                {deviceReturnReminder.staffId} punched OUT but still has {deviceReturnReminder.items.length} borrowed device(s).
+                {deviceReturnReminder.staffName} punched OUT but still has {deviceReturnReminder.items.length} borrowed device(s).
+              </div>
+              <div className="mt-1 text-sm text-slate-300">
+                {deviceReturnReminder.staffName} marcó SALIDA pero todavía tiene {deviceReturnReminder.items.length} dispositivo(s) prestado(s).
               </div>
               <div className="mt-3 max-h-60 space-y-2 overflow-auto pr-1">
                 {deviceReturnReminder.items.map((item) => (
                   <div key={item.deviceSn} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-                    <div className="text-sm font-semibold text-slate-100">{item.deviceName}</div>
-                    <div className="text-xs text-slate-300">
-                      {item.deviceType || 'Device'} {item.position ? `· ${item.position}` : ''} · SN {item.deviceSn}
+                    <div className="text-sm font-semibold text-slate-100">
+                      {item.deviceName} · {item.deviceType || 'Device'}{item.position ? ` · ${item.position}` : ''}
                     </div>
                   </div>
                 ))}
