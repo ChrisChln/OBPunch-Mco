@@ -755,19 +755,13 @@ export default function AdminApp() {
   const [employeeSortByLastPunchDesc, setEmployeeSortByLastPunchDesc] = useState(false);
   const [employeeBadgePrintingStaffId, setEmployeeBadgePrintingStaffId] = useState<string | null>(null);
   const [employeeBadgeBatchPrinting, setEmployeeBadgeBatchPrinting] = useState(false);
+  const [employeeBadgeBatchModalOpen, setEmployeeBadgeBatchModalOpen] = useState(false);
+  const [employeeBadgeBatchSelectedStaffIds, setEmployeeBadgeBatchSelectedStaffIds] = useState<string[]>([]);
   const [employeeBadgePreview, setEmployeeBadgePreview] = useState<{
     staff: string;
     name: string;
     agency: string;
     position: string;
-    qrDataUrl: string;
-  } | null>(null);
-  const [employeeAccountPrintingStaffId, setEmployeeAccountPrintingStaffId] = useState<string | null>(null);
-  const [employeeAccountPreview, setEmployeeAccountPreview] = useState<{
-    staff: string;
-    name: string;
-    workAccount: string;
-    workPassword: string;
     qrDataUrl: string;
   } | null>(null);
   const [deviceLabelPrintingSn, setDeviceLabelPrintingSn] = useState<string | null>(null);
@@ -3650,6 +3644,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         --pageGap: 7mm;
         --badgeW: calc((var(--pageW) - (2 * var(--pagePad)) - var(--pageGap)) / 2);
         --badgeH: calc((var(--pageH) - (2 * var(--pagePad)) - (3 * var(--pageGap))) / 4);
+        --backShiftX: 0mm;
+        --backShiftY: 1.2mm;
         --cardPadX: 14px;
         --cardPadY: 12px;
         --headerH: 44px;
@@ -3681,6 +3677,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         break-after: page;
       }
       .page:last-child { page-break-after: auto; break-after: auto; }
+      .page.back {
+        position: relative;
+        left: var(--backShiftX);
+        top: var(--backShiftY);
+      }
       .badge {
         width: var(--badgeW);
         height: var(--badgeH);
@@ -3856,43 +3857,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       setEmployeeAuditRows(auditRows.filter((r) => normalizeStaffId(String(r.staff_id ?? '').trim()) === staffKey).slice(0, 30));
     } finally {
       setEmployeeAuditLoading(false);
-    }
-  };
-
-  const printEmployeeAccountCard = async (payload: {
-    staff: string;
-    name: string;
-    workAccount: string;
-    workPassword: string;
-  }) => {
-    const staff = normalizeStaffId(String(payload.staff ?? '').trim());
-    const workAccount = String(payload.workAccount ?? '').trim();
-    const workPassword = String(payload.workPassword ?? '').trim();
-    if (!staff) return;
-    if (!workAccount) {
-      setStatus({ tone: 'error', message: t('该员工未设置工作账号。', 'Work account is empty for this employee.') });
-      return;
-    }
-    setEmployeeAccountPrintingStaffId(staff);
-    try {
-      const qrDataUrl = await QRCode.toDataURL(workAccount, {
-        errorCorrectionLevel: 'M',
-        margin: 1,
-        width: 920,
-        color: { dark: '#0b1220', light: '#ffffff' }
-      });
-      setEmployeeAccountPreview({
-        staff,
-        name: String(payload.name ?? '').trim() || '-',
-        workAccount,
-        workPassword: workPassword || '-',
-        qrDataUrl
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err ?? 'unknown error');
-      setStatus({ tone: 'error', message: t(`打印失败：${message}`, `Print failed: ${message}`) });
-    } finally {
-      setEmployeeAccountPrintingStaffId((current) => (current === staff ? null : current));
     }
   };
 
@@ -4142,7 +4106,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   useEffect(() => {
     const onAfterPrint = () => {
       setEmployeeBadgePreview(null);
-      setEmployeeAccountPreview(null);
       setDeviceLabelPreview(null);
     };
     window.addEventListener('afterprint', onAfterPrint);
@@ -8509,7 +8472,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 onClick={() => setPage('audit')}
                 className={tabClass(page === 'audit')}
               >
-                {t('操作日志', 'Audit')}
+                {t('日志', 'Log')}
               </button>
               <button
                 type="button"
@@ -9041,7 +9004,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
             {page === 'audit' && (
               <section className="glass reveal rounded-3xl px-6 py-8">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="font-display text-2xl tracking-[0.08em]">{t('操作日志', 'Audit Log')}</h2>
+                  <h2 className="font-display text-2xl tracking-[0.08em]">{t('日志', 'Log')}</h2>
                   <button
                     type="button"
                     disabled={isLocked}
@@ -10159,22 +10122,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     <button
                       type="button"
                       disabled={isLocked || employeeBadgeBatchPrinting || employeesFiltered.length === 0}
-                      onClick={async () => {
-                        setEmployeeBadgeBatchPrinting(true);
-                        try {
-                          await printEmployeeBadgeCards(
-                            employeesFiltered.map((e) => ({
-                              staff: String(e.staff_id ?? '').trim(),
-                              name: String(e.name ?? '').trim(),
-                              agency: String(e.agency ?? e.Agency ?? '').trim(),
-                              position: String(e.position ?? e.Position ?? '').trim(),
-                              workAccount: String(e.work_account ?? e.WorkAccount ?? '').trim(),
-                              workPassword: String(e.work_password ?? e.WorkPassword ?? '').trim()
-                            }))
-                          );
-                        } finally {
-                          setEmployeeBadgeBatchPrinting(false);
-                        }
+                      onClick={() => {
+                        const allStaff = Array.from(
+                          new Set(
+                            employeesFiltered
+                              .map((e) => normalizeStaffId(String(e.staff_id ?? '').trim()))
+                              .filter(Boolean)
+                          )
+                        );
+                        setEmployeeBadgeBatchSelectedStaffIds(allStaff);
+                        setEmployeeBadgeBatchModalOpen(true);
                       }}
                       className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
                     >
@@ -10615,24 +10572,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 onClick={() => void openEmployeeAuditLog(staff, name)}
                                 className="mr-2 rounded-xl bg-cyan-500/20 px-4 py-1.5 text-xs font-semibold text-cyan-200 transition hover:-translate-y-0.5 hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-60"
                               >
-                                {t('操作日志', 'Audit')}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={isLocked || employeeAccountPrintingStaffId === staff}
-                                onClick={() =>
-                                  void printEmployeeAccountCard({
-                                    staff,
-                                    name,
-                                    workAccount,
-                                    workPassword
-                                  })
-                                }
-                                className="mr-2 rounded-xl bg-fuchsia-500/20 px-4 py-1.5 text-xs font-semibold text-fuchsia-200 transition hover:-translate-y-0.5 hover:bg-fuchsia-500/30 disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                {employeeAccountPrintingStaffId === staff
-                                  ? t('生成中...', 'Generating...')
-                                  : t('打印账号', 'Print account')}
+                                {t('日志', 'Log')}
                               </button>
                               <button
                                 type="button"
@@ -10649,7 +10589,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 }
                                 className="mr-2 rounded-xl bg-neon px-4 py-1.5 text-xs font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
                               >
-                                {employeeBadgePrintingStaffId === staff ? t('生成中...', 'Generating...') : t('打印工牌', 'Print badge')}
+                                {employeeBadgePrintingStaffId === staff ? t('生成中...', 'Generating...') : t('工牌', 'Badge')}
                               </button>
                               <button
                                 type="button"
@@ -10692,7 +10632,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       <div className="w-full max-w-3xl rounded-3xl border border-white/10 bg-slate-950/95 p-5 shadow-2xl backdrop-blur">
                         <div className="flex items-start justify-between gap-4">
                           <div>
-                            <div className="text-xs uppercase tracking-[0.25em] text-cyan-300">{t('操作日志', 'Audit Log')}</div>
+                            <div className="text-xs uppercase tracking-[0.25em] text-cyan-300">{t('日志', 'Log')}</div>
                             <div className="mt-2 text-sm text-slate-300">
                               <span className="font-semibold text-white">{employeeAuditName || '-'}</span>
                               <span className="ml-2 font-mono text-slate-400">
@@ -10751,6 +10691,144 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             </>
                           )}
                         </div>
+                      </div>
+                    </div>,
+                    document.body
+                  )}
+
+                {employeeBadgeBatchModalOpen &&
+                  typeof document !== 'undefined' &&
+                  createPortal(
+                    <div className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-black/60 px-4 py-10">
+                      <div className="w-full max-w-2xl rounded-3xl border border-white/10 bg-slate-950/95 p-5 shadow-2xl backdrop-blur">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="text-xs uppercase tracking-[0.25em] text-neon">{t('批量生成工牌', 'Batch badges')}</div>
+                            <div className="mt-2 text-sm text-slate-300">
+                              {t('勾选需要打印的员工', 'Select employees to print')}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setEmployeeBadgeBatchModalOpen(false)}
+                            className="rounded-xl bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15"
+                          >
+                            {t('关闭', 'Close')}
+                          </button>
+                        </div>
+
+                        {(() => {
+                          const modalRows = employeesFiltered
+                            .map((e) => {
+                              const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
+                              if (!staff) return null;
+                              return {
+                                staff,
+                                name: String(e.name ?? '').trim() || '-',
+                                agency: String(e.agency ?? e.Agency ?? '').trim() || '-',
+                                position: String(e.position ?? e.Position ?? '').trim() || '-',
+                                workAccount: String(e.work_account ?? e.WorkAccount ?? '').trim() || '-',
+                                workPassword: String(e.work_password ?? e.WorkPassword ?? '').trim() || '-'
+                              };
+                            })
+                            .filter(Boolean) as Array<{
+                            staff: string;
+                            name: string;
+                            agency: string;
+                            position: string;
+                            workAccount: string;
+                            workPassword: string;
+                          }>;
+                          const selectedSet = new Set(employeeBadgeBatchSelectedStaffIds);
+                          const selectedCount = modalRows.filter((r) => selectedSet.has(r.staff)).length;
+                          return (
+                            <>
+                              <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                                <div className="text-xs text-slate-400">
+                                  {t(`已选择 ${selectedCount} / ${modalRows.length}`, `Selected ${selectedCount} / ${modalRows.length}`)}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setEmployeeBadgeBatchSelectedStaffIds(modalRows.map((r) => r.staff))}
+                                    className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15"
+                                  >
+                                    {t('全选', 'Select all')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEmployeeBadgeBatchSelectedStaffIds([])}
+                                    className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15"
+                                  >
+                                    {t('清空', 'Clear')}
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="mt-3 max-h-[52vh] space-y-1 overflow-y-auto rounded-2xl border border-white/10 bg-black/20 p-2">
+                                {modalRows.map((row) => {
+                                  const checked = selectedSet.has(row.staff);
+                                  return (
+                                    <label
+                                      key={row.staff}
+                                      className={[
+                                        'flex cursor-pointer items-center justify-between rounded-xl border px-3 py-2 transition',
+                                        checked
+                                          ? 'border-neon/50 bg-neon/10 text-neon'
+                                          : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                                      ].join(' ')}
+                                    >
+                                      <div className="min-w-0">
+                                        <div className="text-sm font-semibold">{row.name}</div>
+                                        <div className="text-xs text-slate-400">
+                                          {displayStaffId(row.staff)} · {row.position} · {row.agency}
+                                        </div>
+                                      </div>
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() =>
+                                          setEmployeeBadgeBatchSelectedStaffIds((prev) =>
+                                            prev.includes(row.staff) ? prev.filter((id) => id !== row.staff) : [...prev, row.staff]
+                                          )
+                                        }
+                                        className="h-4 w-4 accent-lime-400"
+                                      />
+                                    </label>
+                                  );
+                                })}
+                              </div>
+
+                              <div className="mt-4 flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setEmployeeBadgeBatchModalOpen(false)}
+                                  className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/15"
+                                >
+                                  {t('取消', 'Cancel')}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={employeeBadgeBatchPrinting || selectedCount === 0}
+                                  onClick={async () => {
+                                    const selectedRows = modalRows.filter((r) => selectedSet.has(r.staff));
+                                    if (selectedRows.length === 0) return;
+                                    setEmployeeBadgeBatchPrinting(true);
+                                    try {
+                                      await printEmployeeBadgeCards(selectedRows);
+                                      setEmployeeBadgeBatchModalOpen(false);
+                                    } finally {
+                                      setEmployeeBadgeBatchPrinting(false);
+                                    }
+                                  }}
+                                  className="rounded-xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {employeeBadgeBatchPrinting ? t('生成中...', 'Generating...') : t('打印选中', 'Print selected')}
+                                </button>
+                              </div>
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>,
                     document.body
@@ -10992,114 +11070,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     </div>,
                   document.body
                 )}
-
-                {employeeAccountPreview && typeof document !== 'undefined' &&
-                  createPortal(
-                    <div className="employee-badge-print-host">
-                      <style>{`
-                        @page { size: 4in 6in; margin: 0; }
-                        @media print {
-                          html, body {
-                            width: 4in !important;
-                            height: 6in !important;
-                            margin: 0 !important;
-                            padding: 0 !important;
-                            overflow: hidden !important;
-                          }
-                          body > * { display: none !important; }
-                          .employee-badge-print-host {
-                            display: block !important;
-                            position: fixed !important;
-                            inset: 0 !important;
-                            margin: 0 !important;
-                            padding: 0 !important;
-                            background: #fff !important;
-                            z-index: 9999 !important;
-                          }
-                          .employee-badge-sheet-wrap {
-                            width: 4in !important;
-                            height: 6in !important;
-                            margin: 0 !important;
-                            border: none !important;
-                            border-radius: 0 !important;
-                            box-shadow: none !important;
-                          }
-                          .employee-badge-preview-overlay {
-                            display: block !important;
-                            position: fixed !important;
-                            inset: 0 !important;
-                            background: #fff !important;
-                            padding: 0 !important;
-                            margin: 0 !important;
-                          }
-                          .employee-badge-preview-chrome { display: none !important; }
-                          .employee-badge-preview-canvas {
-                            overflow: visible !important;
-                            border: none !important;
-                            background: transparent !important;
-                            padding: 0 !important;
-                          }
-                          .employee-badge-preview-scale {
-                            transform: none !important;
-                            margin: 0 !important;
-                          }
-                        }
-                      `}</style>
-                      <div className="employee-badge-preview-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4 py-10">
-                        <div className="w-full max-w-2xl rounded-3xl border border-white/10 bg-slate-950/95 p-5 shadow-2xl backdrop-blur">
-                          <div className="mb-4 flex items-center justify-between employee-badge-preview-chrome">
-                            <h3 className="font-display text-xl tracking-[0.08em] text-white">{t('打印账号卡', 'Print Account Card')}</h3>
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => window.setTimeout(() => window.print(), 80)}
-                                className="rounded-xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl"
-                              >
-                                {t('打印', 'Print')}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setEmployeeAccountPreview(null)}
-                                className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/15"
-                              >
-                                {t('关闭', 'Close')}
-                              </button>
-                            </div>
-                          </div>
-                          <p className="mb-4 text-xs text-slate-400 employee-badge-preview-chrome">{t('打印尺寸：4 x 6 inch 标签纸。', 'Print size: 4 x 6 inch label.')}</p>
-                          <div className="overflow-auto rounded-2xl border border-white/10 bg-black/20 p-4 employee-badge-preview-canvas">
-                            <div className="mx-auto origin-top scale-[0.52] md:scale-[0.66] employee-badge-preview-scale">
-                              <div className="employee-badge-sheet-wrap" style={{ width: '4in', height: '6in', background: '#fff', color: '#111', fontFamily: 'Arial, \"Microsoft YaHei\", sans-serif', padding: '0.14in 0.16in', display: 'flex', flexDirection: 'column', gap: '0.1in', boxSizing: 'border-box', overflow: 'hidden' }}>
-                                <div style={{ textAlign: 'center', fontSize: '16pt', fontWeight: 800, letterSpacing: '0.04em' }}>{t('工作账号卡', 'WORK ACCOUNT CARD')}</div>
-                                <div style={{ height: '2.65in', border: '2px solid #111', borderRadius: '10px', padding: '0.07in', display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box' }}>
-                                  <img src={employeeAccountPreview.qrDataUrl} alt={`QR Code for ${employeeAccountPreview.workAccount}`} style={{ width: '100%', maxWidth: '2.45in', height: 'auto' }} />
-                                </div>
-                                <div style={{ border: '2px solid #111', borderRadius: '10px', padding: '0.08in 0.1in', display: 'grid', gap: '0.06in', boxSizing: 'border-box' }}>
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1.1in 1fr', alignItems: 'baseline', gap: '0.05in' }}>
-                                    <div style={{ fontSize: '9pt', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{t('员工', 'Employee')}</div>
-                                    <div style={{ fontSize: '12.5pt', fontWeight: 700, lineHeight: 1.1, wordBreak: 'break-word' }}>{employeeAccountPreview.name || '-'}</div>
-                                  </div>
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1.1in 1fr', alignItems: 'baseline', gap: '0.05in' }}>
-                                    <div style={{ fontSize: '9pt', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{t('账号', 'Account')}</div>
-                                    <div style={{ fontSize: '12.5pt', fontWeight: 700, lineHeight: 1.1, wordBreak: 'break-word' }}>{employeeAccountPreview.workAccount || '-'}</div>
-                                  </div>
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1.1in 1fr', alignItems: 'baseline', gap: '0.05in' }}>
-                                    <div style={{ fontSize: '9pt', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{t('密码', 'Password')}</div>
-                                    <div style={{ fontSize: '12.5pt', fontWeight: 700, lineHeight: 1.1, wordBreak: 'break-word' }}>{employeeAccountPreview.workPassword || '-'}</div>
-                                  </div>
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1.1in 1fr', alignItems: 'baseline', gap: '0.05in' }}>
-                                    <div style={{ fontSize: '9pt', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Staff ID</div>
-                                    <div style={{ fontSize: '12.5pt', fontWeight: 700, lineHeight: 1.1, wordBreak: 'break-word' }}>{employeeAccountPreview.staff || '-'}</div>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>,
-                    document.body
-                  )}
 
               </section>
             )}
