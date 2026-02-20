@@ -3659,8 +3659,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       body {
         background: #fff;
         font-family: Arial, "Microsoft YaHei", sans-serif;
-        font-size: 0;
-        line-height: 0;
       }
       .page {
         width: var(--pageW);
