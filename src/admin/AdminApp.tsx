@@ -6970,7 +6970,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const shiftInfo = employeeShiftByStaffId[staff];
         const scheduleRow = scheduleRowsByStaffDayIndex.get(`${normalizeStaffId(staff)}__${homeOperationalDayIndex}`);
         const scheduledShift = normalizeShiftValue(String(scheduleRow?.shift ?? '').trim());
-        const shift = scheduledShift || shiftInfo?.shift || '';
+        const shift = shiftInfo?.shift || scheduledShift || '';
         const shiftLabel = shift === 'early' ? t('白班', 'Day') : shift === 'late' ? t('晚班', 'Night') : '-';
         return [
           displayStaffId(staff),
@@ -10524,7 +10524,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         const shiftInfo = employeeShiftByStaffId[staff];
                         const scheduleRow = scheduleRowsByStaffDayIndex.get(`${normalizeStaffId(staff)}__${homeOperationalDayIndex}`);
                         const scheduledShift = normalizeShiftValue(String(scheduleRow?.shift ?? '').trim());
-                        const shift = scheduledShift || shiftInfo?.shift || '';
+                        const shift = shiftInfo?.shift || scheduledShift || '';
                         const shiftLabel =
                           shift === 'early' ? t('白班', 'Day') : shift === 'late' ? t('晚班', 'Night') : '-';
                         const lastPunchAt = String(employeeLastPunchAtByStaffId[staff] ?? '').trim();
@@ -10536,15 +10536,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             lastPunchDaysText = t(`${days}天前`, `${days}d ago`);
                           }
                         }
-                        const shiftTitle = scheduledShift
+                        const shiftTitle = shiftInfo
                           ? t(
-                              `当前排班：${scheduledShift === 'early' ? '白班' : '晚班'}`,
-                              `Scheduled now: ${scheduledShift === 'early' ? 'Day' : 'Night'}`
+                              `近${SHIFT_ANALYSIS_DAYS}天：白班 ${shiftInfo.earlyHours.toFixed(1)}h / 晚班 ${shiftInfo.lateHours.toFixed(1)}h`,
+                              `Last ${SHIFT_ANALYSIS_DAYS}d: Day ${shiftInfo.earlyHours.toFixed(1)}h / Night ${shiftInfo.lateHours.toFixed(1)}h`
                             )
-                          : shiftInfo
+                          : scheduledShift
                             ? t(
-                                `近${SHIFT_ANALYSIS_DAYS}天：白班 ${shiftInfo.earlyHours.toFixed(1)}h / 晚班 ${shiftInfo.lateHours.toFixed(1)}h`,
-                                `Last ${SHIFT_ANALYSIS_DAYS}d: Day ${shiftInfo.earlyHours.toFixed(1)}h / Night ${shiftInfo.lateHours.toFixed(1)}h`
+                                `当前排班：${scheduledShift === 'early' ? '白班' : '晚班'}`,
+                                `Scheduled now: ${scheduledShift === 'early' ? 'Day' : 'Night'}`
                               )
                             : '';
 
