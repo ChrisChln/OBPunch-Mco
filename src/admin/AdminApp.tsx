@@ -4177,7 +4177,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       push(t('文件', 'File'), payload?.file_name);
       push(t('总行数', 'Total rows'), payload?.total_rows);
       push(t('插入', 'Inserted'), payload?.inserted);
-      push(t('补全更新', 'Updated'), payload?.updated_fill);
+      push(t('更新', 'Updated'), payload?.updated_fill);
       push(t('跳过', 'Skipped'), payload?.skipped_total);
     } else if (action === 'punch_manual_add') {
       summary = t('手动新增打卡', 'Manual punch add');
@@ -6271,8 +6271,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         });
       }
 
-      if (!uploadFillDuplicates || skippedExisting === 0) {
-        return { error: null as any, inserted: insertedCount, skippedExisting, updated: 0 };
+      if (skippedExisting === 0) {
+        return { error: null as any, inserted: insertedCount, skippedExisting, updated: 0, auditItems };
       }
 
       const toUpdate: Array<{
@@ -6294,18 +6294,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         };
 
         const payload: Record<string, unknown> = {};
-        if (!existing.name && row.name) payload.name = row.name;
-        if (!existing.agency && row.agency) {
-          if (existingDetailsRes.mode === 'cased') payload.Agency = row.agency;
-          else payload.agency = row.agency;
+        if (row.name && String(row.name).trim() && String(row.name).trim() !== existing.name) payload.name = String(row.name).trim();
+        if (row.agency && String(row.agency).trim() && String(row.agency).trim() !== existing.agency) {
+          if (existingDetailsRes.mode === 'cased') payload.Agency = String(row.agency).trim();
+          else payload.agency = String(row.agency).trim();
         }
-        if (!existing.position && row.position) {
-          if (existingDetailsRes.mode === 'cased') payload.Position = row.position;
-          else payload.position = row.position;
+        if (row.position && String(row.position).trim() && String(row.position).trim() !== existing.position) {
+          if (existingDetailsRes.mode === 'cased') payload.Position = String(row.position).trim();
+          else payload.position = String(row.position).trim();
         }
-        if (!existing.label && row.label) payload.label = row.label;
-        if (!existing.work_account && row.work_account) payload.work_account = row.work_account;
-        if (!existing.work_password && row.work_password) payload.work_password = row.work_password;
+        if (row.label && String(row.label).trim() && String(row.label).trim() !== existing.label) payload.label = String(row.label).trim();
+        if (row.work_account && String(row.work_account).trim() && String(row.work_account).trim() !== existing.work_account) {
+          payload.work_account = String(row.work_account).trim();
+        }
+        if (row.work_password && String(row.work_password).trim() && String(row.work_password).trim() !== existing.work_password) {
+          payload.work_password = String(row.work_password).trim();
+        }
 
         if (Object.keys(payload).length > 0) {
           const before = {
@@ -6354,7 +6358,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
             work_password: u.after.work_password,
             before: u.before,
             after: u.after,
-            source: 'import_fill'
+            source: 'import_update'
           }
         });
         updated += 1;
@@ -6392,7 +6396,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const skippedTotal = duplicateInFileCount + skippedExistingTotal;
       setStatus({
         tone: 'success',
-        message: `上传完成：插入 ${insertedTotal} 条，补全更新 ${updatedTotal} 条，跳过重复 ${skippedTotal} 条（文件内 ${duplicateInFileCount}，表内 ${skippedExistingTotal}）`
+        message: `上传完成：插入 ${insertedTotal} 条，更新 ${updatedTotal} 条，跳过重复 ${skippedTotal} 条（文件内 ${duplicateInFileCount}，表内 ${skippedExistingTotal}）`
       });
       await writeAudit({
         action: 'employee_upload',
