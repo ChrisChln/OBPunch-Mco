@@ -779,6 +779,7 @@ export default function AdminApp() {
   const [timecardPresentDayFilter, setTimecardPresentDayFilter] = useState<number | null>(null);
   const [timecardMissingEmployeeOnly, setTimecardMissingEmployeeOnly] = useState(false);
   const [timecardRenderCount, setTimecardRenderCount] = useState(120);
+  const [employeeRenderCount, setEmployeeRenderCount] = useState(120);
   const [timecardWeekOffset, setTimecardWeekOffset] = useState(0);
   const [timecardWeekInput, setTimecardWeekInput] = useState(() =>
     toDateOnly(startOfWeekMonday(new Date()))
@@ -867,6 +868,7 @@ export default function AdminApp() {
     createEmptyPositionFlags
   );
   const deferredScheduleSearch = useDeferredValue(scheduleSearch);
+  const deferredEmployeeSearch = useDeferredValue(employeeSearch);
   const deferredSchedulePosition = useDeferredValue(schedulePosition);
   const deferredScheduleShift = useDeferredValue(scheduleShift);
   const deferredScheduleLabels = useDeferredValue(scheduleLabels);
@@ -4427,14 +4429,27 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     };
     const fmtScheduleState = (value: any) => {
       const state = String(value ?? '').trim().toLowerCase();
+      if (!state || state === '-' || state === 'null' || state === 'undefined' || state === 'none' || state === 'n/a') {
+        return t('休息', 'Rest');
+      }
       if (state === 'work') return t('工作', 'Work');
       if (state === 'temp_work') return t('临时工作', 'Temporary Work');
       if (state === 'leave') return t('请假', 'Excuse');
       if (state === 'temp_rest') return t('临时排休', 'Temporary Rest');
       if (state === 'rest') return t('休息', 'Rest');
+      if (state === 'rest_worked') return t('休息', 'Rest');
       if (state === 'empty') return t('休息', 'Rest');
+      if (state === '工作') return t('工作', 'Work');
+      if (state === '临时工作') return t('临时工作', 'Temporary Work');
+      if (state === '请假') return t('请假', 'Excuse');
+      if (state === '临时排休') return t('临时排休', 'Temporary Rest');
+      if (state === '休息') return t('休息', 'Rest');
       return '-';
     };
+    const getScheduleFromState = (fallback: string) =>
+      payload?.from_state ?? payload?.state_before ?? payload?.before_state ?? payload?.old_state ?? payload?.from ?? fallback;
+    const getScheduleToState = (fallback: string) =>
+      payload?.to_state ?? payload?.state_after ?? payload?.next_state ?? payload?.state ?? payload?.to ?? fallback;
     const fmtText = (value: any) => {
       const text = String(value ?? '').trim();
       return text || '-';
@@ -4517,28 +4532,28 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
 
     if (action === 'schedule_work') {
-      const fromState = payload?.from_state;
-      const toState = payload?.to_state ?? payload?.state ?? 'work';
+      const fromState = getScheduleFromState('empty');
+      const toState = getScheduleToState('work');
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_temp_work') {
-      const fromState = payload?.from_state;
-      const toState = payload?.to_state ?? payload?.state ?? 'temp_work';
+      const fromState = getScheduleFromState('empty');
+      const toState = getScheduleToState('temp_work');
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_leave') {
-      const fromState = payload?.from_state;
-      const toState = payload?.to_state ?? payload?.state ?? 'leave';
+      const fromState = getScheduleFromState('empty');
+      const toState = getScheduleToState('leave');
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_temp_rest') {
-      const fromState = payload?.from_state;
-      const toState = payload?.to_state ?? payload?.state ?? 'temp_rest';
+      const fromState = getScheduleFromState('empty');
+      const toState = getScheduleToState('temp_rest');
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_rest') {
-      const fromState = payload?.from_state;
-      const toState = payload?.to_state ?? payload?.state ?? 'rest';
+      const fromState = getScheduleFromState('empty');
+      const toState = getScheduleToState('rest');
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_clear') {
-      const fromState = payload?.from_state;
-      const toState = payload?.to_state ?? 'empty';
+      const fromState = getScheduleFromState('rest');
+      const toState = getScheduleToState('empty');
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     }
 
@@ -6862,7 +6877,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   );
 
   const employeesFiltered = useMemo(() => {
-    const searchNeedle = employeeSearch.trim().toLowerCase();
+    const searchNeedle = deferredEmployeeSearch.trim().toLowerCase();
     const agencyNeedle = employeeAgency.trim().toLowerCase();
     const positionNeedle = employeePosition.trim().toLowerCase();
     const shiftNeedle = employeeShiftFilter;
@@ -6910,7 +6925,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     });
   }, [
     employees,
-    employeeSearch,
+    deferredEmployeeSearch,
     employeeAgency,
     employeePosition,
     employeeShiftFilter,
@@ -6920,6 +6935,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     serverTime,
     employeeShiftByStaffId
   ]);
+  const employeesRendered = useMemo(
+    () => employeesFiltered.slice(0, Math.max(0, employeeRenderCount)),
+    [employeesFiltered, employeeRenderCount]
+  );
 
   const exportEmployees = async () => {
     await runLocked('employees_export', async () => {
@@ -7588,6 +7607,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     () => scheduleEmployeesFiltered.slice(0, Math.max(0, scheduleRenderCount)),
     [scheduleEmployeesFiltered, scheduleRenderCount]
   );
+
+  useEffect(() => {
+    if (page !== 'employees') return;
+    const total = employeesFiltered.length;
+    setEmployeeRenderCount(Math.min(120, total));
+  }, [page, employeesFiltered]);
 
   useEffect(() => {
     if (page !== 'timecard') return;
@@ -10445,7 +10470,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   <p className="mt-3 text-sm text-slate-400">{t('暂无数据，点击“刷新/搜索”。', 'No data. Click “Refresh/Search”.')}</p>
                 )}
 
-                <div className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
+                <div
+                  className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30"
+                  onScroll={(e) => {
+                    const el = e.currentTarget;
+                    if (employeeRenderCount >= employeesFiltered.length) return;
+                    if (el.scrollTop + el.clientHeight < el.scrollHeight - 160) return;
+                    setEmployeeRenderCount((prev) => Math.min(prev + 120, employeesFiltered.length));
+                  }}
+                >
                   <table className="min-w-[1360px] w-full text-left text-sm">
                     <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-xs uppercase tracking-[0.2em] text-slate-400 backdrop-blur">
                       <tr>
@@ -10473,7 +10506,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       </tr>
                     </thead>
                     <tbody>
-                      {employeesFiltered.map((e) => {
+                      {employeesRendered.map((e) => {
                         const staff = String(e.staff_id ?? '').trim();
                         const name = String(e.name ?? '').trim();
                         const agency = String(e.agency ?? e.Agency ?? '').trim();
@@ -10621,6 +10654,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     </tbody>
                   </table>
                 </div>
+                {!employeesError && employeesRendered.length < employeesFiltered.length && (
+                  <div className="mt-2 text-xs text-slate-500">
+                    {t(
+                      `已显示 ${employeesRendered.length}/${employeesFiltered.length}，向下滚动加载更多`,
+                      `Showing ${employeesRendered.length}/${employeesFiltered.length}. Scroll to load more`
+                    )}
+                  </div>
+                )}
 
                 {employeeAuditOpen &&
                   typeof document !== 'undefined' &&

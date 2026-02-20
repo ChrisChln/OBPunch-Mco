@@ -42,7 +42,7 @@ type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
-const BORROW_OVERDUE_MS = 24 * 60 * 60 * 1000;
+const BORROW_OVERDUE_MS = 8 * 60 * 60 * 1000;
 const COUNTING_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_FILTERS_STORAGE_KEY = 'ob_device_filters_v1';
 const COUNTING_NOTE_PATTERN = /\[COUNTED_AT=([^\]]+)\]/i;
@@ -836,7 +836,7 @@ export default function DeviceApp() {
                         {borrowed ? (
                           <>
                             <div className={['text-xs font-semibold', statusTextClass].join(' ')}>
-                              {statusTone === 'overdue' ? 'Borrowed >24h' : 'Borrowed'}
+                              {statusTone === 'overdue' ? 'Borrowed >8h' : 'Borrowed'}
                             </div>
                             <div className="text-xs text-slate-200">{holderName}</div>
                             <div className="text-[11px] text-slate-400">Duration: {formatBorrowDuration(borrowed.createdAt)}</div>
