@@ -2752,12 +2752,6 @@ const fetchPunchBoardUph = async (
                       restWorkedStaff: [],
                       scheduledNotClockInStaff: []
                     };
-                    const earlyOnClockStaffCombined = Array.from(
-                      new Set([...early.onClockStaff, ...early.restWorkedStaff])
-                    );
-                    const lateOnClockStaffCombined = Array.from(
-                      new Set([...late.onClockStaff, ...late.restWorkedStaff])
-                    );
                     const earlyHoverKey = `${position}:early`;
                     const lateHoverKey = `${position}:late`;
                     const earlySearch = String(attendanceHoverSearchByKey[earlyHoverKey] ?? '').trim().toLowerCase();
@@ -2794,15 +2788,17 @@ const fetchPunchBoardUph = async (
                                 </span>
                               </div>
                             </div>
-                            <div className={['group relative z-10 rounded-md px-3 py-1.5 text-center hover:z-50', getAppOnClockPanelClass(position)].join(' ')}>
-                              <div className="text-[10px] font-semibold tracking-[0.08em] text-slate-300">On Clock</div>
+                            <div
+                              className={['group relative z-10 min-w-[84px] rounded-md px-3 py-1.5 text-center hover:z-50', getAppOnClockPanelClass(position)].join(' ')}
+                            >
+                              <div className="whitespace-nowrap text-[10px] font-semibold tracking-[0.08em] text-slate-300">On Clock</div>
                               <div
                                 className={[
                                   'mt-0.5 text-2xl font-bold leading-none',
                                   getAppOnClockValueClass(position)
                                 ].join(' ')}
                               >
-                                {earlyOnClockStaffCombined.length}
+                                {early.onClockStaff.length}
                               </div>
                               <div className="pointer-events-auto absolute left-1/2 top-full z-30 hidden w-[min(50rem,calc(100vw-2rem))] -translate-x-1/2 gap-2 group-hover:grid md:grid-cols-3">
                                 <div className="md:col-span-3">
@@ -2886,15 +2882,17 @@ const fetchPunchBoardUph = async (
                                 </span>
                               </div>
                             </div>
-                            <div className={['group relative z-10 rounded-md px-3 py-1.5 text-center hover:z-50', getAppOnClockPanelClass(position)].join(' ')}>
-                              <div className="text-[10px] font-semibold tracking-[0.08em] text-slate-300">On Clock</div>
+                            <div
+                              className={['group relative z-10 min-w-[84px] rounded-md px-3 py-1.5 text-center hover:z-50', getAppOnClockPanelClass(position)].join(' ')}
+                            >
+                              <div className="whitespace-nowrap text-[10px] font-semibold tracking-[0.08em] text-slate-300">On Clock</div>
                               <div
                                 className={[
                                   'mt-0.5 text-2xl font-bold leading-none',
                                   getAppOnClockValueClass(position)
                                 ].join(' ')}
                               >
-                                {lateOnClockStaffCombined.length}
+                                {late.onClockStaff.length}
                               </div>
                               <div className="pointer-events-auto absolute left-1/2 top-full z-30 hidden w-[min(50rem,calc(100vw-2rem))] -translate-x-1/2 gap-2 group-hover:grid md:grid-cols-3">
                                 <div className="md:col-span-3">

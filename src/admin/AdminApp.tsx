@@ -647,6 +647,7 @@ export default function AdminApp() {
   const isLocked = Boolean(busy);
   const [busyVisible, setBusyVisible] = useState(false);
   const timecardFetchSeqRef = useRef(0);
+  const employeeLoadMoreArmedRef = useRef(true);
   const punchesFetchSeqRef = useRef(0);
   const attendanceFetchSeqRef = useRef(0);
   const timecardPunchFetchSeqRef = useRef(0);
@@ -10474,8 +10475,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30"
                   onScroll={(e) => {
                     const el = e.currentTarget;
+                    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 160;
+                    if (!nearBottom) {
+                      employeeLoadMoreArmedRef.current = true;
+                      return;
+                    }
+                    if (!employeeLoadMoreArmedRef.current) return;
                     if (employeeRenderCount >= employeesFiltered.length) return;
-                    if (el.scrollTop + el.clientHeight < el.scrollHeight - 160) return;
+                    employeeLoadMoreArmedRef.current = false;
                     setEmployeeRenderCount((prev) => Math.min(prev + 120, employeesFiltered.length));
                   }}
                 >
