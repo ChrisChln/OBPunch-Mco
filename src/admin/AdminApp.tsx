@@ -3650,6 +3650,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         --pageGap: 7mm;
         --badgeW: calc((var(--pageW) - (2 * var(--pagePad)) - var(--pageGap)) / 2);
         --badgeH: calc((var(--pageH) - (2 * var(--pagePad)) - (3 * var(--pageGap))) / 4);
+        --cardPadX: 14px;
+        --cardPadY: 12px;
+        --headerH: 44px;
+        --footerH: 22px;
       }
       @page { size: Letter; margin: 0; }
       html, body {
@@ -3682,22 +3686,38 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         height: var(--badgeH);
         border: 1px solid #e5e7eb;
         border-radius: 0;
-        display: flex;
-        flex-direction: column;
+        display: grid;
+        grid-template-rows: var(--headerH) minmax(0, 1fr) var(--footerH);
         background: #fff;
         color: #0f172a;
         overflow: hidden;
         box-sizing: border-box;
       }
       .badge.empty { visibility: hidden; }
-      .badge-header { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 10px 14px; border-bottom: 1px solid #e5e7eb; }
+      .badge-header {
+        height: var(--headerH);
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: center;
+        padding: 0 var(--cardPadX);
+        border-bottom: 1px solid #e5e7eb;
+        box-sizing: border-box;
+      }
       .brand-text .h { font-size: 12.5px; font-weight: 800; line-height: 1.1; }
       .brand-text .s { font-size: 10.5px; color: #64748b; line-height: 1.2; }
       .brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
       .logo { width: 24px; height: 24px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; }
       .logo img { width: 24px; height: 24px; display: block; object-fit: contain; }
       .hdr-right { font-size: 10px; font-weight: 800; color: #64748b; white-space: nowrap; }
-      .badge-body { display: grid; grid-template-columns: 1fr 64px; gap: 10px; padding: 12px 14px; flex: 1; min-height: 0; }
+      .badge-body {
+        display: grid;
+        grid-template-columns: 1fr 64px;
+        gap: 10px;
+        padding: var(--cardPadY) var(--cardPadX);
+        min-height: 0;
+        box-sizing: border-box;
+      }
       .fields { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
       .name { font-size: 22px; font-weight: 900; line-height: 1.1; word-break: break-word; }
       .meta { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
@@ -3708,10 +3728,26 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       .empid code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace; font-size: 10.5px; }
       .qr { width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; }
       .qr img { width: 64px; height: 64px; display: block; image-rendering: pixelated; }
-      .badge-footer { height: 22px; padding: 0 14px; background: #fa4949; color: #fff; font-size: 10.5px; font-weight: 800; display: flex; align-items: center; justify-content: space-between; }
+      .badge-footer {
+        height: var(--footerH);
+        padding: 0 var(--cardPadX);
+        background: #fa4949;
+        color: #fff;
+        font-size: 10.5px;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        box-sizing: border-box;
+      }
       .footer-name { max-width: 60mm; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 9.5px; }
-      .badge-body-back { padding: 10px 14px; flex: 1; display: flex; }
-      .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+      .badge-body-back {
+        padding: var(--cardPadY) var(--cardPadX);
+        min-height: 0;
+        display: flex;
+        box-sizing: border-box;
+      }
+      .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; align-content: start; }
       .qrbox { display: flex; flex-direction: column; align-items: center; gap: 4px; }
       .label { font-size: 10px; font-weight: 800; color: #64748b; letter-spacing: .2px; }
       .qrbox code { font-size: 9.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
