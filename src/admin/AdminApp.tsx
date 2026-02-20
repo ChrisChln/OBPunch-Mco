@@ -6145,6 +6145,84 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return;
     }
 
+    // Guard rail: reject import when staff_id appears to be modified.
+    // Rule: if incoming staff_id does not exist, but another existing row matches same
+    // work_account OR (name + agency), treat as USID-change attempt and reject whole import.
+    const detectModifiedStaffIds = async () => {
+      const mode = await resolveEmployeeColumnMode();
+      const run = async (m: EmployeeColumnMode) => {
+        const select =
+          m === 'cased'
+            ? 'staff_id, name, "Agency", work_account'
+            : 'staff_id, name, agency, work_account';
+        return await supabase.from(EMPLOYEE_TABLE).select(select);
+      };
+
+      let res = await run(mode);
+      if (res.error) {
+        const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
+        employeeColumnModeRef.current = flipped;
+        res = await run(flipped);
+      }
+      if (res.error) return { error: res.error.message, suspicious: [] as string[] };
+
+      const existing = ((res.data as any[]) ?? []) as any[];
+      const existingByStaff = new Set<string>();
+      const existingByAccount = new Map<string, string>();
+      const existingByNameAgency = new Map<string, string>();
+      for (const row of existing) {
+        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+        if (!staff) continue;
+        existingByStaff.add(staff);
+        const account = String(row.work_account ?? '').trim().toLowerCase();
+        if (account && !existingByAccount.has(account)) existingByAccount.set(account, staff);
+        const name = String(row.name ?? '').trim().toLowerCase();
+        const agency = String(row.agency ?? row.Agency ?? '').trim().toLowerCase();
+        if (name && agency) {
+          const key = `${name}__${agency}`;
+          if (!existingByNameAgency.has(key)) existingByNameAgency.set(key, staff);
+        }
+      }
+
+      const suspicious: string[] = [];
+      for (const row of rows) {
+        const incomingStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
+        if (!incomingStaff || existingByStaff.has(incomingStaff)) continue;
+
+        const account = String(row.work_account ?? '').trim().toLowerCase();
+        const accountOwner = account ? existingByAccount.get(account) ?? '' : '';
+        if (accountOwner && accountOwner !== incomingStaff) {
+          suspicious.push(`${incomingStaff} -> ${accountOwner} (work_account)`);
+          continue;
+        }
+
+        const name = String(row.name ?? '').trim().toLowerCase();
+        const agency = String(row.agency ?? '').trim().toLowerCase();
+        const key = name && agency ? `${name}__${agency}` : '';
+        const matchedStaff = key ? existingByNameAgency.get(key) ?? '' : '';
+        if (matchedStaff && matchedStaff !== incomingStaff) {
+          suspicious.push(`${incomingStaff} -> ${matchedStaff} (${name}/${agency})`);
+        }
+      }
+
+      return { error: null as string | null, suspicious };
+    };
+
+    const detectResult = await detectModifiedStaffIds();
+    if (detectResult.error) {
+      setUploadError(`导入前校验失败：${detectResult.error}`);
+      return;
+    }
+    if (detectResult.suspicious.length > 0) {
+      const sample = detectResult.suspicious.slice(0, 6).join('；');
+      setUploadError(
+        `检测到疑似修改USID，已拒绝导入。请不要修改导出模板中的 EMPLOYEE ID。命中：${sample}${
+          detectResult.suspicious.length > 6 ? ` …（共 ${detectResult.suspicious.length} 条）` : ''
+        }`
+      );
+      return;
+    }
+
     const writeEmployeeBatch = async (batch: any[]) => {
       const auditItems: Array<{ action: string; staffId: string; payload: Record<string, unknown> }> = [];
       const batchStaffIds = batch.map((r) => String(r.staff_id ?? '').trim()).filter(Boolean);
