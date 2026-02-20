@@ -19,3 +19,7 @@ Thumbs.db
 
 # Build artifacts
 *.tsbuildinfo
+coverage/
+playwright-report/
+test-results/
+blob-report/
