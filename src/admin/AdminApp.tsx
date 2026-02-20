@@ -187,9 +187,13 @@ type EmployeeRow = {
   agency?: string | null;
   position?: string | null;
   label?: string | null;
+  work_account?: string | null;
+  work_password?: string | null;
   Agency?: string | null;
   Position?: string | null;
   Label?: string | null;
+  WorkAccount?: string | null;
+  WorkPassword?: string | null;
   created_at?: string | null;
 };
 
@@ -597,7 +601,15 @@ const EMPLOYEE_KEY_ALIASES: Record<string, string> = {
   '岗位': 'position',
   '职位': 'position',
   label: 'label',
-  '标签': 'label'
+  '标签': 'label',
+  work_account: 'work_account',
+  workaccount: 'work_account',
+  '工作账号': 'work_account',
+  '账号': 'work_account',
+  work_password: 'work_password',
+  workpassword: 'work_password',
+  '工作密码': 'work_password',
+  '密码': 'work_password'
 };
 
 const DEVICE_KEY_ALIASES: Record<string, string> = {
@@ -718,6 +730,8 @@ export default function AdminApp() {
   const [employeeNewAgency, setEmployeeNewAgency] = useState('');
   const [employeeNewPosition, setEmployeeNewPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [employeeNewLabel, setEmployeeNewLabel] = useState('');
+  const [employeeNewWorkAccount, setEmployeeNewWorkAccount] = useState('');
+  const [employeeNewWorkPassword, setEmployeeNewWorkPassword] = useState('');
   const [employeeAddOpen, setEmployeeAddOpen] = useState(false);
   const [employeeEditOpen, setEmployeeEditOpen] = useState(false);
   const [employeeEditOriginalStaffId, setEmployeeEditOriginalStaffId] = useState<string | null>(null);
@@ -726,6 +740,8 @@ export default function AdminApp() {
   const [employeeEditAgency, setEmployeeEditAgency] = useState('');
   const [employeeEditPosition, setEmployeeEditPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [employeeEditLabel, setEmployeeEditLabel] = useState('');
+  const [employeeEditWorkAccount, setEmployeeEditWorkAccount] = useState('');
+  const [employeeEditWorkPassword, setEmployeeEditWorkPassword] = useState('');
   const [employeeLastPunchAtByStaffId, setEmployeeLastPunchAtByStaffId] = useState<Record<string, string | null>>({});
   const [employeeSortByLastPunchDesc, setEmployeeSortByLastPunchDesc] = useState(false);
   const [employeeBadgePrintingStaffId, setEmployeeBadgePrintingStaffId] = useState<string | null>(null);
@@ -3099,8 +3115,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const labelCol = 'label';
         const select =
           mode === 'cased'
-            ? 'id, staff_id, name, "Agency", "Position", label, created_at'
-            : 'id, staff_id, name, agency, position, label, created_at';
+            ? 'id, staff_id, name, "Agency", "Position", label, work_account, work_password, created_at'
+            : 'id, staff_id, name, agency, position, label, work_account, work_password, created_at';
 
         let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
 
@@ -3347,6 +3363,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const agency = employeeNewAgency.trim();
     const position = employeeNewPosition.trim();
     const label = employeeNewLabel.trim();
+    const workAccount = employeeNewWorkAccount.trim();
+    const workPassword = employeeNewWorkPassword.trim();
     const normalizedPos = normalizePositionKey(position);
     if (!normalizedPos) {
       setEmployeesError(`Position 只能是：${ALLOWED_POSITIONS.join(', ')}`);
@@ -3359,8 +3377,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const mode = await resolveEmployeeColumnMode();
       const payload =
         mode === 'cased'
-          ? { staff_id: staff, name, Agency: agency, Position: normalizedPos, label: label || null }
-          : { staff_id: staff, name, agency, position: normalizedPos, label: label || null };
+          ? {
+              staff_id: staff,
+              name,
+              Agency: agency,
+              Position: normalizedPos,
+              label: label || null,
+              work_account: workAccount || null,
+              work_password: workPassword || null
+            }
+          : {
+              staff_id: staff,
+              name,
+              agency,
+              position: normalizedPos,
+              label: label || null,
+              work_account: workAccount || null,
+              work_password: workPassword || null
+            };
 
       const attemptUpsert = await supabase
         .from(EMPLOYEE_TABLE)
@@ -3379,13 +3413,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         action: 'employee_upsert',
         staffId: staff,
         target: EMPLOYEE_TABLE,
-        payload: { staff_id: staff, name, agency, position: normalizedPos, label }
+        payload: { staff_id: staff, name, agency, position: normalizedPos, label, work_account: workAccount, work_password: workPassword }
       });
       setEmployeeNewStaffId('');
       setEmployeeNewName('');
       setEmployeeNewAgency('');
       setEmployeeNewPosition('');
       setEmployeeNewLabel('');
+      setEmployeeNewWorkAccount('');
+      setEmployeeNewWorkPassword('');
       await fetchEmployees({ reset: true });
     });
   };
@@ -3707,7 +3743,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     return () => window.removeEventListener('afterprint', onAfterPrint);
   }, []);
 
-  const openEmployeeEdit = (payload: { staff: string; name: string; agency: string; position: string; label: string }) => {
+  const openEmployeeEdit = (payload: {
+    staff: string;
+    name: string;
+    agency: string;
+    position: string;
+    label: string;
+    workAccount: string;
+    workPassword: string;
+  }) => {
     setEmployeesError(null);
     setEmployeeEditOriginalStaffId(payload.staff);
     setEmployeeEditStaffId(isNewHirePlaceholderStaffId(payload.staff) ? '' : payload.staff);
@@ -3716,6 +3760,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const normalized = normalizePositionKey(payload.position);
     setEmployeeEditPosition((normalized ?? '') as (typeof ALLOWED_POSITIONS)[number] | '');
     setEmployeeEditLabel(payload.label);
+    setEmployeeEditWorkAccount(payload.workAccount);
+    setEmployeeEditWorkPassword(payload.workPassword);
     setEmployeeEditOpen(true);
   };
 
@@ -3727,6 +3773,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setEmployeeEditAgency('');
     setEmployeeEditPosition('');
     setEmployeeEditLabel('');
+    setEmployeeEditWorkAccount('');
+    setEmployeeEditWorkPassword('');
   };
 
   const saveEmployeeEdit = async () => {
@@ -3759,6 +3807,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const agency = employeeEditAgency.trim();
     const positionRaw = employeeEditPosition.trim();
     const label = employeeEditLabel.trim();
+    const workAccount = employeeEditWorkAccount.trim();
+    const workPassword = employeeEditWorkPassword.trim();
     const normalizedPos = positionRaw ? normalizePositionKey(positionRaw) : null;
     if (positionRaw && !normalizedPos) {
       setEmployeesError('Position must be one of: ' + ALLOWED_POSITIONS.join(', '));
@@ -3823,7 +3873,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const mode = await resolveEmployeeColumnMode();
       const originalEmployeeRes = await supabase
         .from(EMPLOYEE_TABLE)
-        .select(mode === 'cased' ? 'staff_id,name,"Agency","Position",label' : 'staff_id,name,agency,position,label')
+        .select(
+          mode === 'cased'
+            ? 'staff_id,name,"Agency","Position",label,work_account,work_password'
+            : 'staff_id,name,agency,position,label,work_account,work_password'
+        )
         .eq('staff_id', originalStaff)
         .maybeSingle();
       if (originalEmployeeRes.error) {
@@ -3838,8 +3892,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
       const payload =
         mode === 'cased'
-          ? { staff_id: nextStaff, name, Agency: agency || null, Position: normalizedPos, label: label || null }
-          : { staff_id: nextStaff, name, agency: agency || null, position: normalizedPos, label: label || null };
+          ? {
+              staff_id: nextStaff,
+              name,
+              Agency: agency || null,
+              Position: normalizedPos,
+              label: label || null,
+              work_account: workAccount || null,
+              work_password: workPassword || null
+            }
+          : {
+              staff_id: nextStaff,
+              name,
+              agency: agency || null,
+              position: normalizedPos,
+              label: label || null,
+              work_account: workAccount || null,
+              work_password: workPassword || null
+            };
       const { error } = await supabase.from(EMPLOYEE_TABLE).update(payload as any).eq('staff_id', originalStaff);
       if (error) {
         setEmployeesError(error.message);
@@ -3855,14 +3925,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   name: originalEmployeeRow.name ?? null,
                   Agency: originalEmployeeRow.Agency ?? null,
                   Position: originalEmployeeRow.Position ?? null,
-                  label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null
+                  label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null,
+                  work_account: originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? null,
+                  work_password: originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? null
                 }
               : {
                   staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
                   name: originalEmployeeRow.name ?? null,
                   agency: originalEmployeeRow.agency ?? null,
                   position: originalEmployeeRow.position ?? null,
-                  label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null
+                  label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null,
+                  work_account: originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? null,
+                  work_password: originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? null
                 };
           await supabase.from(EMPLOYEE_TABLE).update(restorePayload as any).eq('staff_id', nextStaff);
         };
@@ -3904,6 +3978,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           agency,
           position: normalizedPos,
           label,
+          work_account: workAccount,
+          work_password: workPassword,
           migrated_punch_rows: migratedPunchCount,
           migrated_schedule_rows: migratedScheduleCount
         }
@@ -3982,11 +4058,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       push(t('姓名', 'Name'), payload?.name);
       push('Agency', payload?.agency);
       push(t('岗位', 'Position'), payload?.position);
+      push(t('工作账号', 'Work account'), payload?.work_account);
+      push(t('工作密码', 'Work password'), payload?.work_password);
     } else if (action === 'employee_update') {
       summary = t('更新员工信息', 'Employee updated');
       push(t('姓名', 'Name'), payload?.name);
       push('Agency', payload?.agency);
       push(t('岗位', 'Position'), payload?.position);
+      push(t('工作账号', 'Work account'), payload?.work_account);
+      push(t('工作密码', 'Work password'), payload?.work_password);
     } else if (action === 'employee_delete') {
       summary = t('删除员工', 'Employee deleted');
     } else if (action === 'employee_upload') {
@@ -4052,17 +4132,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     }
 
-    if (details.length === 0 && payload && !String(action).startsWith('schedule_')) {
-      let payloadText = '';
-      try {
-        payloadText = JSON.stringify(payload, null, 0);
-      } catch {
-        payloadText = String(payload ?? '');
-      }
-      if (payloadText.length > 260) payloadText = `${payloadText.slice(0, 260)}…`;
-      if (payloadText) details.push({ label: 'Payload', value: payloadText });
-    }
-
     return { summary, details };
   };
 
@@ -4076,6 +4145,21 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   const renderAuditSummary = (summary: string) => {
     const text = String(summary ?? '').trim();
+    const labeledArrowMatch = text.match(/^(.+?):\s*(.+?)\s*->\s*(.+)$/);
+    if (labeledArrowMatch) {
+      const titleText = String(labeledArrowMatch[1] ?? '').trim() || '-';
+      const fromText = String(labeledArrowMatch[2] ?? '').trim() || '-';
+      const toText = String(labeledArrowMatch[3] ?? '').trim() || '-';
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1.5 text-[11px] leading-4">
+          <span className="text-slate-100">{titleText}</span>
+          <span className="rounded-md border border-white/20 bg-white/5 px-1.5 py-0.5 text-slate-200">{fromText}</span>
+          <span className="font-semibold text-cyan-300">→</span>
+          <span className="rounded-md border border-neon/40 bg-neon/15 px-1.5 py-0.5 font-semibold text-neon">{toText}</span>
+        </span>
+      );
+    }
+
     const arrowMatch = text.match(/^(.+?)\s*->\s*(.+)$/);
     if (!arrowMatch) {
       return <span className="whitespace-normal text-[11px] leading-4 text-slate-100">{text || '-'}</span>;
@@ -5880,7 +5964,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return map[v] ?? null;
     };
 
-    const uniqueByStaff = new Map<string, { staff_id: string; name?: string; agency?: string; position?: string; label?: string }>();
+    const uniqueByStaff = new Map<
+      string,
+      { staff_id: string; name?: string; agency?: string; position?: string; label?: string; work_account?: string; work_password?: string }
+    >();
     let duplicateInFileCount = 0;
 
     for (const r of parsedRows) {
@@ -5906,13 +5993,25 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const positionRaw = canonical.position?.trim();
       const position = positionRaw ? normalizePosition(positionRaw) : null;
       const label = canonical.label?.trim();
+      const workAccount = canonical.work_account?.trim();
+      const workPassword = canonical.work_password?.trim();
 
-      const record: { staff_id: string; name?: string; agency?: string; position?: string; label?: string } = { staff_id: staff };
+      const record: {
+        staff_id: string;
+        name?: string;
+        agency?: string;
+        position?: string;
+        label?: string;
+        work_account?: string;
+        work_password?: string;
+      } = { staff_id: staff };
       if (name) record.name = name;
       if (agency) record.agency = agency;
       if (position) record.position = position;
       if (positionRaw && !position) record.position = positionRaw;
       if (label) record.label = label;
+      if (workAccount) record.work_account = workAccount;
+      if (workPassword) record.work_password = workPassword;
       uniqueByStaff.set(staff, record);
     }
 
@@ -5952,7 +6051,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const fetchExistingDetails = async () => {
         const mode = await resolveEmployeeColumnMode();
         const run = async (m: EmployeeColumnMode) => {
-          const select = m === 'cased' ? 'staff_id, name, "Agency", "Position", label' : 'staff_id, name, agency, position, label';
+          const select =
+            m === 'cased'
+              ? 'staff_id, name, "Agency", "Position", label, work_account, work_password'
+              : 'staff_id, name, agency, position, label, work_account, work_password';
           const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batchStaffIds);
           return { mode: m, res };
         };
@@ -5996,14 +6098,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 name: row.name ?? null,
                 Agency: row.agency ?? null,
                 Position: row.position ?? null,
-                label: row.label ?? null
+                label: row.label ?? null,
+                work_account: row.work_account ?? null,
+                work_password: row.work_password ?? null
               }))
             : toInsert.map((row: any) => ({
                 staff_id: row.staff_id,
                 name: row.name ?? null,
                 agency: row.agency ?? null,
                 position: row.position ?? null,
-                label: row.label ?? null
+                label: row.label ?? null,
+                work_account: row.work_account ?? null,
+                work_password: row.work_password ?? null
               }));
 
         let attempt = await tryInsert(buildPayload(mode));
@@ -6026,7 +6132,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         }
       }
 
-      const existingByStaff = new Map<string, { name: string; agency: string; position: string; label: string }>();
+      const existingByStaff = new Map<
+        string,
+        { name: string; agency: string; position: string; label: string; work_account: string; work_password: string }
+      >();
       for (const r of existingDetailsRes.rows) {
         const staff = String(r.staff_id ?? '').trim();
         if (!staff) continue;
@@ -6034,7 +6143,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           name: String(r.name ?? '').trim(),
           agency: String(r.agency ?? r.Agency ?? '').trim(),
           position: String(r.position ?? r.Position ?? '').trim(),
-          label: String(r.label ?? r.Label ?? '').trim()
+          label: String(r.label ?? r.Label ?? '').trim(),
+          work_account: String(r.work_account ?? r.WorkAccount ?? '').trim(),
+          work_password: String(r.work_password ?? r.WorkPassword ?? '').trim()
         });
       }
 
@@ -6046,7 +6157,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       for (const row of batch) {
         const staff = String(row.staff_id ?? '').trim();
         if (!staff || !existingSet.has(staff)) continue;
-        const existing = existingByStaff.get(staff) ?? { name: '', agency: '', position: '', label: '' };
+        const existing = existingByStaff.get(staff) ?? {
+          name: '',
+          agency: '',
+          position: '',
+          label: '',
+          work_account: '',
+          work_password: ''
+        };
 
         const payload: Record<string, unknown> = {};
         if (!existing.name && row.name) payload.name = row.name;
@@ -6059,6 +6177,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           else payload.position = row.position;
         }
         if (!existing.label && row.label) payload.label = row.label;
+        if (!existing.work_account && row.work_account) payload.work_account = row.work_account;
+        if (!existing.work_password && row.work_password) payload.work_password = row.work_password;
 
         if (Object.keys(payload).length > 0) {
           toUpdate.push({ staff_id: staff, payload });
@@ -9543,7 +9663,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 {employeeAddOpen && (
                   <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4">
                     <div className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('新增员工', 'Add Employee')}</div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-6">
+                    <div className="mt-3 grid gap-3 md:grid-cols-8">
                       <input
                         value={employeeNewStaffId}
                         onChange={(e) => setEmployeeNewStaffId(e.target.value)}
@@ -9586,6 +9706,20 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         placeholder={t('标签', 'Label')}
                         className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                       />
+                      <input
+                        value={employeeNewWorkAccount}
+                        onChange={(e) => setEmployeeNewWorkAccount(e.target.value)}
+                        disabled={isLocked}
+                        placeholder={t('工作账号', 'Work account')}
+                        className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <input
+                        value={employeeNewWorkPassword}
+                        onChange={(e) => setEmployeeNewWorkPassword(e.target.value)}
+                        disabled={isLocked}
+                        placeholder={t('工作密码', 'Work password')}
+                        className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                      />
                       <datalist id="employee-label-add-options">
                         {employeeAddLabelOptions.map((d) => (
                           <option key={d} value={d} />
@@ -9614,7 +9748,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 )}
 
                 <div className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
-                  <table className="min-w-[1120px] w-full text-left text-sm">
+                  <table className="min-w-[1360px] w-full text-left text-sm">
                     <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-xs uppercase tracking-[0.2em] text-slate-400 backdrop-blur">
                       <tr>
                         <th className="px-4 py-3">Employee ID</th>
@@ -9622,6 +9756,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         <th className="px-4 py-3">Agency</th>
                         <th className="px-4 py-3">Position</th>
                         <th className="px-4 py-3">{t('标签', 'Label')}</th>
+                        <th className="px-4 py-3">{t('工作账号', 'Work account')}</th>
+                        <th className="px-4 py-3">{t('工作密码', 'Work password')}</th>
                         <th className="px-4 py-3">{t('入职日期', 'Hire date')}</th>
                         <th className="px-4 py-3">{t('班次', 'Shift')}</th>
                         <th className="px-4 py-3">
@@ -9645,6 +9781,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         const agency = String(e.agency ?? e.Agency ?? '').trim();
                         const position = String(e.position ?? e.Position ?? '').trim();
                         const label = String(e.label ?? e.Label ?? '').trim();
+                        const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
+                        const workPassword = String(e.work_password ?? e.WorkPassword ?? '').trim();
                         const createdAt = String(e.created_at ?? '').trim();
                         const hireDate = (() => {
                           if (!createdAt) return '-';
@@ -9711,6 +9849,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 '-'
                               )}
                             </td>
+                            <td className="px-4 py-3 text-slate-200">{workAccount || '-'}</td>
+                            <td className="px-4 py-3 text-slate-200">{workPassword || '-'}</td>
                             <td className="px-4 py-3 text-slate-200">{hireDate}</td>
                             <td className="px-4 py-3 text-slate-200">
                               <span
@@ -9749,7 +9889,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                     name,
                                     agency,
                                     position,
-                                    label
+                                    label,
+                                    workAccount,
+                                    workPassword
                                   })
                                 }
                                 className="mr-2 rounded-xl bg-white/10 px-4 py-1.5 text-xs font-semibold text-slate-200 transition hover:-translate-y-0.5 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
@@ -9793,7 +9935,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         </button>
                       </div>
 
-                      <div className="mt-4 grid gap-3 md:grid-cols-5">
+                      <div className="mt-4 grid gap-3 md:grid-cols-7">
                         <div className="md:col-span-1">
                           <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('工号', 'Staff ID')}</label>
                           <input
@@ -9860,6 +10002,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               <option key={d} value={d} />
                             ))}
                           </datalist>
+                        </div>
+                        <div className="md:col-span-1">
+                          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('工作账号', 'Work account')}</label>
+                          <input
+                            value={employeeEditWorkAccount}
+                            onChange={(e) => setEmployeeEditWorkAccount(e.target.value)}
+                            disabled={isLocked}
+                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                          />
+                        </div>
+                        <div className="md:col-span-1">
+                          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('工作密码', 'Work password')}</label>
+                          <input
+                            value={employeeEditWorkPassword}
+                            onChange={(e) => setEmployeeEditWorkPassword(e.target.value)}
+                            disabled={isLocked}
+                            className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                          />
                         </div>
                       </div>
 
@@ -10768,7 +10928,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                       onClick={async () => {
                         try {
                           const XLSX = await import('xlsx');
-                          const headers = ['staff_id', 'name', 'agency', 'position', 'label'];
+                          const headers = ['staff_id', 'name', 'agency', 'position', 'label', 'work_account', 'work_password'];
                           const ws = XLSX.utils.aoa_to_sheet([headers]);
                           const wb = XLSX.utils.book_new();
                           XLSX.utils.book_append_sheet(wb, ws, 'template');
@@ -10776,7 +10936,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           XLSX.writeFile(wb, 'ob_employees_template.xlsx');
                         } catch (err: any) {
                           // fallback to CSV download
-                          const headers = ['staff_id', 'name', 'agency', 'position', 'label'];
+                          const headers = ['staff_id', 'name', 'agency', 'position', 'label', 'work_account', 'work_password'];
                           const csv = headers.join(',') + '\n';
                           const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                           const url = URL.createObjectURL(blob);
