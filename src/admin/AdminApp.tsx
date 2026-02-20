@@ -754,6 +754,7 @@ export default function AdminApp() {
   const [employeeLastPunchAtByStaffId, setEmployeeLastPunchAtByStaffId] = useState<Record<string, string | null>>({});
   const [employeeSortByLastPunchDesc, setEmployeeSortByLastPunchDesc] = useState(false);
   const [employeeBadgePrintingStaffId, setEmployeeBadgePrintingStaffId] = useState<string | null>(null);
+  const [employeeBadgeBatchPrinting, setEmployeeBadgeBatchPrinting] = useState(false);
   const [employeeBadgePreview, setEmployeeBadgePreview] = useState<{
     staff: string;
     name: string;
@@ -3449,24 +3450,334 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     });
   };
 
-  const printEmployeeTempBadge = async (payload: { staff: string; name: string; agency: string; position: string }) => {
+  const printEmployeeBadgeCards = async (
+    input: Array<{ staff: string; name: string; agency: string; position: string; workAccount?: string; workPassword?: string }>
+  ) => {
+    const rows = input
+      .map((r) => ({
+        staff: normalizeStaffId(String(r.staff ?? '').trim()),
+        name: String(r.name ?? '').trim() || '-',
+        agency: String(r.agency ?? '').trim() || '-',
+        position: String(r.position ?? '').trim() || '-',
+        workAccount: String(r.workAccount ?? '').trim() || '-',
+        workPassword: String(r.workPassword ?? '').trim() || '-'
+      }))
+      .filter((r) => Boolean(r.staff));
+    if (rows.length === 0) {
+      setStatus({ tone: 'error', message: t('没有可打印的工牌数据。', 'No badge data to print.') });
+      return;
+    }
+    const safe = (v: string) =>
+      String(v ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    const logoUrls = ['/img/1.png', '/img/2.png', '/img/3.png', '/img/4.png', '/img/5.png', '/img/6.png'];
+    const logoByStaff = new Map<string, string>();
+    const pickLogo = (staff: string) => {
+      const key = String(staff ?? '').trim();
+      if (!key) return logoUrls[0];
+      const cached = logoByStaff.get(key);
+      if (cached) return cached;
+      let hash = 0;
+      for (let i = 0; i < key.length; i += 1) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+      const selected = logoUrls[hash % logoUrls.length];
+      logoByStaff.set(key, selected);
+      return selected;
+    };
+    const logoHtml = (staff: string) => `<img src="${safe(pickLogo(staff))}" alt="logo" />`;
+    const getFooterColorByPosition = (position: string) => {
+      const key = String(position ?? '').trim().toLowerCase();
+      if (key === 'pick') return '#38bdf8';
+      if (key === 'pack') return '#fb7185';
+      if (key === 'rebin') return '#34d399';
+      if (key === 'preship') return '#facc15';
+      if (key === 'transfer') return '#a78bfa';
+      return '#fa4949';
+    };
+    const getFooterTextColor = (hex: string) => {
+      const h = String(hex ?? '').trim().replace('#', '');
+      if (!/^[0-9a-fA-F]{6}$/.test(h)) return '#ffffff';
+      const n = Number.parseInt(h, 16);
+      const r = (n >> 16) & 255;
+      const g = (n >> 8) & 255;
+      const b = n & 255;
+      const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+      return lum > 0.72 ? '#0f172a' : '#ffffff';
+    };
+    const footerStyle = (position: string) => {
+      const bg = getFooterColorByPosition(position);
+      const fg = getFooterTextColor(bg);
+      return `background:${bg};color:${fg};`;
+    };
+    const chunk8 = <T,>(arr: T[]) => {
+      const out: T[][] = [];
+      for (let i = 0; i < arr.length; i += 8) out.push(arr.slice(i, i + 8));
+      return out;
+    };
+
+    const rowsWithQr: Array<{
+      staff: string;
+      name: string;
+      agency: string;
+      position: string;
+      workAccount: string;
+      workPassword: string;
+      qrEmp: string;
+      qrAcc: string;
+      qrPwd: string;
+    }> = [];
+    for (const row of rows) {
+      const [qrEmp, qrAcc, qrPwd] = await Promise.all([
+        QRCode.toDataURL(row.staff, {
+          errorCorrectionLevel: 'M',
+          margin: 1,
+          width: 560,
+          color: { dark: '#0b1220', light: '#ffffff' }
+        }),
+        QRCode.toDataURL(row.workAccount, {
+          errorCorrectionLevel: 'M',
+          margin: 1,
+          width: 560,
+          color: { dark: '#0b1220', light: '#ffffff' }
+        }),
+        QRCode.toDataURL(row.workPassword, {
+          errorCorrectionLevel: 'M',
+          margin: 1,
+          width: 560,
+          color: { dark: '#0b1220', light: '#ffffff' }
+        })
+      ]);
+      rowsWithQr.push({ ...row, qrEmp, qrAcc, qrPwd });
+    }
+    const groups = chunk8(rowsWithQr);
+    const byStaff = new Map(rowsWithQr.map((r) => [r.staff, r]));
+
+    const frontCard = (r?: (typeof rowsWithQr)[number]) =>
+      r
+        ? `
+    <div class="badge">
+      <div class="badge-header">
+        <div class="brand">
+          <div class="logo">${logoHtml(r.staff)}</div>
+          <div class="brand-text">
+            <div class="h">JD Outbound</div>
+            <div class="s">Employee Work Card</div>
+          </div>
+        </div>
+        <div class="hdr-right">JD Logistics</div>
+      </div>
+      <div class="badge-body">
+        <div class="fields">
+          <div class="name">${safe(r.name)}</div>
+          <div class="meta">
+            <div class="row"><div class="k">Agency</div><div class="v">${safe(r.agency)}</div></div>
+            <div class="row"><div class="k">Position</div><div class="v">${safe(r.position)}</div></div>
+          </div>
+          <div class="empid"><span>Emp ID</span><code>${safe(r.staff)}</code></div>
+        </div>
+        <div class="qr"><img src="${safe(r.qrEmp)}" alt="QR ${safe(r.staff)}" /></div>
+      </div>
+      <div class="badge-footer" style="${footerStyle(r.position)}">
+        <div class="footer-name">${safe(r.name)}</div>
+        <div class="footer-emp">ID ${safe(r.staff)}</div>
+      </div>
+    </div>`
+        : '<div class="badge empty"></div>';
+
+    const backCard = (r?: (typeof rowsWithQr)[number]) =>
+      r
+        ? `
+    <div class="badge">
+      <div class="badge-header">
+        <div class="brand">
+          <div class="logo">${logoHtml(r.staff)}</div>
+          <div class="brand-text">
+            <div class="h">JD Outbound</div>
+            <div class="s">Work Account</div>
+          </div>
+        </div>
+        <div class="hdr-right">JD Logistics</div>
+      </div>
+      <div class="badge-body-back">
+        <div class="pair">
+          <div class="qrbox">
+            <div class="label">ACCOUNT</div>
+            <code>${safe(r.workAccount)}</code>
+            <div class="qrsq"><img src="${safe(r.qrAcc)}" alt="QR account ${safe(r.staff)}" /></div>
+          </div>
+          <div class="qrbox">
+            <div class="label">PASSWORD</div>
+            <code>${safe(r.workPassword)}</code>
+            <div class="qrsq"><img src="${safe(r.qrPwd)}" alt="QR password ${safe(r.staff)}" /></div>
+          </div>
+        </div>
+      </div>
+      <div class="badge-footer" style="${footerStyle(r.position)}">
+        <div class="footer-name">${safe(r.name)}</div>
+        <div class="footer-emp">ID ${safe(r.staff)}</div>
+      </div>
+    </div>`
+        : '<div class="badge empty"></div>';
+
+    const pagesHtml = groups
+      .map((group) => {
+        const frontSlots = new Array<ReturnType<typeof frontCard>>(8).fill('<div class="badge empty"></div>');
+        const backSlots = new Array<ReturnType<typeof backCard>>(8).fill('<div class="badge empty"></div>');
+        for (let i = 0; i < 8; i += 1) {
+          const row = group[i];
+          if (!row) continue;
+          frontSlots[i] = frontCard(row);
+          backSlots[i ^ 1] = backCard(byStaff.get(row.staff));
+        }
+        return `
+      <section class="page front">${frontSlots.join('')}</section>
+      <section class="page back">${backSlots.join('')}</section>`;
+      })
+      .join('');
+
+    const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      :root {
+        --pageW: 215.9mm;
+        --pageH: 279.4mm;
+        --pagePad: 12mm;
+        --pageGap: 7mm;
+        --badgeW: calc((var(--pageW) - (2 * var(--pagePad)) - var(--pageGap)) / 2);
+        --badgeH: calc((var(--pageH) - (2 * var(--pagePad)) - (3 * var(--pageGap))) / 4);
+      }
+      @page { size: Letter; margin: 0; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: var(--pageW);
+        min-height: var(--pageH);
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      body { background: #fff; font-family: Arial, "Microsoft YaHei", sans-serif; }
+      .page {
+        width: var(--pageW);
+        height: var(--pageH);
+        padding: var(--pagePad);
+        box-sizing: border-box;
+        display: grid;
+        grid-template-columns: var(--badgeW) var(--badgeW);
+        grid-template-rows: repeat(4, var(--badgeH));
+        gap: var(--pageGap);
+        align-content: start;
+        justify-content: start;
+        overflow: hidden;
+        page-break-after: always;
+        break-after: page;
+      }
+      .page:last-child { page-break-after: auto; break-after: auto; }
+      .badge {
+        width: var(--badgeW);
+        height: var(--badgeH);
+        border: 1px solid #e5e7eb;
+        border-radius: 0;
+        display: flex;
+        flex-direction: column;
+        background: #fff;
+        color: #0f172a;
+        overflow: hidden;
+        box-sizing: border-box;
+      }
+      .badge.empty { visibility: hidden; }
+      .badge-header { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 10px 14px; border-bottom: 1px solid #e5e7eb; }
+      .brand-text .h { font-size: 12.5px; font-weight: 800; line-height: 1.1; }
+      .brand-text .s { font-size: 10.5px; color: #64748b; line-height: 1.2; }
+      .brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+      .logo { width: 24px; height: 24px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; }
+      .logo img { width: 24px; height: 24px; display: block; object-fit: contain; }
+      .hdr-right { font-size: 10px; font-weight: 800; color: #64748b; white-space: nowrap; }
+      .badge-body { display: grid; grid-template-columns: 1fr 64px; gap: 10px; padding: 12px 14px; flex: 1; min-height: 0; }
+      .fields { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+      .name { font-size: 22px; font-weight: 900; line-height: 1.1; word-break: break-word; }
+      .meta { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+      .row { display: flex; gap: 8px; align-items: baseline; }
+      .k { color: #64748b; font-weight: 700; width: 56px; flex: 0 0 auto; }
+      .v { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .empid { margin-top: 2px; font-size: 11px; color: #64748b; display: flex; gap: 8px; }
+      .empid code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace; font-size: 10.5px; }
+      .qr { width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; }
+      .qr img { width: 64px; height: 64px; display: block; image-rendering: pixelated; }
+      .badge-footer { height: 22px; padding: 0 14px; background: #fa4949; color: #fff; font-size: 10.5px; font-weight: 800; display: flex; align-items: center; justify-content: space-between; }
+      .footer-name { max-width: 60mm; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 9.5px; }
+      .badge-body-back { padding: 10px 14px; flex: 1; display: flex; }
+      .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+      .qrbox { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+      .label { font-size: 10px; font-weight: 800; color: #64748b; letter-spacing: .2px; }
+      .qrbox code { font-size: 9.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .qrsq img { width: 80px; height: 80px; display: block; image-rendering: pixelated; }
+    </style>
+  </head>
+  <body>${pagesHtml}</body>
+</html>`;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!doc) {
+      iframe.remove();
+      setStatus({ tone: 'error', message: t('打印失败：无法创建打印页。', 'Print failed: cannot create print page.') });
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+    const imgs = Array.from(doc.images ?? []);
+    await Promise.all(
+      imgs.map(
+        (img) =>
+          new Promise<void>((resolve) => {
+            if (img.complete) {
+              resolve();
+              return;
+            }
+            const done = () => {
+              img.removeEventListener('load', done);
+              img.removeEventListener('error', done);
+              resolve();
+            };
+            img.addEventListener('load', done);
+            img.addEventListener('error', done);
+          })
+      )
+    );
+    await new Promise((r) => setTimeout(r, 80));
+    iframe.contentWindow?.focus();
+    iframe.contentWindow?.print();
+    window.setTimeout(() => iframe.remove(), 2500);
+  };
+
+  const printEmployeeTempBadge = async (payload: { staff: string; name: string; agency: string; position: string; workAccount?: string; workPassword?: string }) => {
     const staff = normalizeStaffId(String(payload.staff ?? '').trim());
     if (!staff) return;
     setEmployeeBadgePrintingStaffId(staff);
     try {
-      const qrDataUrl = await QRCode.toDataURL(staff, {
-        errorCorrectionLevel: 'M',
-        margin: 1,
-        width: 920,
-        color: { dark: '#0b1220', light: '#ffffff' }
-      });
-      setEmployeeBadgePreview({
-        staff,
-        name: payload.name || '-',
-        agency: payload.agency || '-',
-        position: payload.position || '-',
-        qrDataUrl
-      });
+      await printEmployeeBadgeCards([
+        {
+          staff,
+          name: payload.name || '-',
+          agency: payload.agency || '-',
+          position: payload.position || '-',
+          workAccount: payload.workAccount || '-',
+          workPassword: payload.workPassword || '-'
+        }
+      ]);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err ?? 'unknown error');
       setStatus({ tone: 'error', message: t(`打印失败：${message}`, `Print failed: ${message}`) });
@@ -9809,6 +10120,30 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="font-display text-2xl tracking-[0.08em]">{t('员工信息', 'Employees')}</h2>
                   <div className="flex shrink-0 items-center gap-3">
+                    <button
+                      type="button"
+                      disabled={isLocked || employeeBadgeBatchPrinting || employeesFiltered.length === 0}
+                      onClick={async () => {
+                        setEmployeeBadgeBatchPrinting(true);
+                        try {
+                          await printEmployeeBadgeCards(
+                            employeesFiltered.map((e) => ({
+                              staff: String(e.staff_id ?? '').trim(),
+                              name: String(e.name ?? '').trim(),
+                              agency: String(e.agency ?? e.Agency ?? '').trim(),
+                              position: String(e.position ?? e.Position ?? '').trim(),
+                              workAccount: String(e.work_account ?? e.WorkAccount ?? '').trim(),
+                              workPassword: String(e.work_password ?? e.WorkPassword ?? '').trim()
+                            }))
+                          );
+                        } finally {
+                          setEmployeeBadgeBatchPrinting(false);
+                        }
+                      }}
+                      className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {employeeBadgeBatchPrinting ? t('生成中...', 'Generating...') : t('批量生成工牌', 'Batch badges')}
+                    </button>
                     <input
                       ref={fileInputRef}
                       type="file"
@@ -10271,7 +10606,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                     staff,
                                     name,
                                     agency,
-                                    position
+                                    position,
+                                    workAccount,
+                                    workPassword
                                   })
                                 }
                                 className="mr-2 rounded-xl bg-neon px-4 py-1.5 text-xs font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
