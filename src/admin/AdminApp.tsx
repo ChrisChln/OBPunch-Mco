@@ -3626,9 +3626,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           frontSlots[i] = frontCard(row);
           backSlots[i ^ 1] = backCard(byStaff.get(row.staff));
         }
-        return `
-      <section class="page front">${frontSlots.join('')}</section>
-      <section class="page back">${backSlots.join('')}</section>`;
+        return `<section class="page front">${frontSlots.join('')}</section><section class="page back">${backSlots.join('')}</section>`;
       })
       .join('');
 
@@ -3645,7 +3643,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         --badgeW: calc((var(--pageW) - (2 * var(--pagePad)) - var(--pageGap)) / 2);
         --badgeH: calc((var(--pageH) - (2 * var(--pagePad)) - (3 * var(--pageGap))) / 4);
         --backShiftX: 0mm;
-        --backShiftY: 1.2mm;
+        --backShiftY: 0mm;
         --cardPadX: 14px;
         --cardPadY: 12px;
         --headerH: 44px;
@@ -3655,12 +3653,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       html, body {
         margin: 0;
         padding: 0;
-        width: var(--pageW);
-        min-height: var(--pageH);
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
-      body { background: #fff; font-family: Arial, "Microsoft YaHei", sans-serif; }
+      body {
+        background: #fff;
+        font-family: Arial, "Microsoft YaHei", sans-serif;
+        font-size: 0;
+        line-height: 0;
+      }
       .page {
         width: var(--pageW);
         height: var(--pageH);
@@ -3672,15 +3673,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         gap: var(--pageGap);
         align-content: start;
         justify-content: start;
+        margin: 0;
         overflow: hidden;
-        page-break-after: always;
-        break-after: page;
       }
-      .page:last-child { page-break-after: auto; break-after: auto; }
+      .page:not(:last-child) { page-break-after: always; break-after: page; }
       .page.back {
         position: relative;
-        left: var(--backShiftX);
-        top: var(--backShiftY);
+        transform: translate(var(--backShiftX), var(--backShiftY));
       }
       .badge {
         width: var(--badgeW);
