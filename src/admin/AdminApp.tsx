@@ -589,6 +589,8 @@ const normalizeHeaderKey = (value: string) =>
     .replace(/-+/g, '_');
 
 const EMPLOYEE_KEY_ALIASES: Record<string, string> = {
+  employee_id: 'staff_id',
+  employeeid: 'staff_id',
   uid: 'staff_id',
   staffid: 'staff_id',
   staff_id: 'staff_id',
@@ -723,6 +725,7 @@ export default function AdminApp() {
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [employeeAgency, setEmployeeAgency] = useState('');
   const [employeePosition, setEmployeePosition] = useState('');
+  const [employeeShiftFilter, setEmployeeShiftFilter] = useState<'' | 'early' | 'late'>('');
   const [employeeLabels, setEmployeeLabels] = useState<string[]>([]);
   const [, setEmployeesHasMore] = useState(false);
   const [employeeNewStaffId, setEmployeeNewStaffId] = useState('');
@@ -742,6 +745,12 @@ export default function AdminApp() {
   const [employeeEditLabel, setEmployeeEditLabel] = useState('');
   const [employeeEditWorkAccount, setEmployeeEditWorkAccount] = useState('');
   const [employeeEditWorkPassword, setEmployeeEditWorkPassword] = useState('');
+  const [employeeAuditOpen, setEmployeeAuditOpen] = useState(false);
+  const [employeeAuditStaffId, setEmployeeAuditStaffId] = useState('');
+  const [employeeAuditName, setEmployeeAuditName] = useState('');
+  const [employeeAuditRows, setEmployeeAuditRows] = useState<AuditRow[]>([]);
+  const [employeeAuditLoading, setEmployeeAuditLoading] = useState(false);
+  const [employeeAuditError, setEmployeeAuditError] = useState<string | null>(null);
   const [employeeLastPunchAtByStaffId, setEmployeeLastPunchAtByStaffId] = useState<Record<string, string | null>>({});
   const [employeeSortByLastPunchDesc, setEmployeeSortByLastPunchDesc] = useState(false);
   const [employeeBadgePrintingStaffId, setEmployeeBadgePrintingStaffId] = useState<string | null>(null);
@@ -750,6 +759,14 @@ export default function AdminApp() {
     name: string;
     agency: string;
     position: string;
+    qrDataUrl: string;
+  } | null>(null);
+  const [employeeAccountPrintingStaffId, setEmployeeAccountPrintingStaffId] = useState<string | null>(null);
+  const [employeeAccountPreview, setEmployeeAccountPreview] = useState<{
+    staff: string;
+    name: string;
+    workAccount: string;
+    workPassword: string;
     qrDataUrl: string;
   } | null>(null);
   const [deviceLabelPrintingSn, setDeviceLabelPrintingSn] = useState<string | null>(null);
@@ -1238,8 +1255,8 @@ export default function AdminApp() {
       return 'lower';
     }
 
-    employeeColumnModeRef.current = 'lower';
-    return 'lower';
+    employeeColumnModeRef.current = 'cased';
+    return 'cased';
   };
 
   const normalizePositionKey = (value: string) => {
@@ -3076,10 +3093,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   const fetchEmployees = async ({
     reset: _reset,
-    search,
-    agency,
-    position,
-    labels,
     lockUi: lockUiOption
   }: {
     reset: boolean;
@@ -3094,10 +3107,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return null;
     }
 
-    const searchValue = (search ?? employeeSearch).trim().replace(/,/g, ' ');
-    const agencyValue = (agency ?? employeeAgency).trim();
-    const positionValue = (position ?? employeePosition).trim();
-    const labelValues = (labels ?? employeeLabels).map((item) => item.trim()).filter(Boolean);
     const lockUi = lockUiOption ?? true;
 
     let fetchedEmployees: EmployeeRow[] | null = null;
@@ -3109,35 +3118,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const rangeEnd = new Date(serverTime);
       const rangeStart = addDays(rangeEnd, -SHIFT_ANALYSIS_DAYS);
 
-      const build = (mode: EmployeeColumnMode, from: number, to: number) => {
-        const agencyCol = mode === 'cased' ? 'Agency' : 'agency';
-        const positionCol = mode === 'cased' ? 'Position' : 'position';
-        const labelCol = 'label';
-        const select =
-          mode === 'cased'
-            ? 'id, staff_id, name, "Agency", "Position", label, work_account, work_password, created_at'
-            : 'id, staff_id, name, agency, position, label, work_account, work_password, created_at';
-
-        let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
-
-        if (agencyValue) {
-          q = q.ilike(agencyCol as any, `%${agencyValue}%`);
-        }
-
-        if (positionValue) {
-          q = q.ilike(positionCol as any, `%${positionValue}%`);
-        }
-
-        if (labelValues.length === 1) {
-          q = q.ilike(labelCol as any, `%${labelValues[0]}%`);
-        }
-
-        if (searchValue) {
-          const term = `%${searchValue}%`;
-          q = q.or(`staff_id.ilike.${term},name.ilike.${term},${labelCol}.ilike.${term}`);
-        }
-
-        return q;
+      const build = (_mode: EmployeeColumnMode, from: number, to: number) => {
+        // Use wildcard select to tolerate mixed legacy schemas:
+        // some deployments use "Agency"/"Position"/"Label", others use lower-case.
+        return supabase.from(EMPLOYEE_TABLE).select('*').order('staff_id', { ascending: true }).range(from, to);
       };
 
       const mode = await resolveEmployeeColumnMode();
@@ -3491,6 +3475,80 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
   };
 
+  const openEmployeeAuditLog = async (staff: string, name?: string) => {
+    const staffKey = normalizeStaffId(String(staff ?? '').trim());
+    if (!staffKey) return;
+    setEmployeeAuditStaffId(staffKey);
+    setEmployeeAuditName(String(name ?? '').trim());
+    setEmployeeAuditRows([]);
+    setEmployeeAuditError(null);
+    setEmployeeAuditOpen(true);
+    setEmployeeAuditLoading(true);
+    if (!supabase) {
+      setEmployeeAuditRows(auditRows.filter((r) => normalizeStaffId(String(r.staff_id ?? '').trim()) === staffKey).slice(0, 30));
+      setEmployeeAuditLoading(false);
+      return;
+    }
+    try {
+      const res = await supabase
+        .from(AUDIT_TABLE)
+        .select('id, created_at, actor, action, staff_id, target, payload')
+        .eq('staff_id', staffKey)
+        .order('created_at', { ascending: false })
+        .limit(30);
+      if (res.error) {
+        setEmployeeAuditError(res.error.message);
+        setEmployeeAuditRows(
+          auditRows.filter((r) => normalizeStaffId(String(r.staff_id ?? '').trim()) === staffKey).slice(0, 30)
+        );
+      } else {
+        setEmployeeAuditRows(((res.data as any[]) ?? []) as AuditRow[]);
+      }
+    } catch (err: any) {
+      setEmployeeAuditError(String(err?.message ?? err ?? 'Unknown error'));
+      setEmployeeAuditRows(auditRows.filter((r) => normalizeStaffId(String(r.staff_id ?? '').trim()) === staffKey).slice(0, 30));
+    } finally {
+      setEmployeeAuditLoading(false);
+    }
+  };
+
+  const printEmployeeAccountCard = async (payload: {
+    staff: string;
+    name: string;
+    workAccount: string;
+    workPassword: string;
+  }) => {
+    const staff = normalizeStaffId(String(payload.staff ?? '').trim());
+    const workAccount = String(payload.workAccount ?? '').trim();
+    const workPassword = String(payload.workPassword ?? '').trim();
+    if (!staff) return;
+    if (!workAccount) {
+      setStatus({ tone: 'error', message: t('该员工未设置工作账号。', 'Work account is empty for this employee.') });
+      return;
+    }
+    setEmployeeAccountPrintingStaffId(staff);
+    try {
+      const qrDataUrl = await QRCode.toDataURL(workAccount, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 920,
+        color: { dark: '#0b1220', light: '#ffffff' }
+      });
+      setEmployeeAccountPreview({
+        staff,
+        name: String(payload.name ?? '').trim() || '-',
+        workAccount,
+        workPassword: workPassword || '-',
+        qrDataUrl
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err ?? 'unknown error');
+      setStatus({ tone: 'error', message: t(`打印失败：${message}`, `Print failed: ${message}`) });
+    } finally {
+      setEmployeeAccountPrintingStaffId((current) => (current === staff ? null : current));
+    }
+  };
+
   const printDeviceLabel = async (payload: DeviceLabelPrintPayload) => {
     const sn = normalizeDeviceSn(String(payload.sn ?? '').trim());
     if (!sn) return;
@@ -3737,6 +3795,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   useEffect(() => {
     const onAfterPrint = () => {
       setEmployeeBadgePreview(null);
+      setEmployeeAccountPreview(null);
       setDeviceLabelPreview(null);
     };
     window.addEventListener('afterprint', onAfterPrint);
@@ -3981,7 +4040,25 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           work_account: workAccount,
           work_password: workPassword,
           migrated_punch_rows: migratedPunchCount,
-          migrated_schedule_rows: migratedScheduleCount
+          migrated_schedule_rows: migratedScheduleCount,
+          before: {
+            staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
+            name: String(originalEmployeeRow.name ?? '').trim(),
+            agency: String(originalEmployeeRow.agency ?? originalEmployeeRow.Agency ?? '').trim(),
+            position: String(originalEmployeeRow.position ?? originalEmployeeRow.Position ?? '').trim(),
+            label: String(originalEmployeeRow.label ?? originalEmployeeRow.Label ?? '').trim(),
+            work_account: String(originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? '').trim(),
+            work_password: String(originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? '').trim()
+          },
+          after: {
+            staff_id: nextStaff,
+            name,
+            agency,
+            position: normalizedPos ?? '',
+            label,
+            work_account: workAccount,
+            work_password: workPassword
+          }
         }
       });
       closeEmployeeEdit();
@@ -4051,6 +4128,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (state === 'empty') return t('休息', 'Rest');
       return '-';
     };
+    const fmtText = (value: any) => {
+      const text = String(value ?? '').trim();
+      return text || '-';
+    };
+    const pushChanged = (label: string, beforeValue: any, afterValue: any) => {
+      const beforeText = fmtText(beforeValue);
+      const afterText = fmtText(afterValue);
+      if (beforeText === afterText) return;
+      details.push({ label, value: `${beforeText} -> ${afterText}` });
+    };
 
     let summary = action || '-';
     if (action === 'employee_upsert') {
@@ -4062,11 +4149,27 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       push(t('工作密码', 'Work password'), payload?.work_password);
     } else if (action === 'employee_update') {
       summary = t('更新员工信息', 'Employee updated');
-      push(t('姓名', 'Name'), payload?.name);
-      push('Agency', payload?.agency);
-      push(t('岗位', 'Position'), payload?.position);
-      push(t('工作账号', 'Work account'), payload?.work_account);
-      push(t('工作密码', 'Work password'), payload?.work_password);
+      const before = (payload?.before ?? null) as Record<string, any> | null;
+      const after = (payload?.after ?? null) as Record<string, any> | null;
+      if (before || after) {
+        pushChanged(t('工号', 'Staff ID'), before?.staff_id ?? payload?.old_staff_id, after?.staff_id ?? payload?.staff_id);
+        pushChanged(t('姓名', 'Name'), before?.name, after?.name ?? payload?.name);
+        pushChanged('Agency', before?.agency, after?.agency ?? payload?.agency);
+        pushChanged(t('岗位', 'Position'), before?.position, after?.position ?? payload?.position);
+        pushChanged(t('标签', 'Label'), before?.label, after?.label ?? payload?.label);
+        pushChanged(t('工作账号', 'Work account'), before?.work_account, after?.work_account ?? payload?.work_account);
+        pushChanged(t('工作密码', 'Work password'), before?.work_password, after?.work_password ?? payload?.work_password);
+      } else {
+        if (payload?.old_staff_id && payload?.staff_id && String(payload.old_staff_id) !== String(payload.staff_id)) {
+          pushChanged(t('工号', 'Staff ID'), payload.old_staff_id, payload.staff_id);
+        }
+        push(t('姓名', 'Name'), payload?.name);
+        push('Agency', payload?.agency);
+        push(t('岗位', 'Position'), payload?.position);
+        push(t('标签', 'Label'), payload?.label);
+        push(t('工作账号', 'Work account'), payload?.work_account);
+        push(t('工作密码', 'Work password'), payload?.work_password);
+      }
     } else if (action === 'employee_delete') {
       summary = t('删除员工', 'Employee deleted');
     } else if (action === 'employee_upload') {
@@ -6043,9 +6146,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
 
     const writeEmployeeBatch = async (batch: any[]) => {
+      const auditItems: Array<{ action: string; staffId: string; payload: Record<string, unknown> }> = [];
       const batchStaffIds = batch.map((r) => String(r.staff_id ?? '').trim()).filter(Boolean);
       if (batchStaffIds.length === 0) {
-        return { error: null as any, inserted: 0, skippedExisting: 0, updated: 0 };
+        return { error: null as any, inserted: 0, skippedExisting: 0, updated: 0, auditItems };
       }
 
       const fetchExistingDetails = async () => {
@@ -6075,7 +6179,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
       const existingDetailsRes = await fetchExistingDetails();
       if (existingDetailsRes.error) {
-        return { error: existingDetailsRes.error, inserted: 0, skippedExisting: 0, updated: 0 };
+        return { error: existingDetailsRes.error, inserted: 0, skippedExisting: 0, updated: 0, auditItems };
       }
 
       const existingSet = new Set<string>(existingDetailsRes.rows.map((r) => String(r.staff_id ?? '').trim()).filter(Boolean));
@@ -6126,9 +6230,27 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           const minimal = toInsert.map((row: any) => ({ staff_id: row.staff_id, name: row.name ?? null }));
           const attemptMinimal = await tryInsert(minimal as any[]);
           if (attemptMinimal.error) {
-            return { error: attemptMinimal.error, inserted: 0, skippedExisting, updated: 0 };
+            return { error: attemptMinimal.error, inserted: 0, skippedExisting, updated: 0, auditItems };
           }
           insertedCount = toInsert.length;
+        }
+        for (const row of toInsert) {
+          const staff = String(row.staff_id ?? '').trim();
+          if (!staff) continue;
+          auditItems.push({
+            action: 'employee_upsert',
+            staffId: staff,
+            payload: {
+              staff_id: staff,
+              name: row.name ?? '',
+              agency: row.agency ?? '',
+              position: row.position ?? '',
+              label: row.label ?? '',
+              work_account: row.work_account ?? '',
+              work_password: row.work_password ?? '',
+              source: 'import'
+            }
+          });
         }
       }
 
@@ -6153,7 +6275,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return { error: null as any, inserted: insertedCount, skippedExisting, updated: 0 };
       }
 
-      const toUpdate: Array<{ staff_id: string; payload: Record<string, unknown> }> = [];
+      const toUpdate: Array<{
+        staff_id: string;
+        payload: Record<string, unknown>;
+        before: Record<string, unknown>;
+        after: Record<string, unknown>;
+      }> = [];
       for (const row of batch) {
         const staff = String(row.staff_id ?? '').trim();
         if (!staff || !existingSet.has(staff)) continue;
@@ -6181,24 +6308,59 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         if (!existing.work_password && row.work_password) payload.work_password = row.work_password;
 
         if (Object.keys(payload).length > 0) {
-          toUpdate.push({ staff_id: staff, payload });
+          const before = {
+            staff_id: staff,
+            name: existing.name,
+            agency: existing.agency,
+            position: existing.position,
+            label: existing.label,
+            work_account: existing.work_account,
+            work_password: existing.work_password
+          };
+          const after = {
+            staff_id: staff,
+            name: payload.name ?? existing.name,
+            agency: payload.agency ?? payload.Agency ?? existing.agency,
+            position: payload.position ?? payload.Position ?? existing.position,
+            label: payload.label ?? existing.label,
+            work_account: payload.work_account ?? existing.work_account,
+            work_password: payload.work_password ?? existing.work_password
+          };
+          toUpdate.push({ staff_id: staff, payload, before, after });
         }
       }
 
       if (toUpdate.length === 0) {
-        return { error: null as any, inserted: insertedCount, skippedExisting, updated: 0 };
+        return { error: null as any, inserted: insertedCount, skippedExisting, updated: 0, auditItems };
       }
 
       let updated = 0;
       for (const u of toUpdate) {
         const res = await supabase.from(EMPLOYEE_TABLE).update(u.payload).eq('staff_id', u.staff_id);
         if (res.error) {
-          return { error: res.error, inserted: insertedCount, skippedExisting, updated };
+          return { error: res.error, inserted: insertedCount, skippedExisting, updated, auditItems };
         }
+        auditItems.push({
+          action: 'employee_update',
+          staffId: u.staff_id,
+          payload: {
+            old_staff_id: u.staff_id,
+            staff_id: u.staff_id,
+            name: u.after.name,
+            agency: u.after.agency,
+            position: u.after.position,
+            label: u.after.label,
+            work_account: u.after.work_account,
+            work_password: u.after.work_password,
+            before: u.before,
+            after: u.after,
+            source: 'import_fill'
+          }
+        });
         updated += 1;
       }
 
-      return { error: null as any, inserted: insertedCount, skippedExisting, updated };
+      return { error: null as any, inserted: insertedCount, skippedExisting, updated, auditItems };
     };
 
     await runLocked('employee_upload', async () => {
@@ -6209,7 +6371,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       let skippedExistingTotal = 0;
       let updatedTotal = 0;
       for (const batch of batches) {
-        const { error, inserted, skippedExisting, updated } = await writeEmployeeBatch(batch as any[]);
+        const { error, inserted, skippedExisting, updated, auditItems } = await writeEmployeeBatch(batch as any[]);
         if (error) {
           setUploadError(error.message);
           setStatus({ tone: 'error', message: '上传失败' });
@@ -6218,6 +6380,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         insertedTotal += inserted ?? 0;
         skippedExistingTotal += skippedExisting ?? 0;
         updatedTotal += updated ?? 0;
+        for (const item of auditItems ?? []) {
+          await writeAudit({
+            action: item.action,
+            staffId: item.staffId,
+            target: EMPLOYEE_TABLE,
+            payload: item.payload
+          });
+        }
       }
       const skippedTotal = duplicateInFileCount + skippedExistingTotal;
       setStatus({
@@ -6306,6 +6476,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const searchNeedle = employeeSearch.trim().toLowerCase();
     const agencyNeedle = employeeAgency.trim().toLowerCase();
     const positionNeedle = employeePosition.trim().toLowerCase();
+    const shiftNeedle = employeeShiftFilter;
     const labelNeedles = employeeLabels.map((item) => item.trim().toLowerCase()).filter(Boolean);
     const rows = employees.filter((e) => {
       const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
@@ -6313,8 +6484,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const agency = String(e.agency ?? e.Agency ?? '').trim();
       const position = String(e.position ?? e.Position ?? '').trim();
       const label = String(e.label ?? e.Label ?? '').trim();
+      const shiftInfo = employeeShiftByStaffId[staff];
+      const shift = shiftInfo?.shift || '';
       if (agencyNeedle && !agency.toLowerCase().includes(agencyNeedle)) return false;
       if (positionNeedle && !position.toLowerCase().includes(positionNeedle)) return false;
+      if (shiftNeedle && shift !== shiftNeedle) return false;
       if (labelNeedles.length > 0) {
         const normalizedLabel = label.toLowerCase();
         const hit = labelNeedles.some((needle) => normalizedLabel === needle);
@@ -6350,11 +6524,92 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     employeeSearch,
     employeeAgency,
     employeePosition,
+    employeeShiftFilter,
     employeeLabels,
     employeeSortByLastPunchDesc,
     employeeLastPunchAtByStaffId,
-    serverTime
+    serverTime,
+    employeeShiftByStaffId
   ]);
+
+  const exportEmployees = async () => {
+    await runLocked('employees_export', async () => {
+      const rows = employeesFiltered;
+      if (rows.length === 0) {
+        setStatus({ tone: 'error', message: t('暂无可导出的员工数据。', 'No employee data to export.') });
+        return;
+      }
+
+      const headers = [
+        'EMPLOYEE ID',
+        'NAME',
+        'AGENCY',
+        'POSITION',
+        t('标签', 'Label'),
+        t('工作账号', 'Work account'),
+        t('工作密码', 'Work password'),
+        t('班次', 'Shift')
+      ];
+
+      const body = rows.map((e) => {
+        const staff = String(e.staff_id ?? '').trim();
+        const name = String(e.name ?? '').trim();
+        const agency = String(e.agency ?? e.Agency ?? '').trim();
+        const position = String(e.position ?? e.Position ?? '').trim();
+        const label = String(e.label ?? e.Label ?? '').trim();
+        const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
+        const workPassword = String(e.work_password ?? e.WorkPassword ?? '').trim();
+        const shiftInfo = employeeShiftByStaffId[staff];
+        const scheduleRow = scheduleRowsByStaffDayIndex.get(`${normalizeStaffId(staff)}__${homeOperationalDayIndex}`);
+        const scheduledShift = normalizeShiftValue(String(scheduleRow?.shift ?? '').trim());
+        const shift = scheduledShift || shiftInfo?.shift || '';
+        const shiftLabel = shift === 'early' ? t('白班', 'Day') : shift === 'late' ? t('晚班', 'Night') : '-';
+        return [
+          displayStaffId(staff),
+          name || '-',
+          agency || '-',
+          position || '-',
+          label || '-',
+          workAccount || '-',
+          workPassword || '-',
+          shiftLabel
+        ];
+      });
+
+      const filename = `ob_employees_${toDateOnly(serverTime)}.xlsx`;
+      try {
+        const XLSX = await import('xlsx');
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...body]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'employees');
+        XLSX.writeFile(wb, filename);
+        setStatus({ tone: 'success', message: t(`已导出：${filename}`, `Exported: ${filename}`) });
+      } catch {
+        const csvName = filename.replace(/\.xlsx$/i, '.csv');
+        const csv = [headers, ...body]
+          .map((row) =>
+            row
+              .map((cell) => {
+                const v = String(cell ?? '');
+                if (v.includes('"') || v.includes(',') || v.includes('\n')) return `"${v.replace(/"/g, '""')}"`;
+                return v;
+              })
+              .join(',')
+          )
+          .join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = csvName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setStatus({ tone: 'success', message: t(`已导出：${csvName}`, `Exported: ${csvName}`) });
+      }
+    });
+  };
 
   const timecardAgencyOptions = useMemo(() => {
     const out = new Set<string>();
@@ -7794,14 +8049,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 className={tabClass(page === 'home')}
               >
                 {t('首页', 'Home')}
-              </button>
-              <button
-                type="button"
-                disabled={isLocked}
-                onClick={() => setPage('employee_upload')}
-                className={tabClass(page === 'employee_upload')}
-              >
-                {t('员工上传', 'Upload')}
               </button>
               <button
                 type="button"
@@ -9480,6 +9727,35 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="font-display text-2xl tracking-[0.08em]">{t('员工信息', 'Employees')}</h2>
                   <div className="flex shrink-0 items-center gap-3">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                      disabled={isLocked}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0] ?? null;
+                        await onFileSelected(file);
+                        if (file) await uploadEmployees();
+                        e.currentTarget.value = '';
+                      }}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => fileInputRef.current?.click()}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {t('导入', 'Import')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => void exportEmployees()}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {t('导出', 'Export')}
+                    </button>
                     <button
                       type="button"
                       disabled={isLocked}
@@ -9503,6 +9779,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         setEmployeeSearch('');
                         setEmployeeAgency('');
                         setEmployeePosition('');
+                        setEmployeeShiftFilter('');
                         setEmployeeLabels([]);
                         void fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
                       }}
@@ -9512,8 +9789,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                     </button>
                   </div>
                 </div>
+                {uploadError && <p className="mt-3 text-sm text-ember">{uploadError}</p>}
 
-                <div className="mt-5 grid gap-4 md:grid-cols-5">
+                <div className="mt-5 grid gap-4 md:grid-cols-6">
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Search</label>
                     <input
@@ -9526,35 +9804,48 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   </div>
                   <div>
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Agency</label>
-                    <input
+                    <select
                       value={employeeAgency}
                       onChange={(e) => setEmployeeAgency(e.target.value)}
                       disabled={isLocked}
-                      list="employee-agency-options"
-                      placeholder="Agency"
                       className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                    <datalist id="employee-agency-options">
+                    >
+                      <option value="">{t('全部Agency', 'All agencies')}</option>
                       {employeeAgencyOptions.map((d) => (
-                        <option key={d} value={d} />
+                        <option key={d} value={d}>
+                          {d}
+                        </option>
                       ))}
-                    </datalist>
+                    </select>
                   </div>
                   <div>
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Position</label>
-                    <input
+                    <select
                       value={employeePosition}
                       onChange={(e) => setEmployeePosition(e.target.value)}
                       disabled={isLocked}
-                      list="employee-position-options"
-                      placeholder="Position"
                       className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                    <datalist id="employee-position-options">
+                    >
+                      <option value="">{t('全部岗位', 'All positions')}</option>
                       {employeePositionOptions.map((d) => (
-                        <option key={d} value={d} />
+                        <option key={d} value={d}>
+                          {d}
+                        </option>
                       ))}
-                    </datalist>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('班次', 'Shift')}</label>
+                    <select
+                      value={employeeShiftFilter}
+                      onChange={(e) => setEmployeeShiftFilter((e.target.value as '' | 'early' | 'late') ?? '')}
+                      disabled={isLocked}
+                      className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <option value="">{t('全部班次', 'All shifts')}</option>
+                      <option value="early">{t('白班', 'Day')}</option>
+                      <option value="late">{t('晚班', 'Night')}</option>
+                    </select>
                   </div>
                   <div>
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('标签', 'Label')}</label>
@@ -9867,6 +10158,31 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             <td className="px-4 py-3 text-right">
                               <button
                                 type="button"
+                                disabled={isLocked}
+                                onClick={() => void openEmployeeAuditLog(staff, name)}
+                                className="mr-2 rounded-xl bg-cyan-500/20 px-4 py-1.5 text-xs font-semibold text-cyan-200 transition hover:-translate-y-0.5 hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {t('操作日志', 'Audit')}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isLocked || employeeAccountPrintingStaffId === staff}
+                                onClick={() =>
+                                  void printEmployeeAccountCard({
+                                    staff,
+                                    name,
+                                    workAccount,
+                                    workPassword
+                                  })
+                                }
+                                className="mr-2 rounded-xl bg-fuchsia-500/20 px-4 py-1.5 text-xs font-semibold text-fuchsia-200 transition hover:-translate-y-0.5 hover:bg-fuchsia-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {employeeAccountPrintingStaffId === staff
+                                  ? t('生成中...', 'Generating...')
+                                  : t('打印账号', 'Print account')}
+                              </button>
+                              <button
+                                type="button"
                                 disabled={isLocked || employeeBadgePrintingStaffId === staff}
                                 onClick={() =>
                                   void printEmployeeTempBadge({
@@ -9914,10 +10230,81 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   </table>
                 </div>
 
+                {employeeAuditOpen &&
+                  typeof document !== 'undefined' &&
+                  createPortal(
+                    <div className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-black/60 px-4 py-10">
+                      <div className="w-full max-w-3xl rounded-3xl border border-white/10 bg-slate-950/95 p-5 shadow-2xl backdrop-blur">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="text-xs uppercase tracking-[0.25em] text-cyan-300">{t('操作日志', 'Audit Log')}</div>
+                            <div className="mt-2 text-sm text-slate-300">
+                              <span className="font-semibold text-white">{employeeAuditName || '-'}</span>
+                              <span className="ml-2 font-mono text-slate-400">
+                                {displayStaffId(String(employeeAuditStaffId ?? '')) || '-'}
+                              </span>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setEmployeeAuditOpen(false)}
+                            className="rounded-xl bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15"
+                          >
+                            {t('关闭', 'Close')}
+                          </button>
+                        </div>
+
+                        <div className="mt-4 max-h-[60vh] space-y-2 overflow-y-auto pr-1">
+                          {employeeAuditLoading ? (
+                            <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-6 text-center text-sm text-slate-300">
+                              {t('加载中...', 'Loading...')}
+                            </div>
+                          ) : (
+                            <>
+                              {employeeAuditError && (
+                                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                  {t(`加载失败：${employeeAuditError}`, `Load failed: ${employeeAuditError}`)}
+                                </div>
+                              )}
+                              {employeeAuditRows.length === 0 ? (
+                                <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-6 text-center text-sm text-slate-300">
+                                  {t('暂无记录', 'No records')}
+                                </div>
+                              ) : (
+                                employeeAuditRows.map((item) => {
+                                  const detail = formatAuditDetail(item);
+                                  return (
+                                    <div
+                                      key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)}
+                                      className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2"
+                                    >
+                                      <div className="text-[11px] text-slate-400">
+                                        {formatCellAuditTime(item.created_at)} · {String(item.actor ?? '').trim() || '-'}
+                                      </div>
+                                      <div className="mt-0.5 text-sm text-slate-100">{renderAuditSummary(detail.summary)}</div>
+                                      {detail.details.slice(0, 2).map((d, idx2) => (
+                                        <div key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`} className="mt-1 text-xs">
+                                          <div className="whitespace-normal break-words text-slate-200">
+                                            {renderAuditSummary(`${d.label}: ${d.value}`)}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>,
+                    document.body
+                  )}
+
                 {employeeEditOpen && typeof document !== 'undefined' &&
                   createPortal(
                   <div className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-black/60 px-4 py-10">
-                    <div className="w-full max-w-xl rounded-3xl border border-white/10 bg-slate-950/90 p-6 shadow-2xl backdrop-blur">
+                    <div className="w-full max-w-6xl rounded-3xl border border-white/10 bg-slate-950/90 p-6 shadow-2xl backdrop-blur">
                       <div className="flex items-start justify-between">
                         <div>
                           <div className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('编辑员工', 'Edit Employee')}</div>
@@ -9935,7 +10322,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                         </button>
                       </div>
 
-                      <div className="mt-4 grid gap-3 md:grid-cols-7">
+                      <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">
                         <div className="md:col-span-1">
                           <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('工号', 'Staff ID')}</label>
                           <input
@@ -9954,7 +10341,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             <p className="mt-1 text-[11px] text-slate-500">Only {STAFF_ID_EDITOR_EMAIL} can edit staff ID.</p>
                           )}
                         </div>
-                        <div className="md:col-span-1">
+                        <div className="md:col-span-1 lg:col-span-2 xl:col-span-2">
                           <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('姓名', 'Name')}</label>
                           <input
                             value={employeeEditName}
@@ -10140,6 +10527,114 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   <div style={{ display: 'grid', gridTemplateColumns: '0.78in 1fr', alignItems: 'baseline', gap: '0.05in' }}>
                                     <div style={{ fontSize: '9pt', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Agency</div>
                                     <div style={{ fontSize: '12.5pt', fontWeight: 700, lineHeight: 1.1, wordBreak: 'break-word' }}>{employeeBadgePreview.agency || '-'}</div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>,
+                  document.body
+                )}
+
+                {employeeAccountPreview && typeof document !== 'undefined' &&
+                  createPortal(
+                    <div className="employee-badge-print-host">
+                      <style>{`
+                        @page { size: 4in 6in; margin: 0; }
+                        @media print {
+                          html, body {
+                            width: 4in !important;
+                            height: 6in !important;
+                            margin: 0 !important;
+                            padding: 0 !important;
+                            overflow: hidden !important;
+                          }
+                          body > * { display: none !important; }
+                          .employee-badge-print-host {
+                            display: block !important;
+                            position: fixed !important;
+                            inset: 0 !important;
+                            margin: 0 !important;
+                            padding: 0 !important;
+                            background: #fff !important;
+                            z-index: 9999 !important;
+                          }
+                          .employee-badge-sheet-wrap {
+                            width: 4in !important;
+                            height: 6in !important;
+                            margin: 0 !important;
+                            border: none !important;
+                            border-radius: 0 !important;
+                            box-shadow: none !important;
+                          }
+                          .employee-badge-preview-overlay {
+                            display: block !important;
+                            position: fixed !important;
+                            inset: 0 !important;
+                            background: #fff !important;
+                            padding: 0 !important;
+                            margin: 0 !important;
+                          }
+                          .employee-badge-preview-chrome { display: none !important; }
+                          .employee-badge-preview-canvas {
+                            overflow: visible !important;
+                            border: none !important;
+                            background: transparent !important;
+                            padding: 0 !important;
+                          }
+                          .employee-badge-preview-scale {
+                            transform: none !important;
+                            margin: 0 !important;
+                          }
+                        }
+                      `}</style>
+                      <div className="employee-badge-preview-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4 py-10">
+                        <div className="w-full max-w-2xl rounded-3xl border border-white/10 bg-slate-950/95 p-5 shadow-2xl backdrop-blur">
+                          <div className="mb-4 flex items-center justify-between employee-badge-preview-chrome">
+                            <h3 className="font-display text-xl tracking-[0.08em] text-white">{t('打印账号卡', 'Print Account Card')}</h3>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => window.setTimeout(() => window.print(), 80)}
+                                className="rounded-xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl"
+                              >
+                                {t('打印', 'Print')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEmployeeAccountPreview(null)}
+                                className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/15"
+                              >
+                                {t('关闭', 'Close')}
+                              </button>
+                            </div>
+                          </div>
+                          <p className="mb-4 text-xs text-slate-400 employee-badge-preview-chrome">{t('打印尺寸：4 x 6 inch 标签纸。', 'Print size: 4 x 6 inch label.')}</p>
+                          <div className="overflow-auto rounded-2xl border border-white/10 bg-black/20 p-4 employee-badge-preview-canvas">
+                            <div className="mx-auto origin-top scale-[0.52] md:scale-[0.66] employee-badge-preview-scale">
+                              <div className="employee-badge-sheet-wrap" style={{ width: '4in', height: '6in', background: '#fff', color: '#111', fontFamily: 'Arial, \"Microsoft YaHei\", sans-serif', padding: '0.14in 0.16in', display: 'flex', flexDirection: 'column', gap: '0.1in', boxSizing: 'border-box', overflow: 'hidden' }}>
+                                <div style={{ textAlign: 'center', fontSize: '16pt', fontWeight: 800, letterSpacing: '0.04em' }}>{t('工作账号卡', 'WORK ACCOUNT CARD')}</div>
+                                <div style={{ height: '2.65in', border: '2px solid #111', borderRadius: '10px', padding: '0.07in', display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box' }}>
+                                  <img src={employeeAccountPreview.qrDataUrl} alt={`QR Code for ${employeeAccountPreview.workAccount}`} style={{ width: '100%', maxWidth: '2.45in', height: 'auto' }} />
+                                </div>
+                                <div style={{ border: '2px solid #111', borderRadius: '10px', padding: '0.08in 0.1in', display: 'grid', gap: '0.06in', boxSizing: 'border-box' }}>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '1.1in 1fr', alignItems: 'baseline', gap: '0.05in' }}>
+                                    <div style={{ fontSize: '9pt', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{t('员工', 'Employee')}</div>
+                                    <div style={{ fontSize: '12.5pt', fontWeight: 700, lineHeight: 1.1, wordBreak: 'break-word' }}>{employeeAccountPreview.name || '-'}</div>
+                                  </div>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '1.1in 1fr', alignItems: 'baseline', gap: '0.05in' }}>
+                                    <div style={{ fontSize: '9pt', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{t('账号', 'Account')}</div>
+                                    <div style={{ fontSize: '12.5pt', fontWeight: 700, lineHeight: 1.1, wordBreak: 'break-word' }}>{employeeAccountPreview.workAccount || '-'}</div>
+                                  </div>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '1.1in 1fr', alignItems: 'baseline', gap: '0.05in' }}>
+                                    <div style={{ fontSize: '9pt', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{t('密码', 'Password')}</div>
+                                    <div style={{ fontSize: '12.5pt', fontWeight: 700, lineHeight: 1.1, wordBreak: 'break-word' }}>{employeeAccountPreview.workPassword || '-'}</div>
+                                  </div>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '1.1in 1fr', alignItems: 'baseline', gap: '0.05in' }}>
+                                    <div style={{ fontSize: '9pt', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Staff ID</div>
+                                    <div style={{ fontSize: '12.5pt', fontWeight: 700, lineHeight: 1.1, wordBreak: 'break-word' }}>{employeeAccountPreview.staff || '-'}</div>
                                   </div>
                                 </div>
                               </div>

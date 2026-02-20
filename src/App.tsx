@@ -1073,8 +1073,8 @@ export default function App() {
       return 'lower';
     }
 
-    employeeColumnModeRef.current = 'lower';
-    return 'lower';
+    employeeColumnModeRef.current = 'cased';
+    return 'cased';
   };
 
   const fetchStaffIdsForPosition = async (position: AllowedPosition) => {
