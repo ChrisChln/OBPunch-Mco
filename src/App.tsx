@@ -707,6 +707,7 @@ export default function App() {
       return fallback;
     }
   });
+  const [attendanceHoverSearchByKey, setAttendanceHoverSearchByKey] = useState<Record<string, string>>({});
   const [rosterFlipped, setRosterFlipped] = useState(false);
   const [rosterFlipSeed, setRosterFlipSeed] = useState(0);
   const [tomorrowListSetting, setTomorrowListSetting] = useState<TomorrowListSetting>({
@@ -2757,6 +2758,18 @@ const fetchPunchBoardUph = async (
                     const lateOnClockStaffCombined = Array.from(
                       new Set([...late.onClockStaff, ...late.restWorkedStaff])
                     );
+                    const earlyHoverKey = `${position}:early`;
+                    const lateHoverKey = `${position}:late`;
+                    const earlySearch = String(attendanceHoverSearchByKey[earlyHoverKey] ?? '').trim().toLowerCase();
+                    const lateSearch = String(attendanceHoverSearchByKey[lateHoverKey] ?? '').trim().toLowerCase();
+                    const filterStaffBySearch = (list: string[], needle: string) =>
+                      !needle ? list : list.filter((staffName) => staffName.toLowerCase().includes(needle));
+                    const earlyOnClockStaffFiltered = filterStaffBySearch(early.onClockStaff, earlySearch);
+                    const earlyRestWorkedStaffFiltered = filterStaffBySearch(early.restWorkedStaff, earlySearch);
+                    const earlyMissingStaffFiltered = filterStaffBySearch(early.scheduledNotClockInStaff, earlySearch);
+                    const lateOnClockStaffFiltered = filterStaffBySearch(late.onClockStaff, lateSearch);
+                    const lateRestWorkedStaffFiltered = filterStaffBySearch(late.restWorkedStaff, lateSearch);
+                    const lateMissingStaffFiltered = filterStaffBySearch(late.scheduledNotClockInStaff, lateSearch);
                     return (
                       <div key={position} className="grid gap-2 overflow-visible md:grid-cols-2">
                         <div className={['rounded-xl border px-3 py-2', positionFrameClass].join(' ')}>
@@ -2792,13 +2805,24 @@ const fetchPunchBoardUph = async (
                                 {earlyOnClockStaffCombined.length}
                               </div>
                               <div className="pointer-events-auto absolute left-1/2 top-full z-30 hidden w-[min(50rem,calc(100vw-2rem))] -translate-x-1/2 gap-2 group-hover:grid md:grid-cols-3">
+                                <div className="md:col-span-3">
+                                  <input
+                                    type="text"
+                                    value={attendanceHoverSearchByKey[earlyHoverKey] ?? ''}
+                                    onChange={(event) =>
+                                      setAttendanceHoverSearchByKey((prev) => ({ ...prev, [earlyHoverKey]: event.target.value }))
+                                    }
+                                    placeholder="Search name / USID"
+                                    className="w-full rounded-lg border border-white/15 bg-slate-950/95 px-2.5 py-1.5 text-xs text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon"
+                                  />
+                                </div>
                                 <div className="min-w-0 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl">
                                   <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Attendance Staff</div>
-                                  {early.onClockStaff.length === 0 ? (
-                                    <div className="text-xs text-slate-300">No one on clock</div>
+                                  {earlyOnClockStaffFiltered.length === 0 ? (
+                                    <div className="text-xs text-slate-300">{earlySearch ? 'No matches' : 'No one on clock'}</div>
                                   ) : (
                                     <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
-                                      {early.onClockStaff.map((staffName) => (
+                                      {earlyOnClockStaffFiltered.map((staffName) => (
                                         <div key={`early-on-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
                                         </div>
@@ -2808,11 +2832,11 @@ const fetchPunchBoardUph = async (
                                 </div>
                                 <div className="min-w-0 rounded-lg border border-sky-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
                                   <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Rest Worked Staff</div>
-                                  {early.restWorkedStaff.length === 0 ? (
-                                    <div className="text-xs text-slate-300">No rest-worked staff</div>
+                                  {earlyRestWorkedStaffFiltered.length === 0 ? (
+                                    <div className="text-xs text-slate-300">{earlySearch ? 'No matches' : 'No rest-worked staff'}</div>
                                   ) : (
                                     <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
-                                      {early.restWorkedStaff.map((staffName) => (
+                                      {earlyRestWorkedStaffFiltered.map((staffName) => (
                                         <div key={`early-rest-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
                                         </div>
@@ -2824,11 +2848,11 @@ const fetchPunchBoardUph = async (
                                   <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">
                                     Scheduled Not Clock In
                                   </div>
-                                  {early.scheduledNotClockInStaff.length === 0 ? (
-                                    <div className="text-xs text-slate-300">No missing clock-in staff</div>
+                                  {earlyMissingStaffFiltered.length === 0 ? (
+                                    <div className="text-xs text-slate-300">{earlySearch ? 'No matches' : 'No missing clock-in staff'}</div>
                                   ) : (
                                     <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
-                                      {early.scheduledNotClockInStaff.map((staffName) => (
+                                      {earlyMissingStaffFiltered.map((staffName) => (
                                         <div key={`early-missing-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
                                         </div>
@@ -2873,13 +2897,24 @@ const fetchPunchBoardUph = async (
                                 {lateOnClockStaffCombined.length}
                               </div>
                               <div className="pointer-events-auto absolute left-1/2 top-full z-30 hidden w-[min(50rem,calc(100vw-2rem))] -translate-x-1/2 gap-2 group-hover:grid md:grid-cols-3">
+                                <div className="md:col-span-3">
+                                  <input
+                                    type="text"
+                                    value={attendanceHoverSearchByKey[lateHoverKey] ?? ''}
+                                    onChange={(event) =>
+                                      setAttendanceHoverSearchByKey((prev) => ({ ...prev, [lateHoverKey]: event.target.value }))
+                                    }
+                                    placeholder="Search name / USID"
+                                    className="w-full rounded-lg border border-white/15 bg-slate-950/95 px-2.5 py-1.5 text-xs text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon"
+                                  />
+                                </div>
                                 <div className="min-w-0 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl">
                                   <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Attendance Staff</div>
-                                  {late.onClockStaff.length === 0 ? (
-                                    <div className="text-xs text-slate-300">No one on clock</div>
+                                  {lateOnClockStaffFiltered.length === 0 ? (
+                                    <div className="text-xs text-slate-300">{lateSearch ? 'No matches' : 'No one on clock'}</div>
                                   ) : (
                                     <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
-                                      {late.onClockStaff.map((staffName) => (
+                                      {lateOnClockStaffFiltered.map((staffName) => (
                                         <div key={`late-on-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
                                         </div>
@@ -2889,11 +2924,11 @@ const fetchPunchBoardUph = async (
                                 </div>
                                 <div className="min-w-0 rounded-lg border border-sky-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
                                   <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Rest Worked Staff</div>
-                                  {late.restWorkedStaff.length === 0 ? (
-                                    <div className="text-xs text-slate-300">No rest-worked staff</div>
+                                  {lateRestWorkedStaffFiltered.length === 0 ? (
+                                    <div className="text-xs text-slate-300">{lateSearch ? 'No matches' : 'No rest-worked staff'}</div>
                                   ) : (
                                     <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
-                                      {late.restWorkedStaff.map((staffName) => (
+                                      {lateRestWorkedStaffFiltered.map((staffName) => (
                                         <div key={`late-rest-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
                                         </div>
@@ -2905,11 +2940,11 @@ const fetchPunchBoardUph = async (
                                   <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">
                                     Scheduled Not Clock In
                                   </div>
-                                  {late.scheduledNotClockInStaff.length === 0 ? (
-                                    <div className="text-xs text-slate-300">No missing clock-in staff</div>
+                                  {lateMissingStaffFiltered.length === 0 ? (
+                                    <div className="text-xs text-slate-300">{lateSearch ? 'No matches' : 'No missing clock-in staff'}</div>
                                   ) : (
                                     <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
-                                      {late.scheduledNotClockInStaff.map((staffName) => (
+                                      {lateMissingStaffFiltered.map((staffName) => (
                                         <div key={`late-missing-${position}-${staffName}`} className="truncate py-0.5">
                                           {staffName}
                                         </div>
