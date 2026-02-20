@@ -1134,7 +1134,15 @@ export default function App() {
       };
     }
 
-    const ids = Array.from(new Set(staffIds.map((s) => s.trim()).filter(Boolean)));
+    const ids = Array.from(
+      new Set(
+        staffIds.flatMap((s) => {
+          const raw = String(s ?? '').trim();
+          const normalized = normalizeStaffId(raw);
+          return [raw, normalized].filter(Boolean);
+        })
+      )
+    );
     if (ids.length === 0) {
       return {
         map: {} as Record<string, { name: string; agency: string; position: string; label: string }>,
@@ -1181,14 +1189,19 @@ export default function App() {
 
     const map: Record<string, { name: string; agency: string; position: string; label: string }> = {};
     for (const r of (rows.data as any[] | null) ?? []) {
-      const staff = String(r.staff_id ?? '').trim();
+      const staffRaw = String(r.staff_id ?? '').trim();
+      const staff = normalizeStaffId(staffRaw);
       if (!staff) continue;
-      map[staff] = {
+      const profile = {
         name: String(r.name ?? '').trim(),
         agency: String(r.agency ?? r.Agency ?? '').trim(),
         position: String(r.position ?? r.Position ?? '').trim(),
         label: String(r.label ?? r.Label ?? '').trim()
       };
+      map[staff] = profile;
+      if (staffRaw && staffRaw !== staff) {
+        map[staffRaw] = profile;
+      }
     }
     return { map, error: null as string | null };
   };
@@ -2223,7 +2236,9 @@ const fetchPunchBoardUph = async (
       }
 
       setUiStatus({ tone: 'success', message: `Punch success: ${action}` });
-      const staffName = String(punchBoardEmployeeMap[normalizedId]?.name ?? '').trim() || normalizedId;
+      const staffName =
+        String((punchBoardEmployeeMap[normalizedId] ?? punchBoardEmployeeMap[String(staffId ?? '').trim()])?.name ?? '').trim() ||
+        normalizedId;
       setPunchSuccessOverlay({
         title: action === 'IN' ? 'Hello' : 'Bye',
         name: staffName,
@@ -2241,7 +2256,9 @@ const fetchPunchBoardUph = async (
           fetchOutstandingDevicesByStaff(normalizedId)
         ]);
         if (!outCountRes.error && outCountRes.count >= 2 && !outstanding.error && outstanding.items.length > 0) {
-          const reminderName = String(punchBoardEmployeeMap[normalizedId]?.name ?? '').trim() || normalizedId;
+          const reminderName =
+            String((punchBoardEmployeeMap[normalizedId] ?? punchBoardEmployeeMap[String(staffId ?? '').trim()])?.name ?? '').trim() ||
+            normalizedId;
           setDeviceReturnReminder({ staffId: normalizedId, staffName: reminderName, items: outstanding.items });
         }
       }
@@ -2971,7 +2988,7 @@ const fetchPunchBoardUph = async (
                         <div className="text-right">Time</div>
                       </div>
                       {punchBoardFiltered.map((p) => {
-                        const employee = punchBoardEmployeeMap[p.staff_id];
+                        const employee = punchBoardEmployeeMap[normalizeStaffId(p.staff_id)] ?? punchBoardEmployeeMap[p.staff_id];
                         const time = p.created_at
                           ? new Date(p.created_at).toLocaleString('zh-CN', { hour12: false })
                           : '';
