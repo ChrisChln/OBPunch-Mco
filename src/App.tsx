@@ -2007,39 +2007,71 @@ const fetchPunchBoardUph = async (
     };
 
     const loadLatestByPosition = async (pos: AllowedPosition) => {
-      const staffRes = await fetchStaffIdsForPosition(pos);
-      if (staffRes.error) {
-        return { rows: [] as PunchBoardRow[], error: staffRes.error };
-      }
-      const staffIds = staffRes.staffIds;
-      if (staffIds.length === 0) {
-        return { rows: [] as PunchBoardRow[], error: null as string | null };
+      // 先获取所有打卡记录的员工（不限制职位），然后再按职位过滤
+      // 这样可以包含那些当天没有排班但有打卡记录的员工
+      const allStaffRes = await fetchStaffIdsForPosition(pos);
+      if (allStaffRes.error) {
+        return { rows: [] as PunchBoardRow[], error: allStaffRes.error };
       }
 
-      const batches = chunk(staffIds, 200);
+      // 获取所有员工的打卡记录（不限制员工数量）
       const allPunches: PunchBoardRow[] = [];
-      for (const batch of batches) {
-        const base = () =>
-          supabase
-            .from('ob_punches')
-            .select('id, staff_id, action, created_at')
-            .in('staff_id', batch)
-            .limit(30);
-        const attemptCreatedAt = await base().order('created_at', { ascending: false });
-        const attempt = attemptCreatedAt.error ? await base().order('id', { ascending: false }) : attemptCreatedAt;
-        if (attempt.error) {
-          return { rows: [] as PunchBoardRow[], error: attempt.error.message };
+      const batchSize = 200;
+      const maxPunchesPerStaff = 30;
+
+      // 直接从 ob_punches 表获取所有记录，不限制员工
+      const punchBase = () =>
+        supabase
+          .from('ob_punches')
+          .select('id, staff_id, action, created_at')
+          .order('created_at', { ascending: false })
+          .limit(3000);
+
+      const punchAttempt = await punchBase();
+      if (punchAttempt.error) {
+        return { rows: [] as PunchBoardRow[], error: punchAttempt.error.message };
+      }
+
+      // 按员工分组，每位员工最多保留 maxPunchesPerStaff 条记录
+      const staffPunches: Record<string, PunchBoardRow[]> = {};
+      for (const r of (punchAttempt.data as any[] | null) ?? []) {
+        const staffId = String(r.staff_id ?? '').trim();
+        if (!staffId) continue;
+
+        if (!staffPunches[staffId]) {
+          staffPunches[staffId] = [];
         }
-        for (const r of (attempt.data as any[] | null) ?? []) {
-          allPunches.push({
+        if (staffPunches[staffId].length < maxPunchesPerStaff) {
+          staffPunches[staffId].push({
             id: r.id,
-            staff_id: String(r.staff_id ?? '').trim(),
+            staff_id: staffId,
             action: String(r.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN',
             created_at: (r.created_at ?? null) as string | null
           });
         }
       }
 
+      // 获取所有打卡员工的 employee map
+      const allStaffIds = Object.keys(staffPunches);
+      const mapRes = await fetchEmployeeMap(allStaffIds);
+      const employeeMap = mapRes.map || {};
+
+      // 按职位过滤：只保留目标职位的员工
+      const needle = pos.trim().toLowerCase();
+      for (const [staffId, punches] of Object.entries(staffPunches)) {
+        const employee = employeeMap[staffId];
+        const staffPos = String(employee?.position ?? '').trim().toLowerCase();
+        if (staffPos !== needle) {
+          delete staffPunches[staffId];
+        }
+      }
+
+      // 合并所有符合条件的打卡记录
+      for (const punches of Object.values(staffPunches)) {
+        allPunches.push(...punches);
+      }
+
+      // 按时间排序
       allPunches.sort((a, b) => {
         const atA = a.created_at ? new Date(a.created_at).getTime() : 0;
         const atB = b.created_at ? new Date(b.created_at).getTime() : 0;
