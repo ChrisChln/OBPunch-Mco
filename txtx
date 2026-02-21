@@ -1,0 +1,2 @@
+setx ANTHROPIC_AUTH_TOKEN "sk-LkyJjoIVw9xuUS2dhWR4DCNeCdjFu0TIQyo0rrAKQdY1Fzfv"
+setx ANTHROPIC_BASE_URL "https://cc.580ai.net"

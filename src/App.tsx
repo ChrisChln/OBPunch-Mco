@@ -1457,9 +1457,11 @@ const fetchPunchBoardUph = async (
       events.sort((a, b) => a.at.getTime() - b.at.getTime());
       const intervals: Array<{ start: Date; end: Date }> = [];
       let currentIn: Date | null = null;
+      let latestIn: Date | null = null;
       for (const ev of events) {
         if (ev.action === 'IN') {
           currentIn = ev.at;
+          latestIn = ev.at;
           continue;
         }
         if (ev.action === 'OUT' && currentIn && ev.at.getTime() > currentIn.getTime()) {
@@ -1467,13 +1469,19 @@ const fetchPunchBoardUph = async (
           currentIn = null;
         }
       }
-      if (currentIn && rangeEnd.getTime() > currentIn.getTime()) {
-        intervals.push({ start: currentIn, end: rangeEnd });
-      }
+      // Do NOT include open sessions in historical hour accumulation (matches admin logic).
       const { earlyHours, lateHours } = computeShiftHoursFromIntervals(intervals);
       let shift: '' | 'early' | 'late' = '';
-      if (earlyHours > lateHours) shift = 'early';
+      if (currentIn) {
+        // Currently on clock: infer shift directly from IN punch time.
+        const mins = currentIn.getHours() * 60 + currentIn.getMinutes();
+        shift = mins >= 5 * 60 && mins < 15 * 60 ? 'early' : 'late';
+      } else if (earlyHours > lateHours) shift = 'early';
       else if (lateHours > earlyHours) shift = 'late';
+      else if (latestIn) {
+        const mins = latestIn.getHours() * 60 + latestIn.getMinutes();
+        shift = mins >= 5 * 60 && mins < 15 * 60 ? 'early' : 'late';
+      }
       inferredMap[staff] = shift;
     }
 
@@ -1703,50 +1711,89 @@ const fetchPunchBoardUph = async (
     }
 
     const trackedStaff = Array.from(new Set([...Array.from(keysByStaff.keys()), ...allScheduleStaff]));
+
+    // 获取当天所有打卡员工（包含没有排班但有打卡记录的）
+    const dayStartDate = getOperationalDayStart(now, ABSENT_RESET_HOUR);
+    const dayStart = dayStartDate.toISOString();
+    const dayEnd = addDays(dayStartDate, 1).toISOString();
+
+    // 查询当天的所有打卡记录
+    const allPunchRes = await supabase
+      .from('ob_punches')
+      .select('staff_id, action, created_at')
+      .gte('created_at', dayStart)
+      .lt('created_at', dayEnd)
+      .limit(5000);
+
     const punchedStaff = new Set<string>();
     const latestActionByStaff = new Map<string, PunchAction>();
-    if (trackedStaff.length > 0) {
-      const dayStartDate = getOperationalDayStart(now, ABSENT_RESET_HOUR);
-      const dayStart = dayStartDate.toISOString();
-      const dayEnd = addDays(dayStartDate, 1).toISOString();
-      for (const batch of chunk(trackedStaff, 120)) {
-        const batchSet = new Set(batch);
-        const pageSize = 1000;
-        const maxPages = 30;
-        for (let page = 0; page < maxPages; page += 1) {
-          const from = page * pageSize;
-          const to = from + pageSize - 1;
-          const attemptCreatedAt = await supabase
-            .from('ob_punches')
-            .select('staff_id, action, created_at')
-            .in('staff_id', batch)
-            .gte('created_at', dayStart)
-            .lt('created_at', dayEnd)
-            .order('created_at', { ascending: true })
-            .range(from, to);
-          const punchRes = attemptCreatedAt.error
-            ? await supabase
-                .from('ob_punches')
-                .select('staff_id, action, created_at')
-                .in('staff_id', batch)
-                .gte('created_at', dayStart)
-                .lt('created_at', dayEnd)
-                .order('id', { ascending: true })
-                .range(from, to)
-            : attemptCreatedAt;
-          if (punchRes.error) break;
-          const rows = (punchRes.data as any[] | null) ?? [];
-          for (const row of rows) {
-            const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-            const actionRaw = String(row.action ?? '').toUpperCase();
-            const action = actionRaw === 'OUT' ? 'OUT' : actionRaw === 'IN' ? 'IN' : null;
-            if (!staff) continue;
-            punchedStaff.add(staff);
-            if (action) latestActionByStaff.set(staff, action);
-          }
-          const allCovered = Array.from(batchSet).every((staff) => punchedStaff.has(staff));
-          if (allCovered || rows.length < pageSize) break;
+
+    // 直接使用已获取的打卡数据
+    if (!allPunchRes.error && allPunchRes.data) {
+      for (const r of allPunchRes.data) {
+        const staff = normalizeStaffId(String(r.staff_id ?? '').trim());
+        const actionRaw = String(r.action ?? '').toUpperCase();
+        const action = actionRaw === 'OUT' ? 'OUT' : actionRaw === 'IN' ? 'IN' : null;
+        if (!staff) continue;
+        punchedStaff.add(staff);
+        if (action) latestActionByStaff.set(staff, action);
+
+        // 把没有排班但有打卡记录的员工也加入到 trackedStaff
+        if (!trackedStaff.includes(staff)) {
+          trackedStaff.push(staff);
         }
+      }
+    }
+
+    // 获取所有有打卡记录但没有排班的员工的职位信息
+    const punchedStaffWithoutSchedule = Array.from(punchedStaff).filter((staff) => !keysByStaff.has(staff));
+    let punchedStaffPositionMap: Record<string, { position: string; shift: string }> = {};
+    if (punchedStaffWithoutSchedule.length > 0) {
+      const positionMapRes = await fetchEmployeeMap(punchedStaffWithoutSchedule);
+      const employeePositionMap = positionMapRes.error ? {} : positionMapRes.map;
+      
+      // 获取这些员工的打卡时间，用于推断班次
+      const firstPunchByStaff = new Map<string, Date>();
+      if (!allPunchRes.error && allPunchRes.data) {
+        for (const r of allPunchRes.data) {
+          const staff = normalizeStaffId(String(r.staff_id ?? '').trim());
+          if (!staff || !punchedStaffWithoutSchedule.includes(staff)) continue;
+          const at = new Date(String(r.created_at ?? ''));
+          if (Number.isNaN(at.getTime())) continue;
+          if (!firstPunchByStaff.has(staff) || at.getTime() < firstPunchByStaff.get(staff)!.getTime()) {
+            firstPunchByStaff.set(staff, at);
+          }
+        }
+      }
+
+      // 为没有排班的员工生成 key
+      for (const staff of punchedStaffWithoutSchedule) {
+        const positionRaw = String(employeePositionMap[staff]?.position ?? '').trim();
+        const position = normalizeAllowedPosition(positionRaw);
+        if (!position) continue;
+        
+        // 推断班次：根据第一次打卡时间
+        const firstPunch = firstPunchByStaff.get(staff);
+        let shift = 'early';
+        if (firstPunch) {
+          const inferredShift = inferredShiftByStaff[staff] ?? '';
+          if (inferredShift) {
+            shift = inferredShift;
+          } else {
+            // 根据打卡时间推断：5:00-15:00 为 early，其他为 late
+            const hours = firstPunch.getHours();
+            shift = hours >= 5 && hours < 15 ? 'early' : 'late';
+          }
+        }
+        
+        const key = `${shift}:${position}`;
+        if (!keysByStaff.has(staff)) {
+          keysByStaff.set(staff, []);
+        }
+        if (!keysByStaff.get(staff)!.includes(key)) {
+          keysByStaff.get(staff)!.push(key);
+        }
+        punchedStaffPositionMap[staff] = { position, shift };
       }
     }
 
