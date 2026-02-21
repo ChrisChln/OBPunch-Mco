@@ -1225,7 +1225,7 @@ export default function AdminApp() {
   const [deviceUploadError, setDeviceUploadError] = useState<string | null>(null);
   const deviceFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [attendanceStats, setAttendanceStats] = useState<
+  const [, setAttendanceStats] = useState<
     Record<string, { early: number; late: number; active: number }>
   >({});
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
@@ -7723,6 +7723,43 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }),
     [homeExpectedCards]
   );
+  const homeCardStats = useMemo(() => {
+    const stats: Record<string, { early: number; late: number; active: number }> = {};
+    const activeStaffSet = new Set(
+      Object.keys(homeOnClockShiftByStaffId)
+        .map((staff) => normalizeStaffId(String(staff ?? '').trim()))
+        .filter(Boolean)
+    );
+    for (const employee of employees) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff) continue;
+      const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
+      if (!row || !isWorkingScheduleRow(row)) continue;
+      const positionRaw =
+        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || String(row.position ?? '').trim();
+      const position = normalizePositionKey(positionRaw);
+      if (!position) continue;
+      const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
+      const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
+      const shift = (inferredShift || scheduledShift || 'early') as 'early' | 'late';
+      const s = (stats[position] ??= { early: 0, late: 0, active: 0 });
+      if (schedulePunchPresenceKeys.has(`${staff}__${homeOperationalDayIndex}`)) {
+        s[shift] += 1;
+      }
+      if (activeStaffSet.has(staff)) {
+        s.active += 1;
+      }
+    }
+    return stats;
+  }, [
+    homeOnClockShiftByStaffId,
+    employees,
+    scheduleRowsByStaffDayIndex,
+    homeOperationalDayIndex,
+    employeeProfileByStaffId,
+    employeeShiftByStaffId,
+    schedulePunchPresenceKeys
+  ]);
 
   const homeRosterRows = useMemo(() => {
     const absent: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
@@ -8523,7 +8560,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_560px]">
                   <div className="space-y-4">
                     {ALLOWED_POSITIONS.map((position) => {
-                      const stats = attendanceStats[position] ?? { early: 0, late: 0, active: 0 };
+                      const stats = homeCardStats[position] ?? { early: 0, late: 0, active: 0 };
                       const plan = homeExpectedPositionSummaryCards.find((item) => item.position === position) ?? {
                         position,
                         early: 0,
