@@ -575,7 +575,12 @@ export default function App() {
       (a): a is HTMLAudioElement => !!a
     );
     if (audios.length === 0) return;
-    audioUnlockedRef.current = true;
+    let unlocked = false;
+    const markUnlocked = () => {
+      if (unlocked) return;
+      unlocked = true;
+      audioUnlockedRef.current = true;
+    };
     for (const audio of audios) {
       const prevMuted = audio.muted;
       audio.muted = true;
@@ -583,6 +588,7 @@ export default function App() {
       if (promise && typeof promise.then === 'function') {
         void promise
           .then(() => {
+            markUnlocked();
             audio.pause();
             audio.currentTime = 0;
             audio.muted = prevMuted;
@@ -591,6 +597,7 @@ export default function App() {
             audio.muted = prevMuted;
           });
       } else {
+        markUnlocked();
         audio.pause();
         audio.currentTime = 0;
         audio.muted = prevMuted;
@@ -625,6 +632,9 @@ export default function App() {
   }, []);
 
   const playSound = (kind: SoundKind) => {
+    if (!audioUnlockedRef.current) {
+      unlockAudio();
+    }
     const tryPlay = (audio: HTMLAudioElement | null, onFail: () => void) => {
       if (!audio) {
         onFail();
@@ -642,6 +652,8 @@ export default function App() {
     };
 
     tryPlay(getSoundAudio(kind), () => {
+      audioUnlockedRef.current = false;
+      unlockAudio();
       const fresh = rebuildSoundAudio(kind);
       if (!fresh) return;
       try {
@@ -1206,6 +1218,22 @@ export default function App() {
     }
     return { map, error: null as string | null };
   };
+
+  const resolveStaffDisplayName = async (staffIdValue: string) => {
+    const staff = normalizeStaffId(String(staffIdValue ?? '').trim());
+    if (!staff) return String(staffIdValue ?? '').trim();
+    const cachedName = String((punchBoardEmployeeMap[staff] ?? punchBoardEmployeeMap[staffIdValue])?.name ?? '').trim();
+    if (cachedName) return cachedName;
+    const mapRes = await fetchEmployeeMap([staff]);
+    if (mapRes.error) return staff;
+    const profile = mapRes.map[staff] ?? mapRes.map[staffIdValue];
+    if (profile) {
+      setPunchBoardEmployeeMap((prev) => ({ ...prev, [staff]: profile }));
+    }
+    const name = String(profile?.name ?? '').trim();
+    return name || staff;
+  };
+
 const fetchPunchBoardUph = async (
     staffIds: string[],
     employeeMap: Record<string, { name: string; agency: string; position: string; label: string }>
@@ -2237,9 +2265,7 @@ const fetchPunchBoardUph = async (
       }
 
       setUiStatus({ tone: 'success', message: `Punch success: ${action}` });
-      const staffName =
-        String((punchBoardEmployeeMap[normalizedId] ?? punchBoardEmployeeMap[String(staffId ?? '').trim()])?.name ?? '').trim() ||
-        normalizedId;
+      const staffName = await resolveStaffDisplayName(normalizedId);
       setPunchSuccessOverlay({
         title: action === 'IN' ? 'Hello' : 'Bye',
         name: staffName,
@@ -2257,9 +2283,7 @@ const fetchPunchBoardUph = async (
           fetchOutstandingDevicesByStaff(normalizedId)
         ]);
         if (!outCountRes.error && outCountRes.count >= 2 && !outstanding.error && outstanding.items.length > 0) {
-          const reminderName =
-            String((punchBoardEmployeeMap[normalizedId] ?? punchBoardEmployeeMap[String(staffId ?? '').trim()])?.name ?? '').trim() ||
-            normalizedId;
+          const reminderName = staffName || (await resolveStaffDisplayName(normalizedId));
           setDeviceReturnReminder({ staffId: normalizedId, staffName: reminderName, items: outstanding.items });
         }
       }
