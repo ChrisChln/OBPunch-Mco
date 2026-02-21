@@ -486,6 +486,11 @@ export default function App() {
   const successInAudioRef = useRef<HTMLAudioElement | null>(null);
   const successOutAudioRef = useRef<HTMLAudioElement | null>(null);
   const errorAudioRef = useRef<HTMLAudioElement | null>(null);
+  const soundSourceIndexRef = useRef<Record<SoundKind, number>>({
+    successIn: 0,
+    successOut: 0,
+    error: 0
+  });
   const audioUnlockedRef = useRef(false);
   const arrivalShiftCacheRef = useRef<{ at: number; map: Record<string, '' | 'early' | 'late'> }>({ at: 0, map: {} });
   const punchBoardUphFetchSeqRef = useRef(0);
@@ -517,14 +522,28 @@ export default function App() {
   const [uiStatus, setUiStatus] = useState<Status>({ tone: 'idle', message: 'Enter US ID to start punch' });
   const [punchSuccessOverlay, setPunchSuccessOverlay] = useState<{ title: string; name: string; at: number } | null>(null);
 
+  const getSoundSourceCandidates = (kind: SoundKind) => {
+    if (kind === 'successIn') {
+      return ['/sound/success in.mp3', '/sound/success.mp3'];
+    }
+    if (kind === 'successOut') {
+      return ['/sound/success out.mp3', encodeURI('/sound/success out.mp3')];
+    }
+    return ['/sound/error.mp3'];
+  };
+
+  const rotateSoundSource = (kind: SoundKind) => {
+    const sources = getSoundSourceCandidates(kind);
+    const current = soundSourceIndexRef.current[kind] ?? 0;
+    const next = sources.length > 1 ? (current + 1) % sources.length : 0;
+    soundSourceIndexRef.current[kind] = next;
+  };
+
   const createSoundAudio = (kind: SoundKind) => {
     if (typeof Audio === 'undefined') return null;
-    const src =
-      kind === 'successIn'
-        ? '/sound/success.mp3'
-        : kind === 'successOut'
-          ? encodeURI('/sound/success out.mp3')
-          : '/sound/error.mp3';
+    const sources = getSoundSourceCandidates(kind);
+    const index = soundSourceIndexRef.current[kind] ?? 0;
+    const src = sources[Math.min(index, Math.max(0, sources.length - 1))] ?? sources[0];
     const audio = new Audio(src);
     audio.preload = 'auto';
     audio.volume = 1;
@@ -650,6 +669,7 @@ export default function App() {
       if (ok) return;
 
       audioUnlockedRef.current = false;
+      rotateSoundSource(kind);
       rebuildSoundAudio(kind);
       await unlockAudio();
       await tryPlayOnce(getSoundAudio(kind));
