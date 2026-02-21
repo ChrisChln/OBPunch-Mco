@@ -569,44 +569,40 @@ export default function App() {
     };
   }, []);
 
-  const unlockAudio = () => {
-    if (audioUnlockedRef.current) return;
+  const unlockAudio = async () => {
+    if (audioUnlockedRef.current) return true;
     const audios = [successInAudioRef.current, successOutAudioRef.current, errorAudioRef.current].filter(
       (a): a is HTMLAudioElement => !!a
     );
-    if (audios.length === 0) return;
-    let unlocked = false;
-    const markUnlocked = () => {
-      if (unlocked) return;
-      unlocked = true;
-      audioUnlockedRef.current = true;
-    };
-    for (const audio of audios) {
-      const prevMuted = audio.muted;
-      audio.muted = true;
-      const promise = audio.play();
-      if (promise && typeof promise.then === 'function') {
-        void promise
-          .then(() => {
-            markUnlocked();
-            audio.pause();
-            audio.currentTime = 0;
-            audio.muted = prevMuted;
-          })
-          .catch(() => {
-            audio.muted = prevMuted;
-          });
-      } else {
-        markUnlocked();
-        audio.pause();
-        audio.currentTime = 0;
-        audio.muted = prevMuted;
-      }
-    }
+    if (audios.length === 0) return false;
+    const results = await Promise.all(
+      audios.map(async (audio) => {
+        const prevMuted = audio.muted;
+        audio.muted = true;
+        try {
+          const promise = audio.play();
+          if (promise && typeof promise.then === 'function') {
+            await promise;
+          }
+          audio.pause();
+          audio.currentTime = 0;
+          return true;
+        } catch {
+          return false;
+        } finally {
+          audio.muted = prevMuted;
+        }
+      })
+    );
+    const unlocked = results.some(Boolean);
+    audioUnlockedRef.current = unlocked;
+    return unlocked;
   };
 
   useEffect(() => {
-    const onFirstUserGesture = () => unlockAudio();
+    const onFirstUserGesture = () => {
+      void unlockAudio();
+    };
     window.addEventListener('keydown', onFirstUserGesture, { passive: true });
     window.addEventListener('pointerdown', onFirstUserGesture, { passive: true });
     return () => {
@@ -632,42 +628,33 @@ export default function App() {
   }, []);
 
   const playSound = (kind: SoundKind) => {
-    if (!audioUnlockedRef.current) {
-      unlockAudio();
-    }
-    const tryPlay = (audio: HTMLAudioElement | null, onFail: () => void) => {
-      if (!audio) {
-        onFail();
-        return;
-      }
+    const tryPlayOnce = async (audio: HTMLAudioElement | null) => {
+      if (!audio) return false;
       try {
         audio.currentTime = 0;
         const promise = audio.play();
-        if (promise && typeof promise.catch === 'function') {
-          void promise.catch(() => onFail());
+        if (promise && typeof promise.then === 'function') {
+          await promise;
         }
+        return true;
       } catch {
-        onFail();
+        return false;
       }
     };
 
-    tryPlay(getSoundAudio(kind), () => {
-      audioUnlockedRef.current = false;
-      unlockAudio();
-      const fresh = rebuildSoundAudio(kind);
-      if (!fresh) return;
-      try {
-        fresh.currentTime = 0;
-        const retry = fresh.play();
-        if (retry && typeof retry.catch === 'function') {
-          void retry.catch(() => {
-            // ignore autoplay/permission/interruption issues
-          });
-        }
-      } catch {
-        // ignore autoplay/permission/interruption issues
+    const run = async () => {
+      if (!audioUnlockedRef.current) {
+        await unlockAudio();
       }
-    });
+      const ok = await tryPlayOnce(getSoundAudio(kind));
+      if (ok) return;
+
+      audioUnlockedRef.current = false;
+      rebuildSoundAudio(kind);
+      await unlockAudio();
+      await tryPlayOnce(getSoundAudio(kind));
+    };
+    void run();
   };
 
   const playSuccess = (action: PunchAction) =>
