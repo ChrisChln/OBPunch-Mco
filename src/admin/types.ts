@@ -20,6 +20,7 @@ export type EmployeeRow = {
   name?: string | null;
   agency?: string | null;
   position?: string | null;
+  shift?: '' | 'early' | 'late' | null;
   label?: string | null;
   work_account?: string | null;
   work_password?: string | null;

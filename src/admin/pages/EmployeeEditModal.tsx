@@ -19,6 +19,8 @@ type EmployeeEditModalProps = {
   setEmployeeEditAgency: (value: string) => void;
   employeeEditPosition: string;
   setEmployeeEditPosition: (value: string) => void;
+  employeeEditShift: '' | 'early' | 'late';
+  setEmployeeEditShift: (value: '' | 'early' | 'late') => void;
   employeeEditLabel: string;
   setEmployeeEditLabel: (value: string) => void;
   employeeEditWorkAccount: string;
@@ -48,6 +50,8 @@ export default function EmployeeEditModal({
   setEmployeeEditAgency,
   employeeEditPosition,
   setEmployeeEditPosition,
+  employeeEditShift,
+  setEmployeeEditShift,
   employeeEditLabel,
   setEmployeeEditLabel,
   employeeEditWorkAccount,
@@ -129,6 +133,28 @@ export default function EmployeeEditModal({
                 </option>
               ))}
             </select>
+          </div>
+          <div className="md:col-span-1">
+            <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('班次', 'Shift')}</label>
+            <div className="mt-2 flex h-11 items-center gap-1 rounded-2xl border border-white/10 bg-black/30 px-2">
+              {([['', t('自动', 'Auto')], ['early', t('白班', 'Day')], ['late', t('晚班', 'Night')]] as const).map(([val, label]) => (
+                <button
+                  key={val}
+                  type="button"
+                  disabled={isLocked}
+                  onClick={() => setEmployeeEditShift(val as '' | 'early' | 'late')}
+                  className={[
+                    'flex-1 rounded-xl px-2 py-1 text-xs font-semibold transition',
+                    employeeEditShift === val
+                      ? val === 'early' ? 'bg-sky-500 text-white' : val === 'late' ? 'bg-violet-500 text-white' : 'bg-white/20 text-white'
+                      : 'text-slate-400 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60'
+                  ].join(' ')}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-[11px] text-slate-500">{t('Auto = 根据打卡历史推断', 'Auto = inferred from punch history')}</p>
           </div>
           <div className="md:col-span-1">
             <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('标签', 'Label')}</label>

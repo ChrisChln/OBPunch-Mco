@@ -1149,7 +1149,7 @@ export default function App() {
   const fetchEmployeeMap = async (staffIds: string[]) => {
     if (!supabase || staffIds.length === 0) {
       return {
-        map: {} as Record<string, { name: string; agency: string; position: string; label: string }>,
+        map: {} as Record<string, { name: string; agency: string; position: string; label: string; shift: string }>,
         error: null as string | null
       };
     }
@@ -1165,27 +1165,36 @@ export default function App() {
     );
     if (ids.length === 0) {
       return {
-        map: {} as Record<string, { name: string; agency: string; position: string; label: string }>,
+        map: {} as Record<string, { name: string; agency: string; position: string; label: string; shift: string }>,
         error: null as string | null
       };
     }
 
     const runQuery = async (mode: EmployeeColumnMode) => {
-      const selects =
+      // Try with shift field first, fall back without it for older schemas.
+      const selectsWithShift =
+        mode === 'cased'
+          ? [
+              'staff_id, name, "Agency", "Position", "Label", shift',
+              'staff_id, name, "Agency", "Position", shift',
+            ]
+          : [
+              'staff_id, name, agency, position, label, shift',
+              'staff_id, name, agency, position, shift',
+            ];
+      const selectsWithoutShift =
         mode === 'cased'
           ? [
               'staff_id, name, "Agency", "Position", "Label"',
-              'staff_id, name, "Agency", "Position", label',
               'staff_id, name, "Agency", "Position"'
             ]
           : [
               'staff_id, name, agency, position, label',
-              'staff_id, name, agency, position, "Label"',
               'staff_id, name, agency, position'
             ];
 
       let lastRes: any = null;
-      for (const select of selects) {
+      for (const select of [...selectsWithShift, ...selectsWithoutShift]) {
         const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', ids);
         if (!res.error) return res;
         lastRes = res;
@@ -1202,12 +1211,12 @@ export default function App() {
     }
     if (rows.error) {
       return {
-        map: {} as Record<string, { name: string; agency: string; position: string; label: string }>,
+        map: {} as Record<string, { name: string; agency: string; position: string; label: string; shift: string }>,
         error: rows.error.message
       };
     }
 
-    const map: Record<string, { name: string; agency: string; position: string; label: string }> = {};
+    const map: Record<string, { name: string; agency: string; position: string; label: string; shift: string }> = {};
     for (const r of (rows.data as any[] | null) ?? []) {
       const staffRaw = String(r.staff_id ?? '').trim();
       const staff = normalizeStaffId(staffRaw);
@@ -1216,7 +1225,8 @@ export default function App() {
         name: String(r.name ?? '').trim(),
         agency: String(r.agency ?? r.Agency ?? '').trim(),
         position: String(r.position ?? r.Position ?? '').trim(),
-        label: String(r.label ?? r.Label ?? '').trim()
+        label: String(r.label ?? r.Label ?? '').trim(),
+        shift: String(r.shift ?? '').trim()
       };
       map[staff] = profile;
       if (staffRaw && staffRaw !== staff) {
@@ -1686,8 +1696,9 @@ const fetchPunchBoardUph = async (
       const position = latestPosition ?? normalizeAllowedPosition(String(row.position ?? '').trim());
       if (!position) continue;
       const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
+      const dbShift = normalizeShiftValue(String(employeePositionMap[staff]?.shift ?? '').trim());
       const inferredShift = inferredShiftByStaff[staff] ?? '';
-      const shift = inferredShift || scheduledShift || 'early';
+      const shift = dbShift || inferredShift || scheduledShift || 'early';
       const key = `${shift}:${position}`;
       if (!staffByKey.has(key)) staffByKey.set(key, new Set());
       staffByKey.get(key)?.add(staff);
@@ -1703,8 +1714,9 @@ const fetchPunchBoardUph = async (
       const position = latestPosition ?? normalizeAllowedPosition(String(row.position ?? '').trim());
       if (!position) continue;
       const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
+      const dbShift = normalizeShiftValue(String(employeePositionMap[staff]?.shift ?? '').trim());
       const inferredShift = inferredShiftByStaff[staff] ?? '';
-      const shift = inferredShift || scheduledShift || 'early';
+      const shift = dbShift || inferredShift || scheduledShift || 'early';
       const key = `${shift}:${position}`;
       if (!restByKey.has(key)) restByKey.set(key, new Set());
       restByKey.get(key)?.add(staff);
@@ -1726,7 +1738,7 @@ const fetchPunchBoardUph = async (
       .limit(5000);
 
     const punchedStaff = new Set<string>();
-    const latestActionByStaff = new Map<string, PunchAction>();
+    const latestPunchByStaff = new Map<string, { at: number; action: PunchAction }>();
 
     // 直接使用已获取的打卡数据
     if (!allPunchRes.error && allPunchRes.data) {
@@ -1734,15 +1746,31 @@ const fetchPunchBoardUph = async (
         const staff = normalizeStaffId(String(r.staff_id ?? '').trim());
         const actionRaw = String(r.action ?? '').toUpperCase();
         const action = actionRaw === 'OUT' ? 'OUT' : actionRaw === 'IN' ? 'IN' : null;
+        const atRaw = String(r.created_at ?? '').trim();
+        const atMs = atRaw ? new Date(atRaw).getTime() : Number.NaN;
         if (!staff) continue;
         punchedStaff.add(staff);
-        if (action) latestActionByStaff.set(staff, action);
+        if (action) {
+          const previous = latestPunchByStaff.get(staff);
+          if (!Number.isNaN(atMs)) {
+            if (!previous || atMs > previous.at) {
+              latestPunchByStaff.set(staff, { at: atMs, action });
+            }
+          } else if (!previous) {
+            latestPunchByStaff.set(staff, { at: Number.NEGATIVE_INFINITY, action });
+          }
+        }
 
         // 把没有排班但有打卡记录的员工也加入到 trackedStaff
         if (!trackedStaff.includes(staff)) {
           trackedStaff.push(staff);
         }
       }
+    }
+
+    const latestActionByStaff = new Map<string, PunchAction>();
+    for (const [staff, row] of latestPunchByStaff.entries()) {
+      latestActionByStaff.set(staff, row.action);
     }
 
     // 获取所有有打卡记录但没有排班的员工的职位信息
@@ -1775,7 +1803,10 @@ const fetchPunchBoardUph = async (
         // 推断班次：根据第一次打卡时间
         const firstPunch = firstPunchByStaff.get(staff);
         let shift = 'early';
-        if (firstPunch) {
+        const dbShiftForUnscheduled = normalizeShiftValue(String(employeePositionMap[staff]?.shift ?? '').trim());
+        if (dbShiftForUnscheduled) {
+          shift = dbShiftForUnscheduled;
+        } else if (firstPunch) {
           const inferredShift = inferredShiftByStaff[staff] ?? '';
           if (inferredShift) {
             shift = inferredShift;

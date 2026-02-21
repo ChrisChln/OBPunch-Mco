@@ -642,6 +642,7 @@ export default function AdminApp() {
   const [employeeEditName, setEmployeeEditName] = useState('');
   const [employeeEditAgency, setEmployeeEditAgency] = useState('');
   const [employeeEditPosition, setEmployeeEditPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [employeeEditShift, setEmployeeEditShift] = useState<'' | 'early' | 'late'>('');
   const [employeeEditLabel, setEmployeeEditLabel] = useState('');
   const [employeeEditWorkAccount, setEmployeeEditWorkAccount] = useState('');
   const [employeeEditWorkPassword, setEmployeeEditWorkPassword] = useState('');
@@ -3217,6 +3218,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         else if (latestIn) shift = getShiftBucketFromDate(latestIn) ?? '';
         shiftMap[staff] = { shift, earlyHours, lateHours };
       }
+      // Override inferred shift with the explicitly set DB shift if present.
+      for (const emp of fetchedEmployees ?? []) {
+        const s = normalizeStaffId(String(emp.staff_id ?? '').trim());
+        if (!s) continue;
+        const dbShift = String(emp.shift ?? '').trim();
+        if (dbShift !== 'early' && dbShift !== 'late') continue;
+        if (shiftMap[s]) {
+          shiftMap[s] = { ...shiftMap[s], shift: dbShift };
+        } else {
+          shiftMap[s] = { shift: dbShift, earlyHours: 0, lateHours: 0 };
+        }
+      }
       setEmployeeShiftByStaffId(shiftMap);
     };
     if (!lockUi) {
@@ -4016,6 +4029,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     name: string;
     agency: string;
     position: string;
+    shift: '' | 'early' | 'late';
     label: string;
     workAccount: string;
     workPassword: string;
@@ -4027,6 +4041,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setEmployeeEditAgency(payload.agency);
     const normalized = normalizePositionKey(payload.position);
     setEmployeeEditPosition((normalized ?? '') as (typeof ALLOWED_POSITIONS)[number] | '');
+    setEmployeeEditShift(payload.shift);
     setEmployeeEditLabel(payload.label);
     setEmployeeEditWorkAccount(payload.workAccount);
     setEmployeeEditWorkPassword(payload.workPassword);
@@ -4040,9 +4055,42 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setEmployeeEditName('');
     setEmployeeEditAgency('');
     setEmployeeEditPosition('');
+    setEmployeeEditShift('');
     setEmployeeEditLabel('');
     setEmployeeEditWorkAccount('');
     setEmployeeEditWorkPassword('');
+  };
+
+  const syncInferredShiftsToDb = async () => {
+    if (!supabase) return;
+    const toSync = employees.filter((emp) => {
+      const s = normalizeStaffId(String(emp.staff_id ?? '').trim());
+      if (!s) return false;
+      const inferred = employeeShiftByStaffId[s]?.shift;
+      return inferred === 'early' || inferred === 'late';
+    });
+    if (toSync.length === 0) {
+      setStatus({ tone: 'idle', message: t('没有需要同步的班次数据。', 'No shift data to sync.') });
+      return;
+    }
+    setStatus({ tone: 'pending', message: t(`正在同步 ${toSync.length} 名员工的班次…`, `Syncing shifts for ${toSync.length} employees…`) });
+    let successCount = 0;
+    let errorCount = 0;
+    for (const emp of toSync) {
+      const s = normalizeStaffId(String(emp.staff_id ?? '').trim());
+      if (!s) continue;
+      const shift = employeeShiftByStaffId[s]?.shift;
+      if (shift !== 'early' && shift !== 'late') continue;
+      const { error } = await supabase.from(EMPLOYEE_TABLE).update({ shift } as any).eq('staff_id', s);
+      if (error) { errorCount += 1; } else { successCount += 1; }
+    }
+    setStatus({
+      tone: errorCount > 0 ? 'error' : 'success',
+      message: t(`同步完成：${successCount} 成功，${errorCount} 失败。`, `Sync done: ${successCount} ok, ${errorCount} failed.`)
+    });
+    if (successCount > 0) {
+      await fetchEmployees({ reset: true, search: employeeSearch, agency: employeeAgency, position: employeePosition, labels: employeeLabels });
+    }
   };
 
   const saveEmployeeEdit = async () => {
@@ -4165,6 +4213,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               name,
               Agency: agency || null,
               Position: normalizedPos,
+              shift: employeeEditShift || null,
               label: label || null,
               work_account: workAccount || null,
               work_password: workPassword || null
@@ -4174,6 +4223,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               name,
               agency: agency || null,
               position: normalizedPos,
+              shift: employeeEditShift || null,
               label: label || null,
               work_account: workAccount || null,
               work_password: workPassword || null
@@ -9304,6 +9354,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
             {page === 'employees' && (
               <section className="glass reveal rounded-3xl px-6 py-8">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('班次同步', 'Shift Sync')}</div>
+                  <button
+                    type="button"
+                    disabled={isLocked}
+                    onClick={() => void syncInferredShiftsToDb()}
+                    className="rounded-2xl bg-sky-500/20 px-4 py-2 text-sm font-medium text-sky-200 transition hover:bg-sky-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                    title={t('将当前推断班次批量写入员工表', 'Batch write inferred shifts to employee table')}
+                  >
+                    {t('同步推断班次到数据库', 'Sync Inferred Shifts to DB')}
+                  </button>
+                </div>
                 <EmployeesToolbar
                   t={t}
                   isLocked={isLocked}
@@ -9446,6 +9508,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   setEmployeeEditAgency={setEmployeeEditAgency}
                   employeeEditPosition={employeeEditPosition}
                   setEmployeeEditPosition={setEmployeeEditPosition as unknown as (value: string) => void}
+                  employeeEditShift={employeeEditShift}
+                  setEmployeeEditShift={setEmployeeEditShift}
                   employeeEditLabel={employeeEditLabel}
                   setEmployeeEditLabel={setEmployeeEditLabel}
                   employeeEditWorkAccount={employeeEditWorkAccount}

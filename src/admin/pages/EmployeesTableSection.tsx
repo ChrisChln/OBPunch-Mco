@@ -37,6 +37,7 @@ type EmployeesTableSectionProps = {
     name: string;
     agency: string;
     position: string;
+    shift: '' | 'early' | 'late';
     label: string;
     workAccount: string;
     workPassword: string;
@@ -217,7 +218,7 @@ export default function EmployeesTableSection({
                     <button
                       type="button"
                       disabled={isLocked}
-                      onClick={() => openEmployeeEdit({ staff, name, agency, position, label, workAccount, workPassword })}
+                      onClick={() => openEmployeeEdit({ staff, name, agency, position, shift: (shift as '' | 'early' | 'late'), label, workAccount, workPassword })}
                       className="mr-2 rounded-xl bg-white/10 px-4 py-1.5 text-xs font-semibold text-slate-200 transition hover:-translate-y-0.5 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {t('编辑', 'Edit')}
