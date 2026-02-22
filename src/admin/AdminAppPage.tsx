@@ -114,7 +114,7 @@ const isWorkingScheduleRow = (row: ScheduleRow | null | undefined) =>
   Boolean(row && isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)));
 
 const getScheduleDisplayState = (row: ScheduleRow | undefined, hasPunch: boolean): ScheduleDisplayState => {
-  if (!row) return 'rest';
+  if (!row) return hasPunch ? 'rest_worked' : 'rest';
   const base = getScheduleBaseStateFromNote(row.note);
   if (hasPunch && isRestLikeScheduleBaseState(base)) return 'rest_worked';
   return base;
@@ -7790,12 +7790,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const hideLateAbsent = shift === 'late' && nowMinutes < lateAbsentVisibleMinutes;
       // 缺勤：工作是打卡状态为false，非补休且非请假
       if (row && isWorkingScheduleBaseState(baseState) && !hasPunch && !hideLateAbsent) absent.push(item);
-      // 排休出勤：有排班记录且为休息类状态，但有打卡
-      if (row && isRestLikeScheduleBaseState(baseState) && hasPunch) restWorked.push(item);
-      // 没有排班但有打卡记录：也显示在打卡中
-      if (!row && hasPunch) {
-        onClock.push(item);
-      }
+      // 排休出勤：休息类状态或无排班，但有打卡
+      if (hasPunch && (!row || isRestLikeScheduleBaseState(baseState))) restWorked.push(item);
     }
 
     absent.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
