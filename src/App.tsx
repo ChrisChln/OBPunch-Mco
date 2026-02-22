@@ -1846,11 +1846,26 @@ const fetchPunchBoardUph = async (
       }
     }
     const restWorkedByKey = new Map<string, Set<string>>();
+    // 情况1：有休息排班但有打卡的员工
     for (const [key, restStaffSet] of restByKey.entries()) {
       for (const staff of restStaffSet) {
         if (!punchedStaff.has(staff)) continue;
         if (!restWorkedByKey.has(key)) restWorkedByKey.set(key, new Set());
         restWorkedByKey.get(key)?.add(staff);
+      }
+    }
+    // 情况2：没有排班但有打卡的员工
+    for (const staff of punchedStaff) {
+      // 检查是否在任何班次的工作排班或休息排班中
+      const hasWorkSchedule = Array.from(staffByKey.values()).some((set) => set.has(staff));
+      const hasRestSchedule = Array.from(restByKey.values()).some((set) => set.has(staff));
+      if (!hasWorkSchedule && !hasRestSchedule) {
+        // 没有排班但有打卡，加入到 restWorked
+        const keys = keysByStaff.get(staff) ?? [];
+        for (const key of keys) {
+          if (!restWorkedByKey.has(key)) restWorkedByKey.set(key, new Set());
+          restWorkedByKey.get(key)?.add(staff);
+        }
       }
     }
     const onClockStaffIds = Array.from(new Set(Array.from(onClockByKey.values()).flatMap((set) => Array.from(set))));
