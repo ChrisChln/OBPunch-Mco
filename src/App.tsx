@@ -1171,35 +1171,35 @@ export default function App() {
     }
 
     const runQuery = async (mode: EmployeeColumnMode) => {
-      // Try with shift field first, fall back without it for older schemas.
-      const selectsWithShift =
+      // Try queries in order, ensuring we get label if it exists.
+      // Strategy: Try all permutations, label-first (both uppercase Label and lowercase label).
+      const queries =
         mode === 'cased'
           ? [
+              'staff_id, name, "Agency", "Position", label, shift',  // Mixed case: check lowercase label first
               'staff_id, name, "Agency", "Position", "Label", shift',
-              'staff_id, name, "Agency", "Position", shift',
-            ]
-          : [
-              'staff_id, name, agency, position, label, shift',
-              'staff_id, name, agency, position, shift',
-            ];
-      const selectsWithoutShift =
-        mode === 'cased'
-          ? [
+              'staff_id, name, "Agency", "Position", label',
               'staff_id, name, "Agency", "Position", "Label"',
+              'staff_id, name, "Agency", "Position", shift',
               'staff_id, name, "Agency", "Position"'
             ]
           : [
+              'staff_id, name, agency, position, label, shift',
               'staff_id, name, agency, position, label',
+              'staff_id, name, agency, position, shift',
               'staff_id, name, agency, position'
             ];
 
-      let lastRes: any = null;
-      for (const select of [...selectsWithShift, ...selectsWithoutShift]) {
+      for (const select of queries) {
         const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', ids);
-        if (!res.error) return res;
-        lastRes = res;
+        if (!res.error) {
+          return res;
+        }
       }
-      return lastRes;
+      
+      // All queries failed, return last error
+      const lastAttempt = await supabase.from(EMPLOYEE_TABLE).select(queries[queries.length - 1]).in('staff_id', ids);
+      return lastAttempt;
     };
 
     const mode = await resolveEmployeeColumnMode();
