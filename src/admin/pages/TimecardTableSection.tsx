@@ -59,6 +59,7 @@ export default function TimecardTableSection({
                 <th className="w-[200px] px-2 py-1.5">Name</th>
                 <th className="w-[140px] px-2 py-1.5">Agency</th>
                 <th className="w-[120px] px-2 py-1.5">{t('岗位', 'Position')}</th>
+                <th className="w-[80px] px-2 py-1.5">{t('班次', 'Shift')}</th>
                 {days.map((label, idx) => (
                   <th key={label} className="w-[92px] px-2 py-1.5 whitespace-nowrap text-center">
                     <div className="text-neon">{`${t('总工时', 'Total')} ${formatHours(timecardDayTotalHours[idx]) || '0'}`}</div>
@@ -100,6 +101,19 @@ export default function TimecardTableSection({
                 >
                   {r.position || '-'}
                 </span>
+              </td>
+              <td className="px-2 py-1.5 text-center text-slate-200">
+                {r.shift === 'early' ? (
+                  <span className="inline-flex items-center rounded-full border border-amber-300/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
+                    {t('早班', 'Early')}
+                  </span>
+                ) : r.shift === 'late' ? (
+                  <span className="inline-flex items-center rounded-full border border-indigo-300/30 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-semibold text-indigo-200">
+                    {t('晚班', 'Late')}
+                  </span>
+                ) : (
+                  <span className="text-slate-500">-</span>
+                )}
               </td>
               {r.hoursByDay.map((h: number, idx: number) => (
                 <td key={idx} className="w-[92px] px-2 py-1.5 text-center align-middle text-slate-200">

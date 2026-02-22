@@ -20,7 +20,7 @@ import DailyListNewHireModal from './components/DailyListNewHireModal';
 import DevicesPage from './pages/DevicesPage';
 import EmployeeUploadPage from './pages/EmployeeUploadPage';
 import EmployeesToolbar from './pages/EmployeesToolbar';
-import EmployeeAddPanel from './pages/EmployeeAddPanel';
+import EmployeeAddModal from './pages/EmployeeAddModal';
 import EmployeesTableSection from './pages/EmployeesTableSection';
 import EmployeeAuditModal from './pages/EmployeeAuditModal';
 import EmployeeBadgeBatchModal from './pages/EmployeeBadgeBatchModal';
@@ -632,6 +632,7 @@ export default function AdminApp() {
   const [employeeNewName, setEmployeeNewName] = useState('');
   const [employeeNewAgency, setEmployeeNewAgency] = useState('');
   const [employeeNewPosition, setEmployeeNewPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [employeeNewShift, setEmployeeNewShift] = useState<'' | 'early' | 'late'>('');
   const [employeeNewLabel, setEmployeeNewLabel] = useState('');
   const [employeeNewWorkAccount, setEmployeeNewWorkAccount] = useState('');
   const [employeeNewWorkPassword, setEmployeeNewWorkPassword] = useState('');
@@ -3256,6 +3257,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const name = employeeNewName.trim();
     const agency = employeeNewAgency.trim();
     const position = employeeNewPosition.trim();
+    const shift = employeeNewShift;
     const label = employeeNewLabel.trim();
     const workAccount = employeeNewWorkAccount.trim();
     const workPassword = employeeNewWorkPassword.trim();
@@ -3276,6 +3278,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               name,
               Agency: agency,
               Position: normalizedPos,
+              shift: shift || null,
               label: label || null,
               work_account: workAccount || null,
               work_password: workPassword || null
@@ -3285,6 +3288,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               name,
               agency,
               position: normalizedPos,
+              shift: shift || null,
               label: label || null,
               work_account: workAccount || null,
               work_password: workPassword || null
@@ -3307,15 +3311,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         action: 'employee_upsert',
         staffId: staff,
         target: EMPLOYEE_TABLE,
-        payload: { staff_id: staff, name, agency, position: normalizedPos, label, work_account: workAccount, work_password: workPassword }
+        payload: { staff_id: staff, name, agency, position: normalizedPos, shift, label, work_account: workAccount, work_password: workPassword }
       });
       setEmployeeNewStaffId('');
       setEmployeeNewName('');
       setEmployeeNewAgency('');
       setEmployeeNewPosition('');
+      setEmployeeNewShift('');
       setEmployeeNewLabel('');
       setEmployeeNewWorkAccount('');
       setEmployeeNewWorkPassword('');
+      setEmployeeAddOpen(false);
       await fetchEmployees({ reset: true });
     });
   };
@@ -4059,6 +4065,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setEmployeeEditLabel('');
     setEmployeeEditWorkAccount('');
     setEmployeeEditWorkPassword('');
+  };
+
+  const closeEmployeeAdd = () => {
+    setEmployeeAddOpen(false);
+    setEmployeeNewStaffId('');
+    setEmployeeNewName('');
+    setEmployeeNewAgency('');
+    setEmployeeNewPosition('');
+    setEmployeeNewShift('');
+    setEmployeeNewLabel('');
+    setEmployeeNewWorkAccount('');
+    setEmployeeNewWorkPassword('');
   };
 
   const syncInferredShiftsToDb = async () => {
@@ -9350,18 +9368,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
             {page === 'employees' && (
               <section className="glass reveal rounded-3xl px-6 py-8">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <div className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('班次同步', 'Shift Sync')}</div>
-                  <button
-                    type="button"
-                    disabled={isLocked}
-                    onClick={() => void syncInferredShiftsToDb()}
-                    className="rounded-2xl bg-sky-500/20 px-4 py-2 text-sm font-medium text-sky-200 transition hover:bg-sky-500/30 disabled:cursor-not-allowed disabled:opacity-60"
-                    title={t('将当前推断班次批量写入员工表', 'Batch write inferred shifts to employee table')}
-                  >
-                    {t('同步推断班次到数据库', 'Sync Inferred Shifts to DB')}
-                  </button>
-                </div>
                 <EmployeesToolbar
                   t={t}
                   isLocked={isLocked}
@@ -9395,7 +9401,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   cycleScheduleLabelTone={cycleScheduleLabelTone}
                 />
 
-                <EmployeeAddPanel
+                <EmployeeAddModal
                   t={t}
                   open={employeeAddOpen}
                   isLocked={isLocked}
@@ -9407,6 +9413,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   setEmployeeNewAgency={setEmployeeNewAgency}
                   employeeNewPosition={employeeNewPosition}
                   setEmployeeNewPosition={setEmployeeNewPosition}
+                  employeeNewShift={employeeNewShift}
+                  setEmployeeNewShift={setEmployeeNewShift}
                   employeeNewLabel={employeeNewLabel}
                   setEmployeeNewLabel={setEmployeeNewLabel}
                   employeeNewWorkAccount={employeeNewWorkAccount}
@@ -9415,6 +9423,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   setEmployeeNewWorkPassword={setEmployeeNewWorkPassword}
                   employeeAddLabelOptions={employeeAddLabelOptions}
                   allowedPositions={ALLOWED_POSITIONS}
+                  closeEmployeeAdd={closeEmployeeAdd}
                   addEmployeeRow={addEmployeeRow}
                 />
 
