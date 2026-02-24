@@ -1798,6 +1798,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       .select('id, created_at, actor, action, staff_id, target, payload')
       .in('action', actions as any)
       .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
       .limit(1200);
     if (res.error) {
       return;
@@ -6246,8 +6247,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const baseWeekStart = startOfWeekMonday(serverTime);
     const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
     const dayRangeForAudit = canCalcDayHours ? getDayRange(weekStart, timecardPunchDayIndex as number) : null;
+    let snapshotSourceRows = timecardPunchRows;
+    const fullWeekSnapshotRes = await fetchPunchRowsForTimecard(staff, null);
+    if (!fullWeekSnapshotRes.error && fullWeekSnapshotRes.rows.length > 0) {
+      snapshotSourceRows = fullWeekSnapshotRes.rows;
+    }
     const punchSnapshot = new Map<string, { action: 'IN' | 'OUT'; created_at: string }>();
-    for (const row of timecardPunchRows) {
+    for (const row of snapshotSourceRows) {
       const rowId = String(row.id ?? '').trim();
       const createdAt = String(row.created_at ?? '').trim();
       if (!rowId || !createdAt) continue;
@@ -6514,6 +6520,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
     });
     if (saveFailed) return;
+    await fetchCellAuditLogs();
     setStatus({ tone: 'success', message: t('打卡流水已保存。', 'Punch records saved.') });
     closeTimecardPunchModal();
     void fetchTimecard({ reset: true, lockUi: false });
@@ -7732,6 +7739,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   const timecardAuditByStaffDate = useMemo(() => {
     const map = new Map<string, AuditRow[]>();
+    const getSortTs = (value: string | null | undefined) => {
+      const n = Date.parse(String(value ?? ''));
+      return Number.isFinite(n) ? n : 0;
+    };
+    const getSortId = (value: unknown) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : 0;
+    };
     for (const row of cellAuditRows) {
       const action = String(row.action ?? '').trim();
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
@@ -7770,9 +7785,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       for (const dateKey of dateKeys) {
         const key = `${staff}__${dateKey}`;
         const list = map.get(key) ?? [];
-        if (list.length < 5) list.push(row);
+        list.push(row);
         map.set(key, list);
       }
+    }
+    for (const [key, list] of map.entries()) {
+      const sorted = [...list].sort((a, b) => {
+        const tsDelta = getSortTs(b.created_at) - getSortTs(a.created_at);
+        if (tsDelta !== 0) return tsDelta;
+        return getSortId(b.id) - getSortId(a.id);
+      });
+      map.set(key, sorted.slice(0, 5));
     }
     return map;
   }, [cellAuditRows]);
@@ -10554,3 +10577,4 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     </div>
   );
 }
+
