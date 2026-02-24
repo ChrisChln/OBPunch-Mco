@@ -3725,21 +3725,185 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     window.setTimeout(() => iframe.remove(), 2500);
   };
 
+  const printEmployeeTempBadgeSheet = async (payload: { staff: string; name: string; position: string }) => {
+    const staff = normalizeStaffId(String(payload.staff ?? '').trim());
+    if (!staff) return;
+    const name = String(payload.name ?? '').trim() || '-';
+    const position = String(payload.position ?? '').trim() || '-';
+    const safe = (v: string) =>
+      String(v ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const qrDataUrl = await QRCode.toDataURL(staff, {
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: 560,
+      color: { dark: '#0b1220', light: '#ffffff' }
+    });
+    const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      @page { size: 4in 2in; margin: 0; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 4in;
+        height: 2in;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      body {
+        background: #fff;
+        box-sizing: border-box;
+        font-family: Arial, "Microsoft YaHei", sans-serif;
+      }
+      .sheet {
+        width: 4in;
+        height: 2in;
+        box-sizing: border-box;
+        padding: 0.14in;
+        border: 1px solid #cbd5e1;
+        display: grid;
+        grid-template-columns: 1fr 1.3in;
+        gap: 0.12in;
+        align-items: center;
+        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+        color: #0f172a;
+      }
+      .left {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.08in;
+      }
+      .kicker {
+        font-size: 8pt;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        color: #64748b;
+        text-transform: uppercase;
+      }
+      .name {
+        font-size: 16pt;
+        font-weight: 900;
+        line-height: 1.02;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 2.2in;
+      }
+      .pos {
+        font-size: 12pt;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #0f172a;
+      }
+      .right {
+        width: 1.3in;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.04in;
+      }
+      .qrbox {
+        width: 1.12in;
+        height: 1.12in;
+        border: 1px solid #cbd5e1;
+        background: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .qrbox img {
+        width: 1in;
+        height: 1in;
+        display: block;
+        image-rendering: pixelated;
+      }
+      .qrlabel {
+        font-size: 7.5pt;
+        font-weight: 700;
+        color: #475569;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sheet">
+      <div class="left">
+        <div class="kicker">TEMP BADGE</div>
+        <div class="name">${safe(name)}</div>
+        <div class="pos">${safe(position)}</div>
+      </div>
+      <div class="right">
+        <div class="qrbox"><img src="${safe(qrDataUrl)}" alt="QR ${safe(staff)}" /></div>
+        <div class="qrlabel">USID QR</div>
+      </div>
+    </div>
+  </body>
+</html>`;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!doc) {
+      iframe.remove();
+      setStatus({ tone: 'error', message: t('打印失败：无法创建打印页。', 'Print failed: cannot create print page.') });
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+    const imgs = Array.from(doc.images ?? []);
+    await Promise.all(
+      imgs.map(
+        (img) =>
+          new Promise<void>((resolve) => {
+            if (img.complete) {
+              resolve();
+              return;
+            }
+            const done = () => {
+              img.removeEventListener('load', done);
+              img.removeEventListener('error', done);
+              resolve();
+            };
+            img.addEventListener('load', done);
+            img.addEventListener('error', done);
+          })
+      )
+    );
+    await new Promise((r) => setTimeout(r, 80));
+    iframe.contentWindow?.focus();
+    iframe.contentWindow?.print();
+    window.setTimeout(() => iframe.remove(), 1500);
+  };
+
   const printEmployeeTempBadge = async (payload: { staff: string; name: string; agency: string; position: string; workAccount?: string; workPassword?: string }) => {
     const staff = normalizeStaffId(String(payload.staff ?? '').trim());
     if (!staff) return;
     setEmployeeBadgePrintingStaffId(staff);
     try {
-      await printEmployeeBadgeCards([
-        {
-          staff,
-          name: payload.name || '-',
-          agency: payload.agency || '-',
-          position: payload.position || '-',
-          workAccount: payload.workAccount || '-',
-          workPassword: payload.workPassword || '-'
-        }
-      ]);
+      await printEmployeeTempBadgeSheet({
+        staff,
+        name: payload.name || '-',
+        position: payload.position || '-'
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err ?? 'unknown error');
       setStatus({ tone: 'error', message: t(`打印失败：${message}`, `Print failed: ${message}`) });
