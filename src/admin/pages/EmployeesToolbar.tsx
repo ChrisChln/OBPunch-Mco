@@ -14,7 +14,6 @@ type EmployeesToolbarProps = {
   onFileSelected: (file: File | null) => void | Promise<void>;
   uploadEmployees: () => void | Promise<void>;
   exportEmployees: () => void | Promise<void>;
-  employeeAddOpen: boolean;
   setEmployeeAddOpen: (next: boolean | ((prev: boolean) => boolean)) => void;
   fetchEmployees: (arg: { reset: boolean; search?: string; agency?: string; position?: string; labels?: string[] }) => void | Promise<unknown>;
   setEmployeeSearch: (value: string) => void;
@@ -47,7 +46,6 @@ export default function EmployeesToolbar({
   onFileSelected,
   uploadEmployees,
   exportEmployees,
-  employeeAddOpen,
   setEmployeeAddOpen,
   fetchEmployees,
   setEmployeeSearch,

@@ -68,6 +68,7 @@ const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | 
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
+const TEMP_ACCOUNT_TABLE = (import.meta.env.VITE_TEMP_ACCOUNT_TABLE as string | undefined) ?? 'ob_temp_accounts';
 const DEVICE_COUNTING_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_COUNTED_AT_NOTE_PATTERN = /\[COUNTED_AT=([^\]]+)\]/i;
 const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
@@ -545,6 +546,33 @@ const DEVICE_KEY_ALIASES: Record<string, string> = {
   '状态': 'active'
 };
 
+const TEMP_ACCOUNT_KEY_ALIASES: Record<string, string> = {
+  staff_id: 'staff_id',
+  staffid: 'staff_id',
+  employee_id: 'staff_id',
+  employeeid: 'staff_id',
+  usid: 'staff_id',
+  uid: 'staff_id',
+  '工号': 'staff_id',
+  '员工号': 'staff_id',
+  name: 'name',
+  agency: 'agency',
+  position: 'position',
+  work_account: 'work_account',
+  workaccount: 'work_account',
+  account: 'work_account',
+  '工作账号': 'work_account',
+  '账号': 'work_account',
+  work_password: 'work_password',
+  workpassword: 'work_password',
+  password: 'work_password',
+  '工作密码': 'work_password',
+  '密码': 'work_password',
+  note: 'note',
+  remark: 'note',
+  '备注': 'note'
+};
+
 export default function AdminApp() {
   const busyRef = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -624,6 +652,17 @@ export default function AdminApp() {
   const [punchesSearch, setPunchesSearch] = useState('');
 
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
+  const [tempAccounts, setTempAccounts] = useState<
+    Array<{
+      staff_id: string;
+      name: string;
+      agency: string;
+      position: string;
+      work_account: string;
+      work_password: string;
+      note: string;
+    }>
+  >([]);
   const [employeesError, setEmployeesError] = useState<string | null>(null);
   const [employeeShiftByStaffId, setEmployeeShiftByStaffId] = useState<
     Record<string, { shift: '' | 'early' | 'late'; earlyHours: number; lateHours: number }>
@@ -3253,6 +3292,40 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     return fetchedEmployees;
   };
 
+  const fetchTempAccounts = async ({ lockUi = false }: { lockUi?: boolean } = {}) => {
+    if (!supabase) {
+      setTempAccounts([]);
+      return;
+    }
+    const exec = async () => {
+      const res = await supabase
+        .from(TEMP_ACCOUNT_TABLE)
+        .select('staff_id, name, agency, position, work_account, work_password, note, updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(5000);
+      if (res.error) {
+        setTempAccounts([]);
+        setStatus({ tone: 'error', message: `Failed to load temp accounts: ${res.error.message}` });
+        return;
+      }
+      const rows = ((res.data as any[]) ?? []).map((row) => ({
+        staff_id: normalizeStaffId(String(row?.staff_id ?? '').trim()),
+        name: String(row?.name ?? '').trim(),
+        agency: String(row?.agency ?? '').trim(),
+        position: String(row?.position ?? '').trim(),
+        work_account: String(row?.work_account ?? '').trim(),
+        work_password: String(row?.work_password ?? '').trim(),
+        note: String(row?.note ?? '').trim()
+      }));
+      setTempAccounts(rows.filter((row) => Boolean(row.staff_id && (row.work_account || row.work_password))));
+    };
+    if (lockUi) {
+      await runLocked('temp_accounts', exec);
+    } else {
+      await exec();
+    }
+  };
+
   const addEmployeeRow = async () => {
     if (!supabase) {
       setEmployeesError('缺少 Supabase 配置。');
@@ -4441,38 +4514,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     setEmployeeNewLabel('');
     setEmployeeNewWorkAccount('');
     setEmployeeNewWorkPassword('');
-  };
-
-  const syncInferredShiftsToDb = async () => {
-    if (!supabase) return;
-    const toSync = employees.filter((emp) => {
-      const s = normalizeStaffId(String(emp.staff_id ?? '').trim());
-      if (!s) return false;
-      const inferred = employeeShiftByStaffId[s]?.shift;
-      return inferred === 'early' || inferred === 'late';
-    });
-    if (toSync.length === 0) {
-      setStatus({ tone: 'idle', message: t('没有需要同步的班次数据。', 'No shift data to sync.') });
-      return;
-    }
-    setStatus({ tone: 'pending', message: t(`正在同步 ${toSync.length} 名员工的班次…`, `Syncing shifts for ${toSync.length} employees…`) });
-    let successCount = 0;
-    let errorCount = 0;
-    for (const emp of toSync) {
-      const s = normalizeStaffId(String(emp.staff_id ?? '').trim());
-      if (!s) continue;
-      const shift = employeeShiftByStaffId[s]?.shift;
-      if (shift !== 'early' && shift !== 'late') continue;
-      const { error } = await supabase.from(EMPLOYEE_TABLE).update({ shift } as any).eq('staff_id', s);
-      if (error) { errorCount += 1; } else { successCount += 1; }
-    }
-    setStatus({
-      tone: errorCount > 0 ? 'error' : 'success',
-      message: t(`同步完成：${successCount} 成功，${errorCount} 失败。`, `Sync done: ${successCount} ok, ${errorCount} failed.`)
-    });
-    if (successCount > 0) {
-      await fetchEmployees({ reset: true, search: employeeSearch, agency: employeeAgency, position: employeePosition, labels: employeeLabels });
-    }
   };
 
   const saveEmployeeEdit = async () => {
@@ -6580,6 +6621,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
     if (page === 'accounts') {
       void fetchEmployees({ reset: true, lockUi: false });
+      void fetchTempAccounts({ lockUi: false });
     }
     if (page === 'timecard') {
       void fetchTimecard({ reset: true, lockUi: false });
@@ -7327,7 +7369,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   );
   const accountRowsFiltered = useMemo(() => {
     const searchNeedle = deferredAccountSearch.trim().toLowerCase();
-    const rows = employees
+    const employeeRows = employees
       .map((e) => {
         const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
         const name = String(e.name ?? '').trim();
@@ -7338,15 +7380,227 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return { staff, name, agency, position, workAccount, workPassword };
       })
       .filter((row) => Boolean(row.staff && (row.workAccount || row.workPassword)));
+    const tempRows = tempAccounts.map((row) => ({
+      staff: normalizeStaffId(String(row.staff_id ?? '').trim()),
+      name: String(row.name ?? '').trim(),
+      agency: String(row.agency ?? '').trim(),
+      position: String(row.position ?? '').trim(),
+      workAccount: String(row.work_account ?? '').trim(),
+      workPassword: String(row.work_password ?? '').trim()
+    }));
+    const dedup = new Map<string, { staff: string; name: string; agency: string; position: string; workAccount: string; workPassword: string }>();
+    for (const row of [...employeeRows, ...tempRows]) {
+      if (!row.staff || (!row.workAccount && !row.workPassword)) continue;
+      const key = `${row.staff}__${row.workAccount}__${row.workPassword}`;
+      if (!dedup.has(key)) dedup.set(key, row);
+    }
+    const rows = Array.from(dedup.values());
     const filtered = searchNeedle
       ? rows.filter((row) => [row.staff, row.name, row.workAccount, row.workPassword].join(' ').toLowerCase().includes(searchNeedle))
       : rows;
     return filtered.sort((a, b) => a.staff.localeCompare(b.staff, 'en-US'));
-  }, [employees, deferredAccountSearch]);
+  }, [employees, tempAccounts, deferredAccountSearch]);
   const accountRowsRendered = useMemo(
     () => accountRowsFiltered.slice(0, Math.max(0, accountRenderCount)),
     [accountRowsFiltered, accountRenderCount]
   );
+
+  const parseSpreadsheetRows = async (file: File) => {
+    const name = (file.name ?? '').toLowerCase();
+    if (name.endsWith('.csv') || file.type === 'text/csv') {
+      return parseCsv(await file.text()).rows;
+    }
+    const XLSX = await import('xlsx');
+    const ab = await file.arrayBuffer();
+    const workbook = XLSX.read(ab, { type: 'array' });
+    const firstSheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[firstSheetName];
+    const rows = (XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][]) || [];
+    const headerRow = (rows[0] ?? []).map((h: any) => String(h ?? '').trim());
+    return rows
+      .slice(1)
+      .map((r) => {
+        const obj: Record<string, string> = {};
+        for (let i = 0; i < headerRow.length; i += 1) {
+          const key = headerRow[i] ?? '';
+          obj[key] = String(r[i] ?? '').trim();
+        }
+        return obj;
+      })
+      .filter((r) => Object.values(r).some((v) => String(v).trim() !== ''));
+  };
+
+  const importTempAccounts = async (file: File | null) => {
+    if (!file) return;
+    if (!supabase) {
+      setStatus({ tone: 'error', message: '缺少 Supabase 配置。' });
+      return;
+    }
+    const lower = String(file.name ?? '').toLowerCase();
+    const fileType = String(file.type ?? '').toLowerCase();
+    const isValid =
+      lower.endsWith('.csv') ||
+      lower.endsWith('.xlsx') ||
+      lower.endsWith('.xls') ||
+      fileType === 'text/csv' ||
+      fileType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      fileType === 'application/vnd.ms-excel';
+    if (!isValid) {
+      setStatus({ tone: 'error', message: 'Unsupported file type. Please upload CSV or Excel.' });
+      return;
+    }
+
+    await runLocked('accounts_import', async () => {
+      let parsedRows: Record<string, string>[] = [];
+      try {
+        parsedRows = await parseSpreadsheetRows(file);
+      } catch (err: any) {
+        setStatus({ tone: 'error', message: `解析文件失败：${String(err?.message ?? err)}` });
+        return;
+      }
+
+      const uniqueByStaff = new Map<
+        string,
+        {
+          staff_id: string;
+          name?: string | null;
+          agency?: string | null;
+          position?: string | null;
+          work_account?: string | null;
+          work_password?: string | null;
+          note?: string | null;
+          operator?: string | null;
+          updated_at?: string;
+        }
+      >();
+
+      for (const row of parsedRows) {
+        const canonical: Record<string, string> = {};
+        for (const [rawKey, rawValue] of Object.entries(row)) {
+          if (!rawKey) continue;
+          const value = String(rawValue ?? '').trim();
+          if (!value) continue;
+          const normalized = normalizeHeaderKey(rawKey);
+          const mapped = TEMP_ACCOUNT_KEY_ALIASES[normalized] ?? normalized;
+          if (!canonical[mapped]) canonical[mapped] = value;
+        }
+        const staff = normalizeStaffId(String(canonical.staff_id ?? '').trim());
+        if (!staff) continue;
+        uniqueByStaff.set(staff, {
+          staff_id: staff,
+          name: canonical.name?.trim() || null,
+          agency: canonical.agency?.trim() || null,
+          position: canonical.position?.trim() || null,
+          work_account: canonical.work_account?.trim() || null,
+          work_password: canonical.work_password?.trim() || null,
+          note: canonical.note?.trim() || null,
+          operator: user?.email ?? null,
+          updated_at: new Date(serverTime).toISOString()
+        });
+      }
+
+      const rows = Array.from(uniqueByStaff.values());
+      if (rows.length === 0) {
+        setStatus({ tone: 'error', message: 'No valid rows in file (missing staff_id).' });
+        return;
+      }
+
+      const upsertRes = await supabase.from(TEMP_ACCOUNT_TABLE).upsert(rows as any[], { onConflict: 'staff_id' });
+      if (upsertRes.error) {
+        setStatus({ tone: 'error', message: `Import accounts failed: ${upsertRes.error.message}` });
+        return;
+      }
+
+      await writeAudit({
+        action: 'temp_account_import',
+        target: TEMP_ACCOUNT_TABLE,
+        payload: {
+          file_name: file.name ?? null,
+          total_rows: rows.length
+        }
+      });
+      setStatus({ tone: 'success', message: `Accounts imported: ${rows.length}.` });
+      await fetchTempAccounts({ lockUi: false });
+    });
+  };
+
+  const exportTempAccounts = async () => {
+    await runLocked('accounts_export', async () => {
+      const searchNeedle = deferredAccountSearch.trim().toLowerCase();
+      const rows = tempAccounts
+        .map((row) => ({
+          staff_id: normalizeStaffId(String(row.staff_id ?? '').trim()),
+          name: String(row.name ?? '').trim(),
+          agency: String(row.agency ?? '').trim(),
+          position: String(row.position ?? '').trim(),
+          work_account: String(row.work_account ?? '').trim(),
+          work_password: String(row.work_password ?? '').trim(),
+          note: String(row.note ?? '').trim()
+        }))
+        .filter((row) => Boolean(row.staff_id && (row.work_account || row.work_password)))
+        .filter((row) =>
+          !searchNeedle
+            ? true
+            : [row.staff_id, row.name, row.agency, row.position, row.work_account, row.work_password, row.note]
+                .join(' ')
+                .toLowerCase()
+                .includes(searchNeedle)
+        );
+
+      if (rows.length === 0) {
+        setStatus({ tone: 'error', message: 'No account data to export.' });
+        return;
+      }
+
+      const headers = ['staff_id', 'name', 'agency', 'position', 'work_account', 'work_password', 'note'];
+      const body = rows.map((row) => [
+        row.staff_id,
+        row.name || '-',
+        row.agency || '-',
+        row.position || '-',
+        row.work_account || '-',
+        row.work_password || '-',
+        row.note || '-'
+      ]);
+      const filename = `ob_temp_accounts_${toDateOnly(serverTime)}.xlsx`;
+      try {
+        const XLSX = await import('xlsx');
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...body]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'temp_accounts');
+        XLSX.writeFile(wb, filename);
+        setStatus({ tone: 'success', message: `已导出：${filename}` });
+      } catch {
+        const csvName = filename.replace(/\.xlsx$/i, '.csv');
+        const csv = [headers, ...body]
+          .map((row) =>
+            row
+              .map((cell) => {
+                const v = String(cell ?? '');
+                if (v.includes('"') || v.includes(',') || v.includes('\n')) return `"${v.replace(/"/g, '""')}"`;
+                return v;
+              })
+              .join(',')
+          )
+          .join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = csvName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setStatus({ tone: 'success', message: `已导出：${csvName}` });
+      }
+      await writeAudit({
+        action: 'temp_account_export',
+        target: TEMP_ACCOUNT_TABLE,
+        payload: { exported_rows: rows.length, search: deferredAccountSearch.trim() || null }
+      });
+    });
+  };
 
   const exportEmployees = async () => {
     await runLocked('employees_export', async () => {
@@ -8415,7 +8669,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return `${m}/${d}`;
     })();
     const positionUpper = String(position).toUpperCase();
-    const seqPrefix = `${mmdd}NEW ${positionUpper}`;
     const existingSeqSet = new Set<number>();
     const escapedMmdd = mmdd.replace('/', '\\/');
     const nameSeqRegex = new RegExp(`^${escapedMmdd}NEW\\s+${positionUpper}(\\d+)$`, 'i');
@@ -9902,7 +10155,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   onFileSelected={onFileSelected}
                   uploadEmployees={uploadEmployees}
                   exportEmployees={exportEmployees}
-                  employeeAddOpen={employeeAddOpen}
                   setEmployeeAddOpen={setEmployeeAddOpen}
                   fetchEmployees={fetchEmployees}
                   setEmployeeSearch={setEmployeeSearch}
@@ -10065,7 +10317,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 accountRowsRendered={accountRowsRendered}
                 accountRenderCount={accountRenderCount}
                 setAccountRenderCount={setAccountRenderCount}
-                onRefreshEmployees={() => void fetchEmployees({ reset: true })}
+                onRefreshEmployees={async () => {
+                  await fetchEmployees({ reset: true });
+                  await fetchTempAccounts({ lockUi: false });
+                }}
+                onImportAccounts={importTempAccounts}
+                onExportAccounts={exportTempAccounts}
                 accountCardPrintingStaffId={accountCardPrintingStaffId}
                 onPrintAccountCard={printAccountCard}
               />

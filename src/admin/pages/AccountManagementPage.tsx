@@ -1,4 +1,4 @@
-import type { UIEvent } from 'react';
+﻿import type { UIEvent } from 'react';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -21,6 +21,8 @@ type AccountManagementPageProps = {
   accountRenderCount: number;
   setAccountRenderCount: (value: number | ((prev: number) => number)) => void;
   onRefreshEmployees: () => void | Promise<void>;
+  onImportAccounts: (file: File | null) => void | Promise<void>;
+  onExportAccounts: () => void | Promise<void>;
   accountCardPrintingStaffId: string | null;
   onPrintAccountCard: (row: AccountRow) => void | Promise<void>;
 };
@@ -35,6 +37,8 @@ export default function AccountManagementPage({
   accountRenderCount,
   setAccountRenderCount,
   onRefreshEmployees,
+  onImportAccounts,
+  onExportAccounts,
   accountCardPrintingStaffId,
   onPrintAccountCard
 }: AccountManagementPageProps) {
@@ -50,34 +54,56 @@ export default function AccountManagementPage({
   return (
     <section className="glass reveal rounded-3xl px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="font-display text-2xl tracking-[0.08em]">{t('账号管理', 'Account Management')}</h2>
+        <h2 className="font-display text-2xl tracking-[0.08em]">{t('Account Management', 'Account Management')}</h2>
         <div className="flex items-center gap-3">
+          <label className="cursor-pointer rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15">
+            {t('Import Accounts', 'Import Accounts')}
+            <input
+              type="file"
+              accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+              disabled={isLocked}
+              onChange={(e) => {
+                const file = e.target.files?.[0] ?? null;
+                void onImportAccounts(file);
+                e.currentTarget.value = '';
+              }}
+              className="hidden"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={isLocked}
+            onClick={() => void onExportAccounts()}
+            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {t('Export Accounts', 'Export Accounts')}
+          </button>
           <button
             type="button"
             disabled={isLocked}
             onClick={() => void onRefreshEmployees()}
             className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {t('刷新', 'Refresh')}
+            {t('Refresh', 'Refresh')}
           </button>
         </div>
       </div>
 
       <div className="mt-5 grid gap-4 md:grid-cols-6">
         <div className="md:col-span-3">
-          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('搜索', 'Search')}</label>
+          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('Search', 'Search')}</label>
           <input
             value={accountSearch}
             onChange={(e) => setAccountSearch(e.target.value)}
             disabled={isLocked}
-            placeholder={t('搜索账号/姓名/工号', 'Search by account / name / staff id')}
+            placeholder={t('Search by account / name / staff id', 'Search by account / name / staff id')}
             className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
           />
         </div>
       </div>
 
       {!accountRowsFiltered.length ? (
-        <p className="mt-4 text-sm text-slate-400">{t('暂无账号数据', 'No account rows')}</p>
+        <p className="mt-4 text-sm text-slate-400">{t('No account rows', 'No account rows')}</p>
       ) : null}
 
       <div className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30" onScroll={onScroll}>
@@ -85,17 +111,17 @@ export default function AccountManagementPage({
           <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-xs uppercase tracking-[0.2em] text-slate-400 backdrop-blur">
             <tr>
               <th className="px-4 py-3">USID</th>
-              <th className="px-4 py-3">{t('姓名', 'Name')}</th>
+              <th className="px-4 py-3">{t('Name', 'Name')}</th>
               <th className="px-4 py-3">Agency</th>
-              <th className="px-4 py-3">{t('岗位', 'Position')}</th>
-              <th className="px-4 py-3">{t('工作账号', 'Work account')}</th>
-              <th className="px-4 py-3">{t('工作密码', 'Work password')}</th>
-              <th className="px-4 py-3 text-right">{t('操作', 'Actions')}</th>
+              <th className="px-4 py-3">{t('Position', 'Position')}</th>
+              <th className="px-4 py-3">{t('Work account', 'Work account')}</th>
+              <th className="px-4 py-3">{t('Work password', 'Work password')}</th>
+              <th className="px-4 py-3 text-right">{t('Actions', 'Actions')}</th>
             </tr>
           </thead>
           <tbody>
             {accountRowsRendered.map((row) => (
-              <tr key={row.staff} className="border-b border-white/5 transition-colors hover:bg-white/5 last:border-0">
+              <tr key={`${row.staff}__${row.workAccount}__${row.workPassword}`} className="border-b border-white/5 transition-colors hover:bg-white/5 last:border-0">
                 <td className="px-4 py-3 font-mono text-slate-200">{row.staff}</td>
                 <td className="px-4 py-3 text-slate-200">{row.name || '-'}</td>
                 <td className="px-4 py-3 text-slate-200">{row.agency || '-'}</td>
@@ -110,8 +136,8 @@ export default function AccountManagementPage({
                     className="rounded-xl bg-neon px-4 py-1.5 text-xs font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {accountCardPrintingStaffId === row.staff
-                      ? t('生成中...', 'Generating...')
-                      : t('打印账号', 'Print account')}
+                      ? t('Generating...', 'Generating...')
+                      : t('Print account', 'Print account')}
                   </button>
                 </td>
               </tr>
@@ -122,14 +148,15 @@ export default function AccountManagementPage({
       {accountRowsRendered.length < accountRowsFiltered.length && (
         <div className="mt-2 text-xs text-slate-500">
           {t(
-            `已显示 ${accountRowsRendered.length}/${accountRowsFiltered.length}，向下滚动加载更多`,
+            `Showing ${accountRowsRendered.length}/${accountRowsFiltered.length}. Scroll to load more`,
             `Showing ${accountRowsRendered.length}/${accountRowsFiltered.length}. Scroll to load more`
           )}
         </div>
       )}
       {accountRenderCount > 0 && accountRowsFiltered.length > 0 && (
-        <div className="mt-1 text-xs text-slate-500">{t('打印尺寸：4 x 2 inch 标签纸。', 'Print size: 4 x 2 inch label.')}</div>
+        <div className="mt-1 text-xs text-slate-500">{t('Print size: 4 x 2 inch label.', 'Print size: 4 x 2 inch label.')}</div>
       )}
     </section>
   );
 }
+

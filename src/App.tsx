@@ -2109,7 +2109,6 @@ const fetchPunchBoardUph = async (
 
       // 获取所有员工的打卡记录（不限制员工数量）
       const allPunches: PunchBoardRow[] = [];
-      const batchSize = 200;
       const maxPunchesPerStaff = 30;
 
       // 直接从 ob_punches 表获取所有记录，不限制员工
@@ -2151,7 +2150,7 @@ const fetchPunchBoardUph = async (
 
       // 按职位过滤：只保留目标职位的员工
       const needle = pos.trim().toLowerCase();
-      for (const [staffId, punches] of Object.entries(staffPunches)) {
+      for (const staffId of Object.keys(staffPunches)) {
         const employee = employeeMap[staffId];
         const staffPos = String(employee?.position ?? '').trim().toLowerCase();
         if (staffPos !== needle) {
