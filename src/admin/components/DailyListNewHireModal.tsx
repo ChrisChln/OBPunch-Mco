@@ -16,6 +16,8 @@ type DailyListNewHireModalProps = {
   setDailyListNewHireCount: (value: number) => void;
   dailyListNewHireAgency: string;
   setDailyListNewHireAgency: (value: string) => void;
+  dailyListNewHireNote: string;
+  setDailyListNewHireNote: (value: string) => void;
   clamp: (value: number, min: number, max: number) => number;
   onClose: () => void;
   addDailyListNewHireDemand: () => void | Promise<void>;
@@ -34,11 +36,14 @@ export default function DailyListNewHireModal({
   setDailyListNewHireCount,
   dailyListNewHireAgency,
   setDailyListNewHireAgency,
+  dailyListNewHireNote,
+  setDailyListNewHireNote,
   clamp,
   onClose,
   addDailyListNewHireDemand
 }: DailyListNewHireModalProps) {
   if (!open || typeof document === 'undefined') return null;
+
   return createPortal(
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
       <div className="w-full max-w-xl rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-2xl backdrop-blur">
@@ -52,6 +57,7 @@ export default function DailyListNewHireModal({
             {t('关闭', 'Close')}
           </button>
         </div>
+
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           <div>
             <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('岗位', 'Position')}</label>
@@ -69,6 +75,7 @@ export default function DailyListNewHireModal({
               ))}
             </select>
           </div>
+
           <div>
             <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('班次', 'Shift')}</label>
             <select
@@ -82,6 +89,7 @@ export default function DailyListNewHireModal({
               <option value="late">{t('晚班', 'Night')}</option>
             </select>
           </div>
+
           <div>
             <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('需求人数', 'Headcount')}</label>
             <input
@@ -94,8 +102,9 @@ export default function DailyListNewHireModal({
               className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon"
             />
           </div>
+
           <div>
-            <label className="text-xs uppercase tracking-[0.2em] text-slate-400">Agency ({t('可留空', 'Optional')})</label>
+            <label className="text-xs uppercase tracking-[0.2em] text-slate-400">Agency</label>
             <input
               value={dailyListNewHireAgency}
               onChange={(e) => setDailyListNewHireAgency(e.target.value)}
@@ -104,10 +113,19 @@ export default function DailyListNewHireModal({
               placeholder="Agency"
             />
           </div>
+
+          <div className="md:col-span-2">
+            <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{t('备注', 'Note')}</label>
+            <input
+              value={dailyListNewHireNote}
+              onChange={(e) => setDailyListNewHireNote(e.target.value)}
+              disabled={isLocked}
+              className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon"
+              placeholder={t('新人要求', 'Request for new hire')}
+            />
+          </div>
         </div>
-        <p className="mt-3 text-xs text-slate-400">
-          {t('将新增为 MM/DDNEW REBIN1, REBIN2... 并自动加入当天名单。', 'Will create MM/DDNEW REBIN1, REBIN2... and auto-add to that day list.')}
-        </p>
+
         <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
@@ -130,4 +148,3 @@ export default function DailyListNewHireModal({
     document.body
   );
 }
-

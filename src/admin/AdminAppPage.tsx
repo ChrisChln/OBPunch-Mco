@@ -562,6 +562,7 @@ export default function AdminApp() {
   const schedulePositionToneHydratingRef = useRef(false);
   const schedulePositionToneLastSavedJsonRef = useRef('');
   const schedulePositionToneReadyRef = useRef(false);
+  const scheduleRenderFilterKeyRef = useRef('');
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
@@ -768,6 +769,7 @@ export default function AdminApp() {
   const [dailyListNewHireCount, setDailyListNewHireCount] = useState(1);
   const [dailyListNewHireAgency, setDailyListNewHireAgency] = useState('');
   const [dailyListNewHireShift, setDailyListNewHireShift] = useState<'' | 'early' | 'late'>('');
+  const [dailyListNewHireNote, setDailyListNewHireNote] = useState('');
   const [dailyListSelectedPositions, setDailyListSelectedPositions] = useState<Record<AllowedPosition, boolean>>(
     createEmptyPositionFlags
   );
@@ -7645,12 +7647,29 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   useEffect(() => {
     if (page !== 'schedule') return;
     const total = scheduleEmployeesFiltered.length;
+    const filterKey = JSON.stringify({
+      search: deferredScheduleSearch.trim().toLowerCase(),
+      position: deferredSchedulePosition || '',
+      shift: deferredScheduleShift || '',
+      labels: deferredScheduleLabels.map((item) => String(item ?? '').trim().toLowerCase()),
+      day: scheduleWorkDayFilter ?? null
+    });
+    const filterChanged = scheduleRenderFilterKeyRef.current !== filterKey;
+    scheduleRenderFilterKeyRef.current = filterKey;
     setScheduleRenderCount((prev) => {
-      if (prev <= 0) return Math.min(60, total);
+      if (filterChanged || prev <= 0) return Math.min(60, total);
       if (prev > total) return total;
       return prev;
     });
-  }, [page, scheduleEmployeesFiltered.length]);
+  }, [
+    page,
+    scheduleEmployeesFiltered.length,
+    deferredScheduleSearch,
+    deferredSchedulePosition,
+    deferredScheduleShift,
+    deferredScheduleLabels,
+    scheduleWorkDayFilter
+  ]);
 
   useEffect(() => {
     if (page !== 'schedule') return;
@@ -7857,9 +7876,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     if (homeRosterSide === 'onClock') return homeRosterRowsFiltered.onClock;
     return homeRosterRowsFiltered.absent;
   }, [homeRosterSide, homeRosterRowsFiltered]);
+  const formatDailyListStaffId = (row: DailyListRow) => {
+    const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+    if (!isNewHirePlaceholderStaffId(staff)) return displayStaffId(staff);
+    const matched = staff.match(/^NEWREQ-(\d{4})(\d{2})(\d{2})(?:-([A-Z]+))?-(\d{3,})$/i);
+    if (matched) {
+      const mm = matched[2] ?? '';
+      const dd = matched[3] ?? '';
+      const pos = String(matched[4] ?? '').toUpperCase();
+      const seq = String(Number(matched[5] ?? '0'));
+      return `${mm}/${dd}NEW ${pos}${seq}`.trim();
+    }
+    const fallbackName = String(row.name ?? '').trim();
+    if (isNewHirePlaceholderName(fallbackName)) return fallbackName;
+    return staff;
+  };
   const makeDailyListTsv = (rows: DailyListRow[]) =>
     rows
-      .map((row) => [displayStaffId(row.staff_id), row.name, row.agency, row.position, getPlannedStartTime(row.shift, row.position)].map((c) => String(c ?? '')).join('\t'))
+      .map((row) => [formatDailyListStaffId(row), row.name, row.agency, row.position, getPlannedStartTime(row.shift, row.position)].map((c) => String(c ?? '')).join('\t'))
       .join('\n');
   const copyDailyList = async (scope: 'early' | 'late' | 'all') => {
     const early = scope === 'all' ? tomorrowDailyList.earlyRows : tomorrowDailyRowsDisplayed.earlyRows;
@@ -7922,6 +7956,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const position = normalizePositionKey(dailyListNewHirePosition);
     const shift = dailyListNewHireShift;
     const agency = dailyListNewHireAgency.trim();
+    const note = dailyListNewHireNote.trim();
     const count = clamp(Number(dailyListNewHireCount) || 0, 1, 200);
     if (!position) {
       setStatus({ tone: 'error', message: 'Please choose position.' });
@@ -7955,7 +7990,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const remoteRes = await supabase
         .from(EMPLOYEE_TABLE)
         .select('staff_id, name')
-        .ilike('name', `${seqPrefix}%`)
+        .ilike('staff_id', `NEWREQ-${targetDate.replace(/-/g, '')}-${positionUpper}-%`)
         .limit(2000);
       if (!remoteRes.error) {
         const rows = ((remoteRes.data as any[]) ?? []) as Array<{ staff_id?: string | null; name?: string | null }>;
@@ -7983,12 +8018,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       for (let i = 0; i < count; i += 1) {
         const seq = nextSeq + i;
         const internalStaffId = `NEWREQ-${targetDate.replace(/-/g, '')}-${positionUpper}-${String(seq).padStart(3, '0')}`;
-        const displayName = `${seqPrefix}${seq}`;
+        const employeeName = note || '-';
         const employeePayload =
           mode === 'cased'
             ? {
                 staff_id: internalStaffId,
-                name: displayName,
+                name: employeeName,
                 Agency: agency || null,
                 Position: position,
                 shift,
@@ -7997,7 +8032,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               }
             : {
                 staff_id: internalStaffId,
-                name: displayName,
+                name: employeeName,
                 agency: agency || null,
                 position,
                 shift,
@@ -8016,7 +8051,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         });
         localEmployeesToAdd.push({
           staff_id: internalStaffId,
-          name: displayName,
+          name: employeeName,
           agency: agency || null,
           position,
           shift,
@@ -8057,6 +8092,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       setDailyListNewHireAgency('');
       setDailyListNewHirePosition('');
       setDailyListNewHireShift('');
+      setDailyListNewHireNote('');
       setEmployees((prev) => {
         const byStaff = new Map<string, EmployeeRow>();
         for (const row of prev) {
@@ -8931,8 +8967,23 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               <td className="px-2 py-2 text-center text-slate-200">
                                 {(() => {
                                   const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-                                  const shiftLabel = inferredShift === 'early' ? t('早班', 'Morning') : inferredShift === 'late' ? t('晚班', 'Night') : '-';
-                                  const shiftClass = getShiftBadgeClass(inferredShift);
+                                  const scheduleRow = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
+                                  const scheduledShift = normalizeShiftValue(String(scheduleRow?.shift ?? '').trim());
+                                  const dbShift = normalizeShiftValue(String(employee.shift ?? '').trim());
+                                  let weeklyScheduledShift: '' | 'early' | 'late' = '';
+                                  if (!scheduledShift) {
+                                    for (let idx = 0; idx < 7; idx += 1) {
+                                      const row = scheduleRowsByStaffDayIndex.get(`${staff}__${idx}`);
+                                      const s = normalizeShiftValue(String(row?.shift ?? '').trim());
+                                      if (s) {
+                                        weeklyScheduledShift = s;
+                                        break;
+                                      }
+                                    }
+                                  }
+                                  const shift = inferredShift || scheduledShift || dbShift || weeklyScheduledShift || '';
+                                  const shiftLabel = shift === 'early' ? t('早班', 'Morning') : shift === 'late' ? t('晚班', 'Night') : '-';
+                                  const shiftClass = getShiftBadgeClass(shift);
                                   return <span className={['inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold tracking-[0.08em]', shiftClass].join(' ')}>{shiftLabel}</span>;
                                 })()}
                               </td>
@@ -9298,7 +9349,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   ) : (
                                     tomorrowDailyRowsDisplayed.earlyRows.map((row) => (
                                       <tr key={`early-${row.staff_id}`} className={themeMode === 'light' ? 'border-t border-slate-100' : 'border-t border-white/5'}>
-                                        <td className={['px-3 py-2 font-mono', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{displayStaffId(row.staff_id)}</td>
+                                        <td className={['px-3 py-2 font-mono', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{formatDailyListStaffId(row)}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.name || '-'}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.agency || '-'}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.position || '-'}</td>
@@ -9354,7 +9405,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                   ) : (
                                     tomorrowDailyRowsDisplayed.lateRows.map((row) => (
                                       <tr key={`late-${row.staff_id}`} className={themeMode === 'light' ? 'border-t border-slate-100' : 'border-t border-white/5'}>
-                                        <td className={['px-3 py-2 font-mono', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{displayStaffId(row.staff_id)}</td>
+                                        <td className={['px-3 py-2 font-mono', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{formatDailyListStaffId(row)}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.name || '-'}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.agency || '-'}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.position || '-'}</td>
@@ -9385,6 +9436,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   setDailyListNewHireCount={setDailyListNewHireCount}
                   dailyListNewHireAgency={dailyListNewHireAgency}
                   setDailyListNewHireAgency={setDailyListNewHireAgency}
+                  dailyListNewHireNote={dailyListNewHireNote}
+                  setDailyListNewHireNote={setDailyListNewHireNote}
                   clamp={clamp}
                   onClose={() => setDailyListNewHireOpen(false)}
                   addDailyListNewHireDemand={addDailyListNewHireDemand}
