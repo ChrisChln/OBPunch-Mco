@@ -5,7 +5,6 @@ import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/
 import {
   LABEL_TONE_KEYS,
   type LabelToneKey,
-  getLabelToneClass,
   loadLabelToneMap,
   saveLabelToneMap
 } from '../lib/labelTone';
@@ -7724,6 +7723,38 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     getPositionBadgeClass(position, schedulePositionToneByPosition);
   const getSchedulePositionBadgeClassLight = (position: string) =>
     getPositionBadgeClassLight(position, schedulePositionToneByPosition);
+  const scheduleLabelDefaultToneByName = useMemo(() => {
+    const positionCountByLabel: Record<string, Partial<Record<AllowedPosition, number>>> = {};
+    for (const employee of employees) {
+      const label = String(employee.label ?? employee.Label ?? '').trim();
+      const position = normalizeAllowedPosition(String(employee.position ?? employee.Position ?? '').trim());
+      if (!label || !position) continue;
+      const key = label.toLowerCase();
+      const next = positionCountByLabel[key] ?? {};
+      next[position] = (next[position] ?? 0) + 1;
+      positionCountByLabel[key] = next;
+    }
+    const toneByLabel: Record<string, LabelToneKey> = {};
+    for (const [labelKey, counts] of Object.entries(positionCountByLabel)) {
+      let topPosition: AllowedPosition | '' = '';
+      let topCount = -1;
+      for (const pos of ALLOWED_POSITIONS) {
+        const count = Number(counts[pos] ?? 0);
+        if (count > topCount) {
+          topCount = count;
+          topPosition = pos;
+        }
+      }
+      if (!topPosition) continue;
+      toneByLabel[labelKey] = schedulePositionToneByPosition[topPosition] ?? getDefaultPositionToneKey(topPosition);
+    }
+    return toneByLabel;
+  }, [employees, schedulePositionToneByPosition]);
+  const getScheduleLabelTone = (label: string): LabelToneKey => {
+    const key = String(label ?? '').trim().toLowerCase();
+    if (!key) return 'slate';
+    return scheduleLabelToneByName[key] ?? scheduleLabelDefaultToneByName[key] ?? 'slate';
+  };
   const cycleSchedulePositionTone = (position: AllowedPosition) => {
     setSchedulePositionToneByPosition((prev) => {
       const current = prev[position] ?? getDefaultPositionToneKey(position);
@@ -7732,12 +7763,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return { ...prev, [position]: next };
     });
   };
-  const getScheduleLabelToneClass = (label: string) => getLabelToneClass(label, scheduleLabelToneByName);
+  const getScheduleLabelToneClass = (label: string) => POSITION_TONE_CLASS_DARK[getScheduleLabelTone(label)] ?? POSITION_TONE_CLASS_DARK.slate;
   const cycleScheduleLabelTone = (label: string) => {
     const key = String(label ?? '').trim().toLowerCase();
     if (!key) return;
     setScheduleLabelToneByName((prev) => {
-      const current = prev[key] ?? 'slate';
+      const current = prev[key] ?? scheduleLabelDefaultToneByName[key] ?? 'slate';
       const idx = LABEL_TONE_KEYS.indexOf(current);
       const next = LABEL_TONE_KEYS[(idx + 1) % LABEL_TONE_KEYS.length];
       return { ...prev, [key]: next };
@@ -8421,8 +8452,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       slate: '#f1f5f9'
     };
     const getLabelTint = (label: string) => {
-      const key = String(label ?? '').trim().toLowerCase();
-      const tone = (key ? scheduleLabelToneByName[key] : undefined) ?? 'slate';
+      const tone = getScheduleLabelTone(label);
       return PRINT_LABEL_TINT_BY_TONE[tone];
     };
 
@@ -9204,7 +9234,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                               : state === 'rest_worked'
                                                 ? 'bg-sky-500 text-white'
                                               : state === 'absent'
-                                                ? 'bg-orange-500 text-white'
+                                                ? themeMode === 'light'
+                                                  ? 'bg-white text-slate-900 border border-slate-900/70'
+                                                  : 'bg-white text-slate-900'
                                               : state === 'temp_rest'
                                                 ? 'bg-red-800 text-red-100'
                                               : 'bg-ember text-white'
