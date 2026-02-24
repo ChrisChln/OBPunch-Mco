@@ -1201,7 +1201,7 @@ const getShiftBucket = (inAtIso: string) => {
 };
 
 const getShiftBadgeClass = (value: '' | 'early' | 'late') => {
-  if (value === 'early') return 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10';
+  if (value === 'early') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
   if (value === 'late') return 'border-indigo-400/60 text-indigo-200 bg-indigo-500/10';
   return 'border-white/20 text-slate-200 bg-white/5';
 };
@@ -4762,21 +4762,21 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const fmtScheduleState = (value: any) => {
       const state = String(value ?? '').trim().toLowerCase();
       if (!state || state === '-' || state === 'null' || state === 'undefined' || state === 'none' || state === 'n/a') {
-        return t('休息', 'Rest');
+        return t('休息', 'Off');
       }
       if (state === 'work') return t('工作', 'Work');
       if (state === 'temp_work') return t('临时工作', 'Temporary Work');
       if (state === 'leave') return t('请假', 'Excuse');
-      if (state === 'temp_rest') return t('临时排休', 'Temporary Rest');
-      if (state === 'rest') return t('休息', 'Rest');
-      if (state === 'rest_worked') return t('休息', 'Rest');
+      if (state === 'temp_rest') return t('临时排休', 'Temporary Off');
+      if (state === 'rest') return t('休息', 'Off');
+      if (state === 'rest_worked') return t('休息', 'Off');
       if (state === 'absent') return t('缺勤', 'Absent');
-      if (state === 'empty') return t('休息', 'Rest');
+      if (state === 'empty') return t('休息', 'Off');
       if (state === '工作') return t('工作', 'Work');
       if (state === '临时工作') return t('临时工作', 'Temporary Work');
       if (state === '请假') return t('请假', 'Excuse');
-      if (state === '临时排休') return t('临时排休', 'Temporary Rest');
-      if (state === '休息') return t('休息', 'Rest');
+      if (state === '临时排休') return t('临时排休', 'Temporary Off');
+      if (state === '休息') return t('休息', 'Off');
       return '-';
     };
     const getScheduleFromState = (fallback: string) =>
@@ -8347,7 +8347,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         : scope === 'late'
           ? makeDailyListTsv(late)
           : [
-              `${title} - Early Shift`,
+              `${title} - Morning Shift`,
               makeDailyListTsv(early),
               '',
               `${title} - Night Shift`,
@@ -9496,12 +9496,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                             : state === 'leave'
                                               ? t('请假', 'Excuse')
                                             : state === 'rest_worked'
-                                              ? t('排休出勤', 'Rest Worked')
+                                              ? t('排休出勤', 'Off Worked')
                                             : state === 'absent'
                                               ? t('缺勤', 'Absent')
                                             : state === 'temp_rest'
-                                                ? t('临时排休', 'Temporary Rest')
-                                              : t('休息', 'Rest')}
+                                                ? t('临时排休', 'Temporary Off')
+                                              : t('休息', 'Off')}
                                         </button>
                                         {scheduleCellAudit.length > 0 && (
                                           <span
@@ -9566,8 +9566,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                           { key: 'work', labelZh: '工作', labelEn: 'Work', cls: 'bg-neon text-white' },
                           { key: 'temp_work', labelZh: '临时工作', labelEn: 'Temporary Work', cls: 'bg-emerald-700 text-white' },
                           { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white' },
-                          { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Temporary Rest', cls: 'bg-red-800 text-red-100' },
-                          { key: 'rest', labelZh: '休息', labelEn: 'Rest', cls: 'bg-ember text-white' }
+                          { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Temporary Off', cls: 'bg-red-800 text-red-100' },
+                          { key: 'rest', labelZh: '休息', labelEn: 'Off', cls: 'bg-ember text-white' }
                         ] as Array<{ key: ScheduleBaseState; labelZh: string; labelEn: string; cls: string }>
                       ).map((item) => (
                         <button
@@ -10577,4 +10577,3 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     </div>
   );
 }
-

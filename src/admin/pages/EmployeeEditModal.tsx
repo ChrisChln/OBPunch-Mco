@@ -148,7 +148,7 @@ export default function EmployeeEditModal({
               <div>
                 <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('班次', 'Shift')}</label>
                 <div className="mt-2 flex h-11 items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-2">
-                  {([['early', t('早班', 'Early')], ['late', t('晚班', 'Late')]] as const).map(([val, label]) => (
+                  {([['early', t('早班', 'Morning')], ['late', t('晚班', 'Night')]] as const).map(([val, label]) => (
                     <button
                       key={val}
                       type="button"

@@ -297,7 +297,7 @@ const getOnClockValueClass = (value: string, toneMap?: Partial<Record<AllowedPos
 
 const getShiftBadgeClass = (value: string) => {
   const v = value.trim().toLowerCase();
-  if (v === 'early') return 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10';
+  if (v === 'early') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
   if (v === 'late') return 'border-violet-400/60 text-violet-200 bg-violet-500/10';
   return 'border-white/20 text-slate-300 bg-white/5';
 };
@@ -2983,7 +2983,7 @@ const fetchPunchBoardUph = async (
                                   )}
                                 </div>
                                 <div className="min-w-0 rounded-lg border border-sky-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Rest Worked Staff</div>
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Off Worked Staff</div>
                                   {earlyRestWorkedStaffFiltered.length === 0 ? (
                                     <div className="text-xs text-slate-300">{earlySearch ? 'No matches' : 'No rest-worked staff'}</div>
                                   ) : (
@@ -3077,7 +3077,7 @@ const fetchPunchBoardUph = async (
                                   )}
                                 </div>
                                 <div className="min-w-0 rounded-lg border border-sky-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Rest Worked Staff</div>
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Off Worked Staff</div>
                                   {lateRestWorkedStaffFiltered.length === 0 ? (
                                     <div className="text-xs text-slate-300">{lateSearch ? 'No matches' : 'No rest-worked staff'}</div>
                                   ) : (

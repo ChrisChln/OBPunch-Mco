@@ -105,11 +105,11 @@ export default function TimecardTableSection({
               <td className="px-2 py-1.5 text-center text-slate-200">
                 {r.shift === 'early' ? (
                   <span className="inline-flex items-center rounded-full border border-amber-300/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
-                    {t('早班', 'Early')}
+                    {t('早班', 'Morning')}
                   </span>
                 ) : r.shift === 'late' ? (
                   <span className="inline-flex items-center rounded-full border border-indigo-300/30 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-semibold text-indigo-200">
-                    {t('晚班', 'Late')}
+                    {t('晚班', 'Night')}
                   </span>
                 ) : (
                   <span className="text-slate-500">-</span>
@@ -157,13 +157,13 @@ export default function TimecardTableSection({
                             {t('请假', 'Excuse')}
                           </span>
                         ) : r.tempRestByDay[idx] ? (
-                          <span className="text-[11px] font-semibold text-amber-300" title="Temporary Rest">
-                            {t('临时排休', 'Temp Rest')}
+                          <span className="text-[11px] font-semibold text-amber-300" title="Temporary Off">
+                            {t('临时排休', 'Temp Off')}
                           </span>
                         ) : r.restByDay[idx] &&
                           toDateOnly(addDays(addDays(startOfWeekMonday(serverTime), timecardWeekOffset * 7), idx)) <= toDateOnly(serverTime) ? (
-                          <span className="text-[11px] font-semibold text-amber-300" title="Rest">
-                            {t('休息', 'Rest')}
+                          <span className="text-[11px] font-semibold text-amber-300" title="Off">
+                            {t('休息', 'Off')}
                           </span>
                         ) : (
                           ''
@@ -231,4 +231,3 @@ export default function TimecardTableSection({
     </div>
   );
 }
-

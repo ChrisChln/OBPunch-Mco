@@ -98,7 +98,7 @@ export default function HomeDashboardPage({
               {homeRosterSide === 'absent'
                 ? t('缺勤名单', 'Absent List')
                 : homeRosterSide === 'restWorked'
-                  ? t('排休出勤名单', 'Rest Worked List')
+                  ? t('排休出勤名单', 'Off Worked List')
                   : t('打卡中名单', 'On Clock List')}
             </h3>
             <div className="flex items-center gap-2">
@@ -120,7 +120,7 @@ export default function HomeDashboardPage({
                   homeRosterSide === 'restWorked' ? 'bg-neon text-white' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                 ].join(' ')}
               >
-                {t('排休出勤', 'Rest Worked')}
+                {t('排休出勤', 'Off Worked')}
               </button>
               <button
                 type="button"
@@ -181,4 +181,3 @@ export default function HomeDashboardPage({
     </section>
   );
 }
-
