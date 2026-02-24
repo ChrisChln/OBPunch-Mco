@@ -1,4 +1,4 @@
-﻿import type { UIEvent } from 'react';
+﻿import { useState, type UIEvent } from 'react';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -29,7 +29,14 @@ type EmployeesTableSectionProps = {
   toDateOnly: (date: Date) => string;
   employeeBadgePrintingStaffId: string | null;
   employeeBadgeBatchSelectedStaffIds: string[];
-  toggleEmployeeBadgeBatchSelectedStaffId: (staff: string) => void;
+  toggleEmployeeBadgeBatchSelectedStaffId: (payload: {
+    staff: string;
+    name: string;
+    agency: string;
+    position: string;
+    workAccount?: string;
+    workPassword?: string;
+  }) => void;
   openEmployeeAuditLog: (staff: string, name?: string) => void | Promise<void>;
   printEmployeeTempBadge: (payload: {
     staff: string;
@@ -85,6 +92,9 @@ export default function EmployeesTableSection({
   openEmployeeEdit,
   deleteEmployeeRow
 }: EmployeesTableSectionProps) {
+  const [hoveredStaffId, setHoveredStaffId] = useState<string | null>(null);
+  const [activeStaffId, setActiveStaffId] = useState<string | null>(null);
+
   return (
     <>
       {employeesError && (
@@ -188,18 +198,39 @@ export default function EmployeesTableSection({
                       `Scheduled now: ${scheduledShift === 'early' ? 'Day' : 'Night'}`
                     )
                   : '';
+              const isSelected = employeeBadgeBatchSelectedStaffIds.includes(staff);
+              const selectedRowStyle = isSelected
+                ? themeMode === 'light'
+                  ? { backgroundColor: '#e2e8f0' }
+                  : { backgroundColor: 'rgba(148,163,184,0.2)' }
+                : undefined;
 
               return (
                 <tr
                   key={String(e.id ?? staff)}
-                  onClick={() => toggleEmployeeBadgeBatchSelectedStaffId(staff)}
+                  onClick={() =>
+                    toggleEmployeeBadgeBatchSelectedStaffId({
+                      staff,
+                      name,
+                      agency,
+                      position,
+                      workAccount,
+                      workPassword
+                    })
+                  }
+                  onMouseEnter={() => setHoveredStaffId(staff)}
+                  onMouseLeave={() => {
+                    if (hoveredStaffId === staff) setHoveredStaffId(null);
+                    if (activeStaffId === staff) setActiveStaffId(null);
+                  }}
+                  onMouseDown={() => setActiveStaffId(staff)}
+                  onMouseUp={() => {
+                    if (activeStaffId === staff) setActiveStaffId(null);
+                  }}
+                  style={selectedRowStyle}
                   className={[
                     'cursor-pointer border-b border-white/5 transition-colors last:border-0',
-                    employeeBadgeBatchSelectedStaffIds.includes(staff)
-                      ? themeMode === 'light'
-                        ? 'bg-lime-100/80'
-                        : 'bg-neon/15'
-                      : 'hover:bg-white/5'
+                    isSelected ? '' : 'hover:bg-white/5'
                   ].join(' ')}
                 >
                   <td className="px-4 py-3 font-mono text-slate-200">{displayStaffId(staff)}</td>
@@ -317,3 +348,7 @@ export default function EmployeesTableSection({
     </>
   );
 }
+
+
+
+

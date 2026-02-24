@@ -706,6 +706,9 @@ export default function AdminApp() {
   const [accountCardPrintingStaffId, setAccountCardPrintingStaffId] = useState<string | null>(null);
   const [employeeBadgeBatchPrinting, setEmployeeBadgeBatchPrinting] = useState(false);
   const [employeeBadgeBatchSelectedStaffIds, setEmployeeBadgeBatchSelectedStaffIds] = useState<string[]>([]);
+  const [employeeBadgeBatchSelectedRowsByStaff, setEmployeeBadgeBatchSelectedRowsByStaff] = useState<
+    Record<string, { staff: string; name: string; agency: string; position: string; workAccount?: string; workPassword?: string }>
+  >({});
   const [employeeBadgePreview, setEmployeeBadgePreview] = useState<{
     staff: string;
     name: string;
@@ -3475,7 +3478,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
-    const logoUrls = ['/img/1.png', '/img/2.png', '/img/3.png', '/img/4.png', '/img/5.png', '/img/6.png'];
+    const logoUrls = [1, 2, 3, 4, 5, 6].map((idx) => new URL(`/img/${idx}.png`, window.location.origin).toString());
     const logoByStaff = new Map<string, string>();
     const pickLogo = (staff: string) => {
       const key = String(staff ?? '').trim();
@@ -3714,6 +3717,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       .brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
       .logo { width: 24px; height: 24px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; }
       .logo img { width: 24px; height: 24px; display: block; object-fit: contain; }
+      .logo svg { width: 24px; height: 24px; display: block; }
       .hdr-right { font-size: 10px; font-weight: 800; color: #64748b; white-space: nowrap; }
       .badge-body {
         display: grid;
@@ -3973,12 +3977,40 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     window.setTimeout(() => iframe.remove(), 1500);
   };
 
-  const toggleEmployeeBadgeBatchSelectedStaffId = (staffRaw: string) => {
-    const staff = normalizeStaffId(String(staffRaw ?? '').trim());
+  const toggleEmployeeBadgeBatchSelectedStaffId = (payload: {
+    staff: string;
+    name: string;
+    agency: string;
+    position: string;
+    workAccount?: string;
+    workPassword?: string;
+  }) => {
+    const staff = normalizeStaffId(String(payload.staff ?? '').trim());
     if (!staff) return;
-    setEmployeeBadgeBatchSelectedStaffIds((prev) =>
-      prev.includes(staff) ? prev.filter((id) => id !== staff) : [...prev, staff]
-    );
+    setEmployeeBadgeBatchSelectedStaffIds((prev) => {
+      const selected = prev.includes(staff);
+      const next = selected ? prev.filter((id) => id !== staff) : [...prev, staff];
+      setEmployeeBadgeBatchSelectedRowsByStaff((rowsPrev) => {
+        if (selected) {
+          if (!(staff in rowsPrev)) return rowsPrev;
+          const nextRows = { ...rowsPrev };
+          delete nextRows[staff];
+          return nextRows;
+        }
+        return {
+          ...rowsPrev,
+          [staff]: {
+            staff,
+            name: String(payload.name ?? '').trim() || '-',
+            agency: String(payload.agency ?? '').trim() || '-',
+            position: String(payload.position ?? '').trim() || '-',
+            workAccount: String(payload.workAccount ?? '').trim() || '-',
+            workPassword: String(payload.workPassword ?? '').trim() || '-'
+          }
+        };
+      });
+      return next;
+    });
   };
 
   const printSelectedEmployeeBadgeCards = async () => {
@@ -3999,6 +4031,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
     const selectedRows = selectedIds
       .map((staff) => {
+        const selectedSnapshot = employeeBadgeBatchSelectedRowsByStaff[staff];
+        if (selectedSnapshot) return selectedSnapshot;
         const e = employeeByStaff.get(staff);
         if (!e) return null;
         return {
@@ -4031,6 +4065,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       setEmployeeBadgeBatchPrinting(false);
     }
   };
+
+  useEffect(() => {
+    setEmployeeBadgeBatchSelectedRowsByStaff((prev) => {
+      if (employeeBadgeBatchSelectedStaffIds.length === 0) {
+        return Object.keys(prev).length === 0 ? prev : {};
+      }
+      const keep = new Set(employeeBadgeBatchSelectedStaffIds.map((item) => normalizeStaffId(String(item ?? '').trim())).filter(Boolean));
+      const next: typeof prev = {};
+      for (const [staff, row] of Object.entries(prev)) {
+        if (keep.has(staff)) next[staff] = row;
+      }
+      const sameSize = Object.keys(next).length === Object.keys(prev).length;
+      if (sameSize) return prev;
+      return next;
+    });
+  }, [employeeBadgeBatchSelectedStaffIds]);
 
   const printEmployeeTempBadge = async (payload: { staff: string; name: string; agency: string; position: string; workAccount?: string; workPassword?: string }) => {
     const staff = normalizeStaffId(String(payload.staff ?? '').trim());
