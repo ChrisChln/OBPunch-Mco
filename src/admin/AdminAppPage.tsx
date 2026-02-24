@@ -3305,7 +3305,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         .limit(5000);
       if (res.error) {
         setTempAccounts([]);
-        setStatus({ tone: 'error', message: `Failed to load temp accounts: ${res.error.message}` });
+        setStatus({ tone: 'error', message: t(`读取临时账号失败：${res.error.message}`, `Failed to load temp accounts: ${res.error.message}`) });
         return;
       }
       const rows = ((res.data as any[]) ?? []).map((row) => ({
@@ -7446,7 +7446,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       fileType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
       fileType === 'application/vnd.ms-excel';
     if (!isValid) {
-      setStatus({ tone: 'error', message: 'Unsupported file type. Please upload CSV or Excel.' });
+      setStatus({ tone: 'error', message: t('不支持的文件类型，请上传 CSV 或 Excel。', 'Unsupported file type. Please upload CSV or Excel.') });
       return;
     }
 
@@ -7455,7 +7455,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       try {
         parsedRows = await parseSpreadsheetRows(file);
       } catch (err: any) {
-        setStatus({ tone: 'error', message: `解析文件失败：${String(err?.message ?? err)}` });
+        setStatus({ tone: 'error', message: t(`解析文件失败：${String(err?.message ?? err)}`, `Failed to parse file: ${String(err?.message ?? err)}`) });
         return;
       }
 
@@ -7501,13 +7501,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
       const rows = Array.from(uniqueByStaff.values());
       if (rows.length === 0) {
-        setStatus({ tone: 'error', message: 'No valid rows in file (missing staff_id).' });
+        setStatus({ tone: 'error', message: t('导入文件没有可用行（缺少 staff_id）。', 'No valid rows in file (missing staff_id).') });
         return;
       }
 
       const upsertRes = await supabase.from(TEMP_ACCOUNT_TABLE).upsert(rows as any[], { onConflict: 'staff_id' });
       if (upsertRes.error) {
-        setStatus({ tone: 'error', message: `Import accounts failed: ${upsertRes.error.message}` });
+        setStatus({ tone: 'error', message: t(`导入账号失败：${upsertRes.error.message}`, `Import accounts failed: ${upsertRes.error.message}`) });
         return;
       }
 
@@ -7519,7 +7519,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           total_rows: rows.length
         }
       });
-      setStatus({ tone: 'success', message: `Accounts imported: ${rows.length}.` });
+      setStatus({ tone: 'success', message: t(`账号导入成功：${rows.length} 条。`, `Accounts imported: ${rows.length}.`) });
       await fetchTempAccounts({ lockUi: false });
     });
   };
@@ -7548,7 +7548,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         );
 
       if (rows.length === 0) {
-        setStatus({ tone: 'error', message: 'No account data to export.' });
+        setStatus({ tone: 'error', message: t('暂无可导出的账号数据。', 'No account data to export.') });
         return;
       }
 
