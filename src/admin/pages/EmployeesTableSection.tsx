@@ -1,8 +1,11 @@
+﻿import type { UIEvent } from 'react';
+
 type TranslateFn = (zh: string, en: string) => string;
 
 type EmployeesTableSectionProps = {
   t: TranslateFn;
   isLocked: boolean;
+  themeMode: 'dark' | 'light';
   employeesError: string | null;
   employeesFiltered: any[];
   employeesRendered: any[];
@@ -48,6 +51,7 @@ type EmployeesTableSectionProps = {
 export default function EmployeesTableSection({
   t,
   isLocked,
+  themeMode,
   employeesError,
   employeesFiltered,
   employeesRendered,
@@ -82,7 +86,7 @@ export default function EmployeesTableSection({
         </p>
       )}
       {!employeesError && employeesFiltered.length === 0 && (
-        <p className="mt-3 text-sm text-slate-400">{t('暂无数据，点击“刷新/搜索”。', 'No data. Click “Refresh/Search”.')}</p>
+        <p className="mt-3 text-sm text-slate-400">{t('暂无数据，点击“刷新/搜索”。', 'No data. Click "Refresh/Search".')}</p>
       )}
 
       <div className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30" onScroll={onScroll}>
@@ -106,7 +110,7 @@ export default function EmployeesTableSection({
                   title={t('按天数从高到低排序', 'Sort by days high to low')}
                 >
                   {t('最后打卡', 'Last punch')}
-                  {employeeSortByLastPunchDesc ? '↓' : ''}
+                  {employeeSortByLastPunchDesc ? ' ↓' : ''}
                 </button>
               </th>
               <th className="px-4 py-3 text-right">{t('操作', 'Actions')}</th>
@@ -216,7 +220,12 @@ export default function EmployeesTableSection({
                       type="button"
                       disabled={isLocked}
                       onClick={() => void openEmployeeAuditLog(staff, name)}
-                      className="mr-2 rounded-xl bg-cyan-500/20 px-4 py-1.5 text-xs font-semibold text-cyan-200 transition hover:-translate-y-0.5 hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                      className={[
+                        'mr-2 rounded-xl px-4 py-1.5 text-xs font-semibold transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60',
+                        themeMode === 'light'
+                          ? 'border border-cyan-300 bg-cyan-50 text-cyan-700 hover:bg-cyan-100'
+                          : 'bg-cyan-500/20 text-cyan-200 hover:bg-cyan-500/30'
+                      ].join(' ')}
                     >
                       {t('日志', 'Log')}
                     </button>
@@ -232,7 +241,12 @@ export default function EmployeesTableSection({
                       type="button"
                       disabled={isLocked}
                       onClick={() => openEmployeeEdit({ staff, name, agency, position, shift: (shift as '' | 'early' | 'late'), label, workAccount, workPassword })}
-                      className="mr-2 rounded-xl bg-white/10 px-4 py-1.5 text-xs font-semibold text-slate-200 transition hover:-translate-y-0.5 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      className={[
+                        'mr-2 rounded-xl px-4 py-1.5 text-xs font-semibold transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60',
+                        themeMode === 'light'
+                          ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                          : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                      ].join(' ')}
                     >
                       {t('编辑', 'Edit')}
                     </button>
@@ -262,4 +276,3 @@ export default function EmployeesTableSection({
     </>
   );
 }
-import type { UIEvent } from 'react';

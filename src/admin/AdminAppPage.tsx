@@ -18,6 +18,7 @@ import ScheduleToolbar from './components/ScheduleToolbar';
 import DailyListNewHireModal from './components/DailyListNewHireModal';
 import DevicesPage from './pages/DevicesPage';
 import EmployeeUploadPage from './pages/EmployeeUploadPage';
+import AccountManagementPage from './pages/AccountManagementPage';
 import EmployeesToolbar from './pages/EmployeesToolbar';
 import EmployeeAddModal from './pages/EmployeeAddModal';
 import EmployeesTableSection from './pages/EmployeesTableSection';
@@ -628,6 +629,7 @@ export default function AdminApp() {
     Record<string, { shift: '' | 'early' | 'late'; earlyHours: number; lateHours: number }>
   >({});
   const [employeeSearch, setEmployeeSearch] = useState('');
+  const [accountSearch, setAccountSearch] = useState('');
   const [employeeAgency, setEmployeeAgency] = useState('');
   const [employeePosition, setEmployeePosition] = useState('');
   const [employeeShiftFilter, setEmployeeShiftFilter] = useState<'' | 'early' | 'late'>('');
@@ -661,6 +663,7 @@ export default function AdminApp() {
   const [employeeLastPunchAtByStaffId, setEmployeeLastPunchAtByStaffId] = useState<Record<string, string | null>>({});
   const [employeeSortByLastPunchDesc, setEmployeeSortByLastPunchDesc] = useState(false);
   const [employeeBadgePrintingStaffId, setEmployeeBadgePrintingStaffId] = useState<string | null>(null);
+  const [accountCardPrintingStaffId, setAccountCardPrintingStaffId] = useState<string | null>(null);
   const [employeeBadgeBatchPrinting, setEmployeeBadgeBatchPrinting] = useState(false);
   const [employeeBadgeBatchModalOpen, setEmployeeBadgeBatchModalOpen] = useState(false);
   const [employeeBadgeBatchSelectedStaffIds, setEmployeeBadgeBatchSelectedStaffIds] = useState<string[]>([]);
@@ -687,6 +690,7 @@ export default function AdminApp() {
   const [timecardMissingEmployeeOnly, setTimecardMissingEmployeeOnly] = useState(false);
   const [timecardRenderCount, setTimecardRenderCount] = useState(120);
   const [employeeRenderCount, setEmployeeRenderCount] = useState(120);
+  const [accountRenderCount, setAccountRenderCount] = useState(120);
   const [timecardWeekOffset, setTimecardWeekOffset] = useState(0);
   const [timecardWeekInput, setTimecardWeekInput] = useState(() =>
     toDateOnly(startOfWeekMonday(new Date()))
@@ -777,6 +781,7 @@ export default function AdminApp() {
   );
   const deferredScheduleSearch = useDeferredValue(scheduleSearch);
   const deferredEmployeeSearch = useDeferredValue(employeeSearch);
+  const deferredAccountSearch = useDeferredValue(accountSearch);
   const deferredSchedulePosition = useDeferredValue(schedulePosition);
   const deferredScheduleShift = useDeferredValue(scheduleShift);
   const deferredScheduleLabels = useDeferredValue(scheduleLabels);
@@ -3911,6 +3916,194 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
   };
 
+  const printAccountCard = async (payload: { staff: string; name: string; workAccount: string; workPassword: string }) => {
+    const staff = normalizeStaffId(String(payload.staff ?? '').trim());
+    const name = String(payload.name ?? '').trim() || '-';
+    const workAccount = String(payload.workAccount ?? '').trim();
+    const workPassword = String(payload.workPassword ?? '').trim();
+    if (!staff || !workAccount || !workPassword) return;
+    setAccountCardPrintingStaffId(staff);
+    try {
+      const safe = (v: string) =>
+        String(v ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      const [qrAcc, qrPwd] = await Promise.all([
+        QRCode.toDataURL(workAccount, {
+          errorCorrectionLevel: 'M',
+          margin: 1,
+          width: 560,
+          color: { dark: '#0b1220', light: '#ffffff' }
+        }),
+        QRCode.toDataURL(workPassword, {
+          errorCorrectionLevel: 'M',
+          margin: 1,
+          width: 560,
+          color: { dark: '#0b1220', light: '#ffffff' }
+        })
+      ]);
+      const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      @page { size: 4in 2in; margin: 0; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 4in;
+        height: 2in;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      body {
+        background: #fff;
+        font-family: Arial, "Microsoft YaHei", sans-serif;
+      }
+      .sheet {
+        width: 4in;
+        height: 2in;
+        box-sizing: border-box;
+        padding: 0.12in;
+        border: 1px solid #cbd5e1;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        gap: 0.08in;
+        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+        color: #0f172a;
+      }
+      .name {
+        font-size: 16pt;
+        line-height: 1.1;
+        font-weight: 900;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .pair {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.08in;
+      }
+      .box {
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        padding: 0.05in;
+        display: grid;
+        grid-template-columns: 0.92in 1fr;
+        gap: 0.05in;
+        align-items: center;
+        min-width: 0;
+      }
+      .qrsq {
+        width: 0.92in;
+        height: 0.92in;
+        border: 1px solid #cbd5e1;
+        background: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .qrsq img {
+        width: 0.82in;
+        height: 0.82in;
+        display: block;
+        image-rendering: pixelated;
+      }
+      .meta { min-width: 0; }
+      .k {
+        font-size: 8pt;
+        letter-spacing: 0.08em;
+        font-weight: 800;
+        color: #475569;
+        text-transform: uppercase;
+      }
+      .v {
+        margin-top: 0.04in;
+        font-size: 8.5pt;
+        font-weight: 700;
+        color: #0f172a;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sheet">
+      <div class="name">${safe(name)}</div>
+      <div class="pair">
+        <div class="box">
+          <div class="qrsq"><img src="${safe(qrAcc)}" alt="QR account ${safe(staff)}" /></div>
+          <div class="meta">
+            <div class="k">Account</div>
+            <div class="v">${safe(workAccount)}</div>
+          </div>
+        </div>
+        <div class="box">
+          <div class="qrsq"><img src="${safe(qrPwd)}" alt="QR password ${safe(staff)}" /></div>
+          <div class="meta">
+            <div class="k">Password</div>
+            <div class="v">${safe(workPassword)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>`;
+
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      document.body.appendChild(iframe);
+      const doc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (!doc) {
+        iframe.remove();
+        setStatus({ tone: 'error', message: t('打印失败：无法创建打印页。', 'Print failed: cannot create print page.') });
+        return;
+      }
+      doc.open();
+      doc.write(html);
+      doc.close();
+      const imgs = Array.from(doc.images ?? []);
+      await Promise.all(
+        imgs.map(
+          (img) =>
+            new Promise<void>((resolve) => {
+              if (img.complete) {
+                resolve();
+                return;
+              }
+              const done = () => {
+                img.removeEventListener('load', done);
+                img.removeEventListener('error', done);
+                resolve();
+              };
+              img.addEventListener('load', done);
+              img.addEventListener('error', done);
+            })
+        )
+      );
+      await new Promise((r) => setTimeout(r, 80));
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      window.setTimeout(() => iframe.remove(), 1500);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err ?? 'unknown error');
+      setStatus({ tone: 'error', message: t(`打印失败：${message}`, `Print failed: ${message}`) });
+    } finally {
+      setAccountCardPrintingStaffId((current) => (current === staff ? null : current));
+    }
+  };
+
   const openEmployeeAuditLog = async (staff: string, name?: string) => {
     const staffKey = normalizeStaffId(String(staff ?? '').trim());
     if (!staffKey) return;
@@ -6378,6 +6571,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     if (page === 'employees') {
       void fetchEmployees({ reset: true, lockUi: false });
     }
+    if (page === 'accounts') {
+      void fetchEmployees({ reset: true, lockUi: false });
+    }
     if (page === 'timecard') {
       void fetchTimecard({ reset: true, lockUi: false });
     }
@@ -7122,6 +7318,28 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     () => employeesFiltered.slice(0, Math.max(0, employeeRenderCount)),
     [employeesFiltered, employeeRenderCount]
   );
+  const accountRowsFiltered = useMemo(() => {
+    const searchNeedle = deferredAccountSearch.trim().toLowerCase();
+    const rows = employees
+      .map((e) => {
+        const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
+        const name = String(e.name ?? '').trim();
+        const agency = String(e.agency ?? e.Agency ?? '').trim();
+        const position = String(e.position ?? e.Position ?? '').trim();
+        const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
+        const workPassword = String(e.work_password ?? e.WorkPassword ?? '').trim();
+        return { staff, name, agency, position, workAccount, workPassword };
+      })
+      .filter((row) => Boolean(row.staff && (row.workAccount || row.workPassword)));
+    const filtered = searchNeedle
+      ? rows.filter((row) => [row.staff, row.name, row.workAccount, row.workPassword].join(' ').toLowerCase().includes(searchNeedle))
+      : rows;
+    return filtered.sort((a, b) => a.staff.localeCompare(b.staff, 'en-US'));
+  }, [employees, deferredAccountSearch]);
+  const accountRowsRendered = useMemo(
+    () => accountRowsFiltered.slice(0, Math.max(0, accountRenderCount)),
+    [accountRowsFiltered, accountRenderCount]
+  );
 
   const exportEmployees = async () => {
     await runLocked('employees_export', async () => {
@@ -7809,6 +8027,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const total = employeesFiltered.length;
     setEmployeeRenderCount(Math.min(120, total));
   }, [page, employeesFiltered]);
+
+  useEffect(() => {
+    if (page !== 'accounts') return;
+    const total = accountRowsFiltered.length;
+    setAccountRenderCount(Math.min(120, total));
+  }, [page, accountRowsFiltered.length]);
 
   useEffect(() => {
     if (page !== 'timecard') return;
@@ -9705,6 +9929,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 <EmployeesTableSection
                   t={t}
                   isLocked={isLocked}
+                  themeMode={themeMode}
                   employeesError={employeesError}
                   employeesFiltered={employeesFiltered}
                   employeesRendered={employeesRendered}
@@ -9805,6 +10030,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 <EmployeeBadgePreviewModal preview={employeeBadgePreview} t={t} close={() => setEmployeeBadgePreview(null)} />
 
               </section>
+            )}
+
+            {page === 'accounts' && (
+              <AccountManagementPage
+                t={t}
+                isLocked={isLocked}
+                accountSearch={accountSearch}
+                setAccountSearch={setAccountSearch}
+                accountRowsFiltered={accountRowsFiltered}
+                accountRowsRendered={accountRowsRendered}
+                accountRenderCount={accountRenderCount}
+                setAccountRenderCount={setAccountRenderCount}
+                onRefreshEmployees={() => void fetchEmployees({ reset: true })}
+                accountCardPrintingStaffId={accountCardPrintingStaffId}
+                onPrintAccountCard={printAccountCard}
+              />
             )}
 
             {page === 'timecard' && (
