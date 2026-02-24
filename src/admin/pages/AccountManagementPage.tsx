@@ -16,9 +16,11 @@ type AccountManagementPageProps = {
   isLocked: boolean;
   accountSearch: string;
   setAccountSearch: (value: string) => void;
+  accountPositionFilter: string;
+  setAccountPositionFilter: (value: string) => void;
+  accountPositionOptions: string[];
   accountRowsFiltered: AccountRow[];
   accountRowsRendered: AccountRow[];
-  accountRenderCount: number;
   setAccountRenderCount: (value: number | ((prev: number) => number)) => void;
   onRefreshEmployees: () => void | Promise<void>;
   onImportAccounts: (file: File | null) => void | Promise<void>;
@@ -32,9 +34,11 @@ export default function AccountManagementPage({
   isLocked,
   accountSearch,
   setAccountSearch,
+  accountPositionFilter,
+  setAccountPositionFilter,
+  accountPositionOptions,
   accountRowsFiltered,
   accountRowsRendered,
-  accountRenderCount,
   setAccountRenderCount,
   onRefreshEmployees,
   onImportAccounts,
@@ -100,6 +104,22 @@ export default function AccountManagementPage({
             className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
           />
         </div>
+        <div className="md:col-span-2">
+          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('岗位筛选', 'Position filter')}</label>
+          <select
+            value={accountPositionFilter}
+            onChange={(e) => setAccountPositionFilter(e.target.value)}
+            disabled={isLocked}
+            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <option value="">{t('全部岗位', 'All positions')}</option>
+            {accountPositionOptions.map((position) => (
+              <option key={position} value={position}>
+                {position}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {!accountRowsFiltered.length ? (
@@ -112,7 +132,6 @@ export default function AccountManagementPage({
             <tr>
               <th className="px-4 py-3">USID</th>
               <th className="px-4 py-3">{t('姓名', 'Name')}</th>
-              <th className="px-4 py-3">Agency</th>
               <th className="px-4 py-3">{t('岗位', 'Position')}</th>
               <th className="px-4 py-3">{t('工作账号', 'Work account')}</th>
               <th className="px-4 py-3">{t('工作密码', 'Work password')}</th>
@@ -124,7 +143,6 @@ export default function AccountManagementPage({
               <tr key={`${row.staff}__${row.workAccount}__${row.workPassword}`} className="border-b border-white/5 transition-colors hover:bg-white/5 last:border-0">
                 <td className="px-4 py-3 font-mono text-slate-200">{row.staff}</td>
                 <td className="px-4 py-3 text-slate-200">{row.name || '-'}</td>
-                <td className="px-4 py-3 text-slate-200">{row.agency || '-'}</td>
                 <td className="px-4 py-3 text-slate-200">{row.position || '-'}</td>
                 <td className="px-4 py-3 text-slate-200">{row.workAccount || '-'}</td>
                 <td className="px-4 py-3 text-slate-200">{row.workPassword || '-'}</td>

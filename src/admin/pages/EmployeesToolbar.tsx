@@ -1,4 +1,4 @@
-import type { RefObject } from 'react';
+﻿import type { RefObject } from 'react';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -6,10 +6,9 @@ type EmployeesToolbarProps = {
   t: TranslateFn;
   isLocked: boolean;
   employeeBadgeBatchPrinting: boolean;
-  employeesFiltered: any[];
-  normalizeStaffId: (value: string) => string;
-  setEmployeeBadgeBatchSelectedStaffIds: (value: string[]) => void;
-  setEmployeeBadgeBatchModalOpen: (value: boolean) => void;
+  employeeBadgeBatchSelectedStaffIds: string[];
+  onPrintSelectedBadgeBatch: () => void | Promise<void>;
+  setEmployeeBadgeBatchSelectedStaffIds: (value: string[] | ((prev: string[]) => string[])) => void;
   fileInputRef: RefObject<HTMLInputElement>;
   onFileSelected: (file: File | null) => void | Promise<void>;
   uploadEmployees: () => void | Promise<void>;
@@ -38,10 +37,9 @@ export default function EmployeesToolbar({
   t,
   isLocked,
   employeeBadgeBatchPrinting,
-  employeesFiltered,
-  normalizeStaffId,
+  employeeBadgeBatchSelectedStaffIds,
+  onPrintSelectedBadgeBatch,
   setEmployeeBadgeBatchSelectedStaffIds,
-  setEmployeeBadgeBatchModalOpen,
   fileInputRef,
   onFileSelected,
   uploadEmployees,
@@ -72,21 +70,21 @@ export default function EmployeesToolbar({
         <div className="flex shrink-0 items-center gap-3">
           <button
             type="button"
-            disabled={isLocked || employeeBadgeBatchPrinting || employeesFiltered.length === 0}
-            onClick={() => {
-              const allStaff = Array.from(
-                new Set(
-                  employeesFiltered
-                    .map((e) => normalizeStaffId(String(e.staff_id ?? '').trim()))
-                    .filter(Boolean)
-                )
-              );
-              setEmployeeBadgeBatchSelectedStaffIds(allStaff);
-              setEmployeeBadgeBatchModalOpen(true);
-            }}
+            disabled={isLocked || employeeBadgeBatchPrinting || employeeBadgeBatchSelectedStaffIds.length === 0}
+            onClick={() => void onPrintSelectedBadgeBatch()}
             className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {employeeBadgeBatchPrinting ? t('生成中...', 'Generating...') : t('批量生成工牌', 'Batch badges')}
+            {employeeBadgeBatchPrinting
+              ? t('生成中...', 'Generating...')
+              : t(`批量生成工牌 (${employeeBadgeBatchSelectedStaffIds.length})`, `Print selected badges (${employeeBadgeBatchSelectedStaffIds.length})`)}
+          </button>
+          <button
+            type="button"
+            disabled={isLocked || employeeBadgeBatchPrinting || employeeBadgeBatchSelectedStaffIds.length === 0}
+            onClick={() => setEmployeeBadgeBatchSelectedStaffIds([])}
+            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {t('清空已选', 'Clear selected')}
           </button>
           <input
             ref={fileInputRef}
@@ -269,7 +267,7 @@ export default function EmployeesToolbar({
                               cycleScheduleLabelTone(item);
                             }}
                             className={['rounded-md border px-1.5 py-0.5 text-[10px] font-semibold', getScheduleLabelToneClass(item)].join(' ')}
-                            title={t('切换标签颜色', 'Cycle label color')}
+                            title={t('点击切换标签颜色', 'Cycle label color')}
                           >
                             {t('颜色', 'Color')}
                           </button>

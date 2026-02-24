@@ -10,7 +10,9 @@ type EmployeesTableSectionProps = {
   employeesFiltered: any[];
   employeesRendered: any[];
   employeeSortByLastPunchDesc: boolean;
+  employeeSortByHireDateDesc: boolean;
   onToggleSort: () => void;
+  onToggleHireDateSort: () => void;
   onScroll: (e: UIEvent<HTMLDivElement>) => void;
   displayStaffId: (value: string) => string;
   getSchedulePositionBadgeClass: (position: string) => string;
@@ -26,6 +28,8 @@ type EmployeesTableSectionProps = {
   shiftAnalysisDays: number;
   toDateOnly: (date: Date) => string;
   employeeBadgePrintingStaffId: string | null;
+  employeeBadgeBatchSelectedStaffIds: string[];
+  toggleEmployeeBadgeBatchSelectedStaffId: (staff: string) => void;
   openEmployeeAuditLog: (staff: string, name?: string) => void | Promise<void>;
   printEmployeeTempBadge: (payload: {
     staff: string;
@@ -56,7 +60,9 @@ export default function EmployeesTableSection({
   employeesFiltered,
   employeesRendered,
   employeeSortByLastPunchDesc,
+  employeeSortByHireDateDesc,
   onToggleSort,
+  onToggleHireDateSort,
   onScroll,
   displayStaffId,
   getSchedulePositionBadgeClass,
@@ -72,6 +78,8 @@ export default function EmployeesTableSection({
   shiftAnalysisDays,
   toDateOnly,
   employeeBadgePrintingStaffId,
+  employeeBadgeBatchSelectedStaffIds,
+  toggleEmployeeBadgeBatchSelectedStaffId,
   openEmployeeAuditLog,
   printEmployeeTempBadge,
   openEmployeeEdit,
@@ -100,7 +108,17 @@ export default function EmployeesTableSection({
               <th className="px-4 py-3">{t('标签', 'Label')}</th>
               <th className="px-4 py-3">{t('工作账号', 'Work account')}</th>
               <th className="px-4 py-3">{t('工作密码', 'Work password')}</th>
-              <th className="px-4 py-3">{t('入职日期', 'Hire date')}</th>
+              <th className="px-4 py-3">
+                <button
+                  type="button"
+                  onClick={onToggleHireDateSort}
+                  className="inline-flex items-center gap-1 text-xs uppercase tracking-[0.2em] text-slate-400 transition hover:text-slate-200"
+                  title={t('按入职日期从新到旧排序', 'Sort by hire date newest to oldest')}
+                >
+                  {t('入职日期', 'Hire date')}
+                  {employeeSortByHireDateDesc ? ' ↓' : ''}
+                </button>
+              </th>
               <th className="px-4 py-3">{t('班次', 'Shift')}</th>
               <th className="px-4 py-3">
                 <button
@@ -172,7 +190,18 @@ export default function EmployeesTableSection({
                   : '';
 
               return (
-                <tr key={String(e.id ?? staff)} className="border-b border-white/5 transition-colors hover:bg-white/5 last:border-0">
+                <tr
+                  key={String(e.id ?? staff)}
+                  onClick={() => toggleEmployeeBadgeBatchSelectedStaffId(staff)}
+                  className={[
+                    'cursor-pointer border-b border-white/5 transition-colors last:border-0',
+                    employeeBadgeBatchSelectedStaffIds.includes(staff)
+                      ? themeMode === 'light'
+                        ? 'bg-lime-100/80'
+                        : 'bg-neon/15'
+                      : 'hover:bg-white/5'
+                  ].join(' ')}
+                >
                   <td className="px-4 py-3 font-mono text-slate-200">{displayStaffId(staff)}</td>
                   <td className="px-4 py-3 text-slate-200">{name}</td>
                   <td className="px-4 py-3 text-slate-200">{agency}</td>
@@ -219,7 +248,10 @@ export default function EmployeesTableSection({
                     <button
                       type="button"
                       disabled={isLocked}
-                      onClick={() => void openEmployeeAuditLog(staff, name)}
+                      onClick={(evt) => {
+                        evt.stopPropagation();
+                        void openEmployeeAuditLog(staff, name);
+                      }}
                       className={[
                         'mr-2 rounded-xl px-4 py-1.5 text-xs font-semibold transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60',
                         themeMode === 'light'
@@ -232,7 +264,10 @@ export default function EmployeesTableSection({
                     <button
                       type="button"
                       disabled={isLocked || employeeBadgePrintingStaffId === staff}
-                      onClick={() => void printEmployeeTempBadge({ staff, name, agency, position, workAccount, workPassword })}
+                      onClick={(evt) => {
+                        evt.stopPropagation();
+                        void printEmployeeTempBadge({ staff, name, agency, position, workAccount, workPassword });
+                      }}
                       className="mr-2 rounded-xl bg-neon px-4 py-1.5 text-xs font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {employeeBadgePrintingStaffId === staff ? t('生成中...', 'Generating...') : t('工牌', 'Badge')}
@@ -240,7 +275,10 @@ export default function EmployeesTableSection({
                     <button
                       type="button"
                       disabled={isLocked}
-                      onClick={() => openEmployeeEdit({ staff, name, agency, position, shift: (shift as '' | 'early' | 'late'), label, workAccount, workPassword })}
+                      onClick={(evt) => {
+                        evt.stopPropagation();
+                        openEmployeeEdit({ staff, name, agency, position, shift: (shift as '' | 'early' | 'late'), label, workAccount, workPassword });
+                      }}
                       className={[
                         'mr-2 rounded-xl px-4 py-1.5 text-xs font-semibold transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60',
                         themeMode === 'light'
@@ -253,7 +291,10 @@ export default function EmployeesTableSection({
                     <button
                       type="button"
                       disabled={isLocked}
-                      onClick={() => void deleteEmployeeRow(staff)}
+                      onClick={(evt) => {
+                        evt.stopPropagation();
+                        void deleteEmployeeRow(staff);
+                      }}
                       className="rounded-xl bg-ember px-4 py-1.5 text-xs font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {t('删除', 'Delete')}

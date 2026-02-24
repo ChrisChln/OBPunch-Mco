@@ -23,7 +23,6 @@ import EmployeesToolbar from './pages/EmployeesToolbar';
 import EmployeeAddModal from './pages/EmployeeAddModal';
 import EmployeesTableSection from './pages/EmployeesTableSection';
 import EmployeeAuditModal from './pages/EmployeeAuditModal';
-import EmployeeBadgeBatchModal from './pages/EmployeeBadgeBatchModal';
 import EmployeeEditModal from './pages/EmployeeEditModal';
 import EmployeeBadgePreviewModal from './pages/EmployeeBadgePreviewModal';
 import TimecardControls from './pages/TimecardControls';
@@ -306,7 +305,7 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
 };
 const isNewHirePlaceholderStaffId = (value: string) => /^NEWREQ-\d{8}(?:-[A-Z]+)?-\d{3,}$/i.test(String(value ?? '').trim());
 const isNewHirePlaceholderName = (value: string) => /^\d{2}\/\d{2}NEW\s+[A-Z]+(\d+)$/i.test(String(value ?? '').trim());
-const displayStaffId = (value: string) => (isNewHirePlaceholderStaffId(value) ? '' : value);
+const displayStaffId = (value: string) => String(value ?? '').trim();
 const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperCase();
 const normalizeDeviceType = (value: string): DeviceType => {
   const raw = String(value ?? '').trim().toUpperCase();
@@ -669,6 +668,7 @@ export default function AdminApp() {
   >({});
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [accountSearch, setAccountSearch] = useState('');
+  const [accountPositionFilter, setAccountPositionFilter] = useState('');
   const [employeeAgency, setEmployeeAgency] = useState('');
   const [employeePosition, setEmployeePosition] = useState('');
   const [employeeShiftFilter, setEmployeeShiftFilter] = useState<'' | 'early' | 'late'>('');
@@ -701,10 +701,10 @@ export default function AdminApp() {
   const [employeeAuditError, setEmployeeAuditError] = useState<string | null>(null);
   const [employeeLastPunchAtByStaffId, setEmployeeLastPunchAtByStaffId] = useState<Record<string, string | null>>({});
   const [employeeSortByLastPunchDesc, setEmployeeSortByLastPunchDesc] = useState(false);
+  const [employeeSortByHireDateDesc, setEmployeeSortByHireDateDesc] = useState(false);
   const [employeeBadgePrintingStaffId, setEmployeeBadgePrintingStaffId] = useState<string | null>(null);
   const [accountCardPrintingStaffId, setAccountCardPrintingStaffId] = useState<string | null>(null);
   const [employeeBadgeBatchPrinting, setEmployeeBadgeBatchPrinting] = useState(false);
-  const [employeeBadgeBatchModalOpen, setEmployeeBadgeBatchModalOpen] = useState(false);
   const [employeeBadgeBatchSelectedStaffIds, setEmployeeBadgeBatchSelectedStaffIds] = useState<string[]>([]);
   const [employeeBadgePreview, setEmployeeBadgePreview] = useState<{
     staff: string;
@@ -821,6 +821,7 @@ export default function AdminApp() {
   const deferredScheduleSearch = useDeferredValue(scheduleSearch);
   const deferredEmployeeSearch = useDeferredValue(employeeSearch);
   const deferredAccountSearch = useDeferredValue(accountSearch);
+  const deferredAccountPositionFilter = useDeferredValue(accountPositionFilter);
   const deferredSchedulePosition = useDeferredValue(schedulePosition);
   const deferredScheduleShift = useDeferredValue(scheduleShift);
   const deferredScheduleLabels = useDeferredValue(scheduleLabels);
@@ -3970,6 +3971,47 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     iframe.contentWindow?.focus();
     iframe.contentWindow?.print();
     window.setTimeout(() => iframe.remove(), 1500);
+  };
+
+  const toggleEmployeeBadgeBatchSelectedStaffId = (staffRaw: string) => {
+    const staff = normalizeStaffId(String(staffRaw ?? '').trim());
+    if (!staff) return;
+    setEmployeeBadgeBatchSelectedStaffIds((prev) =>
+      prev.includes(staff) ? prev.filter((id) => id !== staff) : [...prev, staff]
+    );
+  };
+
+  const printSelectedEmployeeBadgeCards = async () => {
+    if (employeeBadgeBatchPrinting) return;
+    const selectedSet = new Set(employeeBadgeBatchSelectedStaffIds.map((item) => normalizeStaffId(String(item ?? '').trim())).filter(Boolean));
+    if (selectedSet.size === 0) {
+      setStatus({ tone: 'error', message: t('请先在员工表中选择要打印的行。', 'Please select rows in Employees before printing.') });
+      return;
+    }
+    const selectedRows = employeesFiltered
+      .map((e) => {
+        const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
+        if (!staff || !selectedSet.has(staff)) return null;
+        return {
+          staff,
+          name: String(e.name ?? '').trim() || '-',
+          agency: String(e.agency ?? e.Agency ?? '').trim() || '-',
+          position: String(e.position ?? e.Position ?? '').trim() || '-',
+          workAccount: String(e.work_account ?? e.WorkAccount ?? '').trim() || '-',
+          workPassword: String(e.work_password ?? e.WorkPassword ?? '').trim() || '-'
+        };
+      })
+      .filter(Boolean) as Array<{ staff: string; name: string; agency: string; position: string; workAccount?: string; workPassword?: string }>;
+    if (selectedRows.length === 0) {
+      setStatus({ tone: 'error', message: t('当前筛选下没有可打印的选中员工。', 'No selected employees under current filters.') });
+      return;
+    }
+    setEmployeeBadgeBatchPrinting(true);
+    try {
+      await printEmployeeBadgeCards(selectedRows);
+    } finally {
+      setEmployeeBadgeBatchPrinting(false);
+    }
   };
 
   const printEmployeeTempBadge = async (payload: { staff: string; name: string; agency: string; position: string; workAccount?: string; workPassword?: string }) => {
@@ -7329,6 +7371,18 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (!searchNeedle) return true;
       return [staff, name, label].join(' ').toLowerCase().includes(searchNeedle);
     });
+    if (employeeSortByHireDateDesc) {
+      return [...rows].sort((a, b) => {
+        const atA = Date.parse(String(a.created_at ?? ''));
+        const atB = Date.parse(String(b.created_at ?? ''));
+        const valA = Number.isFinite(atA) ? atA : -1;
+        const valB = Number.isFinite(atB) ? atB : -1;
+        if (valA !== valB) return valB - valA;
+        const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
+        const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
+        return staffA.localeCompare(staffB, 'en-US');
+      });
+    }
     if (!employeeSortByLastPunchDesc) return rows;
 
     const dayMs = 24 * 60 * 60 * 1000;
@@ -7358,6 +7412,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     employeePosition,
     employeeShiftFilter,
     employeeLabels,
+    employeeSortByHireDateDesc,
     employeeSortByLastPunchDesc,
     employeeLastPunchAtByStaffId,
     serverTime,
@@ -7367,8 +7422,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     () => employeesFiltered.slice(0, Math.max(0, employeeRenderCount)),
     [employeesFiltered, employeeRenderCount]
   );
-  const accountRowsFiltered = useMemo(() => {
-    const searchNeedle = deferredAccountSearch.trim().toLowerCase();
+  const accountRowsAll = useMemo(() => {
     const employeeRows = employees
       .map((e) => {
         const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
@@ -7394,12 +7448,35 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const key = `${row.staff}__${row.workAccount}__${row.workPassword}`;
       if (!dedup.has(key)) dedup.set(key, row);
     }
-    const rows = Array.from(dedup.values());
+    return Array.from(dedup.values()).sort((a, b) => a.staff.localeCompare(b.staff, 'en-US'));
+  }, [employees, tempAccounts]);
+
+  const accountPositionOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of accountRowsAll) {
+      const positionRaw = String(row.position ?? '').trim();
+      const position = normalizePositionKey(positionRaw) ?? positionRaw;
+      if (position) set.add(position);
+    }
+    return Array.from(set.values()).sort((a, b) => a.localeCompare(b, 'en-US'));
+  }, [accountRowsAll]);
+
+  const accountRowsFiltered = useMemo(() => {
+    const searchNeedle = deferredAccountSearch.trim().toLowerCase();
+    const normalizedFilterPosition = normalizePositionKey(deferredAccountPositionFilter.trim());
+    const positionNeedle = (normalizedFilterPosition ?? deferredAccountPositionFilter.trim()).toLowerCase();
+    const rows = positionNeedle
+      ? accountRowsAll.filter((row) => {
+          const positionRaw = String(row.position ?? '').trim();
+          const position = normalizePositionKey(positionRaw) ?? positionRaw;
+          return position.toLowerCase() === positionNeedle;
+        })
+      : accountRowsAll;
     const filtered = searchNeedle
       ? rows.filter((row) => [row.staff, row.name, row.workAccount, row.workPassword].join(' ').toLowerCase().includes(searchNeedle))
       : rows;
-    return filtered.sort((a, b) => a.staff.localeCompare(b.staff, 'en-US'));
-  }, [employees, tempAccounts, deferredAccountSearch]);
+    return filtered;
+  }, [accountRowsAll, deferredAccountSearch, deferredAccountPositionFilter]);
   const accountRowsRendered = useMemo(
     () => accountRowsFiltered.slice(0, Math.max(0, accountRenderCount)),
     [accountRowsFiltered, accountRenderCount]
@@ -10147,10 +10224,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   t={t}
                   isLocked={isLocked}
                   employeeBadgeBatchPrinting={employeeBadgeBatchPrinting}
-                  employeesFiltered={employeesFiltered}
-                  normalizeStaffId={normalizeStaffId}
+                  employeeBadgeBatchSelectedStaffIds={employeeBadgeBatchSelectedStaffIds}
+                  onPrintSelectedBadgeBatch={printSelectedEmployeeBadgeCards}
                   setEmployeeBadgeBatchSelectedStaffIds={setEmployeeBadgeBatchSelectedStaffIds}
-                  setEmployeeBadgeBatchModalOpen={setEmployeeBadgeBatchModalOpen}
                   fileInputRef={fileInputRef}
                   onFileSelected={onFileSelected}
                   uploadEmployees={uploadEmployees}
@@ -10209,7 +10285,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   employeesFiltered={employeesFiltered}
                   employeesRendered={employeesRendered}
                   employeeSortByLastPunchDesc={employeeSortByLastPunchDesc}
-                  onToggleSort={() => setEmployeeSortByLastPunchDesc((prev) => !prev)}
+                  employeeSortByHireDateDesc={employeeSortByHireDateDesc}
+                  onToggleSort={() => {
+                    setEmployeeSortByLastPunchDesc((prev) => !prev);
+                    setEmployeeSortByHireDateDesc(false);
+                  }}
+                  onToggleHireDateSort={() => {
+                    setEmployeeSortByHireDateDesc((prev) => !prev);
+                    setEmployeeSortByLastPunchDesc(false);
+                  }}
                   onScroll={(e) => {
                     const el = e.currentTarget;
                     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 160;
@@ -10236,6 +10320,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   shiftAnalysisDays={SHIFT_ANALYSIS_DAYS}
                   toDateOnly={toDateOnly}
                   employeeBadgePrintingStaffId={employeeBadgePrintingStaffId}
+                  employeeBadgeBatchSelectedStaffIds={employeeBadgeBatchSelectedStaffIds}
+                  toggleEmployeeBadgeBatchSelectedStaffId={toggleEmployeeBadgeBatchSelectedStaffId}
                   openEmployeeAuditLog={openEmployeeAuditLog}
                   printEmployeeTempBadge={printEmployeeTempBadge}
                   openEmployeeEdit={openEmployeeEdit}
@@ -10254,20 +10340,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   formatCellAuditTime={formatCellAuditTime}
                   renderAuditSummary={renderAuditSummary}
                   formatAuditDetail={formatAuditDetail}
-                  displayStaffId={displayStaffId}
-                />
-
-                <EmployeeBadgeBatchModal
-                  open={employeeBadgeBatchModalOpen}
-                  t={t}
-                  employeesFiltered={employeesFiltered}
-                  normalizeStaffId={normalizeStaffId}
-                  employeeBadgeBatchSelectedStaffIds={employeeBadgeBatchSelectedStaffIds}
-                  setEmployeeBadgeBatchSelectedStaffIds={setEmployeeBadgeBatchSelectedStaffIds}
-                  setEmployeeBadgeBatchModalOpen={setEmployeeBadgeBatchModalOpen}
-                  employeeBadgeBatchPrinting={employeeBadgeBatchPrinting}
-                  setEmployeeBadgeBatchPrinting={setEmployeeBadgeBatchPrinting}
-                  printEmployeeBadgeCards={printEmployeeBadgeCards}
                   displayStaffId={displayStaffId}
                 />
 
@@ -10313,9 +10385,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                 isLocked={isLocked}
                 accountSearch={accountSearch}
                 setAccountSearch={setAccountSearch}
+                accountPositionFilter={accountPositionFilter}
+                setAccountPositionFilter={setAccountPositionFilter}
+                accountPositionOptions={accountPositionOptions}
                 accountRowsFiltered={accountRowsFiltered}
                 accountRowsRendered={accountRowsRendered}
-                accountRenderCount={accountRenderCount}
                 setAccountRenderCount={setAccountRenderCount}
                 onRefreshEmployees={async () => {
                   await fetchEmployees({ reset: true });
