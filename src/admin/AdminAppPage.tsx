@@ -3983,15 +3983,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
   const printSelectedEmployeeBadgeCards = async () => {
     if (employeeBadgeBatchPrinting) return;
-    const selectedSet = new Set(employeeBadgeBatchSelectedStaffIds.map((item) => normalizeStaffId(String(item ?? '').trim())).filter(Boolean));
+    const selectedIds = employeeBadgeBatchSelectedStaffIds
+      .map((item) => normalizeStaffId(String(item ?? '').trim()))
+      .filter(Boolean);
+    const selectedSet = new Set(selectedIds);
     if (selectedSet.size === 0) {
       setStatus({ tone: 'error', message: t('请先在员工表中选择要打印的行。', 'Please select rows in Employees before printing.') });
       return;
     }
-    const selectedRows = employeesFiltered
-      .map((e) => {
-        const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
-        if (!staff || !selectedSet.has(staff)) return null;
+    const employeeByStaff = new Map<string, EmployeeRow>();
+    for (const row of employees) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) continue;
+      if (!employeeByStaff.has(staff)) employeeByStaff.set(staff, row);
+    }
+    const selectedRows = selectedIds
+      .map((staff) => {
+        const e = employeeByStaff.get(staff);
+        if (!e) return null;
         return {
           staff,
           name: String(e.name ?? '').trim() || '-',
@@ -4003,8 +4012,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       })
       .filter(Boolean) as Array<{ staff: string; name: string; agency: string; position: string; workAccount?: string; workPassword?: string }>;
     if (selectedRows.length === 0) {
-      setStatus({ tone: 'error', message: t('当前筛选下没有可打印的选中员工。', 'No selected employees under current filters.') });
+      setStatus({ tone: 'error', message: t('已选员工不在当前员工数据中，请先刷新。', 'Selected employees are not in current employee data. Please refresh.') });
       return;
+    }
+    if (selectedRows.length < selectedSet.size) {
+      setStatus({
+        tone: 'pending',
+        message: t(
+          `部分已选员工未找到，实际打印 ${selectedRows.length}/${selectedSet.size} 张。`,
+          `Some selected employees were not found. Printing ${selectedRows.length}/${selectedSet.size}.`
+        )
+      });
     }
     setEmployeeBadgeBatchPrinting(true);
     try {
