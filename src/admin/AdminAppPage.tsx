@@ -113,10 +113,15 @@ const isRestLikeScheduleBaseState = (state: ScheduleBaseState) =>
 const isWorkingScheduleRow = (row: ScheduleRow | null | undefined) =>
   Boolean(row && isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)));
 
-const getScheduleDisplayState = (row: ScheduleRow | undefined, hasPunch: boolean): ScheduleDisplayState => {
+const getScheduleDisplayState = (
+  row: ScheduleRow | undefined,
+  hasPunch: boolean,
+  options?: { showAbsent?: boolean }
+): ScheduleDisplayState => {
   if (!row) return hasPunch ? 'rest_worked' : 'rest';
   const base = getScheduleBaseStateFromNote(row.note);
   if (hasPunch && isRestLikeScheduleBaseState(base)) return 'rest_worked';
+  if (!hasPunch && options?.showAbsent && isWorkingScheduleBaseState(base)) return 'absent';
   return base;
 };
 
@@ -4406,6 +4411,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       if (state === 'temp_rest') return t('临时排休', 'Temporary Rest');
       if (state === 'rest') return t('休息', 'Rest');
       if (state === 'rest_worked') return t('休息', 'Rest');
+      if (state === 'absent') return t('缺勤', 'Absent');
       if (state === 'empty') return t('休息', 'Rest');
       if (state === '工作') return t('工作', 'Work');
       if (state === '临时工作') return t('临时工作', 'Temporary Work');
@@ -7481,32 +7487,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }),
     [tomorrowAttendanceCards]
   );
-  const selectedDailyPositions = useMemo(
-    () => ALLOWED_POSITIONS.filter((position) => Boolean(dailyListSelectedPositions[position])),
-    [dailyListSelectedPositions]
-  );
   const selectedDailyFilterPositions = useMemo(
     () => ALLOWED_POSITIONS.filter((position) => Boolean(dailyListFilterPositions[position])),
     [dailyListFilterPositions]
   );
-  const canCopyDailyList = selectedDailyPositions.length > 0;
-  const canCopyDailyListAll = selectedDailyPositions.length === ALLOWED_POSITIONS.length;
-  const tomorrowDailyRowsForCopy = useMemo(() => {
-    if (!canCopyDailyList) {
-      return { earlyRows: [] as DailyListRow[], lateRows: [] as DailyListRow[] };
-    }
-    const allowed = new Set(selectedDailyPositions);
-    const match = (row: DailyListRow) => {
-      const pos = normalizePositionKey(String(row.position ?? '').trim());
-      return Boolean(pos && allowed.has(pos as AllowedPosition));
-    };
-    return {
-      earlyRows: tomorrowDailyList.earlyRows.filter(match),
-      lateRows: tomorrowDailyList.lateRows.filter(match)
-    };
-  }, [tomorrowDailyList, selectedDailyPositions, canCopyDailyList]);
-  const canCopyDailyListEarly = tomorrowDailyRowsForCopy.earlyRows.length > 0;
-  const canCopyDailyListLate = tomorrowDailyRowsForCopy.lateRows.length > 0;
   const tomorrowDailyRowsDisplayed = useMemo(() => {
     if (selectedDailyFilterPositions.length === 0) {
       return { earlyRows: tomorrowDailyList.earlyRows, lateRows: tomorrowDailyList.lateRows };
@@ -7521,6 +7505,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       lateRows: tomorrowDailyList.lateRows.filter(match)
     };
   }, [tomorrowDailyList, selectedDailyFilterPositions]);
+  const canCopyDailyListAll = tomorrowDailyList.earlyRows.length + tomorrowDailyList.lateRows.length > 0;
+  const canCopyDailyListEarly = tomorrowDailyRowsDisplayed.earlyRows.length > 0;
+  const canCopyDailyListLate = tomorrowDailyRowsDisplayed.lateRows.length > 0;
 
   const scheduleEmployeesBase = useMemo(() => {
     return employees
@@ -7653,7 +7640,17 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     if (page !== 'schedule') return;
     const total = scheduleEmployeesFiltered.length;
     setScheduleRenderCount(Math.min(60, total));
-  }, [page, scheduleEmployeesFiltered]);
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    const total = scheduleEmployeesFiltered.length;
+    setScheduleRenderCount((prev) => {
+      if (prev <= 0) return Math.min(60, total);
+      if (prev > total) return total;
+      return prev;
+    });
+  }, [page, scheduleEmployeesFiltered.length]);
 
   useEffect(() => {
     if (page !== 'schedule') return;
@@ -7865,12 +7862,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       .map((row) => [displayStaffId(row.staff_id), row.name, row.agency, row.position, getPlannedStartTime(row.shift, row.position)].map((c) => String(c ?? '')).join('\t'))
       .join('\n');
   const copyDailyList = async (scope: 'early' | 'late' | 'all') => {
-    if (!canCopyDailyList) {
-      setStatus({ tone: 'error', message: '请先点亮至少一个岗位卡片。' });
-      return;
-    }
-    const early = tomorrowDailyRowsForCopy.earlyRows;
-    const late = tomorrowDailyRowsForCopy.lateRows;
+    const early = scope === 'all' ? tomorrowDailyList.earlyRows : tomorrowDailyRowsDisplayed.earlyRows;
+    const late = scope === 'all' ? tomorrowDailyList.lateRows : tomorrowDailyRowsDisplayed.lateRows;
     const title = `Daily List ${tomorrowDailyList.targetDate} ${tomorrowDailyList.weekday}`;
     const text =
       scope === 'early'
@@ -7993,8 +7986,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const displayName = `${seqPrefix}${seq}`;
         const employeePayload =
           mode === 'cased'
-            ? { staff_id: internalStaffId, name: displayName, Agency: agency || null, Position: position, label: null, created_at: nowIso }
-            : { staff_id: internalStaffId, name: displayName, agency: agency || null, position, label: null, created_at: nowIso };
+            ? {
+                staff_id: internalStaffId,
+                name: displayName,
+                Agency: agency || null,
+                Position: position,
+                shift,
+                label: null,
+                created_at: nowIso
+              }
+            : {
+                staff_id: internalStaffId,
+                name: displayName,
+                agency: agency || null,
+                position,
+                shift,
+                label: null,
+                created_at: nowIso
+              };
         employeeRows.push(employeePayload as Record<string, unknown>);
         scheduleRowsToWrite.push({
           staff_id: internalStaffId,
@@ -8010,6 +8019,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           name: displayName,
           agency: agency || null,
           position,
+          shift,
           label: null,
           created_at: nowIso
         });
@@ -8931,8 +8941,20 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 const key = `${staff}__${dayIndex}`;
                                 const row = scheduleRowsByStaffDayIndex.get(key);
                                 const hasPunch = schedulePunchPresenceKeys.has(key);
-                                const state: ScheduleDisplayState = getScheduleDisplayState(row, hasPunch);
                                 const targetShift = scheduleShift || ((row?.shift as 'early' | 'late' | null) ?? 'early');
+                                const nowMinutes = new Date(serverTime).getHours() * 60 + new Date(serverTime).getMinutes();
+                                const lateAbsentVisibleMinutes = 16 * 60 + 30; // 16:30
+                                const isCurrentWeek = scheduleWeekOffset === 0;
+                                const isPastOperationalDay = dayIndex < homeOperationalDayIndex;
+                                const isCurrentOperationalDay = dayIndex === homeOperationalDayIndex;
+                                const hideLateAbsent = targetShift === 'late' && nowMinutes < lateAbsentVisibleMinutes;
+                                const showAbsent =
+                                  isCurrentWeek &&
+                                  row &&
+                                  isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)) &&
+                                  !hasPunch &&
+                                  (isPastOperationalDay || (isCurrentOperationalDay && !hideLateAbsent));
+                                const state: ScheduleDisplayState = getScheduleDisplayState(row, hasPunch, { showAbsent });
                                 const scheduleAuditKey = `${staff}__${getTemplateDateByDayIndex(dayIndex)}`;
                                 const scheduleCellAudit = scheduleAuditByStaffDate.get(scheduleAuditKey) ?? [];
 
@@ -8966,6 +8988,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                                 ? 'bg-violet-500 text-white'
                                               : state === 'rest_worked'
                                                 ? 'bg-sky-500 text-white'
+                                              : state === 'absent'
+                                                ? 'bg-orange-500 text-white'
                                               : state === 'temp_rest'
                                                 ? 'bg-red-800 text-red-100'
                                               : 'bg-ember text-white'
@@ -8979,7 +9003,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                               ? t('请假', 'Excuse')
                                             : state === 'rest_worked'
                                               ? t('排休出勤', 'Rest Worked')
-                                              : state === 'temp_rest'
+                                            : state === 'absent'
+                                              ? t('缺勤', 'Absent')
+                                            : state === 'temp_rest'
                                                 ? t('临时排休', 'Temporary Rest')
                                               : t('休息', 'Rest')}
                                         </button>
@@ -10038,4 +10064,3 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     </div>
   );
 }
-

@@ -131,7 +131,20 @@ export default function EmployeesTableSection({
               const shiftInfo = employeeShiftByStaffId[staff];
               const scheduleRow = scheduleRowsByStaffDayIndex.get(`${normalizeStaffId(staff)}__${homeOperationalDayIndex}`);
               const scheduledShift = normalizeShiftValue(String(scheduleRow?.shift ?? '').trim());
-              const shift = shiftInfo?.shift || scheduledShift || '';
+              const dbShift = normalizeShiftValue(String(e.shift ?? '').trim());
+              let weeklyScheduledShift: '' | 'early' | 'late' = '';
+              if (!scheduledShift) {
+                const normalizedStaff = normalizeStaffId(staff);
+                for (let idx = 0; idx < 7; idx += 1) {
+                  const row = scheduleRowsByStaffDayIndex.get(`${normalizedStaff}__${idx}`);
+                  const s = normalizeShiftValue(String(row?.shift ?? '').trim());
+                  if (s) {
+                    weeklyScheduledShift = s;
+                    break;
+                  }
+                }
+              }
+              const shift = shiftInfo?.shift || scheduledShift || dbShift || weeklyScheduledShift || '';
               const shiftLabel = shift === 'early' ? t('白班', 'Day') : shift === 'late' ? t('晚班', 'Night') : '-';
               const lastPunchAt = String(employeeLastPunchAtByStaffId[staff] ?? '').trim();
               let lastPunchDaysText = '-';

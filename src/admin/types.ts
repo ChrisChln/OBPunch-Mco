@@ -12,7 +12,7 @@ export type AllowedPosition = 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer'
 export type DeviceType = 'PDA' | 'CART';
 
 export type ScheduleBaseState = 'work' | 'temp_work' | 'leave' | 'temp_rest' | 'rest';
-export type ScheduleDisplayState = 'empty' | ScheduleBaseState | 'rest_worked';
+export type ScheduleDisplayState = 'empty' | ScheduleBaseState | 'rest_worked' | 'absent';
 
 export type EmployeeRow = {
   id?: number | string;
