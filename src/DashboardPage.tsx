@@ -29,6 +29,7 @@ const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefine
 const PUNCHES_TABLE = 'ob_punches';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const supabase = createSupabaseClient({ persistSession: false });
+const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW)
   ? Math.min(23, Math.max(0, DAY_CUTOFF_HOUR_RAW))
@@ -55,6 +56,22 @@ const getOperationalRange = () => {
   };
 };
 
+const normalizeDateOnly = (value: unknown) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const isoPrefix = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[tT\s].*)?$/);
+  if (isoPrefix) return `${isoPrefix[1]}-${isoPrefix[2]}-${isoPrefix[3]}`;
+  const slash = raw.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+  if (slash) return `${slash[1]}-${slash[2]}-${slash[3]}`;
+  const slashPrefix = raw.match(/^(\d{4})\/(\d{2})\/(\d{2})(?:\s.*)?$/);
+  if (slashPrefix) return `${slashPrefix[1]}-${slashPrefix[2]}-${slashPrefix[3]}`;
+  const dateOnly = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) return dateOnly[0];
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return toDateOnly(parsed);
+};
+
 const formatDateTime = (iso: string) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -67,6 +84,14 @@ const chunkArray = <T,>(list: T[], size: number): T[][] => {
   for (let i = 0; i < list.length; i += size) chunks.push(list.slice(i, i + size));
   return chunks;
 };
+
+const addDays = (value: Date, days: number) => {
+  const d = new Date(value);
+  d.setDate(d.getDate() + days);
+  return d;
+};
+
+const getTemplateDateByDayIndex = (dayIndex: number) => toDateOnly(addDays(SCHEDULE_TEMPLATE_WEEK_START, dayIndex));
 
 const toEpochMs = (value: unknown) => {
   const raw = String(value ?? '').trim();
@@ -111,6 +136,16 @@ const getScheduleStateFromNote = (note: unknown) => {
 
 const isWorkingScheduleState = (state: string) => state === 'work' || state === 'temp_work';
 
+const isMissingColumnError = (message: unknown, column: string) =>
+  (() => {
+    const text = String(message ?? '').toLowerCase();
+    const col = String(column ?? '').toLowerCase();
+    return (
+      (text.includes('does not exist') || text.includes('not exist') || text.includes('undefined column')) &&
+      (text.includes(`.${col}`) || text.includes(`'${col}'`) || text.includes(`"${col}"`) || text.includes(col))
+    );
+  })();
+
 export default function DashboardPage() {
   const [rows, setRows] = useState<DashboardRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -123,6 +158,7 @@ export default function DashboardPage() {
   const [expandedStaffIds, setExpandedStaffIds] = useState<Set<string>>(new Set());
   const inFlightRef = useRef(false);
   const fetchSeqRef = useRef(0);
+  const employeeCacheRef = useRef<Map<string, EmployeeRow>>(new Map());
 
   const fetchData = async (force = false) => {
     if (!supabase) {
@@ -143,22 +179,85 @@ export default function DashboardPage() {
       const rangeStartIso = range.start.toISOString();
       const rangeEndIso = range.end.toISOString();
       const currentOperationalDate = range.operationalDate;
-      const scheduleRes = await supabase
+      const operationalDateObj = new Date(`${currentOperationalDate}T00:00:00`);
+      const operationalDayIndex = Number.isNaN(operationalDateObj.getTime()) ? 0 : (operationalDateObj.getDay() + 6) % 7;
+      const templateDate = getTemplateDateByDayIndex(operationalDayIndex);
+      let scheduleRowsRaw: any[] = [];
+      const scheduleByDateRes = await supabase
         .from(SCHEDULE_TABLE)
         .select('id, staff_id, position, shift, note, updated_at, created_at, date')
-        .eq('date', currentOperationalDate)
+        .eq('date', templateDate)
         .order('created_at', { ascending: false })
         .limit(20000);
 
-      if (scheduleRes.error) {
+      if (scheduleByDateRes.error) {
         if (fetchSeqRef.current === currentSeq) {
-          setError(scheduleRes.error.message);
+          setError(scheduleByDateRes.error.message);
           setRows([]);
         }
         return;
       }
+      scheduleRowsRaw = ((scheduleByDateRes.data as any[]) ?? []);
 
-      const latestScheduleRows = pickLatestByStaff((((scheduleRes.data as any[]) ?? []) as any[]));
+      if (scheduleRowsRaw.length === 0) {
+        const scheduleByDateRangeRes = await supabase
+          .from(SCHEDULE_TABLE)
+          .select('id, staff_id, position, shift, note, updated_at, created_at, date')
+          .gte('date', `${templateDate}T00:00:00`)
+          .lt('date', `${templateDate}T23:59:59.999`)
+          .order('created_at', { ascending: false })
+          .limit(20000);
+
+        if (!scheduleByDateRangeRes.error) {
+          scheduleRowsRaw = ((scheduleByDateRangeRes.data as any[]) ?? []);
+        } else if (!isMissingColumnError(scheduleByDateRangeRes.error.message, 'date')) {
+          if (fetchSeqRef.current === currentSeq) {
+            setError(scheduleByDateRangeRes.error.message);
+            setRows([]);
+          }
+          return;
+        }
+      }
+
+      if (scheduleRowsRaw.length === 0) {
+        const scheduleByWorkDateRes = await supabase
+          .from(SCHEDULE_TABLE)
+          .select('id, staff_id, position, shift, note, updated_at, created_at, work_date')
+          .eq('work_date', currentOperationalDate)
+          .order('created_at', { ascending: false })
+          .limit(20000);
+
+        if (!scheduleByWorkDateRes.error) {
+          scheduleRowsRaw = ((scheduleByWorkDateRes.data as any[]) ?? []);
+        } else if (!isMissingColumnError(scheduleByWorkDateRes.error.message, 'work_date')) {
+          if (fetchSeqRef.current === currentSeq) {
+            setError(scheduleByWorkDateRes.error.message);
+            setRows([]);
+          }
+          return;
+        }
+      }
+
+      if (scheduleRowsRaw.length === 0) {
+        const recentScheduleRes = await supabase
+          .from(SCHEDULE_TABLE)
+          .select('id, staff_id, position, shift, note, updated_at, created_at, date')
+          .gte('created_at', new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString())
+          .order('created_at', { ascending: false })
+          .limit(30000);
+
+        if (!recentScheduleRes.error) {
+          scheduleRowsRaw = (((recentScheduleRes.data as any[]) ?? []) as any[]).filter(
+            (row) => normalizeDateOnly((row as any).date) === templateDate
+          );
+        } else if (fetchSeqRef.current === currentSeq) {
+          setError(recentScheduleRes.error.message);
+          setRows([]);
+          return;
+        }
+      }
+
+      const latestScheduleRows = pickLatestByStaff(scheduleRowsRaw);
       const workingScheduleRows = latestScheduleRows.filter((row) =>
         isWorkingScheduleState(getScheduleStateFromNote((row as any).note))
       );
@@ -173,7 +272,7 @@ export default function DashboardPage() {
         const staffId = String((row as any).staff_id ?? '').trim();
         if (!staffId) continue;
         scheduledByStaff.set(staffId, {
-          position: String((row as any).position ?? '').trim(),
+          position: String((row as any).position ?? (row as any).Position ?? '').trim(),
           shift: String((row as any).shift ?? '').trim()
         });
       }
@@ -184,49 +283,46 @@ export default function DashboardPage() {
           setRows([]);
           setOperationalDate(currentOperationalDate);
           setRangeText(
-            `${range.start.toLocaleString('en-CA', { hour12: false })} -> ${range.end.toLocaleString('en-CA', { hour12: false })}`
+            `${range.start.toLocaleString('en-CA', { hour12: false })} -> ${range.end.toLocaleString('en-CA', { hour12: false })} | Template: ${templateDate}`
           );
           setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
         }
         return;
       }
 
+      const scheduledStaffSet = new Set(scheduledStaffIds);
       const punchesByStaff = new Map<string, PunchRow[]>();
-      for (const staffIds of chunkArray(scheduledStaffIds, 200)) {
-        const punchesRes = await supabase
-          .from(PUNCHES_TABLE)
-          .select('id, staff_id, action, created_at')
-          .in('staff_id', staffIds)
-          .gte('created_at', rangeStartIso)
-          .lt('created_at', rangeEndIso)
-          .order('created_at', { ascending: true })
-          .limit(25000);
+      const punchesRes = await supabase
+        .from(PUNCHES_TABLE)
+        .select('id, staff_id, action, created_at')
+        .gte('created_at', rangeStartIso)
+        .lt('created_at', rangeEndIso)
+        .order('created_at', { ascending: true })
+        .limit(50000);
 
-        if (punchesRes.error) {
-          if (fetchSeqRef.current === currentSeq) {
-            setError(punchesRes.error.message);
-            setRows([]);
-          }
-          return;
+      if (punchesRes.error) {
+        if (fetchSeqRef.current === currentSeq) {
+          setError(punchesRes.error.message);
+          setRows([]);
         }
-
-        for (const row of ((punchesRes.data as any[] | null) ?? [])) {
-          const staffId = String(row.staff_id ?? '').trim();
-          if (!staffId) continue;
-          const list = punchesByStaff.get(staffId) ?? [];
-          list.push({
-            id: String(row.id ?? ''),
-            staff_id: staffId,
-            action: String(row.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN',
-            created_at: String(row.created_at ?? '')
-          });
-          punchesByStaff.set(staffId, list);
-        }
+        return;
       }
 
-      const latestByStaff = new Map<string, EmployeeRow>();
-      const staffIdChunks = chunkArray(scheduledStaffIds, 200);
-      for (const staffIds of staffIdChunks) {
+      for (const row of ((punchesRes.data as any[] | null) ?? [])) {
+        const staffId = String(row.staff_id ?? '').trim();
+        if (!staffId || !scheduledStaffSet.has(staffId)) continue;
+        const list = punchesByStaff.get(staffId) ?? [];
+        list.push({
+          id: String(row.id ?? ''),
+          staff_id: staffId,
+          action: String(row.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN',
+          created_at: String(row.created_at ?? '')
+        });
+        punchesByStaff.set(staffId, list);
+      }
+
+      const missingStaffIds = scheduledStaffIds.filter((staffId) => !employeeCacheRef.current.has(staffId));
+      for (const staffIds of chunkArray(missingStaffIds, 200)) {
         const employeeRes = await supabase
           .from(EMPLOYEE_TABLE)
           .select('*')
@@ -244,13 +340,13 @@ export default function DashboardPage() {
 
         for (const row of ((employeeRes.data as any[] | null) ?? [])) {
           const staffId = String(row.staff_id ?? '').trim();
-          if (!staffId || latestByStaff.has(staffId)) continue;
-          latestByStaff.set(staffId, {
+          if (!staffId || employeeCacheRef.current.has(staffId)) continue;
+          employeeCacheRef.current.set(staffId, {
             staff_id: staffId,
             name: String(row.name ?? '').trim(),
             agency: String(row.agency ?? '').trim(),
-            position: String(row.position ?? '').trim(),
-            label: String(row.label ?? '').trim(),
+            position: String(row.position ?? row.Position ?? '').trim(),
+            label: String(row.label ?? row.Label ?? '').trim(),
             work_account: String(row.work_account ?? '').trim(),
             work_password: String(row.work_password ?? '').trim(),
             hire_date: String(row.hire_date ?? '').trim(),
@@ -262,7 +358,7 @@ export default function DashboardPage() {
       const nextRows: DashboardRow[] = scheduledStaffIds
         .sort((a, b) => a.localeCompare(b, 'en-US'))
         .map((staffId) => {
-          const employee = latestByStaff.get(staffId);
+          const employee = employeeCacheRef.current.get(staffId);
           const schedule = scheduledByStaff.get(staffId);
           const punches = punchesByStaff.get(staffId) ?? [];
           return {
@@ -283,7 +379,9 @@ export default function DashboardPage() {
       if (fetchSeqRef.current !== currentSeq) return;
       setRows(nextRows);
       setOperationalDate(currentOperationalDate);
-      setRangeText(`${range.start.toLocaleString('en-CA', { hour12: false })} -> ${range.end.toLocaleString('en-CA', { hour12: false })}`);
+      setRangeText(
+        `${range.start.toLocaleString('en-CA', { hour12: false })} -> ${range.end.toLocaleString('en-CA', { hour12: false })} | Template: ${templateDate}`
+      );
       setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
       setExpandedStaffIds((prev) => {
         if (!prev.size) return prev;
@@ -360,7 +458,7 @@ export default function DashboardPage() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by staff id / name / agency / position / account"
+            placeholder="Search by staff id / name / position / account"
             className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon"
           />
           <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-2 text-xs text-slate-300">
@@ -381,7 +479,6 @@ export default function DashboardPage() {
                 <tr>
                   <th className="px-3 py-2 text-left">Staff ID</th>
                   <th className="px-3 py-2 text-left">Name</th>
-                  <th className="px-3 py-2 text-left">Agency</th>
                   <th className="px-3 py-2 text-left">Position</th>
                   <th className="px-3 py-2 text-left">Label</th>
                   <th className="px-3 py-2 text-left">Work Account</th>
@@ -400,7 +497,6 @@ export default function DashboardPage() {
                     <tr key={row.staff_id} className="border-t border-white/5 odd:bg-white/[0.03]">
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-slate-200">{row.staff_id || '-'}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-slate-200">{row.name || '-'}</td>
-                      <td className="whitespace-nowrap px-3 py-2 text-slate-300">{row.agency || '-'}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-slate-300">{row.position || '-'}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-slate-300">{row.label || '-'}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-slate-300">{row.work_account || '-'}</td>
@@ -470,7 +566,7 @@ export default function DashboardPage() {
                 })}
                 {!loading && renderedRows.length === 0 && (
                   <tr>
-                    <td className="px-3 py-6 text-center text-slate-500" colSpan={9}>
+                    <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
                       No scheduled work rows for this operational date.
                     </td>
                   </tr>

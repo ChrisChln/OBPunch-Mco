@@ -73,7 +73,6 @@ const DEVICE_COUNTED_AT_NOTE_PATTERN = /\[COUNTED_AT=([^\]]+)\]/i;
 const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
 const OBUP_REPORT_DETAILS_TABLE =
   (import.meta.env.VITE_OBUP_REPORT_DETAILS_TABLE as string | undefined) ?? 'report_details';
-const OBUP_ACCOUNT_LINKS_TABLE = (import.meta.env.VITE_OBUP_ACCOUNT_LINKS_TABLE as string | undefined) ?? 'account_links';
 const OBUP_UPLOAD_RECORDS_TABLE = (import.meta.env.VITE_OBUP_UPLOAD_RECORDS_TABLE as string | undefined) ?? 'upload_records';
 const SCHEDULE_UPH_DAYS = 30;
 const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
@@ -132,18 +131,19 @@ const obupSupabase = createSupabaseClientWithCredentials({
   anonKey: import.meta.env.VITE_OBUP_SUPABASE_ANON_KEY as string | undefined
 });
 
-const normalizeWorkOperatorKey = (value: string) => {
-  const raw = String(value ?? '').trim();
+const normalizeWorkAccountKey = (value: string) => {
+  const raw = String(value ?? '').trim().toLowerCase();
   if (!raw) return '';
-  const compact = raw.replace(/\s+/g, '');
-  if (/^ob[a-z]*#?\d+/i.test(compact)) {
-    return compact.toLowerCase();
+  const parenMatch = raw.match(/\(([^)]+)\)/);
+  if (parenMatch?.[1]) {
+    const inside = parenMatch[1].replace(/\s+/g, '');
+    const digitsInside = inside.match(/\d{5,}/g);
+    if (digitsInside && digitsInside.length > 0) return digitsInside[digitsInside.length - 1];
+    if (inside) return inside;
   }
-  const withoutParen = raw.replace(/\s*\([^)]*\)\s*$/g, '');
-  const lowered = withoutParen.toLowerCase();
-  const lettersOnly = lowered.replace(/[^a-z\u00c0-\u024f\u4e00-\u9fff]+/g, ' ');
-  const noDigits = lettersOnly.replace(/\b\d+\b/g, ' ');
-  return noDigits.replace(/\s+/g, ' ').trim();
+  const allDigits = raw.match(/\d{5,}/g);
+  if (allDigits && allDigits.length > 0) return allDigits[allDigits.length - 1];
+  return raw.replace(/\s+/g, '');
 };
 
 const parseUph = (value: unknown) => {
@@ -154,53 +154,6 @@ const parseUph = (value: unknown) => {
 };
 
 const formatUph = (value: number | null | undefined) => (value === null || value === undefined ? '-' : value.toFixed(1));
-const SCHEDULE_UPH_FUZZY_THRESHOLD = 0.7;
-
-const splitNameTokens = (value: string) => normalizeWorkOperatorKey(value).split(' ').filter(Boolean);
-
-const diceSimilarity = (aRaw: string, bRaw: string) => {
-  const a = aRaw.replace(/\s+/g, '');
-  const b = bRaw.replace(/\s+/g, '');
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-  if (a.length < 2 || b.length < 2) return a === b ? 1 : 0;
-  const bigrams = new Map<string, number>();
-  for (let i = 0; i < a.length - 1; i += 1) {
-    const bg = a.slice(i, i + 2);
-    bigrams.set(bg, (bigrams.get(bg) ?? 0) + 1);
-  }
-  let overlap = 0;
-  for (let i = 0; i < b.length - 1; i += 1) {
-    const bg = b.slice(i, i + 2);
-    const count = bigrams.get(bg) ?? 0;
-    if (count > 0) {
-      overlap += 1;
-      bigrams.set(bg, count - 1);
-    }
-  }
-  return (2 * overlap) / (a.length - 1 + b.length - 1);
-};
-
-const tokenSimilarity = (aRaw: string, bRaw: string) => {
-  const aTokens = splitNameTokens(aRaw);
-  const bTokens = splitNameTokens(bRaw);
-  if (aTokens.length === 0 || bTokens.length === 0) return 0;
-  const aSet = new Set(aTokens);
-  const bSet = new Set(bTokens);
-  let intersect = 0;
-  for (const token of aSet) {
-    if (bSet.has(token)) intersect += 1;
-  }
-  return (2 * intersect) / (aSet.size + bSet.size);
-};
-
-const fuzzyNameSimilarity = (aRaw: string, bRaw: string) => {
-  const a = normalizeWorkOperatorKey(aRaw);
-  const b = normalizeWorkOperatorKey(bRaw);
-  if (!a || !b) return 0;
-  return Math.max(diceSimilarity(a, b), tokenSimilarity(a, b));
-};
-
 
 const formatTime = (value: Date, locale: string = 'zh-CN') =>
   value.toLocaleString(locale, {
@@ -2678,10 +2631,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const stageEmployees = new Map<'picking' | 'sorting' | 'packing', Map<string, string[]>>();
     for (const employee of employeesForUph) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-      const name = String(employee.name ?? '').trim();
+      const workAccount = String(employee.work_account ?? employee.WorkAccount ?? '').trim();
       const stage = positionToStage(String(employee.position ?? employee.Position ?? '').trim());
-      if (!staff || !name || !stage) continue;
-      const key = normalizeWorkOperatorKey(name);
+      if (!staff || !workAccount || !stage) continue;
+      const key = normalizeWorkAccountKey(workAccount);
       if (!key) continue;
       if (!stageEmployees.has(stage)) stageEmployees.set(stage, new Map<string, string[]>());
       const byKey = stageEmployees.get(stage)!;
@@ -2788,7 +2741,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           const stage = reportIdToStage.get(reportId);
           if (!stage) continue;
           const operatorRaw = String(row.operator ?? '').trim();
-          const key = normalizeWorkOperatorKey(operatorRaw);
+          const key = normalizeWorkAccountKey(operatorRaw);
           if (!key) continue;
           const uph = parseUph(row.uph);
           if (uph === null) continue;
@@ -2804,71 +2757,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
     }
 
-    const accountLinkMap = new Map<string, string>();
-    const accountLinkReverseMap = new Map<string, string>();
-    {
-      const pageSize = 1000;
-      const maxPages = 20;
-      for (let page = 0; page < maxPages; page += 1) {
-        const from = page * pageSize;
-        const to = from + pageSize - 1;
-        const linkRes = await obupSupabase
-          .from(OBUP_ACCOUNT_LINKS_TABLE)
-          .select('source_name, target_name, updated_at')
-          .order('updated_at', { ascending: false })
-          .range(from, to);
-        if (linkRes.error) break;
-        const links = (linkRes.data as Array<{ source_name?: string | null; target_name?: string | null }> | null) ?? [];
-        for (const row of links) {
-          const sourceKey = normalizeWorkOperatorKey(String(row.source_name ?? '').trim());
-          const targetKey = normalizeWorkOperatorKey(String(row.target_name ?? '').trim());
-          if (!sourceKey || !targetKey) continue;
-          if (!accountLinkMap.has(sourceKey)) accountLinkMap.set(sourceKey, targetKey);
-          if (!accountLinkReverseMap.has(targetKey)) accountLinkReverseMap.set(targetKey, sourceKey);
-        }
-        if (links.length < pageSize) break;
-      }
-    }
-
     const nextMap: Record<string, number | null> = {};
     for (const [stage, employeesByKey] of stageEmployees.entries()) {
       const operatorAvgByKey = avgByStageOperatorKey.get(stage) ?? new Map<string, { sum: number; count: number }>();
-      const operatorKeys = Array.from(operatorAvgByKey.keys());
 
       for (const [employeeKey, staffIds] of employeesByKey.entries()) {
-        let matchedKey: string | null = null;
-
-        const mappedTarget = accountLinkMap.get(employeeKey);
-        if (mappedTarget && operatorAvgByKey.has(mappedTarget)) {
-          matchedKey = mappedTarget;
-        }
-        if (!matchedKey) {
-          const mappedSource = accountLinkReverseMap.get(employeeKey);
-          if (mappedSource && operatorAvgByKey.has(mappedSource)) {
-            matchedKey = mappedSource;
-          }
-        }
-
-        if (!matchedKey && operatorAvgByKey.has(employeeKey)) {
-          matchedKey = employeeKey;
-        }
-
-        if (!matchedKey) {
-          let bestKey = '';
-          let bestScore = 0;
-          for (const operatorKey of operatorKeys) {
-            const score = fuzzyNameSimilarity(employeeKey, operatorKey);
-            if (score > bestScore) {
-              bestScore = score;
-              bestKey = operatorKey;
-            }
-          }
-          if (bestKey && bestScore >= SCHEDULE_UPH_FUZZY_THRESHOLD) {
-            matchedKey = bestKey;
-          }
-        }
-
-        const rec = matchedKey ? operatorAvgByKey.get(matchedKey) : null;
+        const rec = operatorAvgByKey.get(employeeKey) ?? null;
         const uph = rec && rec.count > 0 ? rec.sum / rec.count : null;
         for (const staff of staffIds) {
           nextMap[staff] = uph;
