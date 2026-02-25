@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib/supabase';
 import { isValidStaffId, normalizeStaffId } from './lib/staffId';
-import { LABEL_TONE_KEYS, type LabelToneKey, getLabelToneClass, loadLabelToneMap } from './lib/labelTone';
+import { LABEL_TONE_KEYS, type LabelToneKey, loadLabelToneMap } from './lib/labelTone';
 
 type PunchAction = 'IN' | 'OUT';
 
@@ -66,6 +66,17 @@ type DeviceOutstandingItem = {
   position: string;
   borrowedAt: string;
 };
+type DeviceQuickLogRow = {
+  id: string | number;
+  created_at: string | null;
+  staff_id: string;
+  action: 'borrow' | 'return';
+  device_sn: string;
+};
+type PunchBoardDeviceStatus = {
+  text: string;
+  tone: 'none' | 'borrowed' | 'overdue';
+};
 
 type TomorrowListSetting = {
   enabled: boolean;
@@ -96,7 +107,6 @@ const ROSTER_RESET_HOUR_RAW = Number(import.meta.env.VITE_ROSTER_RESET_HOUR ?? 0
 const ROSTER_RESET_HOUR = Number.isFinite(ROSTER_RESET_HOUR_RAW) ? Math.max(0, Math.min(23, ROSTER_RESET_HOUR_RAW)) : 5;
 const ABSENT_RESET_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const ABSENT_RESET_HOUR = Number.isFinite(ABSENT_RESET_HOUR_RAW) ? Math.max(0, Math.min(23, ABSENT_RESET_HOUR_RAW)) : 5;
-const LATE_ABSENT_VISIBLE_MINUTES = 16 * 60 + 30; // 16:30
 const ABSENT_ROSTER_CACHE_TTL_MS = 60 * 1000;
 const ARRIVAL_METRICS_CACHE_TTL_MS = 60 * 1000;
 const ARRIVAL_METRICS_STORAGE_KEY = 'obpunch_arrival_metrics_cache_v1';
@@ -133,6 +143,7 @@ const toEpochMs = (value: unknown) => {
   const ms = Date.parse(raw);
   return Number.isFinite(ms) ? ms : 0;
 };
+const normalizeDeviceSn = (value: unknown) => String(value ?? '').trim().toUpperCase();
 
 // Deduplicate same-day schedule rows by staff, keeping the latest row.
 const pickLatestScheduleRowsByStaff = <T extends { staff_id?: unknown; updated_at?: unknown; created_at?: unknown; id?: unknown }>(
@@ -295,13 +306,6 @@ const getOnClockValueClass = (value: string, toneMap?: Partial<Record<AllowedPos
   return ON_CLOCK_VALUE_TONE_CLASS_DARK[tone] ?? ON_CLOCK_VALUE_TONE_CLASS_DARK.slate;
 };
 
-const getShiftBadgeClass = (value: string) => {
-  const v = value.trim().toLowerCase();
-  if (v === 'early') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
-  if (v === 'late') return 'border-violet-400/60 text-violet-200 bg-violet-500/10';
-  return 'border-white/20 text-slate-300 bg-white/5';
-};
-
 const formatShiftLabel = (value: string) => {
   const v = value.trim().toLowerCase();
   if (v === 'early') return 'Morning shift';
@@ -378,7 +382,6 @@ const parseUph = (value: unknown) => {
   if (!Number.isFinite(n) || n < 0) return null;
   return n;
 };
-const formatUph = (value: number | null | undefined) => (value === null || value === undefined ? '-' : value.toFixed(1));
 const splitNameTokens = (value: string) => normalizeWorkOperatorKey(value).split(' ').filter(Boolean);
 const diceSimilarity = (aRaw: string, bRaw: string) => {
   const a = aRaw.replace(/\s+/g, '');
@@ -483,6 +486,9 @@ export default function App() {
   const [busyVisible, setBusyVisible] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const deviceBorrowStaffRef = useRef<HTMLInputElement | null>(null);
+  const deviceBorrowSnRef = useRef<HTMLInputElement | null>(null);
+  const deviceReturnSnRef = useRef<HTMLInputElement | null>(null);
   const successInAudioRef = useRef<HTMLAudioElement | null>(null);
   const successOutAudioRef = useRef<HTMLAudioElement | null>(null);
   const errorAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -695,8 +701,9 @@ export default function App() {
   const [punchBoardEmployeeMap, setPunchBoardEmployeeMap] = useState<
     Record<string, { name: string; agency: string; position: string; label: string }>
   >({});
-  const [punchBoardUphByStaffId, setPunchBoardUphByStaffId] = useState<Record<string, number | null>>({});
-  const [labelToneByName, setLabelToneByName] = useState<Record<string, LabelToneKey>>(() => loadLabelToneMap());
+  const [punchBoardDeviceStatusByStaffId, setPunchBoardDeviceStatusByStaffId] = useState<Record<string, PunchBoardDeviceStatus>>({});
+  const [, setPunchBoardUphByStaffId] = useState<Record<string, number | null>>({});
+  const [, setLabelToneByName] = useState<Record<string, LabelToneKey>>(() => loadLabelToneMap());
   const [schedulePositionToneByPosition, setSchedulePositionToneByPosition] = useState<Record<AllowedPosition, LabelToneKey>>({
     Pick: 'sky',
     Pack: 'emerald',
@@ -706,10 +713,9 @@ export default function App() {
   });
   const [punchLogPositionFilter, setPunchLogPositionFilter] = useState<AllowedPosition | ''>('');
   const [dailyRoster, setDailyRoster] = useState<DailyRosterItem[]>([]);
-  const [dailyRosterError, setDailyRosterError] = useState<string | null>(null);
-  const [dailyRosterPositionFilter, setDailyRosterPositionFilter] = useState<AllowedPosition | ''>('');
-  const [rosterShiftByStaffId, setRosterShiftByStaffId] = useState<Record<string, '' | 'early' | 'late'>>({});
-  const [absentRoster, setAbsentRoster] = useState<AbsentRosterItem[]>([]);
+  const [, setDailyRosterError] = useState<string | null>(null);
+  const [, setRosterShiftByStaffId] = useState<Record<string, '' | 'early' | 'late'>>({});
+  const [, setAbsentRoster] = useState<AbsentRosterItem[]>([]);
   const [arrivalMetrics, setArrivalMetrics] = useState<ArrivalMetric[]>(() => {
     const fallback = createEmptyArrivalMetrics();
     try {
@@ -727,8 +733,6 @@ export default function App() {
     }
   });
   const [attendanceHoverSearchByKey, setAttendanceHoverSearchByKey] = useState<Record<string, string>>({});
-  const [rosterFlipped, setRosterFlipped] = useState(false);
-  const [rosterFlipSeed, setRosterFlipSeed] = useState(0);
   const [tomorrowListSetting, setTomorrowListSetting] = useState<TomorrowListSetting>({
     enabled: false,
     publishForDate: ''
@@ -738,7 +742,6 @@ export default function App() {
     window.addEventListener('storage', sync);
     return () => window.removeEventListener('storage', sync);
   }, []);
-  const getAppLabelToneClass = (label: string) => getLabelToneClass(label, labelToneByName);
   const getAppPositionBadgeClass = (position: string) => getPositionBadgeClass(position, schedulePositionToneByPosition);
   const getAppPositionFrameClass = (position: AllowedPosition) => getPositionFrameClass(position, schedulePositionToneByPosition);
   const getAppOnClockPanelClass = (position: AllowedPosition) => getOnClockPanelClass(position, schedulePositionToneByPosition);
@@ -751,6 +754,14 @@ export default function App() {
     staffName: string;
     items: DeviceOutstandingItem[];
   } | null>(null);
+  const [deviceBorrowStaffId, setDeviceBorrowStaffId] = useState('');
+  const [deviceBorrowSn, setDeviceBorrowSn] = useState('');
+  const [deviceReturnSn, setDeviceReturnSn] = useState('');
+  const [deviceQuickBusy, setDeviceQuickBusy] = useState<'' | 'borrow' | 'return'>('');
+  const [deviceQuickError, setDeviceQuickError] = useState<string | null>(null);
+  const [deviceQuickLogs, setDeviceQuickLogs] = useState<DeviceQuickLogRow[]>([]);
+  const [deviceQuickNameByStaffId, setDeviceQuickNameByStaffId] = useState<Record<string, string>>({});
+  const [deviceQuickNameBySn, setDeviceQuickNameBySn] = useState<Record<string, string>>({});
   useEffect(() => {
     if (!deviceReturnReminder) return;
     setPunchSuccessOverlay(null);
@@ -771,19 +782,6 @@ export default function App() {
     });
   }, [punchBoard, punchBoardEmployeeMap, punchLogPositionFilter]);
 
-  const dailyRosterFiltered = useMemo(() => {
-    if (!dailyRosterPositionFilter) return dailyRoster;
-    const needle = dailyRosterPositionFilter.trim().toLowerCase();
-    return dailyRoster.filter((row) => row.position.toLowerCase() === needle);
-  }, [dailyRoster, dailyRosterPositionFilter]);
-  const absentRosterFiltered = useMemo(() => {
-    const nowMinutes = serverTime.getHours() * 60 + serverTime.getMinutes();
-    const hideLateAbsent = nowMinutes < LATE_ABSENT_VISIBLE_MINUTES;
-    const base = hideLateAbsent ? absentRoster.filter((row) => normalizeShiftValue(row.shift) !== 'late') : absentRoster;
-    if (!dailyRosterPositionFilter) return base;
-    const needle = dailyRosterPositionFilter.trim().toLowerCase();
-    return base.filter((row) => row.position.toLowerCase() === needle);
-  }, [absentRoster, dailyRosterPositionFilter, serverTime]);
   const arrivalMetricByKey = useMemo(() => {
     const map: Record<string, ArrivalMetric> = {};
     for (const metric of arrivalMetrics) {
@@ -799,29 +797,6 @@ export default function App() {
     const now = new Date();
     return getManualTomorrowListVisible(tomorrowListSetting, now);
   }, [serverTime, tomorrowListSetting]);
-  const rosterDateText = useMemo(() => {
-    const now = new Date();
-    const manualVisible = getManualTomorrowListVisible(tomorrowListSetting, now);
-    const target = manualVisible && tomorrowListSetting.publishForDate
-      ? new Date(`${tomorrowListSetting.publishForDate}T00:00:00`)
-      : getTomorrowListTargetDate(now);
-    const datePart = toDateOnly(target).replace(/-/g, '/');
-    const weekday = target.toLocaleDateString('en-US', { weekday: 'short' });
-    return `${datePart} ${weekday}`;
-  }, [serverTime, tomorrowListSetting]);
-  const absentDateText = useMemo(() => {
-    const now = new Date();
-    const operationalStart = getOperationalDayStart(now, ABSENT_RESET_HOUR);
-    const datePart = toDateOnly(operationalStart).replace(/-/g, '/');
-    const weekday = operationalStart.toLocaleDateString('en-US', { weekday: 'short' });
-    return `${datePart} ${weekday}`;
-  }, [serverTime]);
-  const flipRosterPanel = (source: 'auto' | 'manual' = 'manual') => {
-    setRosterFlipped((prev) => !prev);
-    if (source === 'manual') {
-      setRosterFlipSeed((prev) => prev + 1);
-    }
-  };
   const [lastPunchActionLoading, setLastPunchActionLoading] = useState(false);
 
   const [editName, setEditName] = useState('');
@@ -1044,6 +1019,240 @@ export default function App() {
       return { count: 0, error: countRes.error.message };
     }
     return { count: countRes.count ?? 0, error: null as string | null };
+  };
+
+  const fetchPunchBoardDeviceStatus = async (staffIds: string[]) => {
+    if (!supabase) {
+      setPunchBoardDeviceStatusByStaffId({});
+      return;
+    }
+
+    const normalizedStaffIds = Array.from(new Set(staffIds.map((id) => normalizeStaffId(id)).filter(Boolean)));
+    if (normalizedStaffIds.length === 0) {
+      setPunchBoardDeviceStatusByStaffId({});
+      return;
+    }
+
+    const loansRes = await supabase
+      .from(DEVICE_LOANS_TABLE)
+      .select('staff_id, action, device_sn, created_at')
+      .order('created_at', { ascending: true })
+      .limit(5000);
+    if (loansRes.error) {
+      setPunchBoardDeviceStatusByStaffId({});
+      return;
+    }
+
+    const borrowedBySn = new Map<string, { staffId: string; borrowedAt: string }>();
+    for (const row of ((loansRes.data as any[] | null) ?? [])) {
+      const sn = normalizeDeviceSn(row.device_sn);
+      if (!sn) continue;
+      const action = String(row.action ?? '').trim().toLowerCase();
+      if (action === 'borrow') {
+        const staffId = normalizeStaffId(String(row.staff_id ?? '').trim());
+        if (!staffId) continue;
+        borrowedBySn.set(sn, { staffId, borrowedAt: String(row.created_at ?? '') });
+      } else if (action === 'return') {
+        borrowedBySn.delete(sn);
+      }
+    }
+
+    const sns = Array.from(borrowedBySn.keys());
+    const nameBySn: Record<string, string> = {};
+    if (sns.length > 0) {
+      for (const batch of chunk(sns, 200)) {
+        const deviceRes = await supabase.from(DEVICE_TABLE).select('device_sn, device_name').in('device_sn', batch);
+        if (deviceRes.error) continue;
+        for (const row of ((deviceRes.data as any[] | null) ?? [])) {
+          const sn = normalizeDeviceSn(row.device_sn);
+          if (!sn) continue;
+          nameBySn[sn] = String(row.device_name ?? '').trim() || sn;
+        }
+      }
+    }
+
+    const byStaff = new Map<string, Array<{ name: string; borrowedAt: string }>>();
+    for (const [sn, info] of borrowedBySn.entries()) {
+      const list = byStaff.get(info.staffId) ?? [];
+      list.push({ name: nameBySn[sn] || sn, borrowedAt: info.borrowedAt });
+      byStaff.set(info.staffId, list);
+    }
+
+    const nowMs = Date.now();
+    const overdueMs = 8 * 60 * 60 * 1000;
+    const next: Record<string, PunchBoardDeviceStatus> = {};
+    for (const staffId of normalizedStaffIds) {
+      const items = byStaff.get(staffId) ?? [];
+      if (items.length === 0) {
+        next[staffId] = { text: 'No borrowed device', tone: 'none' };
+        continue;
+      }
+      const hasOverdue = items.some((item) => {
+        const borrowedAtMs = Date.parse(String(item.borrowedAt ?? ''));
+        if (!Number.isFinite(borrowedAtMs) || borrowedAtMs <= 0) return false;
+        return nowMs - borrowedAtMs >= overdueMs;
+      });
+      const names = items
+        .map((item) => item.name)
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b, 'en-US', { sensitivity: 'base', numeric: true }));
+      const text = names.length > 1 ? `${names[0]} +${names.length - 1}` : names[0] || 'Borrowed';
+      next[staffId] = { text, tone: hasOverdue ? 'overdue' : 'borrowed' };
+    }
+    setPunchBoardDeviceStatusByStaffId(next);
+  };
+
+  const fetchDeviceQuickLogs = async () => {
+    if (!supabase) {
+      setDeviceQuickError('Missing Supabase configuration.');
+      setDeviceQuickLogs([]);
+      return;
+    }
+
+    setDeviceQuickError(null);
+    const base = () => supabase.from(DEVICE_LOANS_TABLE).select('id, created_at, staff_id, action, device_sn').limit(80);
+    const ordered = await base().order('created_at', { ascending: false });
+    const attempt = ordered.error ? await base().order('id', { ascending: false }) : ordered;
+    if (attempt.error) {
+      setDeviceQuickError(attempt.error.message);
+      setDeviceQuickLogs([]);
+      return;
+    }
+
+    const rows = ((attempt.data as any[] | null) ?? [])
+      .map((row) => {
+        const actionRaw = String(row.action ?? '').trim().toLowerCase();
+        if (actionRaw !== 'borrow' && actionRaw !== 'return') return null;
+        return {
+          id: (row.id as number | string | null | undefined) ?? `${String(row.staff_id ?? '')}-${String(row.created_at ?? '')}`,
+          created_at: String(row.created_at ?? '').trim() || null,
+          staff_id: normalizeStaffId(String(row.staff_id ?? '').trim()),
+          action: actionRaw as 'borrow' | 'return',
+          device_sn: normalizeDeviceSn(row.device_sn)
+        } as DeviceQuickLogRow;
+      })
+      .filter(Boolean) as DeviceQuickLogRow[];
+    setDeviceQuickLogs(rows);
+
+    const staffIds = Array.from(new Set(rows.map((row) => normalizeStaffId(row.staff_id)).filter(Boolean)));
+    if (staffIds.length > 0) {
+      const mapRes = await fetchEmployeeMap(staffIds);
+      if (!mapRes.error) {
+        setDeviceQuickNameByStaffId((prev) => {
+          const next = { ...prev };
+          for (const id of staffIds) {
+            const name = String(mapRes.map[id]?.name ?? '').trim();
+            if (name) next[id] = name;
+          }
+          return next;
+        });
+      }
+    }
+
+    const sns = Array.from(new Set(rows.map((row) => normalizeDeviceSn(row.device_sn)).filter(Boolean)));
+    if (sns.length > 0) {
+      for (const batch of chunk(sns, 200)) {
+        const deviceRes = await supabase.from(DEVICE_TABLE).select('device_sn, device_name').in('device_sn', batch);
+        if (deviceRes.error) continue;
+        setDeviceQuickNameBySn((prev) => {
+          const next = { ...prev };
+          for (const row of ((deviceRes.data as any[] | null) ?? [])) {
+            const sn = normalizeDeviceSn(row.device_sn);
+            if (!sn) continue;
+            next[sn] = String(row.device_name ?? '').trim() || sn;
+          }
+          return next;
+        });
+      }
+    }
+  };
+
+  const resolveBorrowerBySn = async (snRaw: string) => {
+    if (!supabase) return { staffId: '', error: 'Missing Supabase configuration.' };
+    const sn = normalizeDeviceSn(snRaw);
+    if (!sn) return { staffId: '', error: 'Device SN is required.' };
+    const base = () =>
+      supabase
+        .from(DEVICE_LOANS_TABLE)
+        .select('staff_id, action, created_at')
+        .eq('device_sn', sn)
+        .limit(5000);
+    const ordered = await base().order('created_at', { ascending: true });
+    const attempt = ordered.error ? await base().order('id', { ascending: true }) : ordered;
+    if (attempt.error) return { staffId: '', error: attempt.error.message };
+    let currentStaff = '';
+    for (const row of ((attempt.data as any[] | null) ?? [])) {
+      const action = String(row.action ?? '').trim().toLowerCase();
+      if (action === 'borrow') {
+        currentStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      } else if (action === 'return') {
+        currentStaff = '';
+      }
+    }
+    if (!currentStaff) return { staffId: '', error: 'No active borrowed record for this SN.' };
+    return { staffId: currentStaff, error: null as string | null };
+  };
+
+  const submitDeviceQuickAction = async (mode: 'borrow' | 'return') => {
+    if (!supabase) {
+      setDeviceQuickError('Missing Supabase configuration.');
+      playError();
+      return;
+    }
+    if (deviceQuickBusy) return;
+
+    await unlockAudio();
+    setDeviceQuickError(null);
+    let staffId = '';
+    const sn = normalizeDeviceSn(mode === 'borrow' ? deviceBorrowSn : deviceReturnSn);
+    if (!sn) {
+      setDeviceQuickError('Device SN is required.');
+      playError();
+      return;
+    }
+    if (mode === 'borrow') {
+      staffId = normalizeStaffId(deviceBorrowStaffId);
+      if (!isValidStaffId(staffId)) {
+        setDeviceQuickError('Invalid USID.');
+        playError();
+        return;
+      }
+    } else {
+      const holder = await resolveBorrowerBySn(sn);
+      if (holder.error) {
+        setDeviceQuickError(holder.error);
+        playError();
+        return;
+      }
+      staffId = holder.staffId;
+    }
+
+    setDeviceQuickBusy(mode);
+    const insertRes = await supabase.from(DEVICE_LOANS_TABLE).insert([
+      {
+        staff_id: staffId,
+        action: mode,
+        device_sn: sn
+      }
+    ]);
+    setDeviceQuickBusy('');
+    if (insertRes.error) {
+      setDeviceQuickError(insertRes.error.message);
+      playError();
+      return;
+    }
+
+    if (mode === 'borrow') {
+      setDeviceBorrowSn('');
+      deviceBorrowSnRef.current?.focus();
+      playSound('successIn');
+    } else {
+      setDeviceReturnSn('');
+      deviceReturnSnRef.current?.focus();
+      playSound('successOut');
+    }
+    void fetchDeviceQuickLogs();
+    void fetchPunchBoardDeviceStatus(punchBoard.map((row) => row.staff_id));
   };
 
   useEffect(() => {
@@ -2072,7 +2281,7 @@ const fetchPunchBoardUph = async (
     setRosterShiftByStaffId(out);
   };
 
-  const fetchPunchBoard = async (options?: { position?: AllowedPosition | ''; forceUph?: boolean }) => {
+  const fetchPunchBoard = async (options?: { position?: AllowedPosition | '' }) => {
     if (!supabase) {
       setPunchBoardError('Missing Supabase configuration.');
       return;
@@ -2081,7 +2290,6 @@ const fetchPunchBoardUph = async (
     setPunchBoardError(null);
 
     const position = options?.position ?? '';
-    const forceUph = Boolean(options?.forceUph);
 
     const loadLatestAll = async () => {
       const base = () => supabase.from('ob_punches').select('id, staff_id, action, created_at').limit(30);
@@ -2179,6 +2387,7 @@ const fetchPunchBoardUph = async (
       setPunchBoardError(loaded.error);
       setPunchBoard([]);
       setPunchBoardEmployeeMap({});
+      setPunchBoardDeviceStatusByStaffId({});
       setPunchBoardUphByStaffId({});
       return;
     }
@@ -2191,10 +2400,12 @@ const fetchPunchBoardUph = async (
     const mapRes = await fetchEmployeeMap(staffIds);
     if (mapRes.error) {
       setPunchBoardEmployeeMap({});
+      setPunchBoardDeviceStatusByStaffId({});
       setPunchBoardUphByStaffId({});
       return;
     }
     setPunchBoardEmployeeMap(mapRes.map);
+    await fetchPunchBoardDeviceStatus(staffIds);
     const normalizedStaffIds = Array.from(new Set(staffIds.map((v) => normalizeStaffId(v)).filter(Boolean))).sort((a, b) =>
       a.localeCompare(b, 'en-US')
     );
@@ -2206,7 +2417,7 @@ const fetchPunchBoardUph = async (
       .join('|');
     const uphCache = punchBoardUphCacheRef.current;
     const cacheFresh = Date.now() - uphCache.at < PUNCH_LOG_UPH_CACHE_TTL_MS;
-    if (!forceUph && cacheFresh && uphCache.key === uphCacheKey) {
+    if (cacheFresh && uphCache.key === uphCacheKey) {
       setPunchBoardUphByStaffId(uphCache.map);
       return;
     }
@@ -2228,6 +2439,7 @@ const fetchPunchBoardUph = async (
       void fetchArrivalMetrics();
       void fetchAbsentRoster();
       void fetchPunchBoard({ position: punchLogPositionFilter });
+      void fetchDeviceQuickLogs();
       void fetchScheduleLabelToneSetting();
       void fetchSchedulePositionToneSetting();
       void fetchTomorrowListSetting();
@@ -2242,6 +2454,14 @@ const fetchPunchBoardUph = async (
       window.clearInterval(timer);
     };
   }, [page, punchLogPositionFilter]);
+
+  useEffect(() => {
+    if (page !== 'punch') return;
+    const timer = window.setInterval(() => {
+      void fetchDeviceQuickLogs();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [page]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -2299,14 +2519,6 @@ const fetchPunchBoardUph = async (
     const manualVisible = getManualTomorrowListVisible(tomorrowListSetting, now);
     void fetchDailyRoster(manualVisible ? tomorrowListSetting.publishForDate : undefined);
   }, [page, showTomorrowListData, tomorrowListSetting.publishForDate]);
-
-  useEffect(() => {
-    if (page !== 'punch') return;
-    const timer = window.setInterval(() => {
-      flipRosterPanel('auto');
-    }, 25000);
-    return () => window.clearInterval(timer);
-  }, [page, rosterFlipSeed]);
 
   useEffect(() => {
     if (page !== 'punch') return;
@@ -2502,142 +2714,117 @@ const fetchPunchBoardUph = async (
   const dailyRosterPanel = (
     <section className="glass reveal flex h-full flex-col rounded-3xl px-4 py-5">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="font-display text-xl tracking-[0.08em]">{rosterFlipped ? 'Absent List' : 'List for Tomorrow'}</h3>
-        <span className="font-display text-sm tracking-[0.06em] text-slate-300">
-          {rosterFlipped ? absentDateText : rosterDateText}
-        </span>
+        <h3 className="font-display text-xl tracking-[0.08em]">Device Desk</h3>
         <button
           type="button"
-          disabled={isLocked}
-          onClick={() => flipRosterPanel('manual')}
+          disabled={isLocked || Boolean(deviceQuickBusy)}
+          onClick={() => {
+            void fetchDeviceQuickLogs();
+            void fetchPunchBoardDeviceStatus(punchBoard.map((row) => row.staff_id));
+          }}
           className="rounded-lg bg-white/10 px-2 py-1 text-xs text-slate-300 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-          title="Flip panel"
         >
-          Flip
+          Refresh
         </button>
       </div>
-      <div className="mt-3 flex flex-wrap gap-2">
+
+      <div className="mt-3 rounded-2xl border border-emerald-400/50 bg-emerald-500/5 p-3">
+        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">Borrow</div>
+        <input
+          ref={deviceBorrowStaffRef}
+          value={deviceBorrowStaffId}
+          onChange={(event) => setDeviceBorrowStaffId(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              deviceBorrowSnRef.current?.focus();
+            }
+          }}
+          placeholder="USID"
+          className="mt-2 h-10 w-full rounded-xl border border-emerald-300/50 bg-black/40 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-300"
+        />
+        <input
+          ref={deviceBorrowSnRef}
+          value={deviceBorrowSn}
+          onChange={(event) => setDeviceBorrowSn(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              void submitDeviceQuickAction('borrow');
+            }
+          }}
+          placeholder="Device SN"
+          className="mt-2 h-10 w-full rounded-xl border border-emerald-300/50 bg-black/40 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-300"
+        />
         <button
           type="button"
-          disabled={isLocked}
-          onClick={() => setDailyRosterPositionFilter('')}
-          className={[
-            'rounded-xl px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.15em] transition disabled:cursor-not-allowed disabled:opacity-60',
-            dailyRosterPositionFilter === '' ? 'bg-neon roster-all-active shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
-          ].join(' ')}
+          disabled={isLocked || deviceQuickBusy !== ''}
+          onClick={() => void submitDeviceQuickAction('borrow')}
+          className="mt-2 h-10 w-full rounded-xl bg-emerald-500/85 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          All
+          {deviceQuickBusy === 'borrow' ? 'Submitting...' : 'Borrow now'}
         </button>
-        {ALLOWED_POSITIONS.map((pos) => (
-          <button
-            key={`roster-${pos}`}
-            type="button"
-            disabled={isLocked}
-            onClick={() => setDailyRosterPositionFilter((prev) => (prev === pos ? '' : pos))}
-            className={[
-              'rounded-xl px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.15em] transition disabled:cursor-not-allowed disabled:opacity-60',
-              dailyRosterPositionFilter === pos ? `${getAppPositionBadgeClass(pos)} shadow-glow` : 'bg-white/10 text-slate-200 hover:bg-white/15'
-            ].join(' ')}
-          >
-            {pos}
-          </button>
-        ))}
       </div>
-      {dailyRosterError && <p className="mt-3 text-sm text-ember">{dailyRosterError}</p>}
-      {!dailyRosterError && (
-        <div className="mt-3 flex-1" style={{ perspective: '1200px' }}>
-          <div
-            className="relative h-full w-full transition-transform duration-700"
-            style={{ transformStyle: 'preserve-3d', transform: rosterFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
-          >
-            <div className="absolute inset-0 overflow-auto pr-1" style={{ backfaceVisibility: 'hidden' }}>
-              {!showTomorrowListData ? (
-                <div className="flex h-full items-center justify-center">
-                  <p className="text-sm text-slate-500">Tomorrow schedule not published yet.</p>
-                </div>
-              ) : dailyRosterFiltered.length === 0 ? (
-                <p className="text-sm text-slate-400">No roster data.</p>
-              ) : (
-                <div className="space-y-2">
-                  {dailyRosterFiltered.map((row, idx) => (
-                    <div key={`${row.staff_id}-${row.position}-${idx}`} className="rounded-xl bg-white/5 px-3 py-2">
-                      {(() => {
-                        const inferredShift = rosterShiftByStaffId[row.staff_id] ?? '';
-                        const displayShift = inferredShift || ((row.shift as '' | 'early' | 'late') ?? '');
-                        return (
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <div className="truncate text-sm font-semibold text-slate-100">{row.name || row.staff_id}</div>
-                              <div className="truncate text-xs text-slate-400">{row.agency}</div>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <span
-                                className={[
-                                  'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]',
-                                  getShiftBadgeClass(displayShift || '-')
-                                ].join(' ')}
-                              >
-                                {formatShiftLabel(displayShift || '-')}
-                              </span>
-                              <span
-                                className={[
-                                  'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]',
-                                  getAppPositionBadgeClass(row.position || '-')
-                                ].join(' ')}
-                              >
-                                {row.position || '-'}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div
-              className="absolute inset-0 overflow-auto pr-1"
-              style={{ backfaceVisibility: 'hidden', transform: 'rotateY(180deg)' }}
-            >
-              {absentRosterFiltered.length === 0 ? (
-                <p className="text-sm text-slate-400">No absent staff.</p>
-              ) : (
-                <div className="space-y-2">
-                  {absentRosterFiltered.map((row, idx) => (
-                    <div key={`${row.staff_id}-${row.position}-absent-${idx}`} className="rounded-xl bg-white/5 px-3 py-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <div className="truncate text-sm font-semibold text-slate-100">{row.name || row.staff_id}</div>
-                          <div className="truncate text-xs text-slate-400">{row.agency}</div>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={[
-                              'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]',
-                              getShiftBadgeClass(row.shift || '-')
-                            ].join(' ')}
-                          >
-                            {formatShiftLabel(row.shift || '-')}
-                          </span>
-                          <span
-                            className={[
-                              'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]',
-                              getAppPositionBadgeClass(row.position || '-')
-                            ].join(' ')}
-                          >
-                            {row.position || '-'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+
+      <div className="mt-3 rounded-2xl border border-rose-400/50 bg-rose-500/5 p-3">
+        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-300">Return</div>
+        <input
+          ref={deviceReturnSnRef}
+          value={deviceReturnSn}
+          onChange={(event) => setDeviceReturnSn(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              void submitDeviceQuickAction('return');
+            }
+          }}
+          placeholder="Scan Device SN"
+          className="mt-2 h-10 w-full rounded-xl border border-rose-300/60 bg-black/40 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-rose-300"
+        />
+        <button
+          type="button"
+          disabled={isLocked || deviceQuickBusy !== ''}
+          onClick={() => void submitDeviceQuickAction('return')}
+          className="mt-2 h-10 w-full rounded-xl bg-rose-500/85 text-sm font-semibold text-rose-50 transition hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {deviceQuickBusy === 'return' ? 'Submitting...' : 'Return now'}
+        </button>
+      </div>
+
+      <div className="mt-3 min-h-0 flex-1 rounded-2xl border border-white/10 bg-white/[0.03] p-3 flex flex-col">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">Log</div>
+          <div className="text-[10px] text-slate-500">Auto refresh 5s</div>
         </div>
-      )}
+        {deviceQuickError && <p className="mt-2 text-xs text-ember">{deviceQuickError}</p>}
+        {!deviceQuickError && deviceQuickLogs.length === 0 && <p className="mt-2 text-xs text-slate-500">No device logs.</p>}
+        {!deviceQuickError && deviceQuickLogs.length > 0 && (
+          <div className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-auto pr-1">
+            {deviceQuickLogs.map((row) => {
+              const timeText = row.created_at ? new Date(row.created_at).toLocaleString('en-CA', { hour12: false }) : '-';
+              const actionClass =
+                row.action === 'borrow'
+                  ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                  : 'border-rose-400/60 bg-rose-500/10 text-rose-200';
+              return (
+                <div key={String(row.id)} className="rounded-xl bg-black/25 px-2.5 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={['inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]', actionClass].join(' ')}>
+                      {row.action}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-xs text-slate-100">
+                      {(deviceQuickNameByStaffId[normalizeStaffId(row.staff_id)] || '-') +
+                        ' · ' +
+                        (deviceQuickNameBySn[normalizeDeviceSn(row.device_sn)] || '-')}
+                    </span>
+                    <span className="text-[10px] text-slate-500">{timeText}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </section>
   );
 
@@ -3124,6 +3311,15 @@ const fetchPunchBoardUph = async (
                     <button
                       type="button"
                       onClick={() => {
+                        window.location.href = '/Dashboard';
+                      }}
+                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15"
+                    >
+                      Dashboard
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
                         window.location.href = '/device.html';
                       }}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15"
@@ -3133,7 +3329,7 @@ const fetchPunchBoardUph = async (
                     <button
                       type="button"
                       disabled={isLocked}
-                      onClick={() => void fetchPunchBoard({ position: punchLogPositionFilter, forceUph: true })}
+                      onClick={() => void fetchPunchBoard({ position: punchLogPositionFilter })}
                       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       Refresh
@@ -3166,13 +3362,12 @@ const fetchPunchBoardUph = async (
                 {!punchBoardError && punchBoardFiltered.length > 0 && (
                   <div className="mt-4 flex-1 overflow-auto pr-1">
                     <div className="space-y-2">
-                      <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_6.5rem] items-center gap-3 px-4 text-xs uppercase tracking-[0.25em] text-slate-500 sm:grid-cols-[3.5rem_minmax(0,1fr)_7rem_7rem_4.5rem_9.5rem]">
+                      <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_6.5rem] items-center gap-3 px-4 text-xs uppercase tracking-[0.25em] text-slate-500 sm:grid-cols-[3.5rem_minmax(0,1fr)_7rem_8.5rem_9.5rem]">
                         <div>Action</div>
                         <div className="sm:hidden">Info</div>
                         <div className="hidden sm:block">Name</div>
                         <div className="hidden sm:block">Position</div>
-                        <div className="hidden sm:block">Label</div>
-                        <div className="hidden text-center sm:block">UPH</div>
+                        <div className="hidden text-center sm:block">Device</div>
                         <div className="text-right">Time</div>
                       </div>
                       {punchBoardFiltered.map((p) => {
@@ -3183,19 +3378,23 @@ const fetchPunchBoardUph = async (
                         const isIn = p.action === 'IN';
                         const name = employee?.name || p.staff_id || '-';
                         const position = employee?.position || '-';
-                        const label = employee?.label || '-';
-                        const uph = punchBoardUphByStaffId[p.staff_id];
+                        const staffKey = normalizeStaffId(p.staff_id) || p.staff_id;
+                        const deviceStatus = punchBoardDeviceStatusByStaffId[staffKey] ?? { text: 'No borrowed device', tone: 'none' as const };
+                        const deviceStatusClass =
+                          deviceStatus.tone === 'overdue'
+                            ? 'border-rose-400/70 bg-rose-500/20 text-rose-100'
+                            : deviceStatus.tone === 'borrowed'
+                              ? 'border-amber-400/70 bg-amber-500/20 text-amber-100'
+                              : 'border-emerald-400/70 bg-emerald-500/20 text-emerald-100';
                         return (
                           <div key={String(p.id)} className="rounded-2xl bg-white/5 px-4 py-3">
-                            <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_6.5rem] items-center gap-3 sm:grid-cols-[3.5rem_minmax(0,1fr)_7rem_7rem_4.5rem_9.5rem]">
+                            <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_6.5rem] items-center gap-3 sm:grid-cols-[3.5rem_minmax(0,1fr)_7rem_8.5rem_9.5rem]">
                               <span className={['font-display text-xl', isIn ? 'text-mint' : 'text-ember'].join(' ')}>
                                 {p.action}
                               </span>
                               <span className="min-w-0">
                                 <span className="block truncate text-sm text-slate-200 sm:hidden">{name}</span>
-                                <span className="mt-0.5 block truncate text-xs text-slate-400 sm:hidden">
-                                  {position} · {label} · UPH {formatUph(uph)}
-                                </span>
+                                <span className="mt-0.5 block truncate text-xs text-slate-400 sm:hidden">{position} · Device {deviceStatus.text}</span>
                                 <span className="hidden truncate text-sm text-slate-200 sm:block">{name}</span>
                               </span>
                               <span className="hidden min-w-0 truncate text-sm text-slate-200 sm:block">
@@ -3208,17 +3407,17 @@ const fetchPunchBoardUph = async (
                                   {position || '-'}
                                 </span>
                               </span>
-                              <span className="hidden min-w-0 truncate text-sm text-slate-200 sm:block">
+                              <span className="hidden text-center text-sm text-slate-200 sm:block">
                                 <span
                                   className={[
-                                    'inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold',
-                                    getAppLabelToneClass(label)
+                                    'inline-flex min-h-[1.7rem] w-[8.2rem] items-center justify-center rounded-lg border px-2 py-1 text-[11px] font-semibold',
+                                    deviceStatusClass
                                   ].join(' ')}
+                                  title={deviceStatus.text}
                                 >
-                                  <span className="truncate">{label}</span>
+                                  <span className="truncate">{deviceStatus.text}</span>
                                 </span>
                               </span>
-                              <span className="hidden text-center font-mono text-sm text-slate-200 sm:block">{formatUph(uph)}</span>
                               <span className="text-right text-xs text-slate-400">{time}</span>
                             </div>
                           </div>

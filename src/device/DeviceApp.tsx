@@ -706,39 +706,31 @@ export default function DeviceApp() {
                       row.tone === 'success' ? 'border-emerald-400/55' : 'border-rose-400/55'
                     ].join(' ')}
                   >
-                    <div className="flex items-center gap-2 text-xs font-semibold leading-none">
-                      <span className="shrink-0 text-[11px] text-slate-400">{new Date(row.at).toLocaleTimeString('en-US', { hour12: false })}</span>
-                      {(() => {
-                        const isBorrow = row.text.startsWith('Borrow');
-                        const isReturn = row.text.startsWith('Return');
-                        const actionLabel = isBorrow ? 'Borrow' : isReturn ? 'Return' : '';
-                        const actionClass = isBorrow
-                          ? 'bg-[#121a24] text-[#00f28a]'
-                          : isReturn
-                            ? 'bg-[#121a24] text-[#ff3b3b]'
-                            : row.tone === 'success'
-                              ? 'bg-[#121a24] text-[#00f28a]'
-                              : 'bg-[#121a24] text-[#ff3b3b]';
-                        return (
-                          <>
-                            {actionLabel && (
-                              <span className={['inline-flex h-5 min-w-[58px] items-center justify-center rounded-lg px-2 text-[10px] font-bold leading-none tracking-[0.06em]', actionClass].join(' ')}>
-                                {actionLabel}
-                              </span>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </div>
                     {(() => {
                       const isBorrow = row.text.startsWith('Borrow');
                       const isReturn = row.text.startsWith('Return');
                       const actionLabel = isBorrow ? 'Borrow' : isReturn ? 'Return' : '';
-                      const detailText = actionLabel ? row.text.slice(actionLabel.length).trimStart() : row.text;
+                      const detailTextRaw = actionLabel ? row.text.slice(actionLabel.length).trimStart() : row.text;
+                      const detailText = detailTextRaw.replace(/\s*\/\s*/g, ' · ');
+                      const actionClass = isBorrow
+                        ? 'bg-[#121a24] text-[#00f28a]'
+                        : isReturn
+                          ? 'bg-[#121a24] text-[#ff3b3b]'
+                          : row.tone === 'success'
+                            ? 'bg-[#121a24] text-[#00f28a]'
+                            : 'bg-[#121a24] text-[#ff3b3b]';
                       const detailClass = row.tone === 'success' ? 'text-emerald-200' : 'text-rose-200';
                       return (
-                        <div className={['mt-1 text-xs leading-4 break-words', detailClass].join(' ')} style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }} title={detailText}>
-                          {detailText}
+                        <div className="flex items-center gap-2">
+                          {actionLabel && (
+                            <span className={['inline-flex h-5 min-w-[58px] items-center justify-center rounded-lg px-2 text-[10px] font-bold leading-none tracking-[0.06em]', actionClass].join(' ')}>
+                              {actionLabel}
+                            </span>
+                          )}
+                          <span className={['min-w-0 flex-1 truncate text-xs font-semibold leading-none', detailClass].join(' ')} title={detailText}>
+                            {detailText}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-slate-400">{new Date(row.at).toLocaleTimeString('en-US', { hour12: false })}</span>
                         </div>
                       );
                     })()}
