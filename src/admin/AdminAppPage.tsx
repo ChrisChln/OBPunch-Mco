@@ -5148,11 +5148,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const fetchProfilesByStaffId = async (staffIds: string[]) => {
       if (isStale()) {
         return {
-          staffToProfile: new Map<string, { name: string; agency: string; position: string }>(),
+          staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>(),
           error: STALE_TIMECARD_REQUEST
         };
       }
-      const staffToProfile = new Map<string, { name: string; agency: string; position: string }>();
+      const staffToProfile = new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>();
       if (!supabase) {
         return { staffToProfile, error: 'Missing Supabase config.' };
       }
@@ -5163,21 +5163,21 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const mode = await resolveEmployeeColumnMode();
       if (isStale()) {
         return {
-          staffToProfile: new Map<string, { name: string; agency: string; position: string }>(),
+          staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>(),
           error: STALE_TIMECARD_REQUEST
         };
       }
       const batches = chunk(staffIds, 200);
       for (const batch of batches) {
         const run = async (m: EmployeeColumnMode) => {
-          const select = m === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
+          const select = m === 'cased' ? 'staff_id, name, "Agency", "Position", shift' : 'staff_id, name, agency, position, shift';
           return await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch);
         };
 
         let res = await run(mode);
         if (isStale()) {
           return {
-            staffToProfile: new Map<string, { name: string; agency: string; position: string }>(),
+            staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>(),
             error: STALE_TIMECARD_REQUEST
           };
         }
@@ -5188,7 +5188,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         }
         if (res.error) {
           return {
-            staffToProfile: new Map<string, { name: string; agency: string; position: string }>(),
+            staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>(),
             error: res.error.message
           };
         }
@@ -5199,7 +5199,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           staffToProfile.set(staff, {
             name: String(r.name ?? '').trim(),
             agency: String(r.agency ?? r.Agency ?? '').trim(),
-            position: String(r.position ?? r.Position ?? '').trim()
+            position: String(r.position ?? r.Position ?? '').trim(),
+            shift: normalizeShiftValue(String(r.shift ?? '').trim())
           });
         }
       }
@@ -5363,6 +5364,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       name,
       agency,
       position,
+      profileShift,
       eventsByStaff,
       scheduledByStaff,
       scheduleStateByStaff,
@@ -5373,6 +5375,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       name: string;
       agency: string;
       position: string;
+      profileShift: '' | 'early' | 'late';
       eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT'; manual: boolean }>>;
       scheduledByStaff: Record<string, boolean[]>;
       scheduleStateByStaff: Record<string, ScheduleBaseState[]>;
@@ -5382,13 +5385,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const events = eventsByStaff[staff] ?? [];
       const intervals: Array<{ start: Date; end: Date }> = [];
       let currentIn: Date | null = null;
-      let firstInInWeek: Date | null = null;
       for (const ev of events) {
         if (ev.action === 'IN') {
           currentIn = ev.at;
-          if (!firstInInWeek && ev.at.getTime() >= weekStart.getTime() && ev.at.getTime() < weekEnd.getTime()) {
-            firstInInWeek = ev.at;
-          }
           continue;
         }
         if (ev.action === 'OUT') {
@@ -5442,7 +5441,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
       const manualWeek = manualByDay.some(Boolean);
       const totalHours = hoursByDay.reduce((sum, v) => sum + v, 0);
-      const shift = firstInInWeek ? (getShiftBucketFromDate(firstInInWeek) ?? '') : '';
+      const shift = profileShift;
       const scheduledByDay = scheduledByStaff[staff] ?? (new Array(7).fill(false) as boolean[]);
       const markRec = marksByStaff[staff] ?? {
         absentByDay: new Array(7).fill(false) as boolean[],
@@ -5537,7 +5536,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           return { rows: [] as TimecardRow[], hasMore: false, error: profilesRes.error };
         }
 
-        const isMissingProfile = (profile: { name: string; agency: string; position: string } | undefined) => {
+        const isMissingProfile = (profile: { name: string; agency: string; position: string; shift: '' | 'early' | 'late' } | undefined) => {
           if (!profile) return true;
           return !profile.name && !profile.agency && !profile.position;
         };
@@ -5570,12 +5569,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         }
 
         const rows: TimecardRow[] = staffIds.map((staff) => {
-          const profile = profilesRes.staffToProfile.get(staff) ?? { name: '', agency: '', position: '' };
+          const profile = profilesRes.staffToProfile.get(staff) ?? { name: '', agency: '', position: '', shift: '' as '' | 'early' | 'late' };
           return buildTimecardRow({
             staff,
             name: profile.name,
             agency: profile.agency,
             position: profile.position,
+            profileShift: profile.shift,
             eventsByStaff,
             scheduledByStaff: scheduledRes.scheduledByStaff,
             scheduleStateByStaff: scheduledRes.scheduleStateByStaff,
@@ -5593,7 +5593,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const buildEmployees = (m: EmployeeColumnMode) => {
         const agencyCol = m === 'cased' ? 'Agency' : 'agency';
         const positionCol = m === 'cased' ? 'Position' : 'position';
-        const select = m === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
+        const select = m === 'cased' ? 'staff_id, name, "Agency", "Position", shift' : 'staff_id, name, agency, position, shift';
 
         let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
         if (agencyValue) q = q.ilike(agencyCol as any, agencyValue);
@@ -5626,22 +5626,24 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
 
       const employees = employeeRows ?? [];
-      const employeeByStaffId = new Map<string, { staff_id: string; name: string; agency: string; position: string }>();
+      const employeeByStaffId = new Map<string, { staff_id: string; name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>();
       for (const e of employees) {
         const staff = String(e.staff_id ?? '').trim();
         if (!staff) continue;
         const name = String(e.name ?? '').trim();
         const agency = String(e.agency ?? e.Agency ?? '').trim();
         const position = String(e.position ?? e.Position ?? '').trim();
+        const shift = normalizeShiftValue(String(e.shift ?? '').trim());
         const existing = employeeByStaffId.get(staff);
         if (!existing) {
-          employeeByStaffId.set(staff, { staff_id: staff, name, agency, position });
+          employeeByStaffId.set(staff, { staff_id: staff, name, agency, position, shift });
           continue;
         }
         // Keep first row order, but fill missing fields from duplicate rows.
         if (!existing.name && name) existing.name = name;
         if (!existing.agency && agency) existing.agency = agency;
         if (!existing.position && position) existing.position = position;
+        if (!existing.shift && shift) existing.shift = shift;
       }
       const uniqueEmployees = Array.from(employeeByStaffId.values());
       const staffIds = uniqueEmployees.map((e) => e.staff_id);
@@ -5732,11 +5734,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const name = e.name;
         const agency = e.agency;
         const position = e.position;
+        const profileShift = e.shift;
         return buildTimecardRow({
           staff,
           name,
           agency,
           position,
+          profileShift,
           eventsByStaff,
           scheduledByStaff: scheduledRes.scheduledByStaff,
           scheduleStateByStaff: scheduledRes.scheduleStateByStaff,
