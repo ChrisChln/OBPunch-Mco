@@ -1033,27 +1033,35 @@ export default function App() {
       return;
     }
 
-    const loansRes = await supabase
-      .from(DEVICE_LOANS_TABLE)
-      .select('staff_id, action, device_sn, created_at')
-      .order('created_at', { ascending: true })
-      .limit(5000);
+    const baseLoans = () =>
+      supabase
+        .from(DEVICE_LOANS_TABLE)
+        .select('id, staff_id, action, device_sn, created_at')
+        .limit(20000);
+    const loansOrdered = await baseLoans().order('created_at', { ascending: false });
+    const loansRes = loansOrdered.error ? await baseLoans().order('id', { ascending: false }) : loansOrdered;
     if (loansRes.error) {
       setPunchBoardDeviceStatusByStaffId({});
       return;
     }
 
     const borrowedBySn = new Map<string, { staffId: string; borrowedAt: string }>();
+    const resolvedSn = new Set<string>();
     for (const row of ((loansRes.data as any[] | null) ?? [])) {
       const sn = normalizeDeviceSn(row.device_sn);
       if (!sn) continue;
+      if (resolvedSn.has(sn)) continue;
       const action = String(row.action ?? '').trim().toLowerCase();
       if (action === 'borrow') {
         const staffId = normalizeStaffId(String(row.staff_id ?? '').trim());
-        if (!staffId) continue;
+        if (!staffId) {
+          resolvedSn.add(sn);
+          continue;
+        }
         borrowedBySn.set(sn, { staffId, borrowedAt: String(row.created_at ?? '') });
+        resolvedSn.add(sn);
       } else if (action === 'return') {
-        borrowedBySn.delete(sn);
+        resolvedSn.add(sn);
       }
     }
 
@@ -1243,8 +1251,9 @@ export default function App() {
     }
 
     if (mode === 'borrow') {
+      setDeviceBorrowStaffId('');
       setDeviceBorrowSn('');
-      deviceBorrowSnRef.current?.focus();
+      deviceBorrowStaffRef.current?.focus();
       playSound('successIn');
     } else {
       setDeviceReturnSn('');
