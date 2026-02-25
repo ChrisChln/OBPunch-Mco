@@ -9,20 +9,25 @@ type AccountRow = {
   position: string;
   workAccount: string;
   workPassword: string;
+  isTemp?: boolean;
 };
 
 type AccountManagementPageProps = {
   t: TranslateFn;
   isLocked: boolean;
+  themeMode?: 'dark' | 'light';
   accountSearch: string;
   setAccountSearch: (value: string) => void;
   accountPositionFilter: string;
   setAccountPositionFilter: (value: string) => void;
   accountPositionOptions: string[];
+  accountTempOnly: boolean;
+  setAccountTempOnly: (value: boolean) => void;
   accountRowsFiltered: AccountRow[];
   accountRowsRendered: AccountRow[];
   setAccountRenderCount: (value: number | ((prev: number) => number)) => void;
   onRefreshEmployees: () => void | Promise<void>;
+  onDownloadTemplate: () => void | Promise<void>;
   onImportAccounts: (file: File | null) => void | Promise<void>;
   onExportAccounts: () => void | Promise<void>;
   accountCardPrintingStaffId: string | null;
@@ -32,15 +37,19 @@ type AccountManagementPageProps = {
 export default function AccountManagementPage({
   t,
   isLocked,
+  themeMode = 'dark',
   accountSearch,
   setAccountSearch,
   accountPositionFilter,
   setAccountPositionFilter,
   accountPositionOptions,
+  accountTempOnly,
+  setAccountTempOnly,
   accountRowsFiltered,
   accountRowsRendered,
   setAccountRenderCount,
   onRefreshEmployees,
+  onDownloadTemplate,
   onImportAccounts,
   onExportAccounts,
   accountCardPrintingStaffId,
@@ -60,6 +69,14 @@ export default function AccountManagementPage({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-display text-2xl tracking-[0.08em]">{t('账号管理', 'Account Management')}</h2>
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            disabled={isLocked}
+            onClick={() => void onDownloadTemplate()}
+            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {t('下载模板', 'Download template')}
+          </button>
           <label className="cursor-pointer rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15">
             {t('导入账号', 'Import Accounts')}
             <input
@@ -120,6 +137,26 @@ export default function AccountManagementPage({
             ))}
           </select>
         </div>
+        <div className="md:col-span-1">
+          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('临时账号', 'Temp only')}</label>
+          <label
+            className={[
+              'mt-2 flex h-[46px] cursor-pointer items-center gap-2 rounded-2xl border px-3 text-sm',
+              themeMode === 'light'
+                ? 'border-slate-300 bg-white text-slate-700'
+                : 'border-white/10 bg-black/30 text-white'
+            ].join(' ')}
+          >
+            <input
+              type="checkbox"
+              checked={accountTempOnly}
+              onChange={(e) => setAccountTempOnly(e.target.checked)}
+              disabled={isLocked}
+              className="h-4 w-4 accent-lime-400"
+            />
+            <span className={themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'}>{t('仅显示导入账号', 'Show imported accounts only')}</span>
+          </label>
+        </div>
       </div>
 
       {!accountRowsFiltered.length ? (
@@ -141,7 +178,7 @@ export default function AccountManagementPage({
           <tbody>
             {accountRowsRendered.map((row) => (
               <tr key={`${row.staff}__${row.workAccount}__${row.workPassword}`} className="border-b border-white/5 transition-colors hover:bg-white/5 last:border-0">
-                <td className="px-4 py-3 font-mono text-slate-200">{row.staff}</td>
+                <td className="px-4 py-3 font-mono text-slate-200">{row.isTemp ? '' : row.staff}</td>
                 <td className="px-4 py-3 text-slate-200">{row.name || '-'}</td>
                 <td className="px-4 py-3 text-slate-200">{row.position || '-'}</td>
                 <td className="px-4 py-3 text-slate-200">{row.workAccount || '-'}</td>

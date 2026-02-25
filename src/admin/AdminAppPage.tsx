@@ -669,6 +669,7 @@ export default function AdminApp() {
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [accountSearch, setAccountSearch] = useState('');
   const [accountPositionFilter, setAccountPositionFilter] = useState('');
+  const [accountTempOnly, setAccountTempOnly] = useState(false);
   const [employeeAgency, setEmployeeAgency] = useState('');
   const [employeePosition, setEmployeePosition] = useState('');
   const [employeeShiftFilter, setEmployeeShiftFilter] = useState<'' | 'early' | 'late'>('');
@@ -4144,28 +4145,40 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         print-color-adjust: exact !important;
       }
       body {
-        background: #fff;
+        background: #ffffff;
         font-family: Arial, "Microsoft YaHei", sans-serif;
+        color: #0f172a;
       }
       .sheet {
         width: 4in;
         height: 2in;
         box-sizing: border-box;
         padding: 0.12in;
-        border: 1px solid #cbd5e1;
+        border: 0;
+        border-radius: 0;
         display: grid;
         grid-template-rows: auto 1fr;
-        gap: 0.08in;
-        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-        color: #0f172a;
+        gap: 0.05in;
+        background: #ffffff;
       }
       .name {
-        font-size: 16pt;
+        font-size: 14pt;
         line-height: 1.1;
-        font-weight: 900;
+        font-weight: 800;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        color: #0f172a;
+        padding: 0;
+      }
+      .subtitle {
+        margin-top: 0;
+        padding: 0;
+        font-size: 6.8pt;
+        color: #64748b;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        font-weight: 600;
       }
       .pair {
         min-height: 0;
@@ -4174,19 +4187,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         gap: 0.08in;
       }
       .box {
-        border: 1px solid #cbd5e1;
-        border-radius: 6px;
-        padding: 0.05in;
+        border: 0;
+        border-radius: 0;
+        padding: 0;
         display: grid;
         grid-template-columns: 0.92in 1fr;
-        gap: 0.05in;
+        gap: 0.06in;
         align-items: center;
         min-width: 0;
+        background: #ffffff;
+        box-shadow: none;
       }
       .qrsq {
         width: 0.92in;
         height: 0.92in;
-        border: 1px solid #cbd5e1;
+        border: 0;
+        border-radius: 0;
         background: #fff;
         display: flex;
         align-items: center;
@@ -4200,15 +4216,15 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
       .meta { min-width: 0; }
       .k {
-        font-size: 8pt;
-        letter-spacing: 0.08em;
-        font-weight: 800;
-        color: #475569;
+        font-size: 7.5pt;
+        letter-spacing: 0.1em;
+        font-weight: 700;
+        color: #334155;
         text-transform: uppercase;
       }
       .v {
         margin-top: 0.04in;
-        font-size: 8.5pt;
+        font-size: 9pt;
         font-weight: 700;
         color: #0f172a;
         white-space: nowrap;
@@ -7366,6 +7382,29 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     }
   };
 
+  const downloadTempAccountTemplate = async () => {
+    try {
+      const headers = ['name', 'position', 'work_account', 'work_password'];
+      const sample = ['Example Name', 'Pick', '60100001', 'Helloworld2!'];
+      const XLSX = await import('xlsx');
+      const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'template');
+      XLSX.writeFile(wb, 'ob_temp_accounts_template.xlsx');
+    } catch {
+      const csv = 'name,position,work_account,work_password\nExample Name,Pick,60100001,Helloworld2!\n';
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'ob_temp_accounts_template.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+  };
+
   const employeeAgencyOptions = useMemo(() => {
     const out = new Set<string>();
     for (const e of employees) {
@@ -7499,7 +7538,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const position = String(e.position ?? e.Position ?? '').trim();
         const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
         const workPassword = String(e.work_password ?? e.WorkPassword ?? '').trim();
-        return { staff, name, agency, position, workAccount, workPassword };
+        return { staff, name, agency, position, workAccount, workPassword, isTemp: false };
       })
       .filter((row) => Boolean(row.staff && (row.workAccount || row.workPassword)));
     const tempRows = tempAccounts.map((row) => ({
@@ -7508,16 +7547,34 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       agency: String(row.agency ?? '').trim(),
       position: String(row.position ?? '').trim(),
       workAccount: String(row.work_account ?? '').trim(),
-      workPassword: String(row.work_password ?? '').trim()
+      workPassword: String(row.work_password ?? '').trim(),
+      isTemp: true
     }));
-    const dedup = new Map<string, { staff: string; name: string; agency: string; position: string; workAccount: string; workPassword: string }>();
+    const employeeDedup = new Map<string, { staff: string; name: string; agency: string; position: string; workAccount: string; workPassword: string; isTemp: boolean }>();
+    for (const row of employeeRows) {
+      if (!row.staff || (!row.workAccount && !row.workPassword)) continue;
+      const key = `${row.staff}__${row.workAccount}__${row.workPassword}`;
+      if (!employeeDedup.has(key)) employeeDedup.set(key, row);
+    }
+    const tempDedup = new Map<string, { staff: string; name: string; agency: string; position: string; workAccount: string; workPassword: string; isTemp: boolean }>();
+    for (const row of tempRows) {
+      if (!row.staff || (!row.workAccount && !row.workPassword)) continue;
+      const key = `${row.staff}__${row.workAccount}__${row.workPassword}`;
+      if (!tempDedup.has(key)) tempDedup.set(key, row);
+    }
+
+    if (accountTempOnly) {
+      return Array.from(tempDedup.values()).sort((a, b) => a.staff.localeCompare(b.staff, 'en-US'));
+    }
+
+    const dedup = new Map<string, { staff: string; name: string; agency: string; position: string; workAccount: string; workPassword: string; isTemp: boolean }>();
     for (const row of [...employeeRows, ...tempRows]) {
       if (!row.staff || (!row.workAccount && !row.workPassword)) continue;
       const key = `${row.staff}__${row.workAccount}__${row.workPassword}`;
       if (!dedup.has(key)) dedup.set(key, row);
     }
     return Array.from(dedup.values()).sort((a, b) => a.staff.localeCompare(b.staff, 'en-US'));
-  }, [employees, tempAccounts]);
+  }, [employees, tempAccounts, accountTempOnly]);
 
   const accountPositionOptions = useMemo(() => {
     const set = new Set<string>();
@@ -7604,6 +7661,22 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         return;
       }
 
+      const toStaffToken = (value: string) =>
+        String(value ?? '')
+          .trim()
+          .toUpperCase()
+          .replace(/[^A-Z0-9]+/g, '');
+      const buildTempStaffId = (canonical: Record<string, string>, rowIndex: number) => {
+        const staffRaw = normalizeStaffId(String(canonical.staff_id ?? '').trim());
+        if (staffRaw) return staffRaw;
+        const accountToken = toStaffToken(String(canonical.work_account ?? ''));
+        if (accountToken) return `TMPACC-${accountToken}`;
+        const nameToken = toStaffToken(String(canonical.name ?? '')).slice(0, 10);
+        const posToken = toStaffToken(String(canonical.position ?? '')).slice(0, 8);
+        const fallback = `${nameToken || 'NONAME'}${posToken ? `-${posToken}` : ''}-${String(rowIndex + 1).padStart(4, '0')}`;
+        return `TMPACC-${fallback}`;
+      };
+
       const uniqueByStaff = new Map<
         string,
         {
@@ -7614,12 +7687,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           work_account?: string | null;
           work_password?: string | null;
           note?: string | null;
-          operator?: string | null;
           updated_at?: string;
         }
       >();
 
-      for (const row of parsedRows) {
+      for (let rowIndex = 0; rowIndex < parsedRows.length; rowIndex += 1) {
+        const row = parsedRows[rowIndex] ?? {};
         const canonical: Record<string, string> = {};
         for (const [rawKey, rawValue] of Object.entries(row)) {
           if (!rawKey) continue;
@@ -7629,7 +7702,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           const mapped = TEMP_ACCOUNT_KEY_ALIASES[normalized] ?? normalized;
           if (!canonical[mapped]) canonical[mapped] = value;
         }
-        const staff = normalizeStaffId(String(canonical.staff_id ?? '').trim());
+        const staff = buildTempStaffId(canonical, rowIndex);
         if (!staff) continue;
         uniqueByStaff.set(staff, {
           staff_id: staff,
@@ -7639,14 +7712,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           work_account: canonical.work_account?.trim() || null,
           work_password: canonical.work_password?.trim() || null,
           note: canonical.note?.trim() || null,
-          operator: user?.email ?? null,
           updated_at: new Date(serverTime).toISOString()
         });
       }
 
       const rows = Array.from(uniqueByStaff.values());
       if (rows.length === 0) {
-        setStatus({ tone: 'error', message: t('导入文件没有可用行（缺少 staff_id）。', 'No valid rows in file (missing staff_id).') });
+        setStatus({ tone: 'error', message: t('导入文件没有可用行。', 'No valid rows in file.') });
         return;
       }
 
@@ -10451,11 +10523,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
               <AccountManagementPage
                 t={t}
                 isLocked={isLocked}
+                themeMode={themeMode}
                 accountSearch={accountSearch}
                 setAccountSearch={setAccountSearch}
                 accountPositionFilter={accountPositionFilter}
                 setAccountPositionFilter={setAccountPositionFilter}
                 accountPositionOptions={accountPositionOptions}
+                accountTempOnly={accountTempOnly}
+                setAccountTempOnly={setAccountTempOnly}
                 accountRowsFiltered={accountRowsFiltered}
                 accountRowsRendered={accountRowsRendered}
                 setAccountRenderCount={setAccountRenderCount}
@@ -10463,6 +10538,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   await fetchEmployees({ reset: true });
                   await fetchTempAccounts({ lockUi: false });
                 }}
+                onDownloadTemplate={downloadTempAccountTemplate}
                 onImportAccounts={importTempAccounts}
                 onExportAccounts={exportTempAccounts}
                 accountCardPrintingStaffId={accountCardPrintingStaffId}
