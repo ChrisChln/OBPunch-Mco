@@ -2628,8 +2628,35 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       return null;
     };
 
-    const stageEmployees = new Map<'picking' | 'sorting' | 'packing', Map<string, string[]>>();
+    const latestEmployeeByStaff = new Map<string, EmployeeRow>();
+    const toMs = (value: unknown) => {
+      const n = Date.parse(String(value ?? '').trim());
+      return Number.isFinite(n) ? n : 0;
+    };
     for (const employee of employeesForUph) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff) continue;
+      const prev = latestEmployeeByStaff.get(staff);
+      if (!prev) {
+        latestEmployeeByStaff.set(staff, employee);
+        continue;
+      }
+      const prevMs = Math.max(toMs((prev as any).updated_at), toMs((prev as any).created_at));
+      const curMs = Math.max(toMs((employee as any).updated_at), toMs((employee as any).created_at));
+      if (curMs > prevMs) {
+        latestEmployeeByStaff.set(staff, employee);
+        continue;
+      }
+      if (curMs < prevMs) continue;
+      const prevId = Number((prev as any).id ?? 0);
+      const curId = Number((employee as any).id ?? 0);
+      if (Number.isFinite(curId) && Number.isFinite(prevId) && curId > prevId) {
+        latestEmployeeByStaff.set(staff, employee);
+      }
+    }
+
+    const stageEmployees = new Map<'picking' | 'sorting' | 'packing', Map<string, string[]>>();
+    for (const employee of latestEmployeeByStaff.values()) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       const workAccount = String(employee.work_account ?? employee.WorkAccount ?? '').trim();
       const stage = positionToStage(String(employee.position ?? employee.Position ?? '').trim());
