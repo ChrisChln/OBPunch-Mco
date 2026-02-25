@@ -7927,7 +7927,12 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       let score = 0;
       for (let idx = 0; idx < 7; idx += 1) {
         if (row.punchCountMismatchByDay[idx]) score += 100; // most severe
-        if (Number(row.hoursByDay[idx] ?? 0) > 8.5) score += 10;
+        const hours = Number(row.hoursByDay[idx] ?? 0);
+        if (hours > 8.5) {
+          score += 10;
+          const extraHalfHours = Math.floor((hours - 8.5) / 0.5);
+          if (extraHalfHours > 0) score += extraHalfHours * 5;
+        }
         if (row.absentByDay[idx]) score += 1;
       }
       return score;
@@ -9843,10 +9848,30 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                             if (!row) continue;
                             if (isWorkingScheduleRow(row)) workDays += 1;
                           }
+                          let absentPenaltyDays = 0;
+                          const nowMinutes = new Date(serverTime).getHours() * 60 + new Date(serverTime).getMinutes();
+                          const lateAbsentVisibleMinutes = 16 * 60 + 30; // 16:30
+                          const isCurrentWeek = scheduleWeekOffset === 0;
+                          for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+                            const key = `${staff}__${dayIndex}`;
+                            const row = scheduleRowsByStaffDayIndex.get(key);
+                            if (!row || !isWorkingScheduleRow(row)) continue;
+                            const hasPunch = schedulePunchPresenceKeys.has(key);
+                            const targetShift = ((row?.shift as 'early' | 'late' | null) ?? 'early');
+                            const isPastOperationalDay = dayIndex < homeOperationalDayIndex;
+                            const isCurrentOperationalDay = dayIndex === homeOperationalDayIndex;
+                            const hideLateAbsent = targetShift === 'late' && nowMinutes < lateAbsentVisibleMinutes;
+                            const showAbsent =
+                              isCurrentWeek &&
+                              !hasPunch &&
+                              (isPastOperationalDay || (isCurrentOperationalDay && !hideLateAbsent));
+                            if (showAbsent) absentPenaltyDays += 1;
+                          }
+                          const effectiveWorkDays = Math.max(0, workDays - absentPenaltyDays);
                           const workDaysClass =
-                            workDays === 5
+                            effectiveWorkDays === 5
                               ? 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10'
-                              : workDays >= 1 && workDays <= 4
+                              : effectiveWorkDays >= 1 && effectiveWorkDays <= 4
                                 ? 'border-amber-400/60 text-amber-200 bg-amber-500/10'
                                 : 'border-rose-400/60 text-rose-200 bg-rose-500/10';
 
@@ -9856,7 +9881,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               <td className="px-1.5 py-2 text-slate-200 truncate">{name || '-'}</td>
                               <td className="px-2 py-2 text-center">
                                 <span className={['inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold', workDaysClass].join(' ')}>
-                                  {workDays}
+                                  {effectiveWorkDays}
                                 </span>
                               </td>
                               <td className="px-1.5 py-2 text-slate-200 truncate">{agency || '-'}</td>

@@ -2086,7 +2086,16 @@ const fetchPunchBoardUph = async (
         }
       }
     }
-    const onClockStaffIds = Array.from(new Set(Array.from(onClockByKey.values()).flatMap((set) => Array.from(set))));
+    const mergedOnClockByKey = new Map<string, Set<string>>();
+    for (const [key, set] of onClockByKey.entries()) {
+      mergedOnClockByKey.set(key, new Set(set));
+    }
+    for (const [key, set] of restWorkedByKey.entries()) {
+      if (!mergedOnClockByKey.has(key)) mergedOnClockByKey.set(key, new Set());
+      const target = mergedOnClockByKey.get(key)!;
+      for (const staff of set) target.add(staff);
+    }
+    const onClockStaffIds = Array.from(new Set(Array.from(mergedOnClockByKey.values()).flatMap((set) => Array.from(set))));
     const restWorkedStaffIds = Array.from(
       new Set(Array.from(restWorkedByKey.values()).flatMap((set) => Array.from(set)))
     );
@@ -2108,7 +2117,7 @@ const fetchPunchBoardUph = async (
     const out: ArrivalMetric[] = ['early', 'late'].flatMap((shift) =>
       ALLOWED_POSITIONS.map((position) => {
         const key = `${shift}:${position}`;
-        const onClockIds = Array.from(onClockByKey.get(key) ?? []).sort((a, b) => a.localeCompare(b, 'en-US'));
+        const onClockIds = Array.from(mergedOnClockByKey.get(key) ?? []).sort((a, b) => a.localeCompare(b, 'en-US'));
         const onClockStaff = onClockIds.map((staff) => {
           const name = String(displayEmployeeMap[staff]?.name ?? '').trim();
           return name ? `${name} (${staff})` : staff;
@@ -2134,7 +2143,7 @@ const fetchPunchBoardUph = async (
           position,
           expected: staffByKey.get(key)?.size ?? 0,
           present: presentIds.size,
-          onClock: onClockByKey.get(key)?.size ?? 0,
+          onClock: mergedOnClockByKey.get(key)?.size ?? 0,
           onClockStaff,
           restWorked: restWorkedByKey.get(key)?.size ?? 0,
           restWorkedStaff,
@@ -2750,7 +2759,7 @@ const fetchPunchBoardUph = async (
             }
           }}
           placeholder="USID"
-          className="mt-2 h-10 w-full rounded-xl border border-emerald-300/50 bg-black/40 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-300"
+          className="mt-2 h-10 w-full rounded-xl border border-emerald-300/50 bg-black/40 px-3 text-sm text-slate-100 outline-none transition placeholder:text-white focus:border-emerald-300"
         />
         <input
           ref={deviceBorrowSnRef}
@@ -2763,7 +2772,7 @@ const fetchPunchBoardUph = async (
             }
           }}
           placeholder="Device SN"
-          className="mt-2 h-10 w-full rounded-xl border border-emerald-300/50 bg-black/40 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-300"
+          className="mt-2 h-10 w-full rounded-xl border border-emerald-300/50 bg-black/40 px-3 text-sm text-slate-100 outline-none transition placeholder:text-white focus:border-emerald-300"
         />
         <button
           type="button"
@@ -2788,7 +2797,7 @@ const fetchPunchBoardUph = async (
             }
           }}
           placeholder="Scan Device SN"
-          className="mt-2 h-10 w-full rounded-xl border border-rose-300/60 bg-black/40 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-rose-300"
+          className="mt-2 h-10 w-full rounded-xl border border-rose-300/60 bg-black/40 px-3 text-sm text-slate-100 outline-none transition placeholder:text-white focus:border-rose-300"
         />
         <button
           type="button"
