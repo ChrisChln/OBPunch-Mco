@@ -34,6 +34,7 @@ const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefine
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const supabase = createSupabaseClient({ persistSession: false });
+const QR_PRINT_SIZE = 320;
 const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW)
@@ -277,6 +278,7 @@ export default function DashboardPage() {
   const inFlightRef = useRef(false);
   const fetchSeqRef = useRef(0);
   const employeeCacheRef = useRef<Map<string, EmployeeRow>>(new Map());
+  const qrDataUrlCacheRef = useRef<Map<string, string>>(new Map());
   const rowsDigestRef = useRef('');
 
   const fetchData = async (force = false) => {
@@ -631,6 +633,22 @@ export default function DashboardPage() {
     [filteredRows, renderCount]
   );
 
+  const getQrDataUrlCached = async (rawValue: string) => {
+    const value = String(rawValue ?? '').trim();
+    if (!value) return '';
+    const cache = qrDataUrlCacheRef.current;
+    const cached = cache.get(value);
+    if (cached) return cached;
+    const dataUrl = await QRCode.toDataURL(value, {
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: QR_PRINT_SIZE,
+      color: { dark: '#0b1220', light: '#ffffff' }
+    });
+    cache.set(value, dataUrl);
+    return dataUrl;
+  };
+
   const printTempBadge = async (row: DashboardRow) => {
     const staff = String(row.staff_id ?? '').trim();
     if (!staff || isNewHirePlaceholderStaffId(staff)) return;
@@ -638,12 +656,7 @@ export default function DashboardPage() {
     try {
       const name = String(row.name ?? '').trim() || '-';
       const position = String(row.position ?? '').trim() || '-';
-      const qrDataUrl = await QRCode.toDataURL(staff, {
-        errorCorrectionLevel: 'M',
-        margin: 1,
-        width: 560,
-        color: { dark: '#0b1220', light: '#ffffff' }
-      });
+      const qrDataUrl = await getQrDataUrlCached(staff);
       const html = `<!doctype html>
 <html>
   <head>
@@ -693,20 +706,7 @@ export default function DashboardPage() {
     if (!staff || !workAccount || !workPassword) return;
     setAccountPrintingStaffId(staff);
     try {
-      const [qrAcc, qrPwd] = await Promise.all([
-        QRCode.toDataURL(workAccount, {
-          errorCorrectionLevel: 'M',
-          margin: 1,
-          width: 560,
-          color: { dark: '#0b1220', light: '#ffffff' }
-        }),
-        QRCode.toDataURL(workPassword, {
-          errorCorrectionLevel: 'M',
-          margin: 1,
-          width: 560,
-          color: { dark: '#0b1220', light: '#ffffff' }
-        })
-      ]);
+      const [qrAcc, qrPwd] = await Promise.all([getQrDataUrlCached(workAccount), getQrDataUrlCached(workPassword)]);
       const html = `<!doctype html>
 <html>
   <head>
