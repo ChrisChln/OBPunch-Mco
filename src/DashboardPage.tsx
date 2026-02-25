@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import QRCode from 'qrcode';
 import { createSupabaseClient } from './lib/supabase';
+import { getLabelToneClass, loadLabelToneMap } from './lib/labelTone';
 
 type EmployeeRow = {
   staff_id: string;
@@ -22,12 +24,15 @@ type PunchRow = {
 
 type DashboardRow = EmployeeRow & {
   punches: PunchRow[];
-  attendance: 'Absent' | 'Has punch';
+  attendance: 'Absent' | 'Off Worked' | 'Normal';
+  borrowed_device: string;
 };
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const PUNCHES_TABLE = 'ob_punches';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
+const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
+const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const supabase = createSupabaseClient({ persistSession: false });
 const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
@@ -77,6 +82,41 @@ const formatDateTime = (iso: string) => {
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString('en-CA', { hour12: false });
 };
+const formatTimeOnly = (iso: string) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '--:--:--';
+  return d.toLocaleTimeString('en-CA', { hour12: false });
+};
+const formatShiftLabel = (value: string) => {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (v === 'early') return 'Morning';
+  if (v === 'late') return 'Night';
+  return value || '-';
+};
+const normalizePositionKey = (value: string): '' | 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer' => {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (v === 'pick') return 'Pick';
+  if (v === 'pack') return 'Pack';
+  if (v === 'rebin') return 'Rebin';
+  if (v === 'preship') return 'Preship';
+  if (v === 'transfer') return 'Transfer';
+  return '';
+};
+const getPositionBadgeClass = (value: string) => {
+  const pos = normalizePositionKey(value);
+  if (pos === 'Pick') return 'border-sky-400/60 text-sky-200 bg-sky-500/10';
+  if (pos === 'Pack') return 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10';
+  if (pos === 'Rebin') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
+  if (pos === 'Preship') return 'border-rose-400/60 text-rose-200 bg-rose-500/10';
+  if (pos === 'Transfer') return 'border-violet-400/60 text-violet-200 bg-violet-500/10';
+  return 'border-white/20 text-slate-200 bg-white/5';
+};
+const getShiftBadgeClass = (value: string) => {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (v === 'early') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
+  if (v === 'late') return 'border-indigo-400/60 text-indigo-200 bg-indigo-500/10';
+  return 'border-white/20 text-slate-200 bg-white/5';
+};
 
 const chunkArray = <T,>(list: T[], size: number): T[][] => {
   if (size <= 0) return [list];
@@ -92,6 +132,13 @@ const addDays = (value: Date, days: number) => {
 };
 
 const getTemplateDateByDayIndex = (dayIndex: number) => toDateOnly(addDays(SCHEDULE_TEMPLATE_WEEK_START, dayIndex));
+const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperCase();
+const isNewHirePlaceholderStaffId = (value: string) => {
+  const id = String(value ?? '').trim();
+  if (!id) return false;
+  if (/^newreq[-_]/i.test(id)) return true;
+  return /^newreq[-_]\d{8}(?:[-_][a-z]+)?[-_]\d+$/i.test(id);
+};
 
 const toEpochMs = (value: unknown) => {
   const raw = String(value ?? '').trim();
@@ -135,6 +182,7 @@ const getScheduleStateFromNote = (note: unknown) => {
 };
 
 const isWorkingScheduleState = (state: string) => state === 'work' || state === 'temp_work';
+const isRestLikeScheduleState = (state: string) => state === 'rest' || state === 'temp_rest' || state === 'leave';
 
 const isMissingColumnError = (message: unknown, column: string) =>
   (() => {
@@ -146,19 +194,90 @@ const isMissingColumnError = (message: unknown, column: string) =>
     );
   })();
 
+const escapeHtml = (value: string) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const printHtmlDocument = async (html: string, removeDelayMs = 1500) => {
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument || iframe.contentWindow?.document;
+  if (!doc) {
+    iframe.remove();
+    throw new Error('Cannot create print document.');
+  }
+  doc.open();
+  doc.write(html);
+  doc.close();
+
+  const imgs = Array.from(doc.images ?? []);
+  await Promise.all(
+    imgs.map(
+      (img) =>
+        new Promise<void>((resolve) => {
+          if (img.complete) {
+            resolve();
+            return;
+          }
+          const done = () => {
+            img.removeEventListener('load', done);
+            img.removeEventListener('error', done);
+            resolve();
+          };
+          img.addEventListener('load', done);
+          img.addEventListener('error', done);
+        })
+    )
+  );
+  await new Promise((resolve) => window.setTimeout(resolve, 80));
+  iframe.contentWindow?.focus();
+  iframe.contentWindow?.print();
+  window.setTimeout(() => iframe.remove(), removeDelayMs);
+};
+
+const getShortGapPunchIndices = (punches: PunchRow[], thresholdMinutes = 10) => {
+  const flagged = new Set<number>();
+  const thresholdMs = Math.max(1, thresholdMinutes) * 60 * 1000;
+  for (let i = 0; i < punches.length - 1; i += 1) {
+    const currentMs = Date.parse(String(punches[i]?.created_at ?? ''));
+    const nextMs = Date.parse(String(punches[i + 1]?.created_at ?? ''));
+    if (!Number.isFinite(currentMs) || !Number.isFinite(nextMs)) continue;
+    if (nextMs >= currentMs && nextMs - currentMs < thresholdMs) {
+      flagged.add(i);
+      flagged.add(i + 1);
+    }
+  }
+  return flagged;
+};
+
 export default function DashboardPage() {
   const [rows, setRows] = useState<DashboardRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [positionFilter, setPositionFilter] = useState('');
+  const [shiftFilter, setShiftFilter] = useState('');
+  const [absentOnly, setAbsentOnly] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState('');
   const [operationalDate, setOperationalDate] = useState('');
   const [rangeText, setRangeText] = useState('');
   const [renderCount, setRenderCount] = useState(120);
-  const [expandedStaffIds, setExpandedStaffIds] = useState<Set<string>>(new Set());
+  const [badgePrintingStaffId, setBadgePrintingStaffId] = useState<string | null>(null);
+  const [accountPrintingStaffId, setAccountPrintingStaffId] = useState<string | null>(null);
   const inFlightRef = useRef(false);
   const fetchSeqRef = useRef(0);
   const employeeCacheRef = useRef<Map<string, EmployeeRow>>(new Map());
+  const rowsDigestRef = useRef('');
 
   const fetchData = async (force = false) => {
     if (!supabase) {
@@ -258,22 +377,22 @@ export default function DashboardPage() {
       }
 
       const latestScheduleRows = pickLatestByStaff(scheduleRowsRaw);
-      const workingScheduleRows = latestScheduleRows.filter((row) =>
-        isWorkingScheduleState(getScheduleStateFromNote((row as any).note))
-      );
       const scheduledByStaff = new Map<
         string,
         {
           position: string;
           shift: string;
+          scheduleState: string;
         }
       >();
-      for (const row of workingScheduleRows) {
+      for (const row of latestScheduleRows) {
         const staffId = String((row as any).staff_id ?? '').trim();
         if (!staffId) continue;
+        const scheduleState = getScheduleStateFromNote((row as any).note);
         scheduledByStaff.set(staffId, {
           position: String((row as any).position ?? (row as any).Position ?? '').trim(),
-          shift: String((row as any).shift ?? '').trim()
+          shift: String((row as any).shift ?? '').trim(),
+          scheduleState
         });
       }
       const scheduledStaffIds = Array.from(scheduledByStaff.keys());
@@ -290,35 +409,38 @@ export default function DashboardPage() {
         return;
       }
 
-      const scheduledStaffSet = new Set(scheduledStaffIds);
       const punchesByStaff = new Map<string, PunchRow[]>();
-      const punchesRes = await supabase
-        .from(PUNCHES_TABLE)
-        .select('id, staff_id, action, created_at')
-        .gte('created_at', rangeStartIso)
-        .lt('created_at', rangeEndIso)
-        .order('created_at', { ascending: true })
-        .limit(50000);
+      const staffBatchesForPunches = chunkArray(scheduledStaffIds, 120);
+      for (const batch of staffBatchesForPunches) {
+        const punchesRes = await supabase
+          .from(PUNCHES_TABLE)
+          .select('id, staff_id, action, created_at')
+          .in('staff_id', batch)
+          .gte('created_at', rangeStartIso)
+          .lt('created_at', rangeEndIso)
+          .order('created_at', { ascending: true })
+          .limit(10000);
 
-      if (punchesRes.error) {
-        if (fetchSeqRef.current === currentSeq) {
-          setError(punchesRes.error.message);
-          setRows([]);
+        if (punchesRes.error) {
+          if (fetchSeqRef.current === currentSeq) {
+            setError(punchesRes.error.message);
+            setRows([]);
+          }
+          return;
         }
-        return;
-      }
 
-      for (const row of ((punchesRes.data as any[] | null) ?? [])) {
-        const staffId = String(row.staff_id ?? '').trim();
-        if (!staffId || !scheduledStaffSet.has(staffId)) continue;
-        const list = punchesByStaff.get(staffId) ?? [];
-        list.push({
-          id: String(row.id ?? ''),
-          staff_id: staffId,
-          action: String(row.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN',
-          created_at: String(row.created_at ?? '')
-        });
-        punchesByStaff.set(staffId, list);
+        for (const row of ((punchesRes.data as any[] | null) ?? [])) {
+          const staffId = String(row.staff_id ?? '').trim();
+          if (!staffId) continue;
+          const list = punchesByStaff.get(staffId) ?? [];
+          list.push({
+            id: String(row.id ?? ''),
+            staff_id: staffId,
+            action: String(row.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN',
+            created_at: String(row.created_at ?? '')
+          });
+          punchesByStaff.set(staffId, list);
+        }
       }
 
       const missingStaffIds = scheduledStaffIds.filter((staffId) => !employeeCacheRef.current.has(staffId));
@@ -361,37 +483,113 @@ export default function DashboardPage() {
           const employee = employeeCacheRef.current.get(staffId);
           const schedule = scheduledByStaff.get(staffId);
           const punches = punchesByStaff.get(staffId) ?? [];
+          const state = String(schedule?.scheduleState ?? '');
+          const attendance: DashboardRow['attendance'] =
+            isWorkingScheduleState(state) && punches.length === 0
+              ? 'Absent'
+              : isRestLikeScheduleState(state) && punches.length > 0
+                ? 'Off Worked'
+                : 'Normal';
           return {
             staff_id: staffId,
             name: employee?.name ?? '',
             agency: employee?.agency ?? '',
             position: employee?.position ?? schedule?.position ?? '',
             label: employee?.label ?? '',
+            borrowed_device: '',
             work_account: employee?.work_account ?? '',
             work_password: employee?.work_password ?? '',
             hire_date: employee?.hire_date ?? '',
             shift: employee?.shift ?? schedule?.shift ?? '',
             punches,
-            attendance: punches.length > 0 ? 'Has punch' : 'Absent'
+            attendance
           };
+        })
+        .filter((row) => {
+          const state = String(scheduledByStaff.get(row.staff_id)?.scheduleState ?? '');
+          const isPlannedWork = isWorkingScheduleState(state);
+          const isOffWorked = isRestLikeScheduleState(state) && row.punches.length > 0;
+          const isNoProfile =
+            !String(row.name ?? '').trim() &&
+            !String(row.label ?? '').trim() &&
+            !String(row.work_account ?? '').trim();
+          if (isNoProfile) return false;
+          return isPlannedWork || isOffWorked;
         });
 
+      const borrowedDeviceByStaff = new Map<string, string[]>();
+      for (const staffBatch of chunkArray(scheduledStaffIds, 120)) {
+        const loansRes = await supabase
+          .from(DEVICE_LOANS_TABLE)
+          .select('id, staff_id, device_sn, action, created_at')
+          .in('staff_id', staffBatch)
+          .order('created_at', { ascending: true })
+          .limit(20000);
+        if (loansRes.error) continue;
+        const loanRows = ((loansRes.data as any[]) ?? [])
+          .map((row) => ({
+            id: String(row.id ?? ''),
+            staff_id: String(row.staff_id ?? '').trim(),
+            device_sn: normalizeDeviceSn(String(row.device_sn ?? '')),
+            action: String(row.action ?? '').trim().toLowerCase() === 'return' ? 'return' : 'borrow',
+            created_at: String(row.created_at ?? '')
+          }))
+          .filter((row) => row.staff_id && row.device_sn);
+        loanRows.sort((a, b) => {
+          const aMs = Date.parse(a.created_at) || 0;
+          const bMs = Date.parse(b.created_at) || 0;
+          if (aMs !== bMs) return aMs - bMs;
+          return a.id.localeCompare(b.id, 'en-US');
+        });
+        const currentBorrowBySn = new Map<string, string>();
+        for (const row of loanRows) {
+          if (row.action === 'borrow') currentBorrowBySn.set(row.device_sn, row.staff_id);
+          else currentBorrowBySn.delete(row.device_sn);
+        }
+        const activeSnList = Array.from(currentBorrowBySn.entries())
+          .filter(([, staffId]) => staffBatch.includes(staffId))
+          .map(([sn]) => sn);
+        if (activeSnList.length === 0) continue;
+        const nameBySn = new Map<string, string>();
+        for (const snBatch of chunkArray(activeSnList, 150)) {
+          const deviceRes = await supabase
+            .from(DEVICE_TABLE)
+            .select('device_sn, device_name')
+            .in('device_sn', snBatch);
+          if (deviceRes.error) continue;
+          for (const row of ((deviceRes.data as any[]) ?? [])) {
+            const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
+            if (!sn) continue;
+            const name = String(row.device_name ?? '').trim();
+            nameBySn.set(sn, name || sn);
+          }
+        }
+        for (const [sn, staffId] of currentBorrowBySn.entries()) {
+          if (!staffBatch.includes(staffId)) continue;
+          const list = borrowedDeviceByStaff.get(staffId) ?? [];
+          list.push(nameBySn.get(sn) || sn);
+          borrowedDeviceByStaff.set(staffId, list);
+        }
+      }
+      for (const row of nextRows) {
+        const deviceList = borrowedDeviceByStaff.get(row.staff_id) ?? [];
+        row.borrowed_device = deviceList.join(', ');
+      }
+
+      const digest = `${nextRows.length}|${nextRows
+        .map((r) => `${r.staff_id}:${r.attendance}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}`)
+        .join(';')}`;
+
       if (fetchSeqRef.current !== currentSeq) return;
-      setRows(nextRows);
+      if (rowsDigestRef.current !== digest) {
+        rowsDigestRef.current = digest;
+        setRows(nextRows);
+      }
       setOperationalDate(currentOperationalDate);
       setRangeText(
         `${range.start.toLocaleString('en-CA', { hour12: false })} -> ${range.end.toLocaleString('en-CA', { hour12: false })} | Template: ${templateDate}`
       );
       setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
-      setExpandedStaffIds((prev) => {
-        if (!prev.size) return prev;
-        const validIds = new Set(nextRows.map((row) => row.staff_id));
-        const next = new Set<string>();
-        prev.forEach((id) => {
-          if (validIds.has(id)) next.add(id);
-        });
-        return next;
-      });
     } finally {
       if (fetchSeqRef.current === currentSeq) setLoading(false);
       inFlightRef.current = false;
@@ -400,29 +598,163 @@ export default function DashboardPage() {
 
   useEffect(() => {
     void fetchData(true);
-    const timer = window.setInterval(() => {
-      void fetchData();
-    }, 15000);
-    return () => window.clearInterval(timer);
   }, []);
+
+  const positionOptions = useMemo(
+    () => Array.from(new Set(rows.map((row) => String(row.position ?? '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [rows]
+  );
+  const shiftOptions = useMemo(
+    () => Array.from(new Set(rows.map((row) => String(row.shift ?? '').trim().toLowerCase()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [rows]
+  );
+  const labelToneMap = useMemo(() => loadLabelToneMap(), [rows.length]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
     return rows.filter((row) => {
-      const haystack = `${row.staff_id} ${row.name} ${row.agency} ${row.position} ${row.label} ${row.work_account}`.toLowerCase();
+      if (positionFilter && String(row.position ?? '').trim() !== positionFilter) return false;
+      if (shiftFilter && String(row.shift ?? '').trim().toLowerCase() !== shiftFilter) return false;
+      if (absentOnly && row.attendance !== 'Absent') return false;
+      if (!q) return true;
+      const haystack = `${row.staff_id} ${row.name} ${row.agency} ${row.label} ${row.work_account} ${row.borrowed_device}`.toLowerCase();
       return haystack.includes(q);
     });
-  }, [rows, search]);
+  }, [rows, search, positionFilter, shiftFilter, absentOnly]);
 
   useEffect(() => {
     setRenderCount(120);
-  }, [search, rows.length]);
+  }, [search, positionFilter, shiftFilter, absentOnly, rows.length]);
 
   const renderedRows = useMemo(
     () => filteredRows.slice(0, Math.max(0, renderCount)),
     [filteredRows, renderCount]
   );
+
+  const printTempBadge = async (row: DashboardRow) => {
+    const staff = String(row.staff_id ?? '').trim();
+    if (!staff || isNewHirePlaceholderStaffId(staff)) return;
+    setBadgePrintingStaffId(staff);
+    try {
+      const name = String(row.name ?? '').trim() || '-';
+      const position = String(row.position ?? '').trim() || '-';
+      const qrDataUrl = await QRCode.toDataURL(staff, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 560,
+        color: { dark: '#0b1220', light: '#ffffff' }
+      });
+      const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      @page { size: 4in 2in; margin: 0; }
+      html, body { margin: 0; padding: 0; width: 4in; height: 2in; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      body { background: #fff; box-sizing: border-box; font-family: Arial, "Microsoft YaHei", sans-serif; }
+      .sheet { width: 4in; height: 2in; box-sizing: border-box; padding: 0.14in; border: 1px solid #cbd5e1; display: grid; grid-template-columns: 1fr 1.3in; gap: 0.12in; align-items: center; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); color: #0f172a; }
+      .left { min-width: 0; display: flex; flex-direction: column; gap: 0.08in; }
+      .kicker { font-size: 8pt; font-weight: 800; letter-spacing: 0.08em; color: #64748b; text-transform: uppercase; }
+      .name { font-size: 16pt; font-weight: 900; line-height: 1.02; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 2.2in; }
+      .pos { font-size: 12pt; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: #0f172a; }
+      .right { width: 1.3in; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.04in; }
+      .qrbox { width: 1.12in; height: 1.12in; border: 1px solid #cbd5e1; background: #fff; display: flex; align-items: center; justify-content: center; }
+      .qrbox img { width: 1in; height: 1in; display: block; image-rendering: pixelated; }
+      .qrlabel { font-size: 7.5pt; font-weight: 700; color: #475569; letter-spacing: 0.06em; text-transform: uppercase; }
+    </style>
+  </head>
+  <body>
+    <div class="sheet">
+      <div class="left">
+        <div class="kicker">TEMP BADGE</div>
+        <div class="name">${escapeHtml(name)}</div>
+        <div class="pos">${escapeHtml(position)}</div>
+      </div>
+      <div class="right">
+        <div class="qrbox"><img src="${escapeHtml(qrDataUrl)}" alt="QR ${escapeHtml(staff)}" /></div>
+        <div class="qrlabel">USID QR</div>
+      </div>
+    </div>
+  </body>
+</html>`;
+      await printHtmlDocument(html, 1500);
+    } catch (err) {
+      window.alert(`Print failed: ${err instanceof Error ? err.message : String(err ?? 'unknown error')}`);
+    } finally {
+      setBadgePrintingStaffId((current) => (current === staff ? null : current));
+    }
+  };
+
+  const printAccountCard = async (row: DashboardRow) => {
+    const staff = String(row.staff_id ?? '').trim();
+    const name = String(row.name ?? '').trim() || '-';
+    const workAccount = String(row.work_account ?? '').trim();
+    const workPassword = String(row.work_password ?? '').trim();
+    if (!staff || !workAccount || !workPassword) return;
+    setAccountPrintingStaffId(staff);
+    try {
+      const [qrAcc, qrPwd] = await Promise.all([
+        QRCode.toDataURL(workAccount, {
+          errorCorrectionLevel: 'M',
+          margin: 1,
+          width: 560,
+          color: { dark: '#0b1220', light: '#ffffff' }
+        }),
+        QRCode.toDataURL(workPassword, {
+          errorCorrectionLevel: 'M',
+          margin: 1,
+          width: 560,
+          color: { dark: '#0b1220', light: '#ffffff' }
+        })
+      ]);
+      const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      @page { size: 4in 2in; margin: 0; }
+      html, body { margin: 0; padding: 0; width: 4in; height: 2in; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      body { background: #ffffff; font-family: Arial, "Microsoft YaHei", sans-serif; color: #0f172a; }
+      .sheet { width: 4in; height: 2in; box-sizing: border-box; padding: 0.12in; border: 0; border-radius: 0; display: grid; grid-template-rows: auto 1fr; gap: 0.05in; background: #ffffff; }
+      .name { font-size: 14pt; line-height: 1.1; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #0f172a; padding: 0; }
+      .pair { min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0.08in; }
+      .box { border: 0; border-radius: 0; padding: 0; display: grid; grid-template-columns: 0.92in 1fr; gap: 0.06in; align-items: center; min-width: 0; background: #ffffff; box-shadow: none; }
+      .qrsq { width: 0.92in; height: 0.92in; border: 0; border-radius: 0; background: #fff; display: flex; align-items: center; justify-content: center; }
+      .qrsq img { width: 0.82in; height: 0.82in; display: block; image-rendering: pixelated; }
+      .meta { min-width: 0; }
+      .k { font-size: 7.5pt; letter-spacing: 0.1em; font-weight: 700; color: #334155; text-transform: uppercase; }
+      .v { margin-top: 0.04in; font-size: 9pt; font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    </style>
+  </head>
+  <body>
+    <div class="sheet">
+      <div class="name">${escapeHtml(name)}</div>
+      <div class="pair">
+        <div class="box">
+          <div class="qrsq"><img src="${escapeHtml(qrAcc)}" alt="QR account ${escapeHtml(staff)}" /></div>
+          <div class="meta">
+            <div class="k">Account</div>
+            <div class="v">${escapeHtml(workAccount)}</div>
+          </div>
+        </div>
+        <div class="box">
+          <div class="qrsq"><img src="${escapeHtml(qrPwd)}" alt="QR password ${escapeHtml(staff)}" /></div>
+          <div class="meta">
+            <div class="k">Password</div>
+            <div class="v">${escapeHtml(workPassword)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>`;
+      await printHtmlDocument(html, 1500);
+    } catch (err) {
+      window.alert(`Print failed: ${err instanceof Error ? err.message : String(err ?? 'unknown error')}`);
+    } finally {
+      setAccountPrintingStaffId((current) => (current === staff ? null : current));
+    }
+  };
 
   return (
     <main className="min-h-screen px-6 py-6 text-paper">
@@ -431,7 +763,7 @@ export default function DashboardPage() {
           <div>
             <h1 className="font-display text-3xl tracking-[0.08em]">Dashboard</h1>
             <p className="mt-1 text-xs text-slate-400">
-              Schedule date: <span className="text-slate-200">{operationalDate || '-'}</span> | Window: <span className="text-slate-200">{rangeText || '-'}</span> | Auto refresh 15s
+              Schedule date: <span className="text-slate-200">{operationalDate || '-'}</span> | Window: <span className="text-slate-200">{rangeText || '-'}</span>
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -454,13 +786,46 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
+        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_180px_190px_auto_auto]">
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by staff id / name / position / account"
             className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon"
           />
+          <select
+            value={positionFilter}
+            onChange={(e) => setPositionFilter(e.target.value)}
+            className="h-11 rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon"
+          >
+            <option value="">All positions</option>
+            {positionOptions.map((position) => (
+              <option key={position} value={position}>
+                {position}
+              </option>
+            ))}
+          </select>
+          <select
+            value={shiftFilter}
+            onChange={(e) => setShiftFilter(e.target.value)}
+            className="h-11 rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon"
+          >
+            <option value="">All shifts</option>
+            {shiftOptions.map((shift) => (
+              <option key={shift} value={shift}>
+                {formatShiftLabel(shift)}
+              </option>
+            ))}
+          </select>
+          <label className="flex h-11 items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-slate-200">
+            <input
+              type="checkbox"
+              checked={absentOnly}
+              onChange={(e) => setAbsentOnly(e.target.checked)}
+              className="h-4 w-4 rounded border-white/30 bg-transparent accent-rose-500"
+            />
+            Absent only
+          </label>
           <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-2 text-xs text-slate-300">
             Rows: <span className="text-slate-100">{renderedRows.length}</span> / {filteredRows.length}
           </div>
@@ -477,87 +842,155 @@ export default function DashboardPage() {
             <table className="min-w-full border-collapse text-sm">
               <thead className="sticky top-0 z-10 bg-slate-950/95 text-xs uppercase tracking-[0.16em] text-slate-400">
                 <tr>
+                  <th className="px-3 py-2 text-left">SN</th>
                   <th className="px-3 py-2 text-left">Staff ID</th>
                   <th className="px-3 py-2 text-left">Name</th>
                   <th className="px-3 py-2 text-left">Position</th>
                   <th className="px-3 py-2 text-left">Label</th>
-                  <th className="px-3 py-2 text-left">Work Account</th>
+                  <th className="px-3 py-2 text-left">Device</th>
+                  <th className="px-3 py-2 text-left">Account</th>
                   <th className="px-3 py-2 text-left">Shift</th>
-                  <th className="px-3 py-2 text-left">Attendance</th>
                   <th className="px-3 py-2 text-left">Punch Logs</th>
                 </tr>
               </thead>
               <tbody>
-                {renderedRows.map((row) => {
-                  const isExpanded = expandedStaffIds.has(row.staff_id);
-                  const firstPunch = row.punches[0];
-                  const lastPunch = row.punches[row.punches.length - 1];
+                {renderedRows.map((row, idx) => {
+                  const rowToneClass =
+                    row.attendance === 'Absent'
+                      ? 'bg-rose-500/10'
+                      : row.attendance === 'Off Worked'
+                        ? 'bg-sky-500/10'
+                        : 'odd:bg-white/[0.03]';
+                  const hasOverPunch = row.punches.length > 4;
+                  const visiblePunches = row.punches.slice(0, 4);
+                  const shortGapPunchIndices = getShortGapPunchIndices(visiblePunches, 10);
 
+                  const displayStaffId = isNewHirePlaceholderStaffId(row.staff_id) ? '' : row.staff_id;
                   return (
-                    <tr key={row.staff_id} className="border-t border-white/5 odd:bg-white/[0.03]">
-                      <td className="whitespace-nowrap px-3 py-2 font-mono text-slate-200">{row.staff_id || '-'}</td>
-                      <td className="whitespace-nowrap px-3 py-2 text-slate-200">{row.name || '-'}</td>
-                      <td className="whitespace-nowrap px-3 py-2 text-slate-300">{row.position || '-'}</td>
-                      <td className="whitespace-nowrap px-3 py-2 text-slate-300">{row.label || '-'}</td>
-                      <td className="whitespace-nowrap px-3 py-2 text-slate-300">{row.work_account || '-'}</td>
-                      <td className="whitespace-nowrap px-3 py-2 text-slate-300">{row.shift || '-'}</td>
-                      <td className="whitespace-nowrap px-3 py-2">
+                    <tr key={row.staff_id} className={['border-t border-white/5 transition-colors hover:bg-white/5', rowToneClass].join(' ')}>
+                      <td
+                        className={[
+                          'whitespace-nowrap px-3 py-2 font-mono text-slate-400',
+                          hasOverPunch ? 'border-y border-l border-rose-500/90' : ''
+                        ].join(' ')}
+                      >
+                        {idx + 1}
+                      </td>
+                      <td className={['whitespace-nowrap px-3 py-2 font-mono text-slate-200', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                        {displayStaffId ? (
+                          <button
+                            type="button"
+                            disabled={badgePrintingStaffId === row.staff_id}
+                            onClick={() => void printTempBadge(row)}
+                            className="underline decoration-dotted underline-offset-2 transition hover:text-neon disabled:cursor-not-allowed disabled:opacity-60"
+                            title="Print temp badge"
+                          >
+                            {badgePrintingStaffId === row.staff_id ? 'Printing...' : displayStaffId}
+                          </button>
+                        ) : (
+                          ''
+                        )}
+                      </td>
+                      <td className={['whitespace-nowrap px-3 py-2 text-slate-200', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                        {row.name || '-'}
+                      </td>
+                      <td className={['whitespace-nowrap px-3 py-2 text-slate-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
                         <span
                           className={[
-                            'inline-flex items-center rounded-lg border px-2 py-0.5 text-xs font-semibold',
-                            row.attendance === 'Has punch'
-                              ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
-                              : 'border-amber-400/60 bg-amber-500/15 text-amber-200'
+                            'inline-flex items-center rounded-md border px-2 py-0.5',
+                            getPositionBadgeClass(row.position)
                           ].join(' ')}
                         >
-                          {row.attendance}
+                          {row.position || '-'}
                         </span>
                       </td>
-                      <td className="px-3 py-2 align-top">
-                        {row.punches.length === 0 ? (
-                          <span className="text-slate-500">No punch in window</span>
+                      <td className={['whitespace-nowrap px-3 py-2 text-slate-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                        <span
+                          className={[
+                            'inline-flex items-center rounded-md border px-2 py-0.5',
+                            getLabelToneClass(row.label || '', labelToneMap)
+                          ].join(' ')}
+                        >
+                          {row.label || '-'}
+                        </span>
+                      </td>
+                      <td className={['whitespace-nowrap px-3 py-2 text-slate-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                        <span
+                          className={[
+                            'inline-flex items-center rounded-md border px-2 py-0.5',
+                            row.borrowed_device
+                              ? 'border-amber-400/60 bg-amber-500/15 text-amber-200'
+                              : 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                          ].join(' ')}
+                        >
+                          {row.borrowed_device || 'No borrowed device'}
+                        </span>
+                      </td>
+                      <td className={['whitespace-nowrap px-3 py-2 text-slate-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                        {row.work_account ? (
+                          <button
+                            type="button"
+                            disabled={!row.work_password || accountPrintingStaffId === row.staff_id}
+                            onClick={() => void printAccountCard(row)}
+                            className="underline decoration-dotted underline-offset-2 transition hover:text-neon disabled:cursor-not-allowed disabled:opacity-60"
+                            title={row.work_password ? 'Print account card' : 'Missing password'}
+                          >
+                            {accountPrintingStaffId === row.staff_id ? 'Printing...' : row.work_account}
+                          </button>
                         ) : (
-                          <div className="space-y-2">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setExpandedStaffIds((prev) => {
-                                  const next = new Set(prev);
-                                  if (next.has(row.staff_id)) next.delete(row.staff_id);
-                                  else next.add(row.staff_id);
-                                  return next;
-                                })
+                          '-'
+                        )}
+                      </td>
+                      <td className={['whitespace-nowrap px-3 py-2 text-slate-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                        <span
+                          className={[
+                            'inline-flex items-center rounded-md border px-2 py-0.5',
+                            getShiftBadgeClass(row.shift)
+                          ].join(' ')}
+                        >
+                          {formatShiftLabel(row.shift)}
+                        </span>
+                      </td>
+                      <td
+                        className={[
+                          'whitespace-nowrap px-3 py-2',
+                          hasOverPunch ? 'border-y border-r border-rose-500/90' : ''
+                        ].join(' ')}
+                      >
+                        {row.punches.length === 0 ? (
+                          <span className="font-semibold text-rose-300">Absent</span>
+                        ) : (
+                          <div className="flex items-center gap-1">
+                            {Array.from({ length: 4 }).map((_, idx) => {
+                              const punch = visiblePunches[idx];
+                              if (!punch) {
+                                return (
+                                  <span
+                                    key={`${row.staff_id}-p-empty-${idx}`}
+                                    className="inline-flex min-w-[86px] items-center justify-center rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 text-xs text-slate-500"
+                                  >
+                                    -
+                                  </span>
+                                );
                               }
-                              className="inline-flex items-center rounded-lg border border-sky-400/50 bg-sky-500/15 px-2 py-0.5 text-xs font-semibold text-sky-200"
-                            >
-                              {isExpanded ? 'Hide details' : 'Show details'} ({row.punches.length})
-                            </button>
-                            {!isExpanded && (
-                              <div className="text-xs text-slate-400">
-                                {firstPunch && lastPunch
-                                  ? `First ${firstPunch.action} ${formatDateTime(firstPunch.created_at)} | Last ${lastPunch.action} ${formatDateTime(lastPunch.created_at)}`
-                                  : '-'}
-                              </div>
-                            )}
-                            {isExpanded && (
-                              <div className="max-w-[560px] space-y-1">
-                                {row.punches.map((punch, idx) => (
-                                  <div key={punch.id || `${row.staff_id}-p-${idx}`} className="text-xs">
-                                    <span
-                                      className={[
-                                        'mr-2 inline-flex items-center rounded-lg border px-2 py-0.5 font-semibold',
-                                        punch.action === 'IN'
-                                          ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
-                                          : 'border-rose-400/60 bg-rose-500/15 text-rose-200'
-                                      ].join(' ')}
-                                    >
-                                      {`${idx + 1}. ${punch.action}`}
-                                    </span>
-                                    <span className="text-slate-300">{formatDateTime(punch.created_at)}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
+                              const isShortGapPunch = shortGapPunchIndices.has(idx);
+                              return (
+                                <span
+                                  key={punch.id || `${row.staff_id}-p-${idx}`}
+                                  className={[
+                                    'inline-flex min-w-[86px] items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold',
+                                    isShortGapPunch
+                                      ? 'border-rose-400 bg-rose-600/40 text-rose-100 shadow-[0_0_0_1px_rgba(251,113,133,0.45)]'
+                                      : punch.action === 'IN'
+                                        ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
+                                        : 'border-sky-400/60 bg-sky-500/15 text-sky-200'
+                                  ].join(' ')}
+                                  title={formatDateTime(punch.created_at)}
+                                >
+                                  {`${punch.action} ${formatTimeOnly(punch.created_at)}`}
+                                </span>
+                              );
+                            })}
                           </div>
                         )}
                       </td>
@@ -566,7 +999,7 @@ export default function DashboardPage() {
                 })}
                 {!loading && renderedRows.length === 0 && (
                   <tr>
-                    <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
+                    <td className="px-3 py-6 text-center text-slate-500" colSpan={9}>
                       No scheduled work rows for this operational date.
                     </td>
                   </tr>
