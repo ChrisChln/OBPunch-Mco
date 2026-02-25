@@ -403,9 +403,7 @@ export default function DashboardPage() {
         if (fetchSeqRef.current === currentSeq) {
           setRows([]);
           setOperationalDate(currentOperationalDate);
-          setRangeText(
-            `${range.start.toLocaleString('en-CA', { hour12: false })} -> ${range.end.toLocaleString('en-CA', { hour12: false })} | Template: ${templateDate}`
-          );
+          setRangeText(`${range.start.toLocaleString('en-CA', { hour12: false })} -> ${range.end.toLocaleString('en-CA', { hour12: false })}`);
           setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
         }
         return;
@@ -588,9 +586,7 @@ export default function DashboardPage() {
         setRows(nextRows);
       }
       setOperationalDate(currentOperationalDate);
-      setRangeText(
-        `${range.start.toLocaleString('en-CA', { hour12: false })} -> ${range.end.toLocaleString('en-CA', { hour12: false })} | Template: ${templateDate}`
-      );
+      setRangeText(`${range.start.toLocaleString('en-CA', { hour12: false })} -> ${range.end.toLocaleString('en-CA', { hour12: false })}`);
       setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
     } finally {
       if (fetchSeqRef.current === currentSeq) setLoading(false);
@@ -763,7 +759,7 @@ export default function DashboardPage() {
           <div>
             <h1 className="font-display text-3xl tracking-[0.08em]">Dashboard</h1>
             <p className="mt-1 text-xs text-slate-400">
-              Schedule date: <span className="text-slate-200">{operationalDate || '-'}</span> | Window: <span className="text-slate-200">{rangeText || '-'}</span>
+              Schedule date: <span className="text-slate-200">{operationalDate || '-'}</span>
             </p>
           </div>
           <div className="flex items-center gap-2">
