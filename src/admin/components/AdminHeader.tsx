@@ -1,4 +1,4 @@
-import type { User } from '@supabase/supabase-js';
+﻿import type { User } from '@supabase/supabase-js';
 import type { Dispatch, SetStateAction } from 'react';
 import type { Status, StatusTone } from '../types';
 
@@ -16,6 +16,7 @@ type AdminHeaderProps = {
   serverTimeText: string;
   user: User | null;
   attendanceError: string | null;
+  onBack: () => void;
   onLogout: () => void | Promise<void>;
 };
 
@@ -31,6 +32,7 @@ export default function AdminHeader({
   serverTimeText,
   user,
   attendanceError,
+  onBack,
   onLogout
 }: AdminHeaderProps) {
   return (
@@ -84,22 +86,32 @@ export default function AdminHeader({
           <div className="mt-3 text-xs uppercase tracking-[0.25em] text-slate-400">{t('服务器时间', 'Server Time')}</div>
           <div className="mt-2 font-display text-2xl tracking-[0.08em] text-neon">{serverTimeText}</div>
           <div className="mt-2 text-xs text-slate-400">{user ? user.email : t('未登录', 'Signed out')}</div>
-          {attendanceError && <div className="mt-2 text-xs text-ember">考勤卡片加载失败：{attendanceError}</div>}
+          {attendanceError && <div className="mt-2 text-xs text-ember">{t('考勤卡片加载失败：', 'Attendance cards failed: ')}{attendanceError}</div>}
         </div>
       </div>
 
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
         <div className={['text-sm', toneColor[status.tone]].join(' ')}>{status.message}</div>
-        {user && (
+        <div className="flex items-center gap-2">
           <button
             type="button"
             disabled={isLocked}
-            onClick={() => void onLogout()}
+            onClick={onBack}
             className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {t('退出登录', 'Logout')}
+            {t('返回', 'Back')}
           </button>
-        )}
+          {user && (
+            <button
+              type="button"
+              disabled={isLocked}
+              onClick={() => void onLogout()}
+              className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {t('退出登录', 'Logout')}
+            </button>
+          )}
+        </div>
       </div>
     </header>
   );

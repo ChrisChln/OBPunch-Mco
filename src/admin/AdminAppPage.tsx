@@ -9239,6 +9239,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           serverTimeText={formatTime(serverTime, locale)}
           user={user}
           attendanceError={attendanceError}
+          onBack={() => {
+            window.location.href = '/';
+          }}
           onLogout={doLogout}
         />
 
@@ -9785,13 +9788,14 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 const key = `${staff}__${dayIndex}`;
                                 const row = scheduleRowsByStaffDayIndex.get(key);
                                 const hasPunch = schedulePunchPresenceKeys.has(key);
-                                const targetShift = scheduleShift || ((row?.shift as 'early' | 'late' | null) ?? 'early');
+                                const scheduledShiftForAbsent = ((row?.shift as 'early' | 'late' | null) ?? 'early');
+                                const targetShift = scheduleShift || scheduledShiftForAbsent;
                                 const nowMinutes = new Date(serverTime).getHours() * 60 + new Date(serverTime).getMinutes();
                                 const lateAbsentVisibleMinutes = 16 * 60 + 30; // 16:30
                                 const isCurrentWeek = scheduleWeekOffset === 0;
                                 const isPastOperationalDay = dayIndex < homeOperationalDayIndex;
                                 const isCurrentOperationalDay = dayIndex === homeOperationalDayIndex;
-                                const hideLateAbsent = targetShift === 'late' && nowMinutes < lateAbsentVisibleMinutes;
+                                const hideLateAbsent = scheduledShiftForAbsent === 'late' && nowMinutes < lateAbsentVisibleMinutes;
                                 const showAbsent =
                                   isCurrentWeek &&
                                   row &&

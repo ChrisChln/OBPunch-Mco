@@ -281,6 +281,13 @@ const getShortGapPunchIndices = (punches: PunchRow[], thresholdMinutes = 10) => 
   return flagged;
 };
 
+const isAutoSignOutPunch = (punch: PunchRow) => {
+  if (punch.action !== 'OUT') return false;
+  const dt = new Date(String(punch.created_at ?? '').trim());
+  if (Number.isNaN(dt.getTime())) return false;
+  return dt.getHours() === DAY_CUTOFF_HOUR && dt.getMinutes() === 0 && dt.getSeconds() === 0;
+};
+
 export default function DashboardPage() {
   const [rows, setRows] = useState<DashboardRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -450,13 +457,15 @@ export default function DashboardPage() {
         for (const row of ((punchesRes.data as any[] | null) ?? [])) {
           const staffId = String(row.staff_id ?? '').trim();
           if (!staffId) continue;
-          const list = punchesByStaff.get(staffId) ?? [];
-          list.push({
+          const normalizedPunch: PunchRow = {
             id: String(row.id ?? ''),
             staff_id: staffId,
             action: String(row.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN',
             created_at: String(row.created_at ?? '')
-          });
+          };
+          if (isAutoSignOutPunch(normalizedPunch)) continue;
+          const list = punchesByStaff.get(staffId) ?? [];
+          list.push(normalizedPunch);
           punchesByStaff.set(staffId, list);
         }
       }
