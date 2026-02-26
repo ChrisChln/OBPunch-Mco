@@ -26,6 +26,7 @@ type DashboardRow = EmployeeRow & {
   punches: PunchRow[];
   attendance: 'Absent' | 'Off Worked' | 'Normal';
   borrowed_device: string;
+  schedule_state: string;
 };
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
@@ -117,6 +118,25 @@ const getShiftBadgeClass = (value: string) => {
   if (v === 'early') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
   if (v === 'late') return 'border-indigo-400/60 text-indigo-200 bg-indigo-500/10';
   return 'border-white/20 text-slate-200 bg-white/5';
+};
+const CARD_POSITIONS: Array<'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer'> = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'];
+const getAttendanceCardClass = (position: string) => {
+  const pos = normalizePositionKey(position);
+  if (pos === 'Pick') return 'border-sky-400/35 bg-sky-500/[0.04]';
+  if (pos === 'Pack') return 'border-emerald-400/35 bg-emerald-500/[0.04]';
+  if (pos === 'Rebin') return 'border-amber-400/35 bg-amber-500/[0.04]';
+  if (pos === 'Preship') return 'border-rose-400/35 bg-rose-500/[0.04]';
+  if (pos === 'Transfer') return 'border-violet-400/35 bg-violet-500/[0.04]';
+  return 'border-white/15 bg-white/[0.03]';
+};
+const getAttendanceCardValueClass = (position: string) => {
+  const pos = normalizePositionKey(position);
+  if (pos === 'Pick') return 'text-sky-300';
+  if (pos === 'Pack') return 'text-emerald-300';
+  if (pos === 'Rebin') return 'text-amber-300';
+  if (pos === 'Preship') return 'text-rose-300';
+  if (pos === 'Transfer') return 'text-violet-300';
+  return 'text-slate-200';
 };
 
 const chunkArray = <T,>(list: T[], size: number): T[][] => {
@@ -271,7 +291,6 @@ export default function DashboardPage() {
   const [absentOnly, setAbsentOnly] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState('');
   const [operationalDate, setOperationalDate] = useState('');
-  const [rangeText, setRangeText] = useState('');
   const [renderCount, setRenderCount] = useState(120);
   const [badgePrintingStaffId, setBadgePrintingStaffId] = useState<string | null>(null);
   const [accountPrintingStaffId, setAccountPrintingStaffId] = useState<string | null>(null);
@@ -403,7 +422,6 @@ export default function DashboardPage() {
         if (fetchSeqRef.current === currentSeq) {
           setRows([]);
           setOperationalDate(currentOperationalDate);
-          setRangeText(`${range.start.toLocaleString('en-CA', { hour12: false })} -> ${range.end.toLocaleString('en-CA', { hour12: false })}`);
           setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
         }
         return;
@@ -497,6 +515,7 @@ export default function DashboardPage() {
             position: employee?.position ?? schedule?.position ?? '',
             label: employee?.label ?? '',
             borrowed_device: '',
+            schedule_state: state,
             work_account: employee?.work_account ?? '',
             work_password: employee?.work_password ?? '',
             hire_date: employee?.hire_date ?? '',
@@ -577,7 +596,10 @@ export default function DashboardPage() {
       }
 
       const digest = `${nextRows.length}|${nextRows
-        .map((r) => `${r.staff_id}:${r.attendance}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}`)
+        .map(
+          (r) =>
+            `${r.staff_id}:${r.attendance}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}:${r.schedule_state}`
+        )
         .join(';')}`;
 
       if (fetchSeqRef.current !== currentSeq) return;
@@ -586,7 +608,6 @@ export default function DashboardPage() {
         setRows(nextRows);
       }
       setOperationalDate(currentOperationalDate);
-      setRangeText(`${range.start.toLocaleString('en-CA', { hour12: false })} -> ${range.end.toLocaleString('en-CA', { hour12: false })}`);
       setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
     } finally {
       if (fetchSeqRef.current === currentSeq) setLoading(false);
@@ -628,6 +649,33 @@ export default function DashboardPage() {
     () => filteredRows.slice(0, Math.max(0, renderCount)),
     [filteredRows, renderCount]
   );
+  const attendanceCards = useMemo(() => {
+    const cards: Array<{
+      position: 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer';
+      shift: 'early' | 'late';
+      expected: number;
+      present: number;
+      onClock: number;
+    }> = [];
+    for (const shift of ['early', 'late'] as const) {
+      for (const position of CARD_POSITIONS) {
+        const scope = rows.filter(
+          (row) =>
+            normalizePositionKey(row.position) === position &&
+            String(row.shift ?? '').trim().toLowerCase() === shift &&
+            isWorkingScheduleState(row.schedule_state)
+        );
+        const expected = scope.length;
+        const present = scope.filter((row) => row.punches.length > 0).length;
+        const onClock = scope.filter((row) => {
+          const last = row.punches[row.punches.length - 1];
+          return last?.action === 'IN';
+        }).length;
+        cards.push({ position, shift, expected, present, onClock });
+      }
+    }
+    return cards;
+  }, [rows]);
 
   const getQrDataUrlCached = async (rawValue: string) => {
     const value = String(rawValue ?? '').trim();
@@ -660,28 +708,34 @@ export default function DashboardPage() {
     <style>
       @page { size: 4in 2in; margin: 0; }
       html, body { margin: 0; padding: 0; width: 4in; height: 2in; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-      body { background: #fff; box-sizing: border-box; font-family: Arial, "Microsoft YaHei", sans-serif; }
-      .sheet { width: 4in; height: 2in; box-sizing: border-box; padding: 0.14in; border: 1px solid #cbd5e1; display: grid; grid-template-columns: 1fr 1.3in; gap: 0.12in; align-items: center; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); color: #0f172a; }
-      .left { min-width: 0; display: flex; flex-direction: column; gap: 0.08in; }
-      .kicker { font-size: 8pt; font-weight: 800; letter-spacing: 0.08em; color: #64748b; text-transform: uppercase; }
-      .name { font-size: 16pt; font-weight: 900; line-height: 1.02; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 2.2in; }
-      .pos { font-size: 12pt; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: #0f172a; }
-      .right { width: 1.3in; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.04in; }
-      .qrbox { width: 1.12in; height: 1.12in; border: 1px solid #cbd5e1; background: #fff; display: flex; align-items: center; justify-content: center; }
-      .qrbox img { width: 1in; height: 1in; display: block; image-rendering: pixelated; }
-      .qrlabel { font-size: 7.5pt; font-weight: 700; color: #475569; letter-spacing: 0.06em; text-transform: uppercase; }
+      body { background: #ffffff; font-family: Arial, "Microsoft YaHei", sans-serif; color: #0f172a; }
+      .sheet { width: 4in; height: 2in; box-sizing: border-box; padding: 0.12in; border: 0; border-radius: 0; display: grid; grid-template-rows: auto 1fr; gap: 0.05in; background: #ffffff; }
+      .name { font-size: 14pt; line-height: 1.1; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #0f172a; padding: 0; }
+      .sub { margin-top: 0.02in; font-size: 8.5pt; letter-spacing: 0.08em; font-weight: 700; color: #334155; text-transform: uppercase; }
+      .pair { min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0.08in; }
+      .box { border: 0; border-radius: 0; padding: 0; display: grid; grid-template-columns: 0.92in 1fr; gap: 0.06in; align-items: center; min-width: 0; background: #ffffff; box-shadow: none; }
+      .qrsq { width: 0.92in; height: 0.92in; border: 0; border-radius: 0; background: #fff; display: flex; align-items: center; justify-content: center; }
+      .qrsq img { width: 0.82in; height: 0.82in; display: block; image-rendering: pixelated; }
+      .meta { min-width: 0; }
+      .k { font-size: 7.5pt; letter-spacing: 0.1em; font-weight: 700; color: #334155; text-transform: uppercase; }
+      .v { margin-top: 0.04in; font-size: 9pt; font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     </style>
   </head>
   <body>
     <div class="sheet">
-      <div class="left">
-        <div class="kicker">TEMP BADGE</div>
+      <div>
         <div class="name">${escapeHtml(name)}</div>
-        <div class="pos">${escapeHtml(position)}</div>
+        <div class="sub">${escapeHtml(position)}</div>
       </div>
-      <div class="right">
-        <div class="qrbox"><img src="${escapeHtml(qrDataUrl)}" alt="QR ${escapeHtml(staff)}" /></div>
-        <div class="qrlabel">USID QR</div>
+      <div class="pair">
+        <div class="box">
+          <div class="qrsq"><img src="${escapeHtml(qrDataUrl)}" alt="QR ${escapeHtml(staff)}" /></div>
+          <div class="meta">
+            <div class="k">USID</div>
+            <div class="v">${escapeHtml(staff)}</div>
+          </div>
+        </div>
+        <div></div>
       </div>
     </div>
   </body>
@@ -782,11 +836,45 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        <div className="mt-4 grid gap-2 md:grid-cols-5">
+          {attendanceCards.map((card) => {
+            const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
+            return (
+              <div key={`${card.position}:${card.shift}`} className={['rounded-xl border px-3 py-2', getAttendanceCardClass(card.position)].join(' ')}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-100">
+                      {card.shift === 'early' ? 'Morning shift' : 'Night shift'} {card.position}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-400">
+                      {card.present}/{card.expected}
+                      <span
+                        className={[
+                          'ml-2 font-bold',
+                          ratio < 80 ? 'text-rose-400' : ratio >= 90 ? 'text-emerald-400' : 'text-slate-300'
+                        ].join(' ')}
+                      >
+                        {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="min-w-[86px] rounded-lg border border-white/15 bg-black/20 px-3 py-1.5 text-center">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-300">On Clock</div>
+                    <div className={['mt-0.5 text-3xl font-bold leading-none', getAttendanceCardValueClass(card.position)].join(' ')}>
+                      {card.onClock}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
         <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_180px_190px_auto_auto]">
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by staff id / name / position / account"
+            placeholder="Search by staff id / name / account"
             className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon"
           />
           <select

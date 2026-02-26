@@ -17,6 +17,7 @@ type EmployeeEditModalProps = {
   setEmployeeEditName: (value: string) => void;
   employeeEditAgency: string;
   setEmployeeEditAgency: (value: string) => void;
+  employeeAgencyOptions: string[];
   employeeEditPosition: string;
   setEmployeeEditPosition: (value: string) => void;
   employeeEditShift: '' | 'early' | 'late';
@@ -48,6 +49,7 @@ export default function EmployeeEditModal({
   setEmployeeEditName,
   employeeEditAgency,
   setEmployeeEditAgency,
+  employeeAgencyOptions,
   employeeEditPosition,
   setEmployeeEditPosition,
   employeeEditShift,
@@ -122,12 +124,19 @@ export default function EmployeeEditModal({
             <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Agency</label>
-                <input
+                <select
                   value={employeeEditAgency}
                   onChange={(e) => setEmployeeEditAgency(e.target.value)}
                   disabled={isLocked}
                   className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                />
+                >
+                  <option value="">{t('选择中介', 'Select agency')}</option>
+                  {employeeAgencyOptions.map((agency) => (
+                    <option key={agency} value={agency}>
+                      {agency}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Position</label>

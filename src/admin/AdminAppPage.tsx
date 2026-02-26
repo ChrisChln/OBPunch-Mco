@@ -3755,103 +3755,35 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     <meta charset="UTF-8" />
     <style>
       @page { size: 4in 2in; margin: 0; }
-      html, body {
-        margin: 0;
-        padding: 0;
-        width: 4in;
-        height: 2in;
-        -webkit-print-color-adjust: exact !important;
-        print-color-adjust: exact !important;
-      }
-      body {
-        background: #fff;
-        box-sizing: border-box;
-        font-family: Arial, "Microsoft YaHei", sans-serif;
-      }
-      .sheet {
-        width: 4in;
-        height: 2in;
-        box-sizing: border-box;
-        padding: 0.14in;
-        border: 1px solid #cbd5e1;
-        display: grid;
-        grid-template-columns: 1fr 1.3in;
-        gap: 0.12in;
-        align-items: center;
-        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-        color: #0f172a;
-      }
-      .left {
-        min-width: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 0.08in;
-      }
-      .kicker {
-        font-size: 8pt;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-        color: #64748b;
-        text-transform: uppercase;
-      }
-      .name {
-        font-size: 16pt;
-        font-weight: 900;
-        line-height: 1.02;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        max-width: 2.2in;
-      }
-      .pos {
-        font-size: 12pt;
-        font-weight: 800;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        color: #0f172a;
-      }
-      .right {
-        width: 1.3in;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 0.04in;
-      }
-      .qrbox {
-        width: 1.12in;
-        height: 1.12in;
-        border: 1px solid #cbd5e1;
-        background: #fff;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-      .qrbox img {
-        width: 1in;
-        height: 1in;
-        display: block;
-        image-rendering: pixelated;
-      }
-      .qrlabel {
-        font-size: 7.5pt;
-        font-weight: 700;
-        color: #475569;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-      }
+      html, body { margin: 0; padding: 0; width: 4in; height: 2in; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      body { background: #ffffff; font-family: Arial, "Microsoft YaHei", sans-serif; color: #0f172a; }
+      .sheet { width: 4in; height: 2in; box-sizing: border-box; padding: 0.12in; border: 0; border-radius: 0; display: grid; grid-template-rows: auto 1fr; gap: 0.05in; background: #ffffff; }
+      .name { font-size: 14pt; line-height: 1.1; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #0f172a; padding: 0; }
+      .sub { margin-top: 0.02in; font-size: 8.5pt; letter-spacing: 0.08em; font-weight: 700; color: #334155; text-transform: uppercase; }
+      .pair { min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0.08in; }
+      .box { border: 0; border-radius: 0; padding: 0; display: grid; grid-template-columns: 0.92in 1fr; gap: 0.06in; align-items: center; min-width: 0; background: #ffffff; box-shadow: none; }
+      .qrsq { width: 0.92in; height: 0.92in; border: 0; border-radius: 0; background: #fff; display: flex; align-items: center; justify-content: center; }
+      .qrsq img { width: 0.82in; height: 0.82in; display: block; image-rendering: pixelated; }
+      .meta { min-width: 0; }
+      .k { font-size: 7.5pt; letter-spacing: 0.1em; font-weight: 700; color: #334155; text-transform: uppercase; }
+      .v { margin-top: 0.04in; font-size: 9pt; font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     </style>
   </head>
   <body>
     <div class="sheet">
-      <div class="left">
-        <div class="kicker">TEMP BADGE</div>
+      <div>
         <div class="name">${safe(name)}</div>
-        <div class="pos">${safe(position)}</div>
+        <div class="sub">${safe(position)}</div>
       </div>
-      <div class="right">
-        <div class="qrbox"><img src="${safe(qrDataUrl)}" alt="QR ${safe(staff)}" /></div>
-        <div class="qrlabel">USID QR</div>
+      <div class="pair">
+        <div class="box">
+          <div class="qrsq"><img src="${safe(qrDataUrl)}" alt="QR ${safe(staff)}" /></div>
+          <div class="meta">
+            <div class="k">USID</div>
+            <div class="v">${safe(staff)}</div>
+          </div>
+        </div>
+        <div></div>
       </div>
     </div>
   </body>
@@ -10351,6 +10283,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   setEmployeeNewName={setEmployeeNewName}
                   employeeNewAgency={employeeNewAgency}
                   setEmployeeNewAgency={setEmployeeNewAgency}
+                  employeeAgencyOptions={employeeAgencyOptions}
                   employeeNewPosition={employeeNewPosition}
                   setEmployeeNewPosition={setEmployeeNewPosition}
                   employeeNewShift={employeeNewShift}
@@ -10448,6 +10381,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                   setEmployeeEditName={setEmployeeEditName}
                   employeeEditAgency={employeeEditAgency}
                   setEmployeeEditAgency={setEmployeeEditAgency}
+                  employeeAgencyOptions={employeeAgencyOptions}
                   employeeEditPosition={employeeEditPosition}
                   setEmployeeEditPosition={setEmployeeEditPosition as unknown as (value: string) => void}
                   employeeEditShift={employeeEditShift}

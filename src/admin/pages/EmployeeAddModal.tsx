@@ -12,6 +12,7 @@ type EmployeeAddModalProps = {
   setEmployeeNewName: (value: string) => void;
   employeeNewAgency: string;
   setEmployeeNewAgency: (value: string) => void;
+  employeeAgencyOptions: string[];
   employeeNewPosition: string;
   setEmployeeNewPosition: (value: any) => void;
   employeeNewShift: '' | 'early' | 'late';
@@ -38,6 +39,7 @@ export default function EmployeeAddModal({
   setEmployeeNewName,
   employeeNewAgency,
   setEmployeeNewAgency,
+  employeeAgencyOptions,
   employeeNewPosition,
   setEmployeeNewPosition,
   employeeNewShift,
@@ -54,6 +56,9 @@ export default function EmployeeAddModal({
   addEmployeeRow
 }: EmployeeAddModalProps) {
   if (!open || typeof document === 'undefined') return null;
+  const NEW_AGENCY_OPTION = '__new_agency__';
+  const hasAgencyInOptions = employeeAgencyOptions.includes(employeeNewAgency);
+  const agencySelectValue = hasAgencyInOptions ? employeeNewAgency : NEW_AGENCY_OPTION;
 
   return createPortal(
     <div className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-black/60 px-4 py-10">
@@ -104,12 +109,36 @@ export default function EmployeeAddModal({
             <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Agency</label>
-                <input
-                  value={employeeNewAgency}
-                  onChange={(e) => setEmployeeNewAgency(e.target.value)}
+                <select
+                  value={agencySelectValue}
+                  onChange={(e) => {
+                    const selected = String(e.target.value ?? '').trim();
+                    if (selected === NEW_AGENCY_OPTION) {
+                      if (hasAgencyInOptions) setEmployeeNewAgency('');
+                      return;
+                    }
+                    setEmployeeNewAgency(selected);
+                  }}
                   disabled={isLocked}
                   className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                />
+                >
+                  <option value="">{t('选择中介', 'Select agency')}</option>
+                  {employeeAgencyOptions.map((agency) => (
+                    <option key={agency} value={agency}>
+                      {agency}
+                    </option>
+                  ))}
+                  <option value={NEW_AGENCY_OPTION}>{t('新中介', 'New agency')}</option>
+                </select>
+                {agencySelectValue === NEW_AGENCY_OPTION && (
+                  <input
+                    value={employeeNewAgency}
+                    onChange={(e) => setEmployeeNewAgency(e.target.value)}
+                    disabled={isLocked}
+                    placeholder={t('输入新中介', 'Enter new agency')}
+                    className="mt-2 h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                  />
+                )}
               </div>
               <div>
                 <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Position</label>
