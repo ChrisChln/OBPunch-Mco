@@ -15,6 +15,7 @@ type AdminHeaderProps = {
   toneColor: Record<StatusTone, string>;
   serverTimeText: string;
   user: User | null;
+  userDisplayName: string;
   attendanceError: string | null;
   onBack: () => void;
   onLogout: () => void | Promise<void>;
@@ -31,6 +32,7 @@ export default function AdminHeader({
   toneColor,
   serverTimeText,
   user,
+  userDisplayName,
   attendanceError,
   onBack,
   onLogout
@@ -85,7 +87,9 @@ export default function AdminHeader({
 
           <div className="mt-3 text-xs uppercase tracking-[0.25em] text-slate-400">{t('服务器时间', 'Server Time')}</div>
           <div className="mt-2 font-display text-2xl tracking-[0.08em] text-neon">{serverTimeText}</div>
-          <div className="mt-2 text-xs text-slate-400">{user ? user.email : t('未登录', 'Signed out')}</div>
+          <div className="mt-2 text-xs text-slate-400">
+            {user ? (userDisplayName.trim() || user.email || '-') : t('未登录', 'Signed out')}
+          </div>
           {attendanceError && <div className="mt-2 text-xs text-ember">{t('考勤卡片加载失败：', 'Attendance cards failed: ')}{attendanceError}</div>}
         </div>
       </div>

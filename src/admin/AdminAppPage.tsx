@@ -64,6 +64,7 @@ const createEmptyPositionFlags = (): Record<AllowedPosition, boolean> => ({
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
+const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
@@ -597,6 +598,20 @@ export default function AdminApp() {
   const [serverTime, setServerTime] = useState(() => new Date());
 
   const [user, setUser] = useState<User | null>(null);
+  const [userDisplayName, setUserDisplayName] = useState('');
+  const [userDisplayNameInput, setUserDisplayNameInput] = useState('');
+  const [userDisplayNamePromptOpen, setUserDisplayNamePromptOpen] = useState(false);
+  const [userDisplayNameSaving, setUserDisplayNameSaving] = useState(false);
+  const normalizeAuditActor = (value: unknown) => {
+    const raw = String(value ?? '').trim();
+    const emailValue = String(user?.email ?? '').trim();
+    const displayValue = userDisplayName.trim();
+    if (!raw) return raw;
+    if (displayValue && emailValue && raw.toLowerCase() === emailValue.toLowerCase()) {
+      return displayValue;
+    }
+    return raw;
+  };
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -1636,6 +1651,77 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    const syncUserDisplayName = async () => {
+      if (!supabase || !user?.id) {
+        setUserDisplayName('');
+        setUserDisplayNameInput('');
+        setUserDisplayNamePromptOpen(false);
+        return;
+      }
+      const res = await supabase
+        .from(USER_PROFILE_TABLE)
+        .select('display_name')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (!active) {
+        return;
+      }
+      if (res.error) {
+        setStatus({ tone: 'error', message: t(`读取用户名称失败：${res.error.message}`, `Failed to load profile name: ${res.error.message}`) });
+        setUserDisplayName('');
+        setUserDisplayNameInput('');
+        setUserDisplayNamePromptOpen(true);
+        return;
+      }
+      const nextName = String((res.data as any)?.display_name ?? '').trim();
+      setUserDisplayName(nextName);
+      setUserDisplayNameInput(nextName);
+      setUserDisplayNamePromptOpen(!nextName);
+    };
+    void syncUserDisplayName();
+    return () => {
+      active = false;
+    };
+  }, [user?.id, lang]);
+
+  const saveUserDisplayName = async () => {
+    if (!supabase || !user?.id) {
+      return;
+    }
+    const nextName = userDisplayNameInput.trim();
+    if (!nextName) {
+      setStatus({ tone: 'error', message: t('请先填写用户名。', 'Please enter your name first.') });
+      return;
+    }
+    setUserDisplayNameSaving(true);
+    try {
+      const upsertRes = await supabase.from(USER_PROFILE_TABLE).upsert(
+        [
+          {
+            user_id: user.id,
+            user_email: user.email ?? null,
+            display_name: nextName
+          }
+        ] as any[],
+        { onConflict: 'user_id' }
+      );
+      if (upsertRes.error) {
+        setStatus({
+          tone: 'error',
+          message: t(`保存用户名失败：${upsertRes.error.message}`, `Failed to save profile name: ${upsertRes.error.message}`)
+        });
+        return;
+      }
+      setUserDisplayName(nextName);
+      setUserDisplayNamePromptOpen(false);
+      setStatus({ tone: 'success', message: t('用户名已保存。', 'Profile name saved.') });
+    } finally {
+      setUserDisplayNameSaving(false);
+    }
+  };
+
+  useEffect(() => {
     if (!supabase) {
       return;
     }
@@ -1705,10 +1791,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     target?: string | null;
     payload?: any;
   }) => {
+    const actorForAudit = userDisplayName.trim() || user?.email || null;
     const row: AuditRow = {
       id: `local_${Date.now()}`,
       created_at: new Date(serverTime).toISOString(),
-      actor: user?.email ?? null,
+      actor: actorForAudit,
       action,
       staff_id: staffId ?? null,
       target: target ?? null,
@@ -1773,7 +1860,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         setAuditError(res.error.message);
         return;
       }
-      setAuditRows(((res.data as any[]) ?? []) as AuditRow[]);
+      const nextAuditRows = (((res.data as any[]) ?? []) as AuditRow[]).map((row) => ({
+        ...row,
+        actor: normalizeAuditActor((row as any).actor)
+      }));
+      setAuditRows(nextAuditRows);
     });
   };
 
@@ -1803,7 +1894,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     if (res.error) {
       return;
     }
-    setCellAuditRows((((res.data as any[]) ?? []) as AuditRow[]).slice(0, 1200));
+    const nextCellRows = ((((res.data as any[]) ?? []) as AuditRow[]).slice(0, 1200)).map((row) => ({
+      ...row,
+      actor: normalizeAuditActor((row as any).actor)
+    }));
+    setCellAuditRows(nextCellRows);
   };
 
   const fetchDevices = async ({ lockUi = true }: { lockUi?: boolean } = {}) => {
@@ -4199,7 +4294,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           auditRows.filter((r) => normalizeStaffId(String(r.staff_id ?? '').trim()) === staffKey).slice(0, 30)
         );
       } else {
-        setEmployeeAuditRows(((res.data as any[]) ?? []) as AuditRow[]);
+      const nextRows = (((res.data as any[]) ?? []) as AuditRow[]).map((row) => ({
+        ...row,
+        actor: normalizeAuditActor((row as any).actor)
+      }));
+      setEmployeeAuditRows(nextRows);
       }
     } catch (err: any) {
       setEmployeeAuditError(String(err?.message ?? err ?? 'Unknown error'));
@@ -9262,6 +9361,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           toneColor={toneColor}
           serverTimeText={formatTime(serverTime, locale)}
           user={user}
+          userDisplayName={userDisplayName}
           attendanceError={attendanceError}
           onBack={() => {
             window.location.href = '/';
@@ -9905,7 +10005,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                               return (
                                                 <div key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)} className="rounded-md bg-white/5 px-1.5 py-1">
                                                   <div className="text-[10px] text-slate-400">
-                                                    {formatCellAuditTime(item.created_at)} · {String(item.actor ?? '').trim() || '-'}
+                                                    {formatCellAuditTime(item.created_at)} · {normalizeAuditActor((item as any).actor) || '-'}
                                                   </div>
                                                   <div>{renderAuditSummary(detail.summary)}</div>
                                                   {detail.details.slice(0, 2).map((d, idx2) => (
@@ -10841,6 +10941,54 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         )}
 
         <BusyOverlay visible={busyVisible} themeMode={themeMode} t={t} />
+
+        {user && userDisplayNamePromptOpen && (
+          <div className={['fixed inset-0 z-[80] flex items-center justify-center px-4', themeMode === 'light' ? 'bg-slate-900/30' : 'bg-black/70'].join(' ')}>
+            <div className={['w-full max-w-md rounded-2xl border p-5 shadow-2xl', themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950'].join(' ')}>
+              <h3 className={['font-display text-xl tracking-[0.08em]', themeMode === 'light' ? 'text-slate-900' : 'text-white'].join(' ')}>
+                {t('Set Your Name', 'Set Your Name')}
+              </h3>
+              <p className={['mt-2 text-sm', themeMode === 'light' ? 'text-slate-600' : 'text-slate-300'].join(' ')}>
+                {t('Please enter a name before continuing', 'Please enter a display name before continuing.')}
+              </p>
+              <input
+                value={userDisplayNameInput}
+                onChange={(e) => setUserDisplayNameInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void saveUserDisplayName();
+                  }
+                }}
+                placeholder={t('Example:Linnan Chen', 'Example: Linnan Chen')}
+                className={[
+                  'mt-4 h-11 w-full rounded-xl border px-3 text-sm outline-none transition',
+                  themeMode === 'light'
+                    ? 'border-slate-300 bg-white text-slate-900 focus:border-neon'
+                    : 'border-white/10 bg-black/30 text-white focus:border-neon'
+                ].join(' ')}
+              />
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={userDisplayNameSaving}
+                  onClick={() => void doLogout()}
+                  className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {t('退出登录', 'Logout')}
+                </button>
+                <button
+                  type="button"
+                  disabled={userDisplayNameSaving || !userDisplayNameInput.trim()}
+                  onClick={() => void saveUserDisplayName()}
+                  className="rounded-xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {userDisplayNameSaving ? t('保存中...', 'Saving...') : t('保存', 'Save')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {deviceLabelPreview && typeof document !== 'undefined' &&
           createPortal(
