@@ -68,6 +68,9 @@ const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as s
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const TEMP_ACCOUNT_TABLE = (import.meta.env.VITE_TEMP_ACCOUNT_TABLE as string | undefined) ?? 'ob_temp_accounts';
+const DEFAULT_WORK_PASSWORD = 'Helloworld2!';
+const resolveDefaultWorkPassword = (workAccount: string, workPassword: string) =>
+  workAccount && !workPassword ? DEFAULT_WORK_PASSWORD : workPassword;
 const DEVICE_COUNTING_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_COUNTED_AT_NOTE_PATTERN = /\[COUNTED_AT=([^\]]+)\]/i;
 const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
@@ -3034,7 +3037,16 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         }
       }
 
-      setEmployees(all);
+      setEmployees(
+        all.map((row) => {
+          const workAccount = String((row as any)?.work_account ?? (row as any)?.WorkAccount ?? '').trim();
+          const workPassword = String((row as any)?.work_password ?? (row as any)?.WorkPassword ?? '').trim();
+          return {
+            ...row,
+            work_password: resolveDefaultWorkPassword(workAccount, workPassword)
+          } as EmployeeRow;
+        })
+      );
       setEmployeesHasMore(false);
       fetchedEmployees = all;
 
@@ -3240,7 +3252,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         agency: String(row?.agency ?? '').trim(),
         position: String(row?.position ?? '').trim(),
         work_account: String(row?.work_account ?? '').trim(),
-        work_password: String(row?.work_password ?? '').trim(),
+        work_password: resolveDefaultWorkPassword(
+          String(row?.work_account ?? '').trim(),
+          String(row?.work_password ?? '').trim()
+        ),
         note: String(row?.note ?? '').trim()
       }));
       setTempAccounts(rows.filter((row) => Boolean(row.staff_id && (row.work_account || row.work_password))));
@@ -3271,7 +3286,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const shift = employeeNewShift;
     const label = employeeNewLabel.trim();
     const workAccount = employeeNewWorkAccount.trim();
-    const workPassword = employeeNewWorkPassword.trim();
+    const workPassword = resolveDefaultWorkPassword(workAccount, employeeNewWorkPassword.trim());
     const normalizedPos = normalizePositionKey(position);
     if (!normalizedPos) {
       setEmployeesError(`Position 只能是：${ALLOWED_POSITIONS.join(', ')}`);
@@ -3958,7 +3973,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const staff = normalizeStaffId(String(payload.staff ?? '').trim());
     const name = String(payload.name ?? '').trim() || '-';
     const workAccount = String(payload.workAccount ?? '').trim();
-    const workPassword = String(payload.workPassword ?? '').trim();
+    const workPassword = resolveDefaultWorkPassword(workAccount, String(payload.workPassword ?? '').trim());
     if (!staff || !workAccount || !workPassword) return;
     setAccountCardPrintingStaffId(staff);
     try {
@@ -4526,7 +4541,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     const positionRaw = employeeEditPosition.trim();
     const label = employeeEditLabel.trim();
     const workAccount = employeeEditWorkAccount.trim();
-    const workPassword = employeeEditWorkPassword.trim();
+    const workPassword = resolveDefaultWorkPassword(workAccount, employeeEditWorkPassword.trim());
     const normalizedPos = positionRaw ? normalizePositionKey(positionRaw) : null;
     if (positionRaw && !normalizedPos) {
       setEmployeesError('Position must be one of: ' + ALLOWED_POSITIONS.join(', '));
@@ -7394,7 +7409,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const agency = String(e.agency ?? e.Agency ?? '').trim();
         const position = String(e.position ?? e.Position ?? '').trim();
         const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
-        const workPassword = String(e.work_password ?? e.WorkPassword ?? '').trim();
+        const workPassword = resolveDefaultWorkPassword(
+          workAccount,
+          String(e.work_password ?? e.WorkPassword ?? '').trim()
+        );
         return { staff, name, agency, position, workAccount, workPassword, isTemp: false };
       })
       .filter((row) => Boolean(row.staff && (row.workAccount || row.workPassword)));
@@ -7404,7 +7422,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       agency: String(row.agency ?? '').trim(),
       position: String(row.position ?? '').trim(),
       workAccount: String(row.work_account ?? '').trim(),
-      workPassword: String(row.work_password ?? '').trim(),
+      workPassword: resolveDefaultWorkPassword(
+        String(row.work_account ?? '').trim(),
+        String(row.work_password ?? '').trim()
+      ),
       isTemp: true
     }));
     const employeeDedup = new Map<string, { staff: string; name: string; agency: string; position: string; workAccount: string; workPassword: string; isTemp: boolean }>();
@@ -7702,7 +7723,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const position = String(e.position ?? e.Position ?? '').trim();
         const label = String(e.label ?? e.Label ?? '').trim();
         const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
-        const workPassword = String(e.work_password ?? e.WorkPassword ?? '').trim();
+        const workPassword = resolveDefaultWorkPassword(
+          workAccount,
+          String(e.work_password ?? e.WorkPassword ?? '').trim()
+        );
         const shiftInfo = employeeShiftByStaffId[staff];
         const scheduleRow = scheduleRowsByStaffDayIndex.get(`${normalizeStaffId(staff)}__${homeOperationalDayIndex}`);
         const scheduledShift = normalizeShiftValue(String(scheduleRow?.shift ?? '').trim());

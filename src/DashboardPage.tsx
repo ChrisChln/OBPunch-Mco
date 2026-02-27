@@ -27,11 +27,35 @@ type DashboardRow = EmployeeRow & {
   attendance: 'Absent' | 'Off Worked' | 'Normal';
   borrowed_device: string;
   schedule_state: string;
+  temp_account_name: string;
+  temp_source_staff_id: string;
+};
+
+type TempAccountUsageRow = {
+  id: string;
+  staff_id: string;
+  name: string;
+  position: string;
+  work_account: string;
+  account_name: string;
+  source_temp_staff_id: string;
+  created_at: string;
+  status: 'Active' | 'Expired';
+};
+
+type TempAssignmentPayload = {
+  work_account: string;
+  work_password: string;
+  account_name: string;
+  source_temp_staff_id: string;
 };
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const PUNCHES_TABLE = 'ob_punches';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
+const TEMP_ACCOUNT_TABLE = (import.meta.env.VITE_TEMP_ACCOUNT_TABLE as string | undefined) ?? 'ob_temp_accounts';
+const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
+  (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const supabase = createSupabaseClient({ persistSession: false });
@@ -41,6 +65,9 @@ const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW)
   ? Math.min(23, Math.max(0, DAY_CUTOFF_HOUR_RAW))
   : 5;
+const DEFAULT_TEMP_ACCOUNT_PASSWORD = 'Helloworld2!';
+const resolveDefaultPassword = (workAccount: string, workPassword: string) =>
+  workAccount && !workPassword ? DEFAULT_TEMP_ACCOUNT_PASSWORD : workPassword;
 
 const toDateOnly = (d: Date) => {
   const y = d.getFullYear();
@@ -215,6 +242,17 @@ const isMissingColumnError = (message: unknown, column: string) =>
     );
   })();
 
+const isMissingTableError = (message: unknown, table: string) => {
+  const text = String(message ?? '').toLowerCase();
+  const target = String(table ?? '').toLowerCase();
+  return (
+    text.includes(`could not find the table`) ||
+    text.includes('relation') ||
+    text.includes('does not exist')
+  )
+    && text.includes(target);
+};
+
 const escapeHtml = (value: string) =>
   String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -296,11 +334,17 @@ export default function DashboardPage() {
   const [positionFilter, setPositionFilter] = useState('');
   const [shiftFilter, setShiftFilter] = useState('');
   const [absentOnly, setAbsentOnly] = useState(false);
+  const [onClockOnly, setOnClockOnly] = useState(false);
+  const [offWorkOnly, setOffWorkOnly] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState('');
   const [operationalDate, setOperationalDate] = useState('');
   const [renderCount, setRenderCount] = useState(120);
   const [badgePrintingStaffId, setBadgePrintingStaffId] = useState<string | null>(null);
   const [accountPrintingStaffId, setAccountPrintingStaffId] = useState<string | null>(null);
+  const [accountAssigningStaffId, setAccountAssigningStaffId] = useState<string | null>(null);
+  const [accountUsageOpen, setAccountUsageOpen] = useState(false);
+  const [accountUsageSearch, setAccountUsageSearch] = useState('');
+  const [accountUsageRows, setAccountUsageRows] = useState<TempAccountUsageRow[]>([]);
   const inFlightRef = useRef(false);
   const fetchSeqRef = useRef(0);
   const employeeCacheRef = useRef<Map<string, EmployeeRow>>(new Map());
@@ -497,7 +541,10 @@ export default function DashboardPage() {
             position: String(row.position ?? row.Position ?? '').trim(),
             label: String(row.label ?? row.Label ?? '').trim(),
             work_account: String(row.work_account ?? '').trim(),
-            work_password: String(row.work_password ?? '').trim(),
+            work_password: resolveDefaultPassword(
+              String(row.work_account ?? '').trim(),
+              String(row.work_password ?? '').trim()
+            ),
             hire_date: String(row.hire_date ?? '').trim(),
             shift: String(row.shift ?? '').trim()
           });
@@ -529,6 +576,8 @@ export default function DashboardPage() {
             work_password: employee?.work_password ?? '',
             hire_date: employee?.hire_date ?? '',
             shift: employee?.shift ?? schedule?.shift ?? '',
+            temp_account_name: '',
+            temp_source_staff_id: '',
             punches,
             attendance
           };
@@ -544,6 +593,83 @@ export default function DashboardPage() {
           if (isNoProfile) return false;
           return isPlannedWork || isOffWorked;
         });
+
+      // Rehydrate temporary account assignments created in current operational window.
+      const needsAccountRows = nextRows.filter(
+        (row) => !String(row.work_account ?? '').trim() && Boolean(normalizePositionKey(String(row.position ?? '')))
+      );
+      if (needsAccountRows.length > 0) {
+        const needStaffIds = needsAccountRows.map((row) => row.staff_id);
+        const assignedByStaff = new Map<string, TempAssignmentPayload>();
+        for (const batch of chunkArray(needStaffIds, 150)) {
+          const activeRes = await supabase
+            .from(TEMP_ACCOUNT_ASSIGNMENT_TABLE)
+            .select('staff_id, work_account, source_temp_staff_id, created_at')
+            .in('staff_id', batch)
+            .gte('created_at', rangeStartIso)
+            .lt('created_at', rangeEndIso)
+            .order('created_at', { ascending: false })
+            .limit(5000);
+          if (activeRes.error) {
+            if (!isMissingTableError(activeRes.error.message, TEMP_ACCOUNT_ASSIGNMENT_TABLE)) {
+              console.warn('[dashboard] load active temp assignments failed:', activeRes.error.message);
+            }
+            continue;
+          }
+          const sourceIds = Array.from(
+            new Set(
+              (((activeRes.data as any[]) ?? []) as any[])
+                .map((item) => String(item.source_temp_staff_id ?? '').trim())
+                .filter(Boolean)
+            )
+          );
+          const accountBySourceStaff = new Map<string, { name: string; work_password: string; work_account: string }>();
+          for (const sourceBatch of chunkArray(sourceIds, 150)) {
+            const sourceRes = await supabase
+              .from(TEMP_ACCOUNT_TABLE)
+              .select('staff_id, name, work_account, work_password')
+              .in('staff_id', sourceBatch)
+              .limit(5000);
+            if (sourceRes.error) continue;
+            for (const src of ((sourceRes.data as any[]) ?? [])) {
+              const sid = String(src.staff_id ?? '').trim();
+              if (!sid) continue;
+              accountBySourceStaff.set(sid, {
+                name: String(src.name ?? '').trim(),
+                work_account: String(src.work_account ?? '').trim(),
+                work_password: String(src.work_password ?? '').trim()
+              });
+            }
+          }
+
+          for (const item of ((activeRes.data as any[]) ?? [])) {
+            const staff = String(item.staff_id ?? '').trim();
+            const acc = String(item.work_account ?? '').trim();
+            const sourceTempStaffId = String(item.source_temp_staff_id ?? '').trim();
+            const sourceInfo = accountBySourceStaff.get(sourceTempStaffId);
+            const pwd = String(sourceInfo?.work_password ?? '').trim() || DEFAULT_TEMP_ACCOUNT_PASSWORD;
+            const accountName = String(sourceInfo?.name ?? '').trim();
+            if (!staff || !acc || assignedByStaff.has(staff)) continue;
+            assignedByStaff.set(staff, {
+              work_account: acc,
+              work_password: pwd,
+              account_name: accountName,
+              source_temp_staff_id: sourceTempStaffId
+            });
+          }
+        }
+
+        for (const row of nextRows) {
+          const assigned = assignedByStaff.get(row.staff_id);
+          if (!assigned) continue;
+          row.work_account = assigned.work_account;
+          row.work_password = assigned.work_password;
+          row.temp_account_name = assigned.account_name;
+          row.temp_source_staff_id = assigned.source_temp_staff_id;
+        }
+
+        // New assignments are created by explicit click on "Assign account".
+      }
 
       const borrowedDeviceByStaff = new Map<string, string[]>();
       for (const staffBatch of chunkArray(scheduledStaffIds, 120)) {
@@ -604,10 +730,91 @@ export default function DashboardPage() {
         row.borrowed_device = deviceList.join(', ');
       }
 
+      const rowNameByStaff = new Map<string, string>();
+      for (const row of nextRows) rowNameByStaff.set(row.staff_id, String(row.name ?? '').trim());
+      const nowMs = Date.now();
+      const rangeStartMs = range.start.getTime();
+      const rangeEndMs = range.end.getTime();
+      const usageRes = await supabase
+        .from(TEMP_ACCOUNT_ASSIGNMENT_TABLE)
+        .select('id, staff_id, position, work_account, source_temp_staff_id, created_at')
+        .order('created_at', { ascending: false })
+        .limit(400);
+      const nextUsageRows: TempAccountUsageRow[] = [];
+      if (!usageRes.error) {
+        const sourceStaffIds = Array.from(
+          new Set(
+            (((usageRes.data as any[]) ?? []) as any[])
+              .map((item) => String(item.source_temp_staff_id ?? '').trim())
+              .filter(Boolean)
+          )
+        );
+        const sourceInfoBySourceStaff = new Map<string, { name: string; work_password: string }>();
+        for (const batch of chunkArray(sourceStaffIds, 150)) {
+          const sourceRes = await supabase
+            .from(TEMP_ACCOUNT_TABLE)
+            .select('staff_id, name, work_password')
+            .in('staff_id', batch)
+            .limit(5000);
+          if (sourceRes.error) continue;
+          for (const src of ((sourceRes.data as any[]) ?? [])) {
+            const sid = String(src.staff_id ?? '').trim();
+            if (!sid) continue;
+            sourceInfoBySourceStaff.set(sid, {
+              name: String(src.name ?? '').trim(),
+              work_password: String(src.work_password ?? '').trim()
+            });
+          }
+        }
+
+        for (const item of ((usageRes.data as any[]) ?? [])) {
+          const staff = String(item.staff_id ?? '').trim();
+          if (!staff) continue;
+          const sourceTempStaffId = String(item.source_temp_staff_id ?? '').trim();
+          const sourceInfo = sourceInfoBySourceStaff.get(sourceTempStaffId);
+          nextUsageRows.push({
+            id: String(item.id ?? ''),
+            staff_id: staff,
+            name: rowNameByStaff.get(staff) || employeeCacheRef.current.get(staff)?.name || '',
+            position: String(item.position ?? '').trim(),
+            work_account: String(item.work_account ?? '').trim(),
+            account_name: sourceInfo?.name || '',
+            source_temp_staff_id: sourceTempStaffId,
+            created_at: String(item.created_at ?? ''),
+            status:
+              (() => {
+                const createdMs = Date.parse(String(item.created_at ?? ''));
+                if (!Number.isFinite(createdMs)) return 'Expired' as const;
+                if (createdMs >= rangeStartMs && createdMs < rangeEndMs && nowMs < rangeEndMs) return 'Active' as const;
+                return 'Expired' as const;
+              })()
+          });
+        }
+        const activeUsageByStaff = new Map<string, TempAccountUsageRow>();
+        for (const item of nextUsageRows) {
+          if (item.status !== 'Active') continue;
+          if (activeUsageByStaff.has(item.staff_id)) continue;
+          activeUsageByStaff.set(item.staff_id, item);
+        }
+        for (const row of nextRows) {
+          const active = activeUsageByStaff.get(row.staff_id);
+          if (!active) continue;
+          row.temp_account_name = active.account_name || '';
+          row.temp_source_staff_id = active.source_temp_staff_id || '';
+          if (!String(row.work_account ?? '').trim()) row.work_account = active.work_account || '';
+          if (!String(row.work_password ?? '').trim()) {
+            const sourceInfo = sourceInfoBySourceStaff.get(active.source_temp_staff_id || '');
+            row.work_password = String(sourceInfo?.work_password ?? '').trim() || DEFAULT_TEMP_ACCOUNT_PASSWORD;
+          }
+        }
+      } else if (!isMissingTableError(usageRes.error.message, TEMP_ACCOUNT_ASSIGNMENT_TABLE)) {
+        console.warn('[dashboard] load account usage failed:', usageRes.error.message);
+      }
+
       const digest = `${nextRows.length}|${nextRows
         .map(
           (r) =>
-            `${r.staff_id}:${r.attendance}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}:${r.schedule_state}`
+            `${r.staff_id}:${r.attendance}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}:${r.schedule_state}:${r.work_account}:${r.temp_account_name}`
         )
         .join(';')}`;
 
@@ -616,6 +823,7 @@ export default function DashboardPage() {
         rowsDigestRef.current = digest;
         setRows(nextRows);
       }
+      setAccountUsageRows(nextUsageRows);
       setOperationalDate(currentOperationalDate);
       setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
     } finally {
@@ -644,20 +852,41 @@ export default function DashboardPage() {
       if (positionFilter && String(row.position ?? '').trim() !== positionFilter) return false;
       if (shiftFilter && String(row.shift ?? '').trim().toLowerCase() !== shiftFilter) return false;
       if (absentOnly && row.attendance !== 'Absent') return false;
+      if (onClockOnly) {
+        const last = row.punches[row.punches.length - 1];
+        if (!last || last.action !== 'IN') return false;
+      }
+      if (offWorkOnly && row.attendance !== 'Off Worked') return false;
       if (!q) return true;
-      const haystack = `${row.staff_id} ${row.name} ${row.agency} ${row.label} ${row.work_account} ${row.borrowed_device}`.toLowerCase();
+      const haystack = `${row.staff_id} ${row.name} ${row.agency} ${row.label} ${row.work_account} ${row.temp_account_name} ${row.borrowed_device}`.toLowerCase();
       return haystack.includes(q);
     });
-  }, [rows, search, positionFilter, shiftFilter, absentOnly]);
+  }, [rows, search, positionFilter, shiftFilter, absentOnly, onClockOnly, offWorkOnly]);
 
   useEffect(() => {
     setRenderCount(120);
-  }, [search, positionFilter, shiftFilter, absentOnly, rows.length]);
+  }, [search, positionFilter, shiftFilter, absentOnly, onClockOnly, offWorkOnly, rows.length]);
 
   const renderedRows = useMemo(
     () => filteredRows.slice(0, Math.max(0, renderCount)),
     [filteredRows, renderCount]
   );
+  const filteredAccountUsageRows = useMemo(() => {
+    const q = accountUsageSearch.trim().toLowerCase();
+    if (!q) return accountUsageRows;
+    return accountUsageRows.filter((row) => {
+      const haystack = [
+        row.staff_id,
+        row.name,
+        row.work_account,
+        row.account_name,
+        row.source_temp_staff_id
+      ]
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [accountUsageRows, accountUsageSearch]);
   const attendanceCards = useMemo(() => {
     const cards: Array<{
       position: 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer';
@@ -757,15 +986,163 @@ export default function DashboardPage() {
     }
   };
 
+  const assignTempAccountToRow = async (row: DashboardRow) => {
+    if (!supabase) return false;
+    const staff = String(row.staff_id ?? '').trim();
+    const position = normalizePositionKey(String(row.position ?? '').trim());
+    if (!staff || !position) return false;
+    const nowIso = new Date().toISOString();
+    const range = getOperationalRange();
+    const rangeStartIso = range.start.toISOString();
+    const rangeEndIso = range.end.toISOString();
+    setAccountAssigningStaffId(staff);
+    try {
+      const activeSelfRes = await supabase
+        .from(TEMP_ACCOUNT_ASSIGNMENT_TABLE)
+        .select('staff_id, work_account, source_temp_staff_id, created_at')
+        .eq('staff_id', staff)
+        .gte('created_at', rangeStartIso)
+        .lt('created_at', rangeEndIso)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (!activeSelfRes.error && ((activeSelfRes.data as any[]) ?? []).length > 0) {
+        const current = ((activeSelfRes.data as any[]) ?? [])[0] as any;
+        const sourceStaffId = String(current.source_temp_staff_id ?? '').trim();
+        let accountName = '';
+        let workPassword = DEFAULT_TEMP_ACCOUNT_PASSWORD;
+        if (sourceStaffId) {
+          const sourceRes = await supabase
+            .from(TEMP_ACCOUNT_TABLE)
+            .select('name, work_password')
+            .eq('staff_id', sourceStaffId)
+            .limit(1);
+          if (!sourceRes.error) {
+            accountName = String(((sourceRes.data as any[]) ?? [])[0]?.name ?? '').trim();
+            workPassword = String(((sourceRes.data as any[]) ?? [])[0]?.work_password ?? '').trim() || DEFAULT_TEMP_ACCOUNT_PASSWORD;
+          }
+        }
+        if (!workPassword) {
+          const pwdRes = await supabase
+            .from(TEMP_ACCOUNT_TABLE)
+            .select('work_password')
+            .eq('work_account', String(current.work_account ?? '').trim())
+            .limit(1);
+          if (!pwdRes.error) workPassword = String(((pwdRes.data as any[]) ?? [])[0]?.work_password ?? '').trim() || DEFAULT_TEMP_ACCOUNT_PASSWORD;
+        }
+        setRows((prev) =>
+          prev.map((item) =>
+            item.staff_id === staff
+              ? {
+                  ...item,
+                  work_account: String(current.work_account ?? '').trim(),
+                  work_password: workPassword,
+                  temp_account_name: accountName,
+                  temp_source_staff_id: sourceStaffId
+                }
+              : item
+          )
+        );
+        return true;
+      }
+
+      const occupiedRes = await supabase
+        .from(TEMP_ACCOUNT_ASSIGNMENT_TABLE)
+        .select('work_account')
+        .gte('created_at', rangeStartIso)
+        .lt('created_at', rangeEndIso)
+        .limit(20000);
+      const occupied = new Set(
+        ((occupiedRes.data as any[]) ?? [])
+          .map((item) => String(item.work_account ?? '').trim())
+          .filter(Boolean)
+      );
+
+      const poolRes = await supabase
+        .from(TEMP_ACCOUNT_TABLE)
+        .select('staff_id, name, position, work_account, work_password, updated_at')
+        .not('work_account', 'is', null)
+        .order('updated_at', { ascending: false })
+        .limit(2000);
+      if (poolRes.error) {
+        window.alert(`Assign failed: ${poolRes.error.message}`);
+        return false;
+      }
+      const candidates = (((poolRes.data as any[]) ?? []) as any[])
+        .map((item) => ({
+          staff_id: String(item.staff_id ?? '').trim(),
+          name: String(item.name ?? '').trim(),
+          position: String(item.position ?? '').trim(),
+          work_account: String(item.work_account ?? '').trim(),
+          work_password: String(item.work_password ?? '').trim() || DEFAULT_TEMP_ACCOUNT_PASSWORD
+        }))
+        .filter(
+          (item) =>
+            normalizePositionKey(item.position) === position &&
+            item.work_account &&
+            !occupied.has(item.work_account)
+        );
+      const picked = candidates[0];
+      if (!picked) {
+        window.alert(`No available temp account for ${position}.`);
+        return false;
+      }
+
+      const insertRes = await supabase.from(TEMP_ACCOUNT_ASSIGNMENT_TABLE).insert({
+        staff_id: staff,
+        position,
+        work_account: picked.work_account,
+        source_temp_staff_id: picked.staff_id || null,
+        created_at: nowIso
+      });
+      if (insertRes.error) {
+        window.alert(`Assign failed: ${insertRes.error.message}`);
+        return false;
+      }
+
+      setRows((prev) =>
+        prev.map((item) =>
+          item.staff_id === staff
+            ? {
+                ...item,
+                work_account: picked.work_account,
+                work_password: picked.work_password,
+                temp_account_name: picked.name || '',
+                temp_source_staff_id: picked.staff_id || ''
+              }
+            : item
+        )
+      );
+      setAccountUsageRows((prev) => [
+        {
+          id: `local-${staff}-${picked.work_account}-${Date.now()}`,
+          staff_id: staff,
+          name: row.name || '',
+          position,
+          work_account: picked.work_account,
+          account_name: picked.name || '',
+          source_temp_staff_id: picked.staff_id || '',
+          created_at: nowIso,
+          status: 'Active'
+        },
+        ...prev
+      ]);
+      return true;
+    } finally {
+      setAccountAssigningStaffId((current) => (current === staff ? null : current));
+    }
+  };
+
   const printAccountCard = async (row: DashboardRow) => {
     const staff = String(row.staff_id ?? '').trim();
     const name = String(row.name ?? '').trim() || '-';
     const workAccount = String(row.work_account ?? '').trim();
-    const workPassword = String(row.work_password ?? '').trim();
+    const workPassword = resolveDefaultPassword(workAccount, String(row.work_password ?? '').trim());
+    const accountName = String(row.temp_account_name ?? '').trim();
     if (!staff || !workAccount || !workPassword) return;
     setAccountPrintingStaffId(staff);
     try {
       const [qrAcc, qrPwd] = await Promise.all([getQrDataUrlCached(workAccount), getQrDataUrlCached(workPassword)]);
+      const cardTitle = accountName || name;
       const html = `<!doctype html>
 <html>
   <head>
@@ -776,6 +1153,7 @@ export default function DashboardPage() {
       body { background: #ffffff; font-family: Arial, "Microsoft YaHei", sans-serif; color: #0f172a; }
       .sheet { width: 4in; height: 2in; box-sizing: border-box; padding: 0.12in; border: 0; border-radius: 0; display: grid; grid-template-rows: auto 1fr; gap: 0.05in; background: #ffffff; }
       .name { font-size: 14pt; line-height: 1.1; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #0f172a; padding: 0; }
+      .sub { margin-top: 0.02in; font-size: 8.5pt; letter-spacing: 0.06em; font-weight: 700; color: #334155; }
       .pair { min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0.08in; }
       .box { border: 0; border-radius: 0; padding: 0; display: grid; grid-template-columns: 0.92in 1fr; gap: 0.06in; align-items: center; min-width: 0; background: #ffffff; box-shadow: none; }
       .qrsq { width: 0.92in; height: 0.92in; border: 0; border-radius: 0; background: #fff; display: flex; align-items: center; justify-content: center; }
@@ -787,7 +1165,10 @@ export default function DashboardPage() {
   </head>
   <body>
     <div class="sheet">
-      <div class="name">${escapeHtml(name)}</div>
+      <div>
+        <div class="name">${escapeHtml(cardTitle)}</div>
+        <div class="sub">User: ${escapeHtml(name)}</div>
+      </div>
       <div class="pair">
         <div class="box">
           <div class="qrsq"><img src="${escapeHtml(qrAcc)}" alt="QR account ${escapeHtml(staff)}" /></div>
@@ -826,6 +1207,13 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAccountUsageOpen(true)}
+              className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-slate-200 transition hover:bg-white/15"
+            >
+              Account usage
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -879,7 +1267,7 @@ export default function DashboardPage() {
           })}
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_180px_190px_auto_auto]">
+        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_180px_170px_170px_170px_auto_auto]">
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -918,6 +1306,24 @@ export default function DashboardPage() {
               className="h-4 w-4 rounded border-white/30 bg-transparent accent-rose-500"
             />
             Absent only
+          </label>
+          <label className="flex h-11 items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-slate-200">
+            <input
+              type="checkbox"
+              checked={onClockOnly}
+              onChange={(e) => setOnClockOnly(e.target.checked)}
+              className="h-4 w-4 rounded border-white/30 bg-transparent accent-emerald-500"
+            />
+            On Clock
+          </label>
+          <label className="flex h-11 items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-slate-200">
+            <input
+              type="checkbox"
+              checked={offWorkOnly}
+              onChange={(e) => setOffWorkOnly(e.target.checked)}
+              className="h-4 w-4 rounded border-white/30 bg-transparent accent-sky-500"
+            />
+            Off Work
           </label>
           <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-2 text-xs text-slate-300">
             Rows: <span className="text-slate-100">{renderedRows.length}</span> / {filteredRows.length}
@@ -1023,15 +1429,28 @@ export default function DashboardPage() {
                         {row.work_account ? (
                           <button
                             type="button"
-                            disabled={!row.work_password || accountPrintingStaffId === row.staff_id}
+                            disabled={!resolveDefaultPassword(String(row.work_account ?? '').trim(), String(row.work_password ?? '').trim()) || accountPrintingStaffId === row.staff_id}
                             onClick={() => void printAccountCard(row)}
                             className="underline decoration-dotted underline-offset-2 transition hover:text-neon disabled:cursor-not-allowed disabled:opacity-60"
-                            title={row.work_password ? 'Print account card' : 'Missing password'}
+                            title={resolveDefaultPassword(String(row.work_account ?? '').trim(), String(row.work_password ?? '').trim()) ? 'Print account card' : 'Missing password'}
                           >
-                            {accountPrintingStaffId === row.staff_id ? 'Printing...' : row.work_account}
+                            {accountPrintingStaffId === row.staff_id
+                              ? 'Printing...'
+                              : String(row.temp_account_name ?? '').trim() || row.work_account}
                           </button>
                         ) : (
-                          '-'
+                          <button
+                            type="button"
+                            disabled={accountAssigningStaffId === row.staff_id || !normalizePositionKey(String(row.position ?? '').trim())}
+                            onClick={async () => {
+                              const ok = await assignTempAccountToRow(row);
+                              if (!ok) return;
+                            }}
+                            className="underline decoration-dotted underline-offset-2 transition hover:text-neon disabled:cursor-not-allowed disabled:opacity-60"
+                            title="Assign temp account"
+                          >
+                            {accountAssigningStaffId === row.staff_id ? 'Assigning...' : 'Assign account'}
+                          </button>
                         )}
                       </td>
                       <td className={['whitespace-nowrap px-3 py-2 text-slate-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
@@ -1110,6 +1529,84 @@ export default function DashboardPage() {
             >
               Load more
             </button>
+          </div>
+        )}
+
+        {accountUsageOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 p-4 pt-12"
+            onClick={() => setAccountUsageOpen(false)}
+          >
+            <div
+              className="w-full max-w-6xl overflow-hidden rounded-2xl border border-white/10 bg-slate-950 shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                <div>
+                  <div className="text-lg font-semibold text-slate-100">Account usage</div>
+                  <div className="text-xs text-slate-400">Who is using which temporary account</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAccountUsageOpen(false)}
+                  className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="border-b border-white/10 px-4 py-3">
+                <input
+                  value={accountUsageSearch}
+                  onChange={(e) => setAccountUsageSearch(e.target.value)}
+                  placeholder="Search by account name / account / user name"
+                  className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon"
+                />
+              </div>
+              <div className="max-h-[65vh] overflow-auto">
+                <table className="min-w-full border-collapse text-sm">
+                  <thead className="sticky top-0 z-10 bg-slate-950/95 text-xs uppercase tracking-[0.16em] text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Staff ID</th>
+                      <th className="px-3 py-2 text-left">Name</th>
+                      <th className="px-3 py-2 text-left">Position</th>
+                      <th className="px-3 py-2 text-left">Account</th>
+                      <th className="px-3 py-2 text-left">Status</th>
+                      <th className="px-3 py-2 text-left">Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredAccountUsageRows.map((item) => (
+                      <tr key={item.id || `${item.staff_id}-${item.work_account}-${item.created_at}`} className="border-t border-white/5 odd:bg-white/[0.03]">
+                        <td className="whitespace-nowrap px-3 py-2 font-mono text-slate-200">{item.staff_id || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-slate-200">{item.name || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-slate-300">{item.position || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 font-mono text-slate-100">{item.work_account || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2">
+                          <span
+                            className={[
+                              'inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold',
+                              item.status === 'Active'
+                                ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
+                                : 'border-slate-400/50 bg-slate-500/10 text-slate-300'
+                            ].join(' ')}
+                          >
+                            {item.status}
+                          </span>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2 text-slate-300">{item.created_at ? formatDateTime(item.created_at) : '-'}</td>
+                      </tr>
+                    ))}
+                    {filteredAccountUsageRows.length === 0 && (
+                      <tr>
+                        <td className="px-3 py-8 text-center text-slate-500" colSpan={6}>
+                          No assignment records yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
       </section>

@@ -2,6 +2,10 @@
 
 type TranslateFn = (zh: string, en: string) => string;
 
+const DEFAULT_WORK_PASSWORD = 'Helloworld2!';
+const resolveDefaultWorkPassword = (workAccount: string, workPassword: string) =>
+  workAccount && !workPassword ? DEFAULT_WORK_PASSWORD : workPassword;
+
 type EmployeesTableSectionProps = {
   t: TranslateFn;
   isLocked: boolean;
@@ -152,7 +156,10 @@ export default function EmployeesTableSection({
               const position = String(e.position ?? e.Position ?? '').trim();
               const label = String(e.label ?? e.Label ?? '').trim();
               const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
-              const workPassword = String(e.work_password ?? e.WorkPassword ?? '').trim();
+              const workPassword = resolveDefaultWorkPassword(
+                workAccount,
+                String(e.work_password ?? e.WorkPassword ?? '').trim()
+              );
               const createdAt = String(e.created_at ?? '').trim();
               const hireDate = (() => {
                 if (!createdAt) return '-';
