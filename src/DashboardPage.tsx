@@ -710,11 +710,13 @@ export default function DashboardPage() {
               : !isPlannedWork && workHoursToday > 0
                 ? 'Off Worked'
                 : 'Normal';
+          const currentPosition = String(employee?.position ?? '').trim();
+          const scheduledPosition = String(schedule?.position ?? '').trim();
           return {
             staff_id: staffId,
             name: employee?.name ?? '',
             agency: employee?.agency ?? '',
-            position: schedule?.position ?? employee?.position ?? '',
+            position: currentPosition || scheduledPosition,
             label: employee?.label ?? '',
             borrowed_device: '',
             schedule_state: state,
