@@ -1804,6 +1804,9 @@ const fetchPunchBoardUph = async (
       const key = `${shift}:${position}`;
       if (!restByKey.has(key)) restByKey.set(key, new Set());
       restByKey.get(key)?.add(staff);
+      const keys = keysByStaff.get(staff) ?? [];
+      if (!keys.includes(key)) keys.push(key);
+      keysByStaff.set(staff, keys);
     }
 
     const trackedStaff = Array.from(new Set([...Array.from(keysByStaff.keys()), ...allScheduleStaff]));
@@ -1916,16 +1919,7 @@ const fetchPunchBoardUph = async (
         }
       }
     }
-    const mergedOnClockByKey = new Map<string, Set<string>>();
-    for (const [key, set] of onClockByKey.entries()) {
-      mergedOnClockByKey.set(key, new Set(set));
-    }
-    for (const [key, set] of restWorkedByKey.entries()) {
-      if (!mergedOnClockByKey.has(key)) mergedOnClockByKey.set(key, new Set());
-      const target = mergedOnClockByKey.get(key)!;
-      for (const staff of set) target.add(staff);
-    }
-    const onClockStaffIds = Array.from(new Set(Array.from(mergedOnClockByKey.values()).flatMap((set) => Array.from(set))));
+    const onClockStaffIds = Array.from(new Set(Array.from(onClockByKey.values()).flatMap((set) => Array.from(set))));
     const restWorkedStaffIds = Array.from(
       new Set(Array.from(restWorkedByKey.values()).flatMap((set) => Array.from(set)))
     );
@@ -1947,7 +1941,7 @@ const fetchPunchBoardUph = async (
     const out: ArrivalMetric[] = ['early', 'late'].flatMap((shift) =>
       ALLOWED_POSITIONS.map((position) => {
         const key = `${shift}:${position}`;
-        const onClockIds = Array.from(mergedOnClockByKey.get(key) ?? []).sort((a, b) => a.localeCompare(b, 'en-US'));
+        const onClockIds = Array.from(onClockByKey.get(key) ?? []).sort((a, b) => a.localeCompare(b, 'en-US'));
         const onClockStaff = onClockIds.map((staff) => {
           const name = String(displayEmployeeMap[staff]?.name ?? '').trim();
           return name ? `${name} (${staff})` : staff;
@@ -1973,7 +1967,7 @@ const fetchPunchBoardUph = async (
           position,
           expected: staffByKey.get(key)?.size ?? 0,
           present: presentIds.size,
-          onClock: mergedOnClockByKey.get(key)?.size ?? 0,
+          onClock: onClockByKey.get(key)?.size ?? 0,
           onClockStaff,
           restWorked: restWorkedByKey.get(key)?.size ?? 0,
           restWorkedStaff,

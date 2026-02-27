@@ -62,7 +62,6 @@ const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const supabase = createSupabaseClient({ persistSession: false });
-const ARRIVAL_METRICS_STORAGE_KEY = 'obpunch_arrival_metrics_cache_v1';
 const QR_PRINT_SIZE = 320;
 const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
@@ -376,36 +375,6 @@ const getShortGapPunchIndices = (punches: PunchRow[], thresholdMinutes = 10) => 
   return flagged;
 };
 
-const readAppArrivalStatsByKey = (templateDate: string) => {
-  try {
-    const raw = localStorage.getItem(ARRIVAL_METRICS_STORAGE_KEY);
-    if (!raw) return null as Record<string, { expected: number; present: number; onClock: number; offWorked: number }> | null;
-    const parsed = JSON.parse(raw) as { key?: unknown; rows?: unknown };
-    if (String(parsed?.key ?? '') !== String(templateDate ?? '')) return null;
-    const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
-    const out: Record<string, { expected: number; present: number; onClock: number; offWorked: number }> = {};
-    const toNum = (v: unknown) => {
-      const n = Number(v);
-      return Number.isFinite(n) && n >= 0 ? n : 0;
-    };
-    for (const item of rows) {
-      const row = (item ?? {}) as Record<string, unknown>;
-      const shift = normalizeShiftValue(String(row.shift ?? ''));
-      const position = normalizePositionKey(String(row.position ?? ''));
-      if (!shift || !position) continue;
-      out[`${shift}:${position}`] = {
-        expected: toNum(row.expected),
-        present: toNum(row.present),
-        onClock: toNum(row.onClock),
-        offWorked: toNum(row.restWorked)
-      };
-    }
-    return out;
-  } catch {
-    return null;
-  }
-};
-
 export default function DashboardPage() {
   const [rows, setRows] = useState<DashboardRow[]>([]);
   const [cardStatsByKey, setCardStatsByKey] = useState<Record<string, { expected: number; present: number; onClock: number; offWorked: number }>>({});
@@ -658,6 +627,9 @@ export default function DashboardPage() {
           hasRestScheduleStaff.add(staffId);
           if (!restByKey.has(key)) restByKey.set(key, new Set());
           restByKey.get(key)?.add(staffId);
+          const keys = keysByStaff.get(staffId) ?? [];
+          if (!keys.includes(key)) keys.push(key);
+          keysByStaff.set(staffId, keys);
         }
       }
       for (const staffId of punchedStaffIds) {
@@ -702,12 +674,6 @@ export default function DashboardPage() {
           restWorkedByKey.get(key)?.add(staffId);
         }
       }
-      const mergedOnClockByKey = new Map<string, Set<string>>();
-      for (const [key, set] of onClockByKey.entries()) mergedOnClockByKey.set(key, new Set(set));
-      for (const [key, set] of restWorkedByKey.entries()) {
-        if (!mergedOnClockByKey.has(key)) mergedOnClockByKey.set(key, new Set());
-        for (const staffId of set) mergedOnClockByKey.get(key)?.add(staffId);
-      }
       const nextCardStatsByKey: Record<string, { expected: number; present: number; onClock: number; offWorked: number }> = {};
       for (const shift of ['early', 'late'] as const) {
         for (const position of CARD_POSITIONS) {
@@ -720,7 +686,7 @@ export default function DashboardPage() {
           nextCardStatsByKey[key] = {
             expected,
             present: presentIds.size,
-            onClock: mergedOnClockByKey.get(key)?.size ?? 0,
+            onClock: onClockByKey.get(key)?.size ?? 0,
             offWorked: restWorkedByKey.get(key)?.size ?? 0
           };
         }
@@ -1004,8 +970,7 @@ export default function DashboardPage() {
         rowsDigestRef.current = digest;
         setRows(nextRows);
       }
-      const cachedAppCardStats = readAppArrivalStatsByKey(templateDate);
-      setCardStatsByKey(cachedAppCardStats && Object.keys(cachedAppCardStats).length > 0 ? cachedAppCardStats : nextCardStatsByKey);
+      setCardStatsByKey(nextCardStatsByKey);
       setAccountUsageRows(nextUsageRows);
       setOperationalDate(currentOperationalDate);
       setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
