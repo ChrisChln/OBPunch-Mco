@@ -1,4 +1,4 @@
-﻿import { useState, type UIEvent } from 'react';
+﻿import { useEffect, useMemo, useRef, useState } from 'react';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -12,12 +12,10 @@ type EmployeesTableSectionProps = {
   themeMode: 'dark' | 'light';
   employeesError: string | null;
   employeesFiltered: any[];
-  employeesRendered: any[];
   employeeSortByLastPunchDesc: boolean;
   employeeSortByHireDateDesc: boolean;
   onToggleSort: () => void;
   onToggleHireDateSort: () => void;
-  onScroll: (e: UIEvent<HTMLDivElement>) => void;
   displayStaffId: (value: string) => string;
   getSchedulePositionBadgeClass: (position: string) => string;
   getScheduleLabelToneClass: (label: string) => string;
@@ -69,12 +67,10 @@ export default function EmployeesTableSection({
   themeMode,
   employeesError,
   employeesFiltered,
-  employeesRendered,
   employeeSortByLastPunchDesc,
   employeeSortByHireDateDesc,
   onToggleSort,
   onToggleHireDateSort,
-  onScroll,
   displayStaffId,
   getSchedulePositionBadgeClass,
   getScheduleLabelToneClass,
@@ -96,8 +92,43 @@ export default function EmployeesTableSection({
   openEmployeeEdit,
   deleteEmployeeRow
 }: EmployeesTableSectionProps) {
-  const [hoveredStaffId, setHoveredStaffId] = useState<string | null>(null);
-  const [activeStaffId, setActiveStaffId] = useState<string | null>(null);
+  const ROW_HEIGHT = 56;
+  const OVERSCAN = 12;
+  const TABLE_COLS = 11;
+
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(640);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const sync = () => setViewportHeight(el.clientHeight || 640);
+    sync();
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(sync);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }
+    window.addEventListener('resize', sync);
+    return () => window.removeEventListener('resize', sync);
+  }, []);
+
+  const total = employeesFiltered.length;
+  const visibleMeta = useMemo(() => {
+    const safeHeight = Math.max(1, viewportHeight);
+    const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+    const visibleCount = Math.ceil(safeHeight / ROW_HEIGHT) + OVERSCAN * 2;
+    const end = Math.min(total, start + visibleCount);
+    return { start, end };
+  }, [scrollTop, viewportHeight, total]);
+
+  const topSpacerHeight = visibleMeta.start * ROW_HEIGHT;
+  const bottomSpacerHeight = Math.max(0, (total - visibleMeta.end) * ROW_HEIGHT);
+  const employeesVisible = useMemo(
+    () => employeesFiltered.slice(visibleMeta.start, visibleMeta.end),
+    [employeesFiltered, visibleMeta.start, visibleMeta.end]
+  );
 
   return (
     <>
@@ -111,7 +142,11 @@ export default function EmployeesTableSection({
         <p className="mt-3 text-sm text-slate-400">{t('暂无数据，点击“刷新/搜索”。', 'No data. Click "Refresh/Search".')}</p>
       )}
 
-      <div className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30" onScroll={onScroll}>
+      <div
+        ref={containerRef}
+        className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30"
+        onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+      >
         <table className="min-w-[1360px] w-full text-left text-sm">
           <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-xs uppercase tracking-[0.2em] text-slate-400 backdrop-blur">
             <tr>
@@ -149,7 +184,12 @@ export default function EmployeesTableSection({
             </tr>
           </thead>
           <tbody>
-            {employeesRendered.map((e) => {
+            {topSpacerHeight > 0 && (
+              <tr aria-hidden="true">
+                <td colSpan={TABLE_COLS} style={{ height: topSpacerHeight, padding: 0, border: 0 }} />
+              </tr>
+            )}
+            {employeesVisible.map((e) => {
               const staff = String(e.staff_id ?? '').trim();
               const name = String(e.name ?? '').trim();
               const agency = String(e.agency ?? e.Agency ?? '').trim();
@@ -225,15 +265,6 @@ export default function EmployeesTableSection({
                       workPassword
                     })
                   }
-                  onMouseEnter={() => setHoveredStaffId(staff)}
-                  onMouseLeave={() => {
-                    if (hoveredStaffId === staff) setHoveredStaffId(null);
-                    if (activeStaffId === staff) setActiveStaffId(null);
-                  }}
-                  onMouseDown={() => setActiveStaffId(staff)}
-                  onMouseUp={() => {
-                    if (activeStaffId === staff) setActiveStaffId(null);
-                  }}
                   style={selectedRowStyle}
                   className={[
                     'cursor-pointer border-b border-white/5 transition-colors last:border-0',
@@ -341,21 +372,22 @@ export default function EmployeesTableSection({
                 </tr>
               );
             })}
+            {bottomSpacerHeight > 0 && (
+              <tr aria-hidden="true">
+                <td colSpan={TABLE_COLS} style={{ height: bottomSpacerHeight, padding: 0, border: 0 }} />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
-      {!employeesError && employeesRendered.length < employeesFiltered.length && (
+      {!employeesError && employeesFiltered.length > 0 && (
         <div className="mt-2 text-xs text-slate-500">
           {t(
-            `已显示 ${employeesRendered.length}/${employeesFiltered.length}，向下滚动加载更多`,
-            `Showing ${employeesRendered.length}/${employeesFiltered.length}. Scroll to load more`
+            `总计 ${employeesFiltered.length}，当前渲染 ${employeesVisible.length} 行（虚拟滚动）`,
+            `${employeesFiltered.length} total, rendering ${employeesVisible.length} rows (virtualized)`
           )}
         </div>
       )}
     </>
   );
 }
-
-
-
-

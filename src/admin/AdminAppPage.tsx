@@ -538,7 +538,6 @@ export default function AdminApp() {
   const isLocked = Boolean(busy);
   const [busyVisible, setBusyVisible] = useState(false);
   const timecardFetchSeqRef = useRef(0);
-  const employeeLoadMoreArmedRef = useRef(true);
   const punchesFetchSeqRef = useRef(0);
   const attendanceFetchSeqRef = useRef(0);
   const timecardPunchFetchSeqRef = useRef(0);
@@ -750,7 +749,6 @@ export default function AdminApp() {
   const [timecardPresentDayFilter, setTimecardPresentDayFilter] = useState<number | null>(null);
   const [timecardMissingEmployeeOnly, setTimecardMissingEmployeeOnly] = useState(false);
   const [timecardRenderCount, setTimecardRenderCount] = useState(120);
-  const [employeeRenderCount, setEmployeeRenderCount] = useState(120);
   const [accountRenderCount, setAccountRenderCount] = useState(120);
   const [timecardWeekOffset, setTimecardWeekOffset] = useState(0);
   const [timecardWeekInput, setTimecardWeekInput] = useState(() =>
@@ -1456,7 +1454,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const tick = () => {
       setServerTime(new Date(Date.now() + offsetMs));
     };
-    const timer = window.setInterval(tick, page === 'timecard' ? 15000 : 1000);
+    const intervalMs =
+      page === 'home'
+        ? 5000
+        : page === 'schedule'
+          ? 60000
+          : page === 'timecard'
+            ? 15000
+            : 60000;
+    const timer = window.setInterval(tick, intervalMs);
     tick();
     return () => window.clearInterval(timer);
   }, [offsetMs, page]);
@@ -2543,7 +2549,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const scheduleWeekRolloverDoneKeyRef = useRef('');
   const maybeRolloverScheduleWeek = async () => {
     if (!supabase || scheduleWeekRolloverInFlightRef.current) return;
-    const now = new Date(serverTime);
+    const now = new Date(Date.now() + offsetMs);
+    // Rollover should only run on Monday after 05:00 local time.
+    // Without this guard, missing marker data could trigger rollover repeatedly on other days.
+    if (now.getDay() !== 1) return;
     const thisMonday = startOfWeekMonday(now);
     const rolloverAt = new Date(thisMonday);
     rolloverAt.setHours(5, 0, 0, 0);
@@ -2578,7 +2587,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const nextRows = (((nextWeekRes.data as any[]) ?? []) as any[]);
       if (nextRows.length === 0) return;
 
-      const nowIso = new Date(serverTime).toISOString();
+      const nowIso = now.toISOString();
       const migrated = nextRows.map((row) => {
         const rawDate = String(row.date ?? '').trim();
         const dt = new Date(`${rawDate}T00:00:00`);
@@ -6811,8 +6820,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     if (page !== 'timecard' && page !== 'schedule') return;
     void fetchCellAuditLogs();
     const timer = window.setInterval(() => {
+      if (document.hidden) return;
       void fetchCellAuditLogs();
-    }, 60000);
+    }, 180000);
     return () => window.clearInterval(timer);
   }, [page]);
 
@@ -6832,6 +6842,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     };
     void sync();
     const timer = window.setInterval(() => {
+      if (document.hidden) return;
       void sync();
     }, 60000);
     return () => {
@@ -6868,7 +6879,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   useEffect(() => {
     if (page !== 'schedule') return;
     void maybeRolloverScheduleWeek();
-  }, [page, serverTime, user?.id]);
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      void maybeRolloverScheduleWeek();
+    }, 5 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [page, user?.id, offsetMs]);
 
   const onFileSelected = async (file: File | null) => {
     if (!file) {
@@ -7508,6 +7524,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   );
 
   const employeesFiltered = useMemo(() => {
+    if (page !== 'employees') return [];
     const searchNeedle = deferredEmployeeSearch.trim().toLowerCase();
     const agencyNeedle = employeeAgency.trim().toLowerCase();
     const positionNeedle = employeePosition.trim().toLowerCase();
@@ -7567,6 +7584,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       return staffA.localeCompare(staffB, 'en-US');
     });
   }, [
+    page,
     employees,
     deferredEmployeeSearch,
     employeeAgency,
@@ -7579,10 +7597,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     serverTime,
     employeeShiftByStaffId
   ]);
-  const employeesRendered = useMemo(
-    () => employeesFiltered.slice(0, Math.max(0, employeeRenderCount)),
-    [employeesFiltered, employeeRenderCount]
-  );
   const accountRowsAll = useMemo(() => {
     const employeeRows = employees
       .map((e) => {
@@ -7647,6 +7661,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   }, [accountRowsAll]);
 
   const accountRowsFiltered = useMemo(() => {
+    if (page !== 'accounts') return [];
     const searchNeedle = deferredAccountSearch.trim().toLowerCase();
     const normalizedFilterPosition = normalizePositionKey(deferredAccountPositionFilter.trim());
     const positionNeedle = (normalizedFilterPosition ?? deferredAccountPositionFilter.trim()).toLowerCase();
@@ -7661,7 +7676,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       ? rows.filter((row) => [row.staff, row.name, row.workAccount, row.workPassword].join(' ').toLowerCase().includes(searchNeedle))
       : rows;
     return filtered;
-  }, [accountRowsAll, deferredAccountSearch, deferredAccountPositionFilter]);
+  }, [page, accountRowsAll, deferredAccountSearch, deferredAccountPositionFilter]);
   const accountRowsRendered = useMemo(
     () => accountRowsFiltered.slice(0, Math.max(0, accountRenderCount)),
     [accountRowsFiltered, accountRenderCount]
@@ -7972,6 +7987,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const timecardPositionOptions = ALLOWED_POSITIONS;
 
   const timecardRowsFiltered = useMemo(() => {
+    if (page !== 'timecard') return [];
     const filtered = timecardRows.filter((r) => {
       if (timecardShift && r.shift !== timecardShift) return false;
       if (timecardInProgressOnly && !r.inProgressWeek) return false;
@@ -8000,12 +8016,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (b.totalHours !== a.totalHours) return b.totalHours - a.totalHours;
       return String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US');
     });
-  }, [timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter]);
+  }, [page, timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter]);
   const timecardRowsRendered = useMemo(
     () => timecardRowsFiltered.slice(0, Math.max(0, timecardRenderCount)),
     [timecardRowsFiltered, timecardRenderCount]
   );
   const timecardDayTotalHours = useMemo(() => {
+    if (page !== 'timecard') return new Array(7).fill(0) as number[];
     const totals = new Array(7).fill(0) as number[];
     for (const row of timecardRowsFiltered) {
       for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
@@ -8013,8 +8030,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
     }
     return totals;
-  }, [timecardRowsFiltered]);
+  }, [page, timecardRowsFiltered]);
   const timecardDayAttendanceCount = useMemo(() => {
+    if (page !== 'timecard') return new Array(7).fill(0) as number[];
     const totals = new Array(7).fill(0) as number[];
     for (const row of timecardRowsFiltered) {
       for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
@@ -8024,7 +8042,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
     }
     return totals;
-  }, [timecardRowsFiltered]);
+  }, [page, timecardRowsFiltered]);
 
   const timecardPunchRowsVisible = useMemo(() => {
     const rowsAll = [...timecardPunchRows, ...timecardPunchPendingAddRows];
@@ -8453,6 +8471,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const canCopyDailyListLate = tomorrowDailyRowsDisplayed.lateRows.length > 0;
 
   const scheduleEmployeesBase = useMemo(() => {
+    if (page !== 'schedule') return [];
     return employees
       .filter((employee) => {
         const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
@@ -8478,6 +8497,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       })
       .sort((a, b) => String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US'));
   }, [
+    page,
     employees,
     deferredSchedulePosition,
     deferredScheduleLabels,
@@ -8554,6 +8574,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   };
 
   const scheduleEmployeesFiltered = useMemo(() => {
+    if (page !== 'schedule') return [];
     const search = deferredScheduleSearch.trim().toLowerCase();
     const filtered = !search
       ? scheduleEmployeesBase
@@ -8576,17 +8597,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (!hasA && hasB) return 1;
       return staffA.localeCompare(staffB, 'en-US');
     });
-  }, [scheduleEmployeesBase, deferredScheduleSearch, scheduleSortByUphDesc, scheduleUphByStaffId]);
+  }, [page, scheduleEmployeesBase, deferredScheduleSearch, scheduleSortByUphDesc, scheduleUphByStaffId]);
   const scheduleEmployeesRendered = useMemo(
     () => scheduleEmployeesFiltered.slice(0, Math.max(0, scheduleRenderCount)),
     [scheduleEmployeesFiltered, scheduleRenderCount]
   );
-
-  useEffect(() => {
-    if (page !== 'employees') return;
-    const total = employeesFiltered.length;
-    setEmployeeRenderCount(Math.min(120, total));
-  }, [page, employeesFiltered]);
 
   useEffect(() => {
     if (page !== 'accounts') return;
@@ -8668,6 +8683,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   }, [page, scheduleRenderCount, scheduleEmployeesFiltered]);
 
   const scheduleWorkingCountByDayIndex = useMemo(() => {
+    if (page !== 'schedule') return Array.from({ length: 7 }, () => 0);
     const counts = Array.from({ length: 7 }, () => 0);
     for (const employee of scheduleEmployeesFiltered) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
@@ -8679,7 +8695,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
     }
     return counts;
-  }, [scheduleEmployeesFiltered, scheduleRowsByStaffDayIndex]);
+  }, [page, scheduleEmployeesFiltered, scheduleRowsByStaffDayIndex]);
 
   const homeOperationalDayIndex = useMemo(() => {
     const now = new Date(serverTime);
@@ -8688,7 +8704,21 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     if (now.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
     return (operationalStart.getDay() + 6) % 7;
   }, [serverTime]);
+  const homeNowMinutes = useMemo(() => {
+    const now = new Date(serverTime);
+    return now.getHours() * 60 + now.getMinutes();
+  }, [serverTime]);
   const homeExpectedCards = useMemo(() => {
+    if (page !== 'home') {
+      return (['early', 'late'] as const).flatMap((shift) =>
+        ALLOWED_POSITIONS.map((position) => ({
+          key: `${shift}:${position}`,
+          shift,
+          position,
+          count: 0
+        }))
+      );
+    }
     const countByKey: Record<string, number> = {};
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
@@ -8714,6 +8744,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }))
     );
   }, [
+    page,
     employees,
     scheduleRowsByStaffDayIndex,
     homeOperationalDayIndex,
@@ -8721,15 +8752,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     employeeShiftByStaffId,
   ]);
   const homeExpectedPositionSummaryCards = useMemo(
-    () =>
-      ALLOWED_POSITIONS.map((position) => {
+    () => {
+      if (page !== 'home') return ALLOWED_POSITIONS.map((position) => ({ position, early: 0, late: 0, total: 0 }));
+      return ALLOWED_POSITIONS.map((position) => {
         const early = homeExpectedCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
         const late = homeExpectedCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
         return { position, early, late, total: early + late };
-      }),
-    [homeExpectedCards]
+      });
+    },
+    [page, homeExpectedCards]
   );
   const homeCardStats = useMemo(() => {
+    if (page !== 'home') return {};
     const stats: Record<string, { early: number; late: number; active: number }> = {};
     const activeStaffSet = new Set(
       Object.keys(homeOnClockShiftByStaffId)
@@ -8762,6 +8796,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     }
     return stats;
   }, [
+    page,
     homeOnClockShiftByStaffId,
     employees,
     scheduleRowsByStaffDayIndex,
@@ -8772,11 +8807,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   ]);
 
   const homeRosterRows = useMemo(() => {
+    if (page !== 'home') {
+      return {
+        absent: [] as Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>,
+        restWorked: [] as Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>,
+        onClock: [] as Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>
+      };
+    }
     const absent: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
     const restWorked: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
     const onClock: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
     const seen = new Set<string>();
-    const nowMinutes = new Date(serverTime).getHours() * 60 + new Date(serverTime).getMinutes();
+    const nowMinutes = homeNowMinutes;
     const lateAbsentVisibleMinutes = 16 * 60 + 30; // 16:30
 
     for (const employee of employees) {
@@ -8828,16 +8870,24 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     onClock.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     return { absent, restWorked, onClock };
   }, [
+    page,
     employees,
     scheduleRowsByStaffDayIndex,
     homeOperationalDayIndex,
     schedulePunchPresenceKeys,
-    serverTime,
+    homeNowMinutes,
     homeOnClockShiftByStaffId,
     employeeShiftByStaffId,
     employeeProfileByStaffId
   ]);
   const homeRosterRowsFiltered = useMemo(() => {
+    if (page !== 'home') {
+      return {
+        absent: [] as Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>,
+        restWorked: [] as Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>,
+        onClock: [] as Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>
+      };
+    }
     const filterRows = (rows: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>) =>
       rows.filter((row) => {
         if (homeRosterPositionFilter === 'ALL') return true;
@@ -8849,12 +8899,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       restWorked: filterRows(homeRosterRows.restWorked),
       onClock: filterRows(homeRosterRows.onClock)
     };
-  }, [homeRosterRows, homeRosterPositionFilter]);
+  }, [page, homeRosterRows, homeRosterPositionFilter]);
   const homeRosterRowsCurrent = useMemo(() => {
+    if (page !== 'home') return [];
     if (homeRosterSide === 'restWorked') return homeRosterRowsFiltered.restWorked;
     if (homeRosterSide === 'onClock') return homeRosterRowsFiltered.onClock;
     return homeRosterRowsFiltered.absent;
-  }, [homeRosterSide, homeRosterRowsFiltered]);
+  }, [page, homeRosterSide, homeRosterRowsFiltered]);
   const formatDailyListStaffId = (row: DailyListRow) => {
     const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
     if (!isNewHirePlaceholderStaffId(staff)) return displayStaffId(staff);
@@ -9385,7 +9436,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     doc.write(html);
     doc.close();
 
-    const doPrint = () => {
+  const doPrint = () => {
       const win = iframe.contentWindow;
       if (!win) {
         iframe.remove();
@@ -9399,6 +9450,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     if (iframe.contentWindow?.document.readyState === 'complete') doPrint();
     else iframe.onload = doPrint;
   };
+
+  const scheduleNowMinutes = useMemo(() => {
+    const now = new Date(serverTime);
+    return now.getHours() * 60 + now.getMinutes();
+  }, [serverTime]);
+  const scheduleIsCurrentWeek = scheduleWeekOffset === 0;
+  const scheduleLateAbsentVisibleMinutes = 16 * 60 + 30;
 
   if (!supabase) {
     return (
@@ -9899,10 +9957,21 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                             if (!row) continue;
                             if (isWorkingScheduleRow(row)) workDays += 1;
                           }
+                          let restWorkedBonusDays = 0;
+                          for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+                            const key = `${staff}__${dayIndex}`;
+                            const row = scheduleRowsByStaffDayIndex.get(key);
+                            const hasPunch = schedulePunchPresenceKeys.has(key);
+                            if (!hasPunch) continue;
+                            if (!row) {
+                              // 无排班但有打卡，显示为“排休出勤”，计 +1
+                              restWorkedBonusDays += 1;
+                              continue;
+                            }
+                            const isRestLike = isRestLikeScheduleBaseState(getScheduleBaseStateFromNote(row.note));
+                            if (isRestLike) restWorkedBonusDays += 1;
+                          }
                           let absentPenaltyDays = 0;
-                          const nowMinutes = new Date(serverTime).getHours() * 60 + new Date(serverTime).getMinutes();
-                          const lateAbsentVisibleMinutes = 16 * 60 + 30; // 16:30
-                          const isCurrentWeek = scheduleWeekOffset === 0;
                           for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
                             const key = `${staff}__${dayIndex}`;
                             const row = scheduleRowsByStaffDayIndex.get(key);
@@ -9911,16 +9980,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                             const targetShift = ((row?.shift as 'early' | 'late' | null) ?? 'early');
                             const isPastOperationalDay = dayIndex < homeOperationalDayIndex;
                             const isCurrentOperationalDay = dayIndex === homeOperationalDayIndex;
-                            const hideLateAbsent = targetShift === 'late' && nowMinutes < lateAbsentVisibleMinutes;
+                            const hideLateAbsent = targetShift === 'late' && scheduleNowMinutes < scheduleLateAbsentVisibleMinutes;
                             const showAbsent =
-                              isCurrentWeek &&
+                              scheduleIsCurrentWeek &&
                               !hasPunch &&
                               (isPastOperationalDay || (isCurrentOperationalDay && !hideLateAbsent));
                             if (showAbsent) absentPenaltyDays += 1;
                           }
-                          const effectiveWorkDays = Math.max(0, workDays - absentPenaltyDays);
+                          const effectiveWorkDays = workDays + restWorkedBonusDays - absentPenaltyDays;
                           const workDaysClass =
-                            effectiveWorkDays === 5
+                            effectiveWorkDays >= 5
                               ? 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10'
                               : effectiveWorkDays >= 1 && effectiveWorkDays <= 4
                                 ? 'border-amber-400/60 text-amber-200 bg-amber-500/10'
@@ -9971,14 +10040,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                                 const hasPunch = schedulePunchPresenceKeys.has(key);
                                 const scheduledShiftForAbsent = employeeShiftByStaffId[staff]?.shift ?? '';
                                 const targetShift: 'early' | 'late' = scheduledShiftForAbsent === 'late' ? 'late' : 'early';
-                                const nowMinutes = new Date(serverTime).getHours() * 60 + new Date(serverTime).getMinutes();
-                                const lateAbsentVisibleMinutes = 16 * 60 + 30; // 16:30
-                                const isCurrentWeek = scheduleWeekOffset === 0;
                                 const isPastOperationalDay = dayIndex < homeOperationalDayIndex;
                                 const isCurrentOperationalDay = dayIndex === homeOperationalDayIndex;
-                                const hideLateAbsent = scheduledShiftForAbsent === 'late' && nowMinutes < lateAbsentVisibleMinutes;
+                                const hideLateAbsent =
+                                  scheduledShiftForAbsent === 'late' && scheduleNowMinutes < scheduleLateAbsentVisibleMinutes;
                                 const showAbsent =
-                                  isCurrentWeek &&
+                                  scheduleIsCurrentWeek &&
                                   row &&
                                   isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)) &&
                                   !hasPunch &&
@@ -10491,7 +10558,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                   themeMode={themeMode}
                   employeesError={employeesError}
                   employeesFiltered={employeesFiltered}
-                  employeesRendered={employeesRendered}
                   employeeSortByLastPunchDesc={employeeSortByLastPunchDesc}
                   employeeSortByHireDateDesc={employeeSortByHireDateDesc}
                   onToggleSort={() => {
@@ -10501,18 +10567,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                   onToggleHireDateSort={() => {
                     setEmployeeSortByHireDateDesc((prev) => !prev);
                     setEmployeeSortByLastPunchDesc(false);
-                  }}
-                  onScroll={(e) => {
-                    const el = e.currentTarget;
-                    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 160;
-                    if (!nearBottom) {
-                      employeeLoadMoreArmedRef.current = true;
-                      return;
-                    }
-                    if (!employeeLoadMoreArmedRef.current) return;
-                    if (employeeRenderCount >= employeesFiltered.length) return;
-                    employeeLoadMoreArmedRef.current = false;
-                    setEmployeeRenderCount((prev) => Math.min(prev + 120, employeesFiltered.length));
                   }}
                   displayStaffId={displayStaffId}
                   getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
