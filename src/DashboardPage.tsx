@@ -62,6 +62,7 @@ const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const supabase = createSupabaseClient({ persistSession: false });
+const ARRIVAL_METRICS_STORAGE_KEY = 'obpunch_arrival_metrics_cache_v1';
 const QR_PRINT_SIZE = 320;
 const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
@@ -261,35 +262,10 @@ const pickLatestByStaff = <T extends { staff_id?: unknown; updated_at?: unknown;
 
 const getScheduleStateFromNote = (note: unknown) => {
   const raw = String(note ?? '').trim();
-  const value = raw.toLowerCase();
-  const compact = value.replace(/\s+/g, '');
-  if (
-    compact.includes('__temp_work__') ||
-    compact.includes('temp_work') ||
-    compact.includes('temporarywork') ||
-    raw.includes('\u4e34\u65f6\u5de5\u4f5c')
-  ) {
-    return 'temp_work';
-  }
-  if (
-    compact.includes('__temp_rest__') ||
-    compact.includes('temp_rest') ||
-    compact.includes('temporaryoff') ||
-    raw.includes('\u4e34\u65f6\u6392\u4f11')
-  ) {
-    return 'temp_rest';
-  }
-  if (
-    compact.includes('__leave__') ||
-    compact.includes('leave') ||
-    compact.includes('excuse') ||
-    raw.includes('\u8bf7\u5047')
-  ) {
-    return 'leave';
-  }
-  if (compact.includes('__rest__') || compact.includes('rest') || compact === 'off' || raw.includes('\u4f11\u606f')) {
-    return 'rest';
-  }
+  if (raw === '__temp_work__') return 'temp_work';
+  if (raw === '__leave__') return 'leave';
+  if (raw === '__temp_rest__') return 'temp_rest';
+  if (raw === '__rest__') return 'rest';
   return 'work';
 };
 
@@ -400,9 +376,39 @@ const getShortGapPunchIndices = (punches: PunchRow[], thresholdMinutes = 10) => 
   return flagged;
 };
 
+const readAppArrivalStatsByKey = (templateDate: string) => {
+  try {
+    const raw = localStorage.getItem(ARRIVAL_METRICS_STORAGE_KEY);
+    if (!raw) return null as Record<string, { expected: number; present: number; onClock: number; offWorked: number }> | null;
+    const parsed = JSON.parse(raw) as { key?: unknown; rows?: unknown };
+    if (String(parsed?.key ?? '') !== String(templateDate ?? '')) return null;
+    const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+    const out: Record<string, { expected: number; present: number; onClock: number; offWorked: number }> = {};
+    const toNum = (v: unknown) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    };
+    for (const item of rows) {
+      const row = (item ?? {}) as Record<string, unknown>;
+      const shift = normalizeShiftValue(String(row.shift ?? ''));
+      const position = normalizePositionKey(String(row.position ?? ''));
+      if (!shift || !position) continue;
+      out[`${shift}:${position}`] = {
+        expected: toNum(row.expected),
+        present: toNum(row.present),
+        onClock: toNum(row.onClock),
+        offWorked: toNum(row.restWorked)
+      };
+    }
+    return out;
+  } catch {
+    return null;
+  }
+};
+
 export default function DashboardPage() {
   const [rows, setRows] = useState<DashboardRow[]>([]);
-  const [expectedByScheduleKey, setExpectedByScheduleKey] = useState<Record<string, number>>({});
+  const [cardStatsByKey, setCardStatsByKey] = useState<Record<string, { expected: number; present: number; onClock: number; offWorked: number }>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -543,7 +549,6 @@ export default function DashboardPage() {
         });
       }
       const scheduledStaffIds = Array.from(scheduledByStaff.keys());
-      const nextExpectedByScheduleKey: Record<string, number> = {};
 
       const punchesByStaff = new Map<string, PunchRow[]>();
       const punchesRes = await supabase
@@ -627,19 +632,98 @@ export default function DashboardPage() {
         else employeeCacheRef.current.delete(staffId);
       }
 
-      // Expected should only count schedule rows whose staff still exists in employee table.
+      const staffByKey = new Map<string, Set<string>>();
+      const restByKey = new Map<string, Set<string>>();
+      const keysByStaff = new Map<string, string[]>();
+      const hasWorkScheduleStaff = new Set<string>();
+      const hasRestScheduleStaff = new Set<string>();
       for (const staffId of scheduledStaffIds) {
-        if (!employeeCacheRef.current.has(staffId)) continue;
-        if (isNewHirePlaceholderStaffId(staffId)) continue;
         const schedule = scheduledByStaff.get(staffId);
         if (!schedule) continue;
-        if (!isWorkingScheduleState(String(schedule.scheduleState ?? ''))) continue;
-        const position = normalizePositionKey(String(schedule.position ?? ''));
-        const employeeShift = normalizeShiftValue(String(employeeCacheRef.current.get(staffId)?.shift ?? ''));
-        const shift = employeeShift;
+        const employeePosition = normalizePositionKey(String(employeeCacheRef.current.get(staffId)?.position ?? ''));
+        const schedulePosition = normalizePositionKey(String(schedule.position ?? ''));
+        const position = employeePosition || schedulePosition;
+        const shift = normalizeShiftValue(String(employeeCacheRef.current.get(staffId)?.shift ?? ''));
         if (!position || !shift) continue;
         const key = `${shift}:${position}`;
-        nextExpectedByScheduleKey[key] = (nextExpectedByScheduleKey[key] ?? 0) + 1;
+        const isWork = isWorkingScheduleState(String(schedule.scheduleState ?? ''));
+        if (isWork) {
+          hasWorkScheduleStaff.add(staffId);
+          if (!staffByKey.has(key)) staffByKey.set(key, new Set());
+          staffByKey.get(key)?.add(staffId);
+          const keys = keysByStaff.get(staffId) ?? [];
+          if (!keys.includes(key)) keys.push(key);
+          keysByStaff.set(staffId, keys);
+        } else {
+          hasRestScheduleStaff.add(staffId);
+          if (!restByKey.has(key)) restByKey.set(key, new Set());
+          restByKey.get(key)?.add(staffId);
+        }
+      }
+      for (const staffId of punchedStaffIds) {
+        if (keysByStaff.has(staffId) || hasWorkScheduleStaff.has(staffId) || hasRestScheduleStaff.has(staffId)) continue;
+        const employee = employeeCacheRef.current.get(staffId);
+        const position = normalizePositionKey(String(employee?.position ?? ''));
+        const shift = normalizeShiftValue(String(employee?.shift ?? ''));
+        if (!position || !shift) continue;
+        keysByStaff.set(staffId, [`${shift}:${position}`]);
+      }
+      const arrivedByKey = new Map<string, Set<string>>();
+      for (const staffId of punchedStaffIds) {
+        const keys = keysByStaff.get(staffId) ?? [];
+        for (const key of keys) {
+          if (!arrivedByKey.has(key)) arrivedByKey.set(key, new Set());
+          arrivedByKey.get(key)?.add(staffId);
+        }
+      }
+      const onClockByKey = new Map<string, Set<string>>();
+      for (const [staffId, punches] of punchesByStaff.entries()) {
+        const last = punches[punches.length - 1];
+        if (!last || last.action !== 'IN') continue;
+        const keys = keysByStaff.get(staffId) ?? [];
+        for (const key of keys) {
+          if (!onClockByKey.has(key)) onClockByKey.set(key, new Set());
+          onClockByKey.get(key)?.add(staffId);
+        }
+      }
+      const restWorkedByKey = new Map<string, Set<string>>();
+      for (const [key, restSet] of restByKey.entries()) {
+        for (const staffId of restSet) {
+          if (!punchedStaffIds.includes(staffId)) continue;
+          if (!restWorkedByKey.has(key)) restWorkedByKey.set(key, new Set());
+          restWorkedByKey.get(key)?.add(staffId);
+        }
+      }
+      for (const staffId of punchedStaffIds) {
+        if (hasWorkScheduleStaff.has(staffId) || hasRestScheduleStaff.has(staffId)) continue;
+        const keys = keysByStaff.get(staffId) ?? [];
+        for (const key of keys) {
+          if (!restWorkedByKey.has(key)) restWorkedByKey.set(key, new Set());
+          restWorkedByKey.get(key)?.add(staffId);
+        }
+      }
+      const mergedOnClockByKey = new Map<string, Set<string>>();
+      for (const [key, set] of onClockByKey.entries()) mergedOnClockByKey.set(key, new Set(set));
+      for (const [key, set] of restWorkedByKey.entries()) {
+        if (!mergedOnClockByKey.has(key)) mergedOnClockByKey.set(key, new Set());
+        for (const staffId of set) mergedOnClockByKey.get(key)?.add(staffId);
+      }
+      const nextCardStatsByKey: Record<string, { expected: number; present: number; onClock: number; offWorked: number }> = {};
+      for (const shift of ['early', 'late'] as const) {
+        for (const position of CARD_POSITIONS) {
+          const key = `${shift}:${position}`;
+          const expected = staffByKey.get(key)?.size ?? 0;
+          const presentIds = new Set<string>([
+            ...Array.from(arrivedByKey.get(key) ?? []),
+            ...Array.from(restWorkedByKey.get(key) ?? [])
+          ]);
+          nextCardStatsByKey[key] = {
+            expected,
+            present: presentIds.size,
+            onClock: mergedOnClockByKey.get(key)?.size ?? 0,
+            offWorked: restWorkedByKey.get(key)?.size ?? 0
+          };
+        }
       }
 
       const nextRows: DashboardRow[] = displayStaffIds
@@ -920,7 +1004,8 @@ export default function DashboardPage() {
         rowsDigestRef.current = digest;
         setRows(nextRows);
       }
-      setExpectedByScheduleKey(nextExpectedByScheduleKey);
+      const cachedAppCardStats = readAppArrivalStatsByKey(templateDate);
+      setCardStatsByKey(cachedAppCardStats && Object.keys(cachedAppCardStats).length > 0 ? cachedAppCardStats : nextCardStatsByKey);
       setAccountUsageRows(nextUsageRows);
       setOperationalDate(currentOperationalDate);
       setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
@@ -1016,24 +1101,12 @@ export default function DashboardPage() {
             String(row.shift ?? '').trim().toLowerCase() === shift
         );
         const offWorkedScope = positionShiftScope.filter((row) => row.attendance === 'Off Worked');
-        const expected = expectedByScheduleKey[`${shift}:${position}`] ?? 0;
-        const presentIds = new Set(positionShiftScope.filter((row) => row.work_hours_today > 0).map((row) => row.staff_id));
-        const onClockIds = new Set(
-          positionShiftScope
-            .filter((row) => {
-              const last = row.punches[row.punches.length - 1];
-              return last?.action === 'IN';
-            })
-            .map((row) => row.staff_id)
-        );
-        for (const row of offWorkedScope) onClockIds.add(row.staff_id);
-        const present = presentIds.size;
-        const onClock = onClockIds.size;
-        cards.push({ position, shift, expected, present, onClock, offWorked: offWorkedScope.length });
+        const stat = cardStatsByKey[`${shift}:${position}`] ?? { expected: 0, present: 0, onClock: 0, offWorked: 0 };
+        cards.push({ position, shift, expected: stat.expected, present: stat.present, onClock: stat.onClock, offWorked: stat.offWorked || offWorkedScope.length });
       }
     }
     return cards;
-  }, [rows, expectedByScheduleKey]);
+  }, [rows, cardStatsByKey]);
 
   const getQrDataUrlCached = async (rawValue: string) => {
     const value = String(rawValue ?? '').trim();
