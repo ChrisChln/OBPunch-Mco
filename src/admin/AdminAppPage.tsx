@@ -2149,7 +2149,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const to = from + pageSize - 1;
         const res = await supabase
           .from(SCHEDULE_TABLE)
-          .select('id, staff_id, date, position, note, operator, updated_at, created_at')
+          .select('id, staff_id, date, position, shift, note, operator, updated_at, created_at')
           .gte('date', startDate)
           .lte('date', endDate)
           .order('date', { ascending: false })
@@ -2255,6 +2255,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     });
     const resolvedEmployeeShift =
       employeeShiftByStaffId[staff]?.shift || normalizeShiftValue(String(employee.shift ?? '')) || '';
+    const resolvedScheduleShift: 'early' | 'late' = resolvedEmployeeShift === 'late' ? 'late' : 'early';
     const existingState: 'empty' | ScheduleBaseState = !existing ? 'empty' : getScheduleBaseStateFromNote(existing.note);
     if (nextState === existingState) return;
     if (nextState === 'empty' && !existing) return;
@@ -2364,6 +2365,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         staff_id: staff,
         date: templateDate,
         position: normalizedPosition,
+        shift: resolvedScheduleShift,
         note: getScheduleNoteFromBaseState(nextState),
         operator: user?.email ?? null,
         updated_at: new Date(serverTime).toISOString()
@@ -2390,6 +2392,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         staff_id: staff,
         date: templateDate,
         position: normalizedPosition,
+        shift: resolvedScheduleShift,
         note: getScheduleNoteFromBaseState(nextState),
         operator: user?.email ?? null,
         updated_at: new Date(serverTime).toISOString()
@@ -2433,7 +2436,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           from_shift: existing?.shift ?? null,
           from_position: existing?.position ?? null,
           to_state: nextState,
-          to_shift: resolvedEmployeeShift,
+          to_shift: resolvedScheduleShift,
           to_position: normalizedPosition
         }
       });
@@ -8918,6 +8921,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           staff_id: internalStaffId,
           date: templateDate,
           position,
+          shift,
           note: null,
           operator: user?.email ?? null,
           updated_at: nowIso
@@ -8935,6 +8939,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           staff_id: internalStaffId,
           date: templateDate,
           position,
+          shift,
           note: null,
           operator: user?.email ?? null,
           updated_at: nowIso
