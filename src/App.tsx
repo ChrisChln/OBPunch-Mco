@@ -432,40 +432,6 @@ const getShiftBucketByInAt = (inAtIso: string): '' | 'early' | 'late' => {
   const minutes = dt.getHours() * 60 + dt.getMinutes();
   return minutes >= 5 * 60 && minutes < 15 * 60 ? 'early' : 'late';
 };
-const overlapMs = (aStart: number, aEnd: number, bStart: number, bEnd: number) => {
-  const start = Math.max(aStart, bStart);
-  const end = Math.min(aEnd, bEnd);
-  return Math.max(0, end - start);
-};
-const computeShiftHoursFromIntervals = (intervals: Array<{ start: Date; end: Date }>) => {
-  let earlyMs = 0;
-  let lateMs = 0;
-  for (const it of intervals) {
-    let cursor = new Date(it.start);
-    while (cursor.getTime() < it.end.getTime()) {
-      const dayStart = new Date(cursor);
-      dayStart.setHours(0, 0, 0, 0);
-      const earlyStart = new Date(dayStart);
-      earlyStart.setHours(5, 0, 0, 0);
-      const earlyEnd = new Date(dayStart);
-      earlyEnd.setHours(15, 0, 0, 0);
-      const lateStart = new Date(earlyEnd);
-      const lateEnd = new Date(dayStart);
-      lateEnd.setDate(lateEnd.getDate() + 1);
-      lateEnd.setHours(5, 0, 0, 0);
-
-      const segmentStart = Math.max(cursor.getTime(), it.start.getTime());
-      const segmentEnd = Math.min(it.end.getTime(), lateEnd.getTime());
-      if (segmentEnd > segmentStart) {
-        earlyMs += overlapMs(segmentStart, segmentEnd, earlyStart.getTime(), earlyEnd.getTime());
-        lateMs += overlapMs(segmentStart, segmentEnd, lateStart.getTime(), lateEnd.getTime());
-      }
-      cursor = new Date(lateEnd);
-    }
-  }
-  return { earlyHours: earlyMs / 3600000, lateHours: lateMs / 3600000 };
-};
-
 function getBestTimeField(row: Record<string, unknown>) {
   const candidates = ['created_at', 'inserted_at', 'punch_at', 'time', 'timestamp', 'ts'];
   for (const c of candidates) {
@@ -498,7 +464,6 @@ export default function App() {
     error: 0
   });
   const audioUnlockedRef = useRef(false);
-  const arrivalShiftCacheRef = useRef<{ at: number; map: Record<string, '' | 'early' | 'late'> }>({ at: 0, map: {} });
   const punchBoardUphFetchSeqRef = useRef(0);
   const punchBoardUphCacheRef = useRef<{ at: number; key: string; map: Record<string, number | null> }>({
     at: 0,
@@ -1623,100 +1588,6 @@ const fetchPunchBoardUph = async (
     }
     return nextMap;
   };
-  const inferShiftByWorkHoursForStaff = async (staffIds: string[]) => {
-    if (!supabase || staffIds.length === 0) {
-      return {} as Record<string, '' | 'early' | 'late'>;
-    }
-
-    const ids = Array.from(new Set(staffIds.map((s) => normalizeStaffId(s)).filter(Boolean)));
-    if (ids.length === 0) {
-      return {} as Record<string, '' | 'early' | 'late'>;
-    }
-
-    const nowMs = Date.now();
-    const cacheTtlMs = 10 * 60 * 1000;
-    const cache = arrivalShiftCacheRef.current;
-    const missing = ids.filter((staff) => !cache.map[staff]);
-    const needRefresh = nowMs - cache.at > cacheTtlMs;
-    if (!needRefresh && missing.length === 0) {
-      return cache.map;
-    }
-
-    const targetStaff = needRefresh ? ids : missing;
-    const inferredMap = needRefresh ? ({} as Record<string, '' | 'early' | 'late'>) : { ...cache.map };
-    const rangeEnd = new Date();
-    const rangeStart = new Date(rangeEnd);
-    rangeStart.setDate(rangeStart.getDate() - 30);
-    const eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT' }>> = {};
-    const punchPageSize = 1000;
-    const maxPages = 6;
-
-    for (const batch of chunk(targetStaff, 80)) {
-      const base = () =>
-        supabase
-          .from('ob_punches')
-          .select('staff_id, action, created_at')
-          .in('staff_id', batch)
-          .gte('created_at', rangeStart.toISOString())
-          .lt('created_at', rangeEnd.toISOString());
-
-      for (let page = 0; page < maxPages; page += 1) {
-        const from = page * punchPageSize;
-        const to = from + punchPageSize - 1;
-        const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
-        const attempt = attemptCreatedAt.error ? await base().order('id', { ascending: true }).range(from, to) : attemptCreatedAt;
-        if (attempt.error) break;
-        const rows = (attempt.data as any[] | null) ?? [];
-        for (const row of rows) {
-          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-          const actionRaw = String(row.action ?? '').toUpperCase();
-          const atRaw = String(row.created_at ?? '').trim();
-          if (!staff || (actionRaw !== 'IN' && actionRaw !== 'OUT') || !atRaw) continue;
-          const at = new Date(atRaw);
-          if (Number.isNaN(at.getTime())) continue;
-          (eventsByStaff[staff] ??= []).push({ at, action: actionRaw === 'OUT' ? 'OUT' : 'IN' });
-        }
-        if (rows.length < punchPageSize) break;
-      }
-    }
-
-    for (const staff of targetStaff) {
-      const events = eventsByStaff[staff] ?? [];
-      events.sort((a, b) => a.at.getTime() - b.at.getTime());
-      const intervals: Array<{ start: Date; end: Date }> = [];
-      let currentIn: Date | null = null;
-      let latestIn: Date | null = null;
-      for (const ev of events) {
-        if (ev.action === 'IN') {
-          currentIn = ev.at;
-          latestIn = ev.at;
-          continue;
-        }
-        if (ev.action === 'OUT' && currentIn && ev.at.getTime() > currentIn.getTime()) {
-          intervals.push({ start: currentIn, end: ev.at });
-          currentIn = null;
-        }
-      }
-      // Do NOT include open sessions in historical hour accumulation (matches admin logic).
-      const { earlyHours, lateHours } = computeShiftHoursFromIntervals(intervals);
-      let shift: '' | 'early' | 'late' = '';
-      if (currentIn) {
-        // Currently on clock: infer shift directly from IN punch time.
-        const mins = currentIn.getHours() * 60 + currentIn.getMinutes();
-        shift = mins >= 5 * 60 && mins < 15 * 60 ? 'early' : 'late';
-      } else if (earlyHours > lateHours) shift = 'early';
-      else if (lateHours > earlyHours) shift = 'late';
-      else if (latestIn) {
-        const mins = latestIn.getHours() * 60 + latestIn.getMinutes();
-        shift = mins >= 5 * 60 && mins < 15 * 60 ? 'early' : 'late';
-      }
-      inferredMap[staff] = shift;
-    }
-
-    arrivalShiftCacheRef.current = { at: nowMs, map: inferredMap };
-    return inferredMap;
-  };
-
   const fetchDailyRoster = async (publishForDate?: string) => {
     if (!supabase) {
       setDailyRosterError('Missing Supabase configuration.');
@@ -1731,7 +1602,7 @@ const fetchPunchBoardUph = async (
     setDailyRosterError(null);
     const res = await supabase
       .from(SCHEDULE_TABLE)
-      .select('id, staff_id, position, shift, note, updated_at, created_at')
+      .select('id, staff_id, position, note, updated_at, created_at')
       .eq('date', templateDate)
       .order('staff_id', { ascending: true })
       .limit(2000);
@@ -1765,7 +1636,7 @@ const fetchPunchBoardUph = async (
         name: employeeInfo?.name || staff,
         agency: employeeInfo?.agency || '-',
         position,
-        shift: String(row.shift ?? '').trim()
+        shift: String(employeeInfo?.shift ?? '').trim()
       };
     });
     setDailyRoster(list);
@@ -1790,7 +1661,7 @@ const fetchPunchBoardUph = async (
 
     const scheduleRes = await supabase
       .from(SCHEDULE_TABLE)
-      .select('id, staff_id, position, shift, note, updated_at, created_at')
+      .select('id, staff_id, position, note, updated_at, created_at')
       .eq('date', templateDate)
       .order('staff_id', { ascending: true })
       .limit(3000);
@@ -1815,7 +1686,6 @@ const fetchPunchBoardUph = async (
       absentRosterCacheRef.current = { at: Date.now(), key: templateDate, rows: [] };
       return;
     }
-    const inferredShiftByStaff = await inferShiftByWorkHoursForStaff(scheduledStaff);
 
     const dayStart = getOperationalDayStart(now, ABSENT_RESET_HOUR);
     const punchRes = await supabase
@@ -1836,13 +1706,12 @@ const fetchPunchBoardUph = async (
 
     const mapRes = await fetchEmployeeMap(scheduledStaff);
     const employeeMap = mapRes.error ? {} : mapRes.map;
-    const byStaffSchedule = new Map<string, { position: string; shift: string }>();
+    const byStaffSchedule = new Map<string, { position: string }>();
     for (const row of scheduledRows) {
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       if (!staff || byStaffSchedule.has(staff)) continue;
       byStaffSchedule.set(staff, {
-        position: String(row.position ?? '').trim(),
-        shift: String(row.shift ?? '').trim()
+        position: String(row.position ?? '').trim()
       });
     }
 
@@ -1857,7 +1726,7 @@ const fetchPunchBoardUph = async (
           name: employeeInfo?.name || '',
           agency: employeeInfo?.agency || '-',
           position: employeeInfo?.position || scheduleInfo?.position || '',
-          shift: inferredShiftByStaff[staff] || normalizeShiftValue(scheduleInfo?.shift || '')
+          shift: normalizeShiftValue(String(employeeInfo?.shift ?? '').trim())
         };
       });
 
@@ -1883,7 +1752,7 @@ const fetchPunchBoardUph = async (
     }
     const scheduleRes = await supabase
       .from(SCHEDULE_TABLE)
-      .select('id, staff_id, position, shift, note, updated_at, created_at')
+      .select('id, staff_id, position, note, updated_at, created_at')
       .eq('date', templateDate)
       .limit(5000);
     if (scheduleRes.error) {
@@ -1903,7 +1772,6 @@ const fetchPunchBoardUph = async (
     );
     const positionMapRes = await fetchEmployeeMap(allScheduleStaff);
     const employeePositionMap = positionMapRes.error ? {} : positionMapRes.map;
-    const inferredShiftByStaff = await inferShiftByWorkHoursForStaff(allScheduleStaff);
 
     const staffByKey = new Map<string, Set<string>>();
     const keysByStaff = new Map<string, string[]>();
@@ -1913,10 +1781,9 @@ const fetchPunchBoardUph = async (
       const latestPosition = normalizeAllowedPosition(String(employeePositionMap[staff]?.position ?? '').trim());
       const position = latestPosition ?? normalizeAllowedPosition(String(row.position ?? '').trim());
       if (!position) continue;
-      const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
       const dbShift = normalizeShiftValue(String(employeePositionMap[staff]?.shift ?? '').trim());
-      const inferredShift = inferredShiftByStaff[staff] ?? '';
-      const shift = dbShift || inferredShift || scheduledShift || 'early';
+      const shift = dbShift;
+      if (!shift) continue;
       const key = `${shift}:${position}`;
       if (!staffByKey.has(key)) staffByKey.set(key, new Set());
       staffByKey.get(key)?.add(staff);
@@ -1931,10 +1798,9 @@ const fetchPunchBoardUph = async (
       const latestPosition = normalizeAllowedPosition(String(employeePositionMap[staff]?.position ?? '').trim());
       const position = latestPosition ?? normalizeAllowedPosition(String(row.position ?? '').trim());
       if (!position) continue;
-      const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
       const dbShift = normalizeShiftValue(String(employeePositionMap[staff]?.shift ?? '').trim());
-      const inferredShift = inferredShiftByStaff[staff] ?? '';
-      const shift = dbShift || inferredShift || scheduledShift || 'early';
+      const shift = dbShift;
+      if (!shift) continue;
       const key = `${shift}:${position}`;
       if (!restByKey.has(key)) restByKey.set(key, new Set());
       restByKey.get(key)?.add(staff);
@@ -1997,51 +1863,15 @@ const fetchPunchBoardUph = async (
     if (punchedStaffWithoutSchedule.length > 0) {
       const positionMapRes = await fetchEmployeeMap(punchedStaffWithoutSchedule);
       const employeePositionMap = positionMapRes.error ? {} : positionMapRes.map;
-      
-      // 获取这些员工的打卡时间，用于推断班次
-      const firstPunchByStaff = new Map<string, Date>();
-      if (!allPunchRes.error && allPunchRes.data) {
-        for (const r of allPunchRes.data) {
-          const staff = normalizeStaffId(String(r.staff_id ?? '').trim());
-          if (!staff || !punchedStaffWithoutSchedule.includes(staff)) continue;
-          const at = new Date(String(r.created_at ?? ''));
-          if (Number.isNaN(at.getTime())) continue;
-          if (!firstPunchByStaff.has(staff) || at.getTime() < firstPunchByStaff.get(staff)!.getTime()) {
-            firstPunchByStaff.set(staff, at);
-          }
-        }
-      }
-
-      // 为没有排班的员工生成 key
       for (const staff of punchedStaffWithoutSchedule) {
         const positionRaw = String(employeePositionMap[staff]?.position ?? '').trim();
         const position = normalizeAllowedPosition(positionRaw);
         if (!position) continue;
-        
-        // 推断班次：根据第一次打卡时间
-        const firstPunch = firstPunchByStaff.get(staff);
-        let shift = 'early';
-        const dbShiftForUnscheduled = normalizeShiftValue(String(employeePositionMap[staff]?.shift ?? '').trim());
-        if (dbShiftForUnscheduled) {
-          shift = dbShiftForUnscheduled;
-        } else if (firstPunch) {
-          const inferredShift = inferredShiftByStaff[staff] ?? '';
-          if (inferredShift) {
-            shift = inferredShift;
-          } else {
-            // 根据打卡时间推断：5:00-15:00 为 early，其他为 late
-            const hours = firstPunch.getHours();
-            shift = hours >= 5 && hours < 15 ? 'early' : 'late';
-          }
-        }
-        
+        const shift = normalizeShiftValue(String(employeePositionMap[staff]?.shift ?? '').trim());
+        if (!shift) continue;
         const key = `${shift}:${position}`;
-        if (!keysByStaff.has(staff)) {
-          keysByStaff.set(staff, []);
-        }
-        if (!keysByStaff.get(staff)!.includes(key)) {
-          keysByStaff.get(staff)!.push(key);
-        }
+        if (!keysByStaff.has(staff)) keysByStaff.set(staff, []);
+        if (!keysByStaff.get(staff)!.includes(key)) keysByStaff.get(staff)!.push(key);
         punchedStaffPositionMap[staff] = { position, shift };
       }
     }

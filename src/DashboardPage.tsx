@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { createSupabaseClient } from './lib/supabase';
+import { normalizeStaffId } from './lib/staffId';
 import { getLabelToneClass, loadLabelToneMap } from './lib/labelTone';
 
 type EmployeeRow = {
@@ -25,6 +26,8 @@ type PunchRow = {
 type DashboardRow = EmployeeRow & {
   punches: PunchRow[];
   attendance: 'Absent' | 'Off Worked' | 'Normal';
+  work_hours_today: number;
+  display_shift: '' | 'early' | 'late';
   borrowed_device: string;
   schedule_state: string;
   temp_account_name: string;
@@ -70,7 +73,7 @@ const normalizeWorkAccountValue = (value: unknown) => {
   const raw = String(value ?? '').trim();
   if (!raw) return '';
   const lower = raw.toLowerCase();
-  if (raw === '-' || raw === '--' || raw === '—' || lower === 'n/a' || lower === 'na' || lower === 'null') return '';
+  if (raw === '-' || raw === '--' || lower === 'n/a' || lower === 'na' || lower === 'null') return '';
   return raw;
 };
 const resolveDefaultPassword = (workAccount: string, workPassword: string) =>
@@ -124,19 +127,26 @@ const formatTimeOnly = (iso: string) => {
   return d.toLocaleTimeString('en-CA', { hour12: false });
 };
 const formatShiftLabel = (value: string) => {
-  const v = String(value ?? '').trim().toLowerCase();
+  const v = normalizeShiftValue(value);
   if (v === 'early') return 'Morning';
   if (v === 'late') return 'Night';
   return value || '-';
 };
+const normalizeShiftValue = (value: unknown): '' | 'early' | 'late' => {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (!v) return '';
+  if (v === 'early' || v === 'morning' || v === 'day' || v === 'am' || v === '鐧界彮' || v === '鏃╃彮') return 'early';
+  if (v === 'late' || v === 'night' || v === 'pm' || v === '鏅氱彮') return 'late';
+  return '';
+};
 const normalizePositionKey = (value: string): '' | 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer' => {
   const v = String(value ?? '').trim().toLowerCase();
   if (!v) return '';
-  if (v === 'pick' || v.includes('pick') || v.includes('拣货')) return 'Pick';
-  if (v === 'pack' || v.includes('pack') || v.includes('打包')) return 'Pack';
-  if (v === 'rebin' || v.includes('rebin') || v.includes('上架') || v.includes('回仓')) return 'Rebin';
-  if (v === 'preship' || v.includes('preship') || v.includes('发货')) return 'Preship';
-  if (v === 'transfer' || v.includes('transfer') || v.includes('转运')) return 'Transfer';
+  if (v === 'pick' || v.includes('pick') || v.includes('鎷ｈ揣')) return 'Pick';
+  if (v === 'pack' || v.includes('pack') || v.includes('鎵撳寘')) return 'Pack';
+  if (v === 'rebin' || v.includes('rebin') || v.includes('涓婃灦') || v.includes('鍥炰粨')) return 'Rebin';
+  if (v === 'preship' || v.includes('preship') || v.includes('鍙戣揣')) return 'Preship';
+  if (v === 'transfer' || v.includes('transfer') || v.includes('杞繍')) return 'Transfer';
   return '';
 };
 const getPositionBadgeClass = (value: string) => {
@@ -181,6 +191,28 @@ const chunkArray = <T,>(list: T[], size: number): T[][] => {
   return chunks;
 };
 
+const computeWorkHoursFromPunches = (punches: PunchRow[], capEnd: Date) => {
+  if (!punches.length) return 0;
+  const capEndMs = capEnd.getTime();
+  if (!Number.isFinite(capEndMs)) return 0;
+  let totalMs = 0;
+  let currentInMs: number | null = null;
+  for (const p of punches) {
+    const atMs = Date.parse(String(p.created_at ?? ''));
+    if (!Number.isFinite(atMs)) continue;
+    if (p.action === 'IN') {
+      currentInMs = atMs;
+      continue;
+    }
+    if (p.action === 'OUT') {
+      if (currentInMs !== null && atMs > currentInMs) totalMs += atMs - currentInMs;
+      currentInMs = null;
+    }
+  }
+  if (currentInMs !== null && capEndMs > currentInMs) totalMs += capEndMs - currentInMs;
+  return totalMs / 3600000;
+};
+
 const addDays = (value: Date, days: number) => {
   const d = new Date(value);
   d.setDate(d.getDate() + days);
@@ -206,7 +238,7 @@ const toEpochMs = (value: unknown) => {
 const pickLatestByStaff = <T extends { staff_id?: unknown; updated_at?: unknown; created_at?: unknown; id?: unknown }>(rows: T[]) => {
   const byStaff = new Map<string, T>();
   for (const row of rows) {
-    const staff = String(row.staff_id ?? '').trim();
+    const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
     if (!staff) continue;
     const prev = byStaff.get(staff);
     if (!prev) {
@@ -230,15 +262,38 @@ const pickLatestByStaff = <T extends { staff_id?: unknown; updated_at?: unknown;
 const getScheduleStateFromNote = (note: unknown) => {
   const raw = String(note ?? '').trim();
   const value = raw.toLowerCase();
-  if (value.includes('temp_work') || raw.includes('临时工作')) return 'temp_work';
-  if (value.includes('temp_rest') || raw.includes('临时排休') || value.includes('temporary off')) return 'temp_rest';
-  if (value.includes('leave') || value.includes('excuse') || raw.includes('请假')) return 'leave';
-  if (value.includes('rest') || value === 'off' || raw.includes('休息')) return 'rest';
+  const compact = value.replace(/\s+/g, '');
+  if (
+    compact.includes('__temp_work__') ||
+    compact.includes('temp_work') ||
+    compact.includes('temporarywork') ||
+    raw.includes('\u4e34\u65f6\u5de5\u4f5c')
+  ) {
+    return 'temp_work';
+  }
+  if (
+    compact.includes('__temp_rest__') ||
+    compact.includes('temp_rest') ||
+    compact.includes('temporaryoff') ||
+    raw.includes('\u4e34\u65f6\u6392\u4f11')
+  ) {
+    return 'temp_rest';
+  }
+  if (
+    compact.includes('__leave__') ||
+    compact.includes('leave') ||
+    compact.includes('excuse') ||
+    raw.includes('\u8bf7\u5047')
+  ) {
+    return 'leave';
+  }
+  if (compact.includes('__rest__') || compact.includes('rest') || compact === 'off' || raw.includes('\u4f11\u606f')) {
+    return 'rest';
+  }
   return 'work';
 };
 
 const isWorkingScheduleState = (state: string) => state === 'work' || state === 'temp_work';
-const isRestLikeScheduleState = (state: string) => state === 'rest' || state === 'temp_rest' || state === 'leave';
 
 const isMissingColumnError = (message: unknown, column: string) =>
   (() => {
@@ -259,6 +314,24 @@ const isMissingTableError = (message: unknown, table: string) => {
     text.includes('does not exist')
   )
     && text.includes(target);
+};
+
+const normalizeSearchToken = (value: string) => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const staffIdSearchMatches = (query: string, staffId: string) => {
+  const q = normalizeSearchToken(query);
+  const s = normalizeSearchToken(staffId);
+  if (!q || !s) return false;
+  if (s.includes(q) || q.includes(s)) return true;
+
+  const qNoPrefix = q.startsWith('us') ? q.slice(2) : q;
+  const sNoPrefix = s.startsWith('us') ? s.slice(2) : s;
+  if ((qNoPrefix && s.includes(qNoPrefix)) || (sNoPrefix && q.includes(sNoPrefix))) return true;
+
+  const qDigits = qNoPrefix.replace(/\D/g, '');
+  const sDigits = sNoPrefix.replace(/\D/g, '');
+  if (!qDigits || !sDigits) return false;
+  return sDigits.includes(qDigits) || qDigits.includes(sDigits);
 };
 
 const escapeHtml = (value: string) =>
@@ -327,15 +400,9 @@ const getShortGapPunchIndices = (punches: PunchRow[], thresholdMinutes = 10) => 
   return flagged;
 };
 
-const isAutoSignOutPunch = (punch: PunchRow) => {
-  if (punch.action !== 'OUT') return false;
-  const dt = new Date(String(punch.created_at ?? '').trim());
-  if (Number.isNaN(dt.getTime())) return false;
-  return dt.getHours() === DAY_CUTOFF_HOUR && dt.getMinutes() === 0 && dt.getSeconds() === 0;
-};
-
 export default function DashboardPage() {
   const [rows, setRows] = useState<DashboardRow[]>([]);
+  const [expectedByScheduleKey, setExpectedByScheduleKey] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -378,6 +445,7 @@ export default function DashboardPage() {
       const range = getOperationalRange();
       const rangeStartIso = range.start.toISOString();
       const rangeEndIso = range.end.toISOString();
+      const capEnd = new Date(Math.min(Date.now(), range.end.getTime()));
       const currentOperationalDate = range.operationalDate;
       const operationalDateObj = new Date(`${currentOperationalDate}T00:00:00`);
       const operationalDayIndex = Number.isNaN(operationalDateObj.getTime()) ? 0 : (operationalDateObj.getDay() + 6) % 7;
@@ -385,7 +453,7 @@ export default function DashboardPage() {
       let scheduleRowsRaw: any[] = [];
       const scheduleByDateRes = await supabase
         .from(SCHEDULE_TABLE)
-        .select('id, staff_id, position, shift, note, updated_at, created_at, date')
+        .select('id, staff_id, position, note, updated_at, created_at, date')
         .eq('date', templateDate)
         .order('created_at', { ascending: false })
         .limit(20000);
@@ -402,7 +470,7 @@ export default function DashboardPage() {
       if (scheduleRowsRaw.length === 0) {
         const scheduleByDateRangeRes = await supabase
           .from(SCHEDULE_TABLE)
-          .select('id, staff_id, position, shift, note, updated_at, created_at, date')
+          .select('id, staff_id, position, note, updated_at, created_at, date')
           .gte('date', `${templateDate}T00:00:00`)
           .lt('date', `${templateDate}T23:59:59.999`)
           .order('created_at', { ascending: false })
@@ -422,7 +490,7 @@ export default function DashboardPage() {
       if (scheduleRowsRaw.length === 0) {
         const scheduleByWorkDateRes = await supabase
           .from(SCHEDULE_TABLE)
-          .select('id, staff_id, position, shift, note, updated_at, created_at, work_date')
+          .select('id, staff_id, position, note, updated_at, created_at, work_date')
           .eq('work_date', currentOperationalDate)
           .order('created_at', { ascending: false })
           .limit(20000);
@@ -441,7 +509,7 @@ export default function DashboardPage() {
       if (scheduleRowsRaw.length === 0) {
         const recentScheduleRes = await supabase
           .from(SCHEDULE_TABLE)
-          .select('id, staff_id, position, shift, note, updated_at, created_at, date')
+          .select('id, staff_id, position, note, updated_at, created_at, date')
           .gte('created_at', new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString())
           .order('created_at', { ascending: false })
           .limit(30000);
@@ -462,23 +530,53 @@ export default function DashboardPage() {
         string,
         {
           position: string;
-          shift: string;
           scheduleState: string;
         }
       >();
       for (const row of latestScheduleRows) {
-        const staffId = String((row as any).staff_id ?? '').trim();
+        const staffId = normalizeStaffId(String((row as any).staff_id ?? '').trim());
         if (!staffId) continue;
         const scheduleState = getScheduleStateFromNote((row as any).note);
         scheduledByStaff.set(staffId, {
           position: String((row as any).position ?? (row as any).Position ?? '').trim(),
-          shift: String((row as any).shift ?? '').trim(),
           scheduleState
         });
       }
       const scheduledStaffIds = Array.from(scheduledByStaff.keys());
+      const nextExpectedByScheduleKey: Record<string, number> = {};
 
-      if (scheduledStaffIds.length === 0) {
+      const punchesByStaff = new Map<string, PunchRow[]>();
+      const punchesRes = await supabase
+        .from(PUNCHES_TABLE)
+        .select('id, staff_id, action, created_at')
+        .gte('created_at', rangeStartIso)
+        .lt('created_at', rangeEndIso)
+        .order('created_at', { ascending: true })
+        .limit(20000);
+      if (punchesRes.error) {
+        if (fetchSeqRef.current === currentSeq) {
+          setError(punchesRes.error.message);
+          setRows([]);
+        }
+        return;
+      }
+      for (const row of ((punchesRes.data as any[] | null) ?? [])) {
+        const staffId = normalizeStaffId(String(row.staff_id ?? '').trim());
+        if (!staffId) continue;
+        const normalizedPunch: PunchRow = {
+          id: String(row.id ?? ''),
+          staff_id: staffId,
+          action: String(row.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN',
+          created_at: String(row.created_at ?? '')
+        };
+        const list = punchesByStaff.get(staffId) ?? [];
+        list.push(normalizedPunch);
+        punchesByStaff.set(staffId, list);
+      }
+      const punchedStaffIds = Array.from(punchesByStaff.keys());
+      const displayStaffIds = Array.from(new Set([...scheduledStaffIds, ...punchedStaffIds]));
+
+      if (displayStaffIds.length === 0) {
         if (fetchSeqRef.current === currentSeq) {
           setRows([]);
           setOperationalDate(currentOperationalDate);
@@ -487,44 +585,8 @@ export default function DashboardPage() {
         return;
       }
 
-      const punchesByStaff = new Map<string, PunchRow[]>();
-      const staffBatchesForPunches = chunkArray(scheduledStaffIds, 120);
-      for (const batch of staffBatchesForPunches) {
-        const punchesRes = await supabase
-          .from(PUNCHES_TABLE)
-          .select('id, staff_id, action, created_at')
-          .in('staff_id', batch)
-          .gte('created_at', rangeStartIso)
-          .lt('created_at', rangeEndIso)
-          .order('created_at', { ascending: true })
-          .limit(10000);
-
-        if (punchesRes.error) {
-          if (fetchSeqRef.current === currentSeq) {
-            setError(punchesRes.error.message);
-            setRows([]);
-          }
-          return;
-        }
-
-        for (const row of ((punchesRes.data as any[] | null) ?? [])) {
-          const staffId = String(row.staff_id ?? '').trim();
-          if (!staffId) continue;
-          const normalizedPunch: PunchRow = {
-            id: String(row.id ?? ''),
-            staff_id: staffId,
-            action: String(row.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN',
-            created_at: String(row.created_at ?? '')
-          };
-          if (isAutoSignOutPunch(normalizedPunch)) continue;
-          const list = punchesByStaff.get(staffId) ?? [];
-          list.push(normalizedPunch);
-          punchesByStaff.set(staffId, list);
-        }
-      }
-
-      const missingStaffIds = scheduledStaffIds.filter((staffId) => !employeeCacheRef.current.has(staffId));
-      for (const staffIds of chunkArray(missingStaffIds, 200)) {
+      const fetchedEmployeesByStaff = new Map<string, EmployeeRow>();
+      for (const staffIds of chunkArray(displayStaffIds, 200)) {
         const employeeRes = await supabase
           .from(EMPLOYEE_TABLE)
           .select('*')
@@ -541,9 +603,9 @@ export default function DashboardPage() {
         }
 
         for (const row of ((employeeRes.data as any[] | null) ?? [])) {
-          const staffId = String(row.staff_id ?? '').trim();
-          if (!staffId || employeeCacheRef.current.has(staffId)) continue;
-          employeeCacheRef.current.set(staffId, {
+          const staffId = normalizeStaffId(String(row.staff_id ?? '').trim());
+          if (!staffId || fetchedEmployeesByStaff.has(staffId)) continue;
+          fetchedEmployeesByStaff.set(staffId, {
             staff_id: staffId,
             name: String(row.name ?? '').trim(),
             agency: String(row.agency ?? '').trim(),
@@ -559,32 +621,59 @@ export default function DashboardPage() {
           });
         }
       }
+      for (const staffId of displayStaffIds) {
+        const employee = fetchedEmployeesByStaff.get(staffId);
+        if (employee) employeeCacheRef.current.set(staffId, employee);
+        else employeeCacheRef.current.delete(staffId);
+      }
 
-      const nextRows: DashboardRow[] = scheduledStaffIds
+      // Expected should only count schedule rows whose staff still exists in employee table.
+      for (const staffId of scheduledStaffIds) {
+        if (!employeeCacheRef.current.has(staffId)) continue;
+        if (isNewHirePlaceholderStaffId(staffId)) continue;
+        const schedule = scheduledByStaff.get(staffId);
+        if (!schedule) continue;
+        if (!isWorkingScheduleState(String(schedule.scheduleState ?? ''))) continue;
+        const position = normalizePositionKey(String(schedule.position ?? ''));
+        const employeeShift = normalizeShiftValue(String(employeeCacheRef.current.get(staffId)?.shift ?? ''));
+        const shift = employeeShift;
+        if (!position || !shift) continue;
+        const key = `${shift}:${position}`;
+        nextExpectedByScheduleKey[key] = (nextExpectedByScheduleKey[key] ?? 0) + 1;
+      }
+
+      const nextRows: DashboardRow[] = displayStaffIds
         .sort((a, b) => a.localeCompare(b, 'en-US'))
         .map((staffId) => {
           const employee = employeeCacheRef.current.get(staffId);
           const schedule = scheduledByStaff.get(staffId);
           const punches = punchesByStaff.get(staffId) ?? [];
           const state = String(schedule?.scheduleState ?? '');
+          const isPlannedWork = isWorkingScheduleState(state);
+          const employeeShift = normalizeShiftValue(employee?.shift ?? '');
+          const normalizedShift = employeeShift;
+          const displayShift = normalizedShift;
+          const workHoursToday = computeWorkHoursFromPunches(punches, capEnd);
           const attendance: DashboardRow['attendance'] =
-            isWorkingScheduleState(state) && punches.length === 0
+            isPlannedWork && workHoursToday <= 0
               ? 'Absent'
-              : isRestLikeScheduleState(state) && punches.length > 0
+              : !isPlannedWork && workHoursToday > 0
                 ? 'Off Worked'
                 : 'Normal';
           return {
             staff_id: staffId,
             name: employee?.name ?? '',
             agency: employee?.agency ?? '',
-            position: employee?.position ?? schedule?.position ?? '',
+            position: schedule?.position ?? employee?.position ?? '',
             label: employee?.label ?? '',
             borrowed_device: '',
             schedule_state: state,
             work_account: normalizeWorkAccountValue(employee?.work_account ?? ''),
             work_password: employee?.work_password ?? '',
             hire_date: employee?.hire_date ?? '',
-            shift: employee?.shift ?? schedule?.shift ?? '',
+            shift: normalizedShift,
+            display_shift: displayShift,
+            work_hours_today: workHoursToday,
             temp_account_name: '',
             temp_source_staff_id: '',
             punches,
@@ -592,14 +681,13 @@ export default function DashboardPage() {
           };
         })
         .filter((row) => {
+          if (!String(row.staff_id ?? '').trim()) return false;
+          if (isNewHirePlaceholderStaffId(row.staff_id)) return false;
           const state = String(scheduledByStaff.get(row.staff_id)?.scheduleState ?? '');
           const isPlannedWork = isWorkingScheduleState(state);
-          const isOffWorked = isRestLikeScheduleState(state) && row.punches.length > 0;
-          const isNoProfile =
-            !String(row.name ?? '').trim() &&
-            !String(row.label ?? '').trim() &&
-            !normalizeWorkAccountValue(row.work_account);
-          if (isNoProfile) return false;
+          const isOffWorked = !isPlannedWork && row.work_hours_today > 0;
+          const hasProfile = Boolean(String(row.name ?? '').trim() || String(row.label ?? '').trim());
+          if (isPlannedWork && !hasProfile && row.work_hours_today <= 0) return false;
           return isPlannedWork || isOffWorked;
         });
 
@@ -681,7 +769,7 @@ export default function DashboardPage() {
       }
 
       const borrowedDeviceByStaff = new Map<string, string[]>();
-      for (const staffBatch of chunkArray(scheduledStaffIds, 120)) {
+      for (const staffBatch of chunkArray(displayStaffIds, 120)) {
         const loansRes = await supabase
           .from(DEVICE_LOANS_TABLE)
           .select('id, staff_id, device_sn, action, created_at')
@@ -832,6 +920,7 @@ export default function DashboardPage() {
         rowsDigestRef.current = digest;
         setRows(nextRows);
       }
+      setExpectedByScheduleKey(nextExpectedByScheduleKey);
       setAccountUsageRows(nextUsageRows);
       setOperationalDate(currentOperationalDate);
       setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
@@ -850,7 +939,10 @@ export default function DashboardPage() {
     [rows]
   );
   const shiftOptions = useMemo(
-    () => Array.from(new Set(rows.map((row) => String(row.shift ?? '').trim().toLowerCase()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    () =>
+      Array.from(new Set(rows.map((row) => String(row.display_shift ?? row.shift ?? '').trim().toLowerCase()).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b)
+      ),
     [rows]
   );
   const labelToneMap = useMemo(() => loadLabelToneMap(), [rows.length]);
@@ -859,7 +951,7 @@ export default function DashboardPage() {
     const q = search.trim().toLowerCase();
     return rows.filter((row) => {
       if (positionFilter && String(row.position ?? '').trim() !== positionFilter) return false;
-      if (shiftFilter && String(row.shift ?? '').trim().toLowerCase() !== shiftFilter) return false;
+      if (shiftFilter && String(row.display_shift ?? row.shift ?? '').trim().toLowerCase() !== shiftFilter) return false;
       if (absentOnly && row.attendance !== 'Absent') return false;
       if (onClockOnly) {
         const last = row.punches[row.punches.length - 1];
@@ -868,7 +960,8 @@ export default function DashboardPage() {
       if (offWorkOnly && row.attendance !== 'Off Worked') return false;
       if (!q) return true;
       const haystack = `${row.staff_id} ${row.name} ${row.agency} ${row.label} ${row.work_account} ${row.temp_account_name} ${row.borrowed_device}`.toLowerCase();
-      return haystack.includes(q);
+      if (haystack.includes(q)) return true;
+      return staffIdSearchMatches(q, String(row.staff_id ?? ''));
     });
   }, [rows, search, positionFilter, shiftFilter, absentOnly, onClockOnly, offWorkOnly]);
 
@@ -917,24 +1010,30 @@ export default function DashboardPage() {
     }> = [];
     for (const shift of ['early', 'late'] as const) {
       for (const position of CARD_POSITIONS) {
-        const scope = rows.filter(
+        const positionShiftScope = rows.filter(
           (row) =>
             normalizePositionKey(row.position) === position &&
             String(row.shift ?? '').trim().toLowerCase() === shift
         );
-        const plannedScope = scope.filter((row) => isWorkingScheduleState(row.schedule_state));
-        const offWorkedScope = scope.filter((row) => row.attendance === 'Off Worked');
-        const expected = plannedScope.length;
-        const present = plannedScope.filter((row) => row.punches.length > 0).length;
-        const onClock = scope.filter((row) => {
-          const last = row.punches[row.punches.length - 1];
-          return last?.action === 'IN';
-        }).length;
+        const offWorkedScope = positionShiftScope.filter((row) => row.attendance === 'Off Worked');
+        const expected = expectedByScheduleKey[`${shift}:${position}`] ?? 0;
+        const presentIds = new Set(positionShiftScope.filter((row) => row.work_hours_today > 0).map((row) => row.staff_id));
+        const onClockIds = new Set(
+          positionShiftScope
+            .filter((row) => {
+              const last = row.punches[row.punches.length - 1];
+              return last?.action === 'IN';
+            })
+            .map((row) => row.staff_id)
+        );
+        for (const row of offWorkedScope) onClockIds.add(row.staff_id);
+        const present = presentIds.size;
+        const onClock = onClockIds.size;
         cards.push({ position, shift, expected, present, onClock, offWorked: offWorkedScope.length });
       }
     }
     return cards;
-  }, [rows]);
+  }, [rows, expectedByScheduleKey]);
 
   const getQrDataUrlCached = async (rawValue: string) => {
     const value = String(rawValue ?? '').trim();
@@ -1515,7 +1614,7 @@ export default function DashboardPage() {
                             getShiftBadgeClass(row.shift)
                           ].join(' ')}
                         >
-                          {formatShiftLabel(row.shift)}
+                          {formatShiftLabel(row.display_shift || row.shift)}
                         </span>
                       </td>
                       <td
@@ -1684,3 +1783,4 @@ export default function DashboardPage() {
     </main>
   );
 }
+

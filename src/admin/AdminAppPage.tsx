@@ -1194,16 +1194,6 @@ export default function AdminApp() {
     return null;
   };
 
-const getShiftBucketFromDate = (dt: Date) => {
-  if (Number.isNaN(dt.getTime())) return null;
-  const h = dt.getHours();
-  const m = dt.getMinutes();
-  const minutes = h * 60 + m;
-  const earlyStart = 5 * 60;
-  const earlyEnd = 15 * 60; // 3pm
-  return minutes >= earlyStart && minutes < earlyEnd ? 'early' : 'late';
-};
-
 const getShiftBucket = (inAtIso: string) => {
     const dt = new Date(inAtIso);
     if (Number.isNaN(dt.getTime())) return null;
@@ -1230,43 +1220,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const pos = normalizePositionKey(position) ?? '';
   if (shift === 'early') return pos === 'Pick' ? '07:00' : '08:00';
   return pos === 'Pick' ? '15:30' : '16:30';
-};
-
-const overlapMs = (aStart: number, aEnd: number, bStart: number, bEnd: number) =>
-  Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
-
-const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
-  let earlyMs = 0;
-  let lateMs = 0;
-  for (const interval of intervals) {
-    const start = interval.start.getTime();
-    const end = interval.end.getTime();
-    if (end <= start) continue;
-    const cursor = new Date(interval.start);
-    cursor.setHours(0, 0, 0, 0);
-    while (cursor.getTime() < end) {
-      const dayStart = new Date(cursor);
-      const earlyStart = new Date(dayStart);
-      earlyStart.setHours(5, 0, 0, 0);
-      const earlyEnd = new Date(dayStart);
-      earlyEnd.setHours(15, 0, 0, 0);
-      const lateStart = new Date(earlyEnd);
-      const lateEnd = new Date(dayStart);
-      lateEnd.setDate(lateEnd.getDate() + 1);
-      lateEnd.setHours(5, 0, 0, 0);
-
-      const dayStartMs = dayStart.getTime();
-      const dayEndMs = lateEnd.getTime();
-      const segmentStart = Math.max(start, dayStartMs);
-      const segmentEnd = Math.min(end, dayEndMs);
-      if (segmentEnd > segmentStart) {
-        earlyMs += overlapMs(segmentStart, segmentEnd, earlyStart.getTime(), earlyEnd.getTime());
-        lateMs += overlapMs(segmentStart, segmentEnd, lateStart.getTime(), lateEnd.getTime());
-      }
-      cursor.setDate(cursor.getDate() + 1);
-    }
-  }
-  return { earlyHours: earlyMs / 3600000, lateHours: lateMs / 3600000 };
 };
 
   const fetchRealtimeAttendance = async () => {
@@ -2148,7 +2101,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const to = from + pageSize - 1;
         const res = await supabase
           .from(SCHEDULE_TABLE)
-          .select('id, staff_id, date, shift, position, note, operator, updated_at, created_at')
+          .select('id, staff_id, date, position, note, operator, updated_at, created_at')
           .gte('date', startDate)
           .lte('date', endDate)
           .order('date', { ascending: false })
@@ -2230,7 +2183,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
     employee: EmployeeRow,
     dayIndex: number,
     nextState: 'empty' | ScheduleBaseState,
-    targetShift: 'early' | 'late',
+    _targetShift: 'early' | 'late',
     workDate?: string
   ) => {
     if (!supabase) {
@@ -2252,9 +2205,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
       return rowStaff === staff && rowDayIndex === dayIndex;
     });
+    const resolvedEmployeeShift =
+      employeeShiftByStaffId[staff]?.shift || normalizeShiftValue(String(employee.shift ?? '')) || '';
     const existingState: 'empty' | ScheduleBaseState = !existing ? 'empty' : getScheduleBaseStateFromNote(existing.note);
-    const isWorkingNextState = nextState === 'work' || nextState === 'temp_work';
-    if (nextState === existingState && (!isWorkingNextState || (existing?.shift ?? 'early') === targetShift)) return;
+    if (nextState === existingState) return;
     if (nextState === 'empty' && !existing) return;
 
     await runLocked('schedule_toggle', async () => {
@@ -2361,7 +2315,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const payload = {
         staff_id: staff,
         date: templateDate,
-        shift: targetShift,
         position: normalizedPosition,
         note: getScheduleNoteFromBaseState(nextState),
         operator: user?.email ?? null,
@@ -2388,7 +2341,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         id: existing?.id ?? undefined,
         staff_id: staff,
         date: templateDate,
-        shift: targetShift,
         position: normalizedPosition,
         note: getScheduleNoteFromBaseState(nextState),
         operator: user?.email ?? null,
@@ -2427,13 +2379,13 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           weekday: dayIndex + 1,
           template_date: templateDate,
           position: normalizedPosition,
-          shift: targetShift,
+          shift: resolvedEmployeeShift,
           state: nextState,
           from_state: existingState,
           from_shift: existing?.shift ?? null,
           from_position: existing?.position ?? null,
           to_state: nextState,
-          to_shift: targetShift,
+          to_shift: resolvedEmployeeShift,
           to_position: normalizedPosition
         }
       });
@@ -3274,46 +3226,11 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       }
 
       const shiftMap: Record<string, { shift: '' | 'early' | 'late'; earlyHours: number; lateHours: number }> = {};
-      for (const staffRaw of staffIds) {
-        const staff = normalizeStaffId(staffRaw);
-        if (!staff) continue;
-        const events = eventsByStaff[staff] ?? [];
-        const intervals: Array<{ start: Date; end: Date }> = [];
-        let currentIn: Date | null = null;
-        let latestIn: Date | null = null;
-        for (const ev of events) {
-          if (ev.action === 'IN') {
-            currentIn = ev.at;
-            latestIn = ev.at;
-            continue;
-          }
-          if (ev.action === 'OUT' && currentIn && ev.at.getTime() > currentIn.getTime()) {
-            intervals.push({ start: currentIn, end: ev.at });
-            currentIn = null;
-          }
-        }
-        const { earlyHours, lateHours } = computeShiftHours(intervals);
-        let shift: '' | 'early' | 'late' = '';
-        // For open sessions (IN without OUT), do not inflate historical hour buckets.
-        // While on clock, infer shift directly from the current IN time.
-        if (currentIn) {
-          shift = getShiftBucketFromDate(currentIn) ?? '';
-        } else if (earlyHours > lateHours) shift = 'early';
-        else if (lateHours > earlyHours) shift = 'late';
-        else if (latestIn) shift = getShiftBucketFromDate(latestIn) ?? '';
-        shiftMap[staff] = { shift, earlyHours, lateHours };
-      }
-      // Override inferred shift with the explicitly set DB shift if present.
       for (const emp of fetchedEmployees ?? []) {
         const s = normalizeStaffId(String(emp.staff_id ?? '').trim());
         if (!s) continue;
-        const dbShift = String(emp.shift ?? '').trim();
-        if (dbShift !== 'early' && dbShift !== 'late') continue;
-        if (shiftMap[s]) {
-          shiftMap[s] = { ...shiftMap[s], shift: dbShift };
-        } else {
-          shiftMap[s] = { shift: dbShift, earlyHours: 0, lateHours: 0 };
-        }
+        const dbShift = normalizeShiftValue(String(emp.shift ?? '').trim());
+        shiftMap[s] = { shift: dbShift, earlyHours: 0, lateHours: 0 };
       }
       setEmployeeShiftByStaffId(shiftMap);
     };
@@ -3460,13 +3377,25 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
 
     await runLocked('employee_delete', async () => {
       setEmployeesError(null);
-      const { error } = await supabase.from(EMPLOYEE_TABLE).delete().eq('staff_id', staff);
-      if (error) {
-        setEmployeesError(error.message);
+      const scheduleDeleteRes = await supabase.from(SCHEDULE_TABLE).delete().eq('staff_id', staff).select('id');
+      if (scheduleDeleteRes.error) {
+        setEmployeesError(scheduleDeleteRes.error.message);
         return;
       }
-      setStatus({ tone: 'success', message: `已删除员工：${staff}` });
-      await writeAudit({ action: 'employee_delete', staffId: staff, target: EMPLOYEE_TABLE });
+      const deletedScheduleCount = ((scheduleDeleteRes.data as any[] | null) ?? []).length;
+
+      const employeeDeleteRes = await supabase.from(EMPLOYEE_TABLE).delete().eq('staff_id', staff);
+      if (employeeDeleteRes.error) {
+        setEmployeesError(employeeDeleteRes.error.message);
+        return;
+      }
+      setStatus({ tone: 'success', message: `已删除员工：${staff}（同时删除排班 ${deletedScheduleCount} 条）` });
+      await writeAudit({
+        action: 'employee_delete',
+        staffId: staff,
+        target: EMPLOYEE_TABLE,
+        payload: { deleted_schedule_rows: deletedScheduleCount }
+      });
       const normalizedStaff = normalizeStaffId(staff);
       setEmployees((prev) =>
         prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== normalizedStaff)
@@ -7827,9 +7756,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
           String(e.work_password ?? e.WorkPassword ?? '').trim()
         );
         const shiftInfo = employeeShiftByStaffId[staff];
-        const scheduleRow = scheduleRowsByStaffDayIndex.get(`${normalizeStaffId(staff)}__${homeOperationalDayIndex}`);
-        const scheduledShift = normalizeShiftValue(String(scheduleRow?.shift ?? '').trim());
-        const shift = shiftInfo?.shift || scheduledShift || '';
+        const shift = shiftInfo?.shift || '';
         const shiftLabel = shift === 'early' ? t('白班', 'Day') : shift === 'late' ? t('晚班', 'Night') : '-';
         return [
           displayStaffId(staff),
@@ -8296,9 +8223,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const profile = employeeProfileByStaffId.get(staff);
       if (!profile) continue;
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-      const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
       // Daily list should prefer observed work-hour inference over scheduled shift.
-      const shift: 'early' | 'late' = (inferredShift || scheduledShift || 'early') as 'early' | 'late';
+      const shift = inferredShift;
+      if (shift !== 'early' && shift !== 'late') continue;
       const item: DailyListRow = {
         staff_id: staff,
         name: profile?.name || '',
@@ -8618,9 +8545,9 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || String(row.position ?? '').trim();
       const normalizedPosition = normalizePositionKey(positionRaw);
       if (!normalizedPosition) continue;
-      const scheduledShift = normalizeShiftValue(String(row.shift ?? '').trim());
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-      const shift = (inferredShift || scheduledShift || 'early') as 'early' | 'late';
+      const shift = inferredShift;
+      if (shift !== 'early' && shift !== 'late') continue;
       const key = `${shift}:${normalizedPosition}`;
       countByKey[key] = (countByKey[key] ?? 0) + 1;
     }
@@ -8669,8 +8596,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const position = normalizePositionKey(positionRaw);
       if (!position) continue;
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-      const scheduledShift = row ? normalizeShiftValue(String(row.shift ?? '').trim()) : '';
-      const shift = (inferredShift || scheduledShift || 'early') as 'early' | 'late';
+      const shift = inferredShift;
+      if (shift !== 'early' && shift !== 'late') continue;
       const s = (stats[position] ??= { early: 0, late: 0, active: 0 });
       if (hasPunch) {
         s[shift] += 1;
@@ -8709,7 +8636,7 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const baseState = row ? getScheduleBaseStateFromNote(row.note) : 'rest';
       const hasPunch = schedulePunchPresenceKeys.has(`${staff}__${homeOperationalDayIndex}`);
       const position = String(employee.position ?? employee.Position ?? '').trim();
-      const shift = row ? (employeeShiftByStaffId[staff]?.shift || normalizeShiftValue(String(row.shift ?? '').trim()) || '') : (employeeShiftByStaffId[staff]?.shift ?? '');
+      const shift = employeeShiftByStaffId[staff]?.shift ?? '';
       const profile = employeeProfileByStaffId.get(staff);
       const item = {
         staff_id: staff,
@@ -8940,7 +8867,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         scheduleRowsToWrite.push({
           staff_id: internalStaffId,
           date: templateDate,
-          shift,
           position,
           note: null,
           operator: user?.email ?? null,
@@ -8958,7 +8884,6 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         localSchedulesToAdd.push({
           staff_id: internalStaffId,
           date: templateDate,
-          shift,
           position,
           note: null,
           operator: user?.email ?? null,
@@ -9040,20 +8965,10 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
       const dateHeaders = scheduleDays.map((day) => toDateOnly(day));
       const headers = ['用户ERP', '用户编码', '用户姓名', ...dateHeaders];
 
-      const resolveEmployeeShift = (staff: string): 'early' | 'late' => {
+      const resolveEmployeeShift = (staff: string): '' | 'early' | 'late' => {
         const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-        let scheduledShift: '' | 'early' | 'late' = '';
-        for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
-          const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
-          if (!row) continue;
-          if (!isWorkingScheduleRow(row)) continue;
-          const s = normalizeShiftValue(String(row.shift ?? '').trim());
-          if (s) {
-            scheduledShift = s;
-            break;
-          }
-        }
-        return (inferredShift || scheduledShift || 'early') as 'early' | 'late';
+        if (inferredShift === 'early' || inferredShift === 'late') return inferredShift;
+        return '';
       };
 
       const buildShiftRows = (shift: 'early' | 'late') =>
@@ -9165,8 +9080,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
         const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
         if (!isWorkingScheduleRow(row)) return null;
         const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-        const rowShift = normalizeShiftValue(String(row?.shift ?? '').trim());
-        const shift = (inferredShift || rowShift || 'early') as 'early' | 'late';
+        const shift = inferredShift;
+        if (shift !== 'early' && shift !== 'late') return null;
         return {
           staff_id: staff,
           name: String(employee.name ?? '').trim(),
@@ -9886,22 +9801,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                               </td>
                               <td className="px-2 py-2 text-center text-slate-200">
                                 {(() => {
-                                  const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-                                  const scheduleRow = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
-                                  const scheduledShift = normalizeShiftValue(String(scheduleRow?.shift ?? '').trim());
                                   const dbShift = normalizeShiftValue(String(employee.shift ?? '').trim());
-                                  let weeklyScheduledShift: '' | 'early' | 'late' = '';
-                                  if (!scheduledShift) {
-                                    for (let idx = 0; idx < 7; idx += 1) {
-                                      const row = scheduleRowsByStaffDayIndex.get(`${staff}__${idx}`);
-                                      const s = normalizeShiftValue(String(row?.shift ?? '').trim());
-                                      if (s) {
-                                        weeklyScheduledShift = s;
-                                        break;
-                                      }
-                                    }
-                                  }
-                                  const shift = inferredShift || scheduledShift || dbShift || weeklyScheduledShift || '';
+                                  const shift = dbShift || '';
                                   const shiftLabel = shift === 'early' ? t('早班', 'Morning') : shift === 'late' ? t('晚班', 'Night') : '-';
                                   const shiftClass = getShiftBadgeClass(shift);
                                   return <span className={['inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold tracking-[0.08em]', shiftClass].join(' ')}>{shiftLabel}</span>;
@@ -9912,8 +9813,8 @@ const computeShiftHours = (intervals: Array<{ start: Date; end: Date }>) => {
                                 const key = `${staff}__${dayIndex}`;
                                 const row = scheduleRowsByStaffDayIndex.get(key);
                                 const hasPunch = schedulePunchPresenceKeys.has(key);
-                                const scheduledShiftForAbsent = ((row?.shift as 'early' | 'late' | null) ?? 'early');
-                                const targetShift = scheduleShift || scheduledShiftForAbsent;
+                                const scheduledShiftForAbsent = employeeShiftByStaffId[staff]?.shift ?? '';
+                                const targetShift: 'early' | 'late' = scheduledShiftForAbsent === 'late' ? 'late' : 'early';
                                 const nowMinutes = new Date(serverTime).getHours() * 60 + new Date(serverTime).getMinutes();
                                 const lateAbsentVisibleMinutes = 16 * 60 + 30; // 16:30
                                 const isCurrentWeek = scheduleWeekOffset === 0;
