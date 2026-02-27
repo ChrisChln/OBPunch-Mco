@@ -428,7 +428,7 @@ export default function DashboardPage() {
       let scheduleRowsRaw: any[] = [];
       const scheduleByDateRes = await supabase
         .from(SCHEDULE_TABLE)
-        .select('id, staff_id, position, note, updated_at, created_at, date')
+        .select('id, staff_id, note, updated_at, created_at, date')
         .eq('date', templateDate)
         .order('created_at', { ascending: false })
         .limit(20000);
@@ -445,7 +445,7 @@ export default function DashboardPage() {
       if (scheduleRowsRaw.length === 0) {
         const scheduleByDateRangeRes = await supabase
           .from(SCHEDULE_TABLE)
-          .select('id, staff_id, position, note, updated_at, created_at, date')
+          .select('id, staff_id, note, updated_at, created_at, date')
           .gte('date', `${templateDate}T00:00:00`)
           .lt('date', `${templateDate}T23:59:59.999`)
           .order('created_at', { ascending: false })
@@ -465,7 +465,7 @@ export default function DashboardPage() {
       if (scheduleRowsRaw.length === 0) {
         const scheduleByWorkDateRes = await supabase
           .from(SCHEDULE_TABLE)
-          .select('id, staff_id, position, note, updated_at, created_at, work_date')
+          .select('id, staff_id, note, updated_at, created_at, work_date')
           .eq('work_date', currentOperationalDate)
           .order('created_at', { ascending: false })
           .limit(20000);
@@ -484,7 +484,7 @@ export default function DashboardPage() {
       if (scheduleRowsRaw.length === 0) {
         const recentScheduleRes = await supabase
           .from(SCHEDULE_TABLE)
-          .select('id, staff_id, position, note, updated_at, created_at, date')
+          .select('id, staff_id, note, updated_at, created_at, date')
           .gte('created_at', new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString())
           .order('created_at', { ascending: false })
           .limit(30000);
@@ -501,21 +501,12 @@ export default function DashboardPage() {
       }
 
       const latestScheduleRows = pickLatestByStaff(scheduleRowsRaw);
-      const scheduledByStaff = new Map<
-        string,
-        {
-          position: string;
-          scheduleState: string;
-        }
-      >();
+      const scheduledByStaff = new Map<string, { scheduleState: string }>();
       for (const row of latestScheduleRows) {
         const staffId = normalizeStaffId(String((row as any).staff_id ?? '').trim());
         if (!staffId) continue;
         const scheduleState = getScheduleStateFromNote((row as any).note);
-        scheduledByStaff.set(staffId, {
-          position: String((row as any).position ?? (row as any).Position ?? '').trim(),
-          scheduleState
-        });
+        scheduledByStaff.set(staffId, { scheduleState });
       }
       const scheduledStaffIds = Array.from(scheduledByStaff.keys());
 
@@ -610,8 +601,7 @@ export default function DashboardPage() {
         const schedule = scheduledByStaff.get(staffId);
         if (!schedule) continue;
         const employeePosition = normalizePositionKey(String(employeeCacheRef.current.get(staffId)?.position ?? ''));
-        const schedulePosition = normalizePositionKey(String(schedule.position ?? ''));
-        const position = employeePosition || schedulePosition;
+        const position = employeePosition;
         const shift = normalizeShiftValue(String(employeeCacheRef.current.get(staffId)?.shift ?? ''));
         if (!position || !shift) continue;
         const key = `${shift}:${position}`;
@@ -711,12 +701,11 @@ export default function DashboardPage() {
                 ? 'Off Worked'
                 : 'Normal';
           const currentPosition = String(employee?.position ?? '').trim();
-          const scheduledPosition = String(schedule?.position ?? '').trim();
           return {
             staff_id: staffId,
             name: employee?.name ?? '',
             agency: employee?.agency ?? '',
-            position: currentPosition || scheduledPosition,
+            position: currentPosition,
             label: employee?.label ?? '',
             borrowed_device: '',
             schedule_state: state,

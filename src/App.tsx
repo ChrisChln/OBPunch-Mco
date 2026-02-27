@@ -1602,7 +1602,7 @@ const fetchPunchBoardUph = async (
     setDailyRosterError(null);
     const res = await supabase
       .from(SCHEDULE_TABLE)
-      .select('id, staff_id, position, note, updated_at, created_at')
+      .select('id, staff_id, note, updated_at, created_at')
       .eq('date', templateDate)
       .order('staff_id', { ascending: true })
       .limit(2000);
@@ -1630,7 +1630,7 @@ const fetchPunchBoardUph = async (
     const list: DailyRosterItem[] = rows.map((row) => {
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       const employeeInfo = staff ? employeeMap[staff] : undefined;
-      const position = String(employeeInfo?.position ?? '').trim() || String(row.position ?? '').trim();
+      const position = String(employeeInfo?.position ?? '').trim();
       return {
         staff_id: staff,
         name: employeeInfo?.name || staff,
@@ -1661,7 +1661,7 @@ const fetchPunchBoardUph = async (
 
     const scheduleRes = await supabase
       .from(SCHEDULE_TABLE)
-      .select('id, staff_id, position, note, updated_at, created_at')
+      .select('id, staff_id, note, updated_at, created_at')
       .eq('date', templateDate)
       .order('staff_id', { ascending: true })
       .limit(3000);
@@ -1706,26 +1706,16 @@ const fetchPunchBoardUph = async (
 
     const mapRes = await fetchEmployeeMap(scheduledStaff);
     const employeeMap = mapRes.error ? {} : mapRes.map;
-    const byStaffSchedule = new Map<string, { position: string }>();
-    for (const row of scheduledRows) {
-      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-      if (!staff || byStaffSchedule.has(staff)) continue;
-      byStaffSchedule.set(staff, {
-        position: String(row.position ?? '').trim()
-      });
-    }
-
     const list: AbsentRosterItem[] = scheduledStaff
       .filter((staff) => !punchedStaff.has(staff))
       .filter((staff) => Boolean(employeeMap[staff]))
       .map((staff) => {
         const employeeInfo = employeeMap[staff];
-        const scheduleInfo = byStaffSchedule.get(staff);
         return {
           staff_id: staff,
           name: employeeInfo?.name || '',
           agency: employeeInfo?.agency || '-',
-          position: employeeInfo?.position || scheduleInfo?.position || '',
+          position: employeeInfo?.position || '',
           shift: normalizeShiftValue(String(employeeInfo?.shift ?? '').trim())
         };
       });
@@ -1752,7 +1742,7 @@ const fetchPunchBoardUph = async (
     }
     const scheduleRes = await supabase
       .from(SCHEDULE_TABLE)
-      .select('id, staff_id, position, note, updated_at, created_at')
+      .select('id, staff_id, note, updated_at, created_at')
       .eq('date', templateDate)
       .limit(5000);
     if (scheduleRes.error) {
@@ -1779,7 +1769,7 @@ const fetchPunchBoardUph = async (
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       if (!staff) continue;
       const latestPosition = normalizeAllowedPosition(String(employeePositionMap[staff]?.position ?? '').trim());
-      const position = latestPosition ?? normalizeAllowedPosition(String(row.position ?? '').trim());
+      const position = latestPosition;
       if (!position) continue;
       const dbShift = normalizeShiftValue(String(employeePositionMap[staff]?.shift ?? '').trim());
       const shift = dbShift;
@@ -1796,7 +1786,7 @@ const fetchPunchBoardUph = async (
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       if (!staff) continue;
       const latestPosition = normalizeAllowedPosition(String(employeePositionMap[staff]?.position ?? '').trim());
-      const position = latestPosition ?? normalizeAllowedPosition(String(row.position ?? '').trim());
+      const position = latestPosition;
       if (!position) continue;
       const dbShift = normalizeShiftValue(String(employeePositionMap[staff]?.shift ?? '').trim());
       const shift = dbShift;
