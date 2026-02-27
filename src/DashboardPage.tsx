@@ -913,22 +913,24 @@ export default function DashboardPage() {
       expected: number;
       present: number;
       onClock: number;
+      offWorked: number;
     }> = [];
     for (const shift of ['early', 'late'] as const) {
       for (const position of CARD_POSITIONS) {
         const scope = rows.filter(
           (row) =>
             normalizePositionKey(row.position) === position &&
-            String(row.shift ?? '').trim().toLowerCase() === shift &&
-            isWorkingScheduleState(row.schedule_state)
+            String(row.shift ?? '').trim().toLowerCase() === shift
         );
-        const expected = scope.length;
-        const present = scope.filter((row) => row.punches.length > 0).length;
+        const plannedScope = scope.filter((row) => isWorkingScheduleState(row.schedule_state));
+        const offWorkedScope = scope.filter((row) => row.attendance === 'Off Worked');
+        const expected = plannedScope.length;
+        const present = plannedScope.filter((row) => row.punches.length > 0).length;
         const onClock = scope.filter((row) => {
           const last = row.punches[row.punches.length - 1];
           return last?.action === 'IN';
         }).length;
-        cards.push({ position, shift, expected, present, onClock });
+        cards.push({ position, shift, expected, present, onClock, offWorked: offWorkedScope.length });
       }
     }
     return cards;
@@ -1305,6 +1307,7 @@ export default function DashboardPage() {
                       >
                         {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
                       </span>
+                      {card.offWorked > 0 && <span className="ml-2 font-semibold text-sky-300">+{card.offWorked} Off Worked</span>}
                     </div>
                   </div>
                   <div className="min-w-[86px] rounded-lg border border-white/15 bg-black/20 px-3 py-1.5 text-center">
