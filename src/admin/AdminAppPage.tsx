@@ -82,6 +82,7 @@ const SCHEDULE_UPH_DAYS = 30;
 const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
 const SCHEDULE_WEEK_RESET_KEY = 'schedule_transient_reset_week';
+const SCHEDULE_WEEK_ROLLOVER_KEY = 'schedule_week_rollover_marker';
 const DAILY_LIST_LIGHTS_KEY = 'daily_list_position_lights';
 const SCHEDULE_LABEL_TONES_KEY = 'schedule_label_tones_v1';
 const SCHEDULE_POSITION_TONES_KEY = 'schedule_position_tones_v1';
@@ -193,11 +194,13 @@ const addDays = (value: Date, days: number) => {
 };
 
 const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
-const getTemplateDateByDayIndex = (dayIndex: number) => toDateOnly(addDays(SCHEDULE_TEMPLATE_WEEK_START, dayIndex));
-const getDayIndexFromTemplateDate = (dateOnly: string) => {
+const getTemplateDateByDayIndex = (dayIndex: number, weekOffset = 0) =>
+  toDateOnly(addDays(SCHEDULE_TEMPLATE_WEEK_START, dayIndex + weekOffset * 7));
+const getDayIndexFromTemplateDate = (dateOnly: string, weekOffset = 0) => {
   const dt = new Date(`${dateOnly}T00:00:00`);
   if (Number.isNaN(dt.getTime())) return null;
-  const diffDays = Math.round((dt.getTime() - SCHEDULE_TEMPLATE_WEEK_START.getTime()) / (24 * 60 * 60 * 1000));
+  const weekStart = addDays(SCHEDULE_TEMPLATE_WEEK_START, weekOffset * 7);
+  const diffDays = Math.round((dt.getTime() - weekStart.getTime()) / (24 * 60 * 60 * 1000));
   if (diffDays < 0 || diffDays > 6) return null;
   return diffDays;
 };
@@ -786,6 +789,7 @@ export default function AdminApp() {
   const [deviceBorrowedOnly, setDeviceBorrowedOnly] = useState(false);
 
   const [scheduleRows, setScheduleRows] = useState<ScheduleRow[]>([]);
+  const [scheduleRowsWeekOffset, setScheduleRowsWeekOffset] = useState(0);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [schedulePunchPresenceKeys, setSchedulePunchPresenceKeys] = useState<Set<string>>(new Set());
   const [scheduleUphByStaffId, setScheduleUphByStaffId] = useState<Record<string, number | null>>({});
@@ -2129,15 +2133,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     });
   };
 
-  const fetchSchedule = async () => {
+  const fetchSchedule = async (options?: { weekOffsetOverride?: number }) => {
     if (!supabase) {
       setScheduleError('缺少 Supabase 配置。');
       setScheduleRows([]);
       return;
     }
 
-    const startDate = getTemplateDateByDayIndex(0);
-    const endDate = getTemplateDateByDayIndex(6);
+    const weekOffset = options?.weekOffsetOverride ?? scheduleWeekOffset;
+    const startDate = getTemplateDateByDayIndex(0, weekOffset);
+    const endDate = getTemplateDateByDayIndex(6, weekOffset);
 
     await runLocked('schedule', async () => {
       setScheduleError(null);
@@ -2166,6 +2171,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
 
       setScheduleRows(allRows);
+      setScheduleRowsWeekOffset(weekOffset);
     });
   };
 
@@ -2243,14 +2249,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       setScheduleError('Invalid staff id.');
       return;
     }
-    const templateDate = getTemplateDateByDayIndex(dayIndex);
+    const templateDate = getTemplateDateByDayIndex(dayIndex, scheduleWeekOffset);
     const targetWorkDate =
       workDate && /^\d{4}-\d{2}-\d{2}$/.test(workDate)
         ? workDate
         : toDateOnly(addDays(startOfWeekMonday(new Date(serverTime)), dayIndex));
     const existing = scheduleRows.find((row) => {
       const rowStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
-      const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
+      const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim(), scheduleWeekOffset);
       return rowStaff === staff && rowDayIndex === dayIndex;
     });
     const resolvedEmployeeShift =
@@ -2334,7 +2340,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         setScheduleRows((prev) =>
           prev.filter((row) => {
             const rowStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
-            const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
+            const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim(), scheduleWeekOffset);
             return !(rowStaff === staff && rowDayIndex === dayIndex);
           })
         );
@@ -2401,7 +2407,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         let replaced = false;
         const next = prev.map((row) => {
           const rowStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
-          const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
+          const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim(), scheduleWeekOffset);
           if (rowStaff === staff && rowDayIndex === dayIndex) {
             replaced = true;
             return { ...row, ...localRow };
@@ -2527,10 +2533,95 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
   const refreshHomePanel = async (options?: { lockUi?: boolean }) => {
     const lockUi = options?.lockUi ?? true;
-    await fetchSchedule();
+    await fetchSchedule({ weekOffsetOverride: 0 });
     const latestEmployees = await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [], lockUi });
     // Home dashboard should use current week punch presence, independent of Schedule page week navigation.
     await fetchSchedulePunchPresence({ employeesOverride: latestEmployees, weekOffsetOverride: 0, mode: 'operational_day' });
+  };
+
+  const scheduleWeekRolloverInFlightRef = useRef(false);
+  const scheduleWeekRolloverDoneKeyRef = useRef('');
+  const maybeRolloverScheduleWeek = async () => {
+    if (!supabase || scheduleWeekRolloverInFlightRef.current) return;
+    const now = new Date(serverTime);
+    const thisMonday = startOfWeekMonday(now);
+    const rolloverAt = new Date(thisMonday);
+    rolloverAt.setHours(5, 0, 0, 0);
+    if (now.getTime() < rolloverAt.getTime()) return;
+    const weekKey = toDateOnly(rolloverAt);
+    if (scheduleWeekRolloverDoneKeyRef.current === weekKey) return;
+
+    scheduleWeekRolloverInFlightRef.current = true;
+    try {
+      const markerRes = await supabase
+        .from(APP_SETTINGS_TABLE)
+        .select('value')
+        .eq('key', SCHEDULE_WEEK_ROLLOVER_KEY)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      if (markerRes.error) return;
+      const marker = (((markerRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
+      const doneWeek = String(marker?.value?.week_start ?? '').trim();
+      if (doneWeek === weekKey) {
+        scheduleWeekRolloverDoneKeyRef.current = weekKey;
+        return;
+      }
+
+      const nextStart = getTemplateDateByDayIndex(0, 1);
+      const nextEnd = getTemplateDateByDayIndex(6, 1);
+      const nextWeekRes = await supabase
+        .from(SCHEDULE_TABLE)
+        .select('staff_id, date, position, shift, note, operator, updated_at')
+        .gte('date', nextStart)
+        .lte('date', nextEnd);
+      if (nextWeekRes.error) return;
+      const nextRows = (((nextWeekRes.data as any[]) ?? []) as any[]);
+      if (nextRows.length === 0) return;
+
+      const nowIso = new Date(serverTime).toISOString();
+      const migrated = nextRows.map((row) => {
+        const rawDate = String(row.date ?? '').trim();
+        const dt = new Date(`${rawDate}T00:00:00`);
+        const toDate = Number.isNaN(dt.getTime()) ? rawDate : toDateOnly(addDays(dt, -7));
+        const rawNote = String(row.note ?? '').trim();
+        const normalizedNote =
+          rawNote === SCHEDULE_TEMP_REST_NOTE
+            ? null // 临时排休 -> 工作
+            : rawNote === SCHEDULE_TEMP_WORK_NOTE
+              ? SCHEDULE_REST_NOTE // 临时工作 -> 休息
+              : row.note ?? null;
+        return {
+          staff_id: normalizeStaffId(String(row.staff_id ?? '').trim()),
+          date: toDate,
+          position: String(row.position ?? '').trim() || null,
+          shift: String(row.shift ?? '').trim() === 'late' ? 'late' : 'early',
+          note: normalizedNote,
+          operator: (user?.email ?? String(row.operator ?? '').trim()) || null,
+          updated_at: nowIso
+        };
+      });
+      const upsertRes = await supabase.from(SCHEDULE_TABLE).upsert(migrated as any[], { onConflict: 'staff_id,date' });
+      if (upsertRes.error) return;
+
+      const deleteNextRes = await supabase.from(SCHEDULE_TABLE).delete().gte('date', nextStart).lte('date', nextEnd);
+      if (deleteNextRes.error) return;
+
+      await supabase.from(APP_SETTINGS_TABLE).upsert(
+        [
+          {
+            key: SCHEDULE_WEEK_ROLLOVER_KEY,
+            value: { week_start: weekKey, rolled_at: now.toISOString() },
+            operator: user?.email ?? null,
+            updated_at: now.toISOString()
+          }
+        ] as any[],
+        { onConflict: 'key' }
+      );
+      scheduleWeekRolloverDoneKeyRef.current = weekKey;
+      await fetchSchedule();
+    } finally {
+      scheduleWeekRolloverInFlightRef.current = false;
+    }
   };
 
   const openScheduleStatePicker = (
@@ -5171,8 +5262,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         return { scheduledByStaff, scheduleStateByStaff, error: null as string | null };
       }
       const batches = chunk(staffIds, 200);
-      const startDate = getTemplateDateByDayIndex(0);
-      const endDate = getTemplateDateByDayIndex(6);
+      const startDate = getTemplateDateByDayIndex(0, offset);
+      const endDate = getTemplateDateByDayIndex(6, offset);
       for (const batch of batches) {
         const { data, error } = await supabase
           .from(SCHEDULE_TABLE)
@@ -5196,7 +5287,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         }
         for (const row of (data as any[] | null) ?? []) {
           const staff = String(row.staff_id ?? '').trim();
-          const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
+          const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim(), offset);
           if (!staff || dayIndex === null) continue;
           const arr = (scheduledByStaff[staff] ??= new Array(7).fill(false) as boolean[]);
           const stateArr = (scheduleStateByStaff[staff] ??= new Array(7).fill('work') as ScheduleBaseState[]);
@@ -5801,8 +5892,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
     await runLocked('attendance_marks_recompute_week', async () => {
       const weekDateByIndex = Array.from({ length: 7 }, (_, idx) => toDateOnly(addDays(weekStart, idx)));
-      const templateStart = getTemplateDateByDayIndex(0);
-      const templateEnd = getTemplateDateByDayIndex(6);
+      const templateStart = getTemplateDateByDayIndex(0, timecardWeekOffset);
+      const templateEnd = getTemplateDateByDayIndex(6, timecardWeekOffset);
 
       const scheduleRes = await supabase
         .from(SCHEDULE_TABLE)
@@ -5817,7 +5908,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const stateByStaffDay = new Map<string, ScheduleBaseState>();
       for (const row of ((scheduleRes.data as any[]) ?? []) as ScheduleRow[]) {
         const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-        const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
+        const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim(), timecardWeekOffset);
         if (!staff || dayIndex === null || dayIndex < 0 || dayIndex > 6) continue;
         stateByStaffDay.set(`${staff}__${dayIndex}`, getScheduleBaseStateFromNote(row.note));
       }
@@ -6761,6 +6852,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
   useEffect(() => {
     if (page !== 'schedule') return;
+    void fetchSchedule();
+  }, [page, scheduleWeekOffset]);
+
+  useEffect(() => {
+    if (page !== 'schedule') return;
     void fetchSchedulePunchPresence();
   }, [page, scheduleWeekOffset, employees]);
 
@@ -6768,6 +6864,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     if (page !== 'schedule') return;
     void fetchScheduleUph();
   }, [page, employees]);
+
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    void maybeRolloverScheduleWeek();
+  }, [page, serverTime, user?.id]);
 
   const onFileSelected = async (file: File | null) => {
     if (!file) {
@@ -8240,12 +8341,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const map = new Map<string, ScheduleRow>();
     for (const row of scheduleRows) {
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-      const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim());
+      const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim(), scheduleRowsWeekOffset);
       if (!staff || dayIndex === null) continue;
       map.set(`${staff}__${dayIndex}`, row);
     }
     return map;
-  }, [scheduleRows]);
+  }, [scheduleRows, scheduleRowsWeekOffset]);
   const employeeProfileByStaffId = useMemo(() => {
     const map = new Map<string, { name: string; agency: string; position: string }>();
     for (const employee of employees) {
@@ -8830,7 +8931,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       return;
     }
     const dayIndex = (target.getDay() + 6) % 7;
-    const templateDate = getTemplateDateByDayIndex(dayIndex);
+    const templateDate = getTemplateDateByDayIndex(dayIndex, scheduleWeekOffset);
     const position = normalizePositionKey(dailyListNewHirePosition);
     const shift = dailyListNewHireShift;
     const agency = dailyListNewHireAgency.trim();
@@ -9883,7 +9984,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                                   !hasPunch &&
                                   (isPastOperationalDay || (isCurrentOperationalDay && !hideLateAbsent));
                                 const state: ScheduleDisplayState = getScheduleDisplayState(row, hasPunch, { showAbsent });
-                                const scheduleAuditKey = `${staff}__${getTemplateDateByDayIndex(dayIndex)}`;
+                                const scheduleAuditKey = `${staff}__${getTemplateDateByDayIndex(dayIndex, scheduleWeekOffset)}`;
                                 const scheduleCellAudit = scheduleAuditByStaffDate.get(scheduleAuditKey) ?? [];
 
                                 return (
