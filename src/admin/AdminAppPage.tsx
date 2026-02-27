@@ -602,11 +602,55 @@ export default function AdminApp() {
   const [userDisplayNameInput, setUserDisplayNameInput] = useState('');
   const [userDisplayNamePromptOpen, setUserDisplayNamePromptOpen] = useState(false);
   const [userDisplayNameSaving, setUserDisplayNameSaving] = useState(false);
+  const auditActorDisplayByKeyRef = useRef<Map<string, string>>(new Map());
+  const auditActorDisplayMapLoadedRef = useRef(false);
+  const loadAuditActorDisplayNameMap = async () => {
+    if (!supabase || auditActorDisplayMapLoadedRef.current) return;
+    const res = await supabase.from(USER_PROFILE_TABLE).select('user_email, display_name').limit(5000);
+    if (res.error) {
+      return;
+    }
+    for (const row of ((res.data as any[]) ?? [])) {
+      const email = String(row?.user_email ?? '').trim();
+      const display = String(row?.display_name ?? '').trim();
+      if (!email || !display) continue;
+      auditActorDisplayByKeyRef.current.set(email.toLowerCase(), display);
+    }
+    auditActorDisplayMapLoadedRef.current = true;
+  };
+  const rememberAuditActorDisplayNames = async (actors: Array<unknown>) => {
+    if (!supabase) return;
+    await loadAuditActorDisplayNameMap();
+    const missingEmails: string[] = [];
+    const seen = new Set<string>();
+    for (const value of actors) {
+      const raw = String(value ?? '').trim();
+      if (!raw || !raw.includes('@')) continue;
+      const key = raw.toLowerCase();
+      if (seen.has(key) || auditActorDisplayByKeyRef.current.has(key)) continue;
+      seen.add(key);
+      missingEmails.push(raw);
+    }
+    if (missingEmails.length === 0) return;
+
+    const res = await supabase.from(USER_PROFILE_TABLE).select('user_email, display_name').in('user_email', missingEmails as any);
+    if (res.error) {
+      return;
+    }
+    for (const row of ((res.data as any[]) ?? [])) {
+      const email = String(row?.user_email ?? '').trim();
+      const display = String(row?.display_name ?? '').trim();
+      if (!email || !display) continue;
+      auditActorDisplayByKeyRef.current.set(email.toLowerCase(), display);
+    }
+  };
   const normalizeAuditActor = (value: unknown) => {
     const raw = String(value ?? '').trim();
+    const resolved = auditActorDisplayByKeyRef.current.get(raw.toLowerCase());
     const emailValue = String(user?.email ?? '').trim();
     const displayValue = userDisplayName.trim();
     if (!raw) return raw;
+    if (resolved) return resolved;
     if (displayValue && emailValue && raw.toLowerCase() === emailValue.toLowerCase()) {
       return displayValue;
     }
@@ -1813,7 +1857,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         setAuditError(res.error.message);
         return;
       }
-      const nextAuditRows = (((res.data as any[]) ?? []) as AuditRow[]).map((row) => ({
+      const rawRows = (((res.data as any[]) ?? []) as AuditRow[]);
+      await rememberAuditActorDisplayNames(rawRows.map((row) => row.actor));
+      const nextAuditRows = rawRows.map((row) => ({
         ...row,
         actor: normalizeAuditActor((row as any).actor)
       }));
@@ -1847,7 +1893,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     if (res.error) {
       return;
     }
-    const nextCellRows = ((((res.data as any[]) ?? []) as AuditRow[]).slice(0, 1200)).map((row) => ({
+    const rawRows = (((res.data as any[]) ?? []) as AuditRow[]).slice(0, 1200);
+    await rememberAuditActorDisplayNames(rawRows.map((row) => row.actor));
+    const nextCellRows = rawRows.map((row) => ({
       ...row,
       actor: normalizeAuditActor((row as any).actor)
     }));
@@ -4223,11 +4271,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           auditRows.filter((r) => normalizeStaffId(String(r.staff_id ?? '').trim()) === staffKey).slice(0, 30)
         );
       } else {
-      const nextRows = (((res.data as any[]) ?? []) as AuditRow[]).map((row) => ({
-        ...row,
-        actor: normalizeAuditActor((row as any).actor)
-      }));
-      setEmployeeAuditRows(nextRows);
+        const rawRows = (((res.data as any[]) ?? []) as AuditRow[]);
+        await rememberAuditActorDisplayNames(rawRows.map((row) => row.actor));
+        const nextRows = rawRows.map((row) => ({
+          ...row,
+          actor: normalizeAuditActor((row as any).actor)
+        }));
+        setEmployeeAuditRows(nextRows);
       }
     } catch (err: any) {
       setEmployeeAuditError(String(err?.message ?? err ?? 'Unknown error'));
@@ -10515,6 +10565,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                   openTimecardPunchModal={openTimecardPunchModal}
                   formatAuditDetail={formatAuditDetail}
                   formatCellAuditTime={formatCellAuditTime}
+                  normalizeAuditActor={normalizeAuditActor}
                   renderAuditSummary={renderAuditSummary}
                 />
 

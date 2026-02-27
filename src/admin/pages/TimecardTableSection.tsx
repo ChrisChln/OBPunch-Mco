@@ -1,4 +1,4 @@
-type TranslateFn = (zh: string, en: string) => string;
+﻿type TranslateFn = (zh: string, en: string) => string;
 
 type TimecardTableSectionProps = {
   t: TranslateFn;
@@ -20,6 +20,7 @@ type TimecardTableSectionProps = {
   openTimecardPunchModal: (staffId: string, dayIndex: number | null) => void | Promise<void>;
   formatAuditDetail: (row: any) => { summary: string; details: Array<{ label: string; value: string }> };
   formatCellAuditTime: (value: string | null | undefined) => string;
+  normalizeAuditActor: (value: unknown) => string;
   renderAuditSummary: (text: string) => any;
 };
 
@@ -43,6 +44,7 @@ export default function TimecardTableSection({
   openTimecardPunchModal,
   formatAuditDetail,
   formatCellAuditTime,
+  normalizeAuditActor,
   renderAuditSummary
 }: TimecardTableSectionProps) {
   return (
@@ -52,14 +54,14 @@ export default function TimecardTableSection({
           {(() => {
             const baseWeekStart = startOfWeekMonday(serverTime);
             const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
-            const days = [t('周一', 'Mon'), t('周二', 'Tue'), t('周三', 'Wed'), t('周四', 'Thu'), t('周五', 'Fri'), t('周六', 'Sat'), t('周日', 'Sun')];
+            const days = [t('鍛ㄤ竴', 'Mon'), t('鍛ㄤ簩', 'Tue'), t('鍛ㄤ笁', 'Wed'), t('鍛ㄥ洓', 'Thu'), t('鍛ㄤ簲', 'Fri'), t('鍛ㄥ叚', 'Sat'), t('鍛ㄦ棩', 'Sun')];
             return (
               <tr>
                 <th className="w-[108px] px-2 py-1.5">ID</th>
                 <th className="w-[200px] px-2 py-1.5">Name</th>
                 <th className="w-[140px] px-2 py-1.5">Agency</th>
-                <th className="w-[120px] px-2 py-1.5">{t('岗位', 'Position')}</th>
-                <th className="w-[80px] px-2 py-1.5">{t('班次', 'Shift')}</th>
+                <th className="w-[120px] px-2 py-1.5">{t('宀椾綅', 'Position')}</th>
+                <th className="w-[80px] px-2 py-1.5">{t('鐝', 'Shift')}</th>
                 {days.map((label, idx) => (
                   <th key={label} className="w-[92px] px-2 py-1.5 whitespace-nowrap text-center">
                     <div className="text-neon">{`${t('总工时', 'Total')} ${formatHours(timecardDayTotalHours[idx]) || '0'}`}</div>
@@ -74,14 +76,14 @@ export default function TimecardTableSection({
                       ].join(' ')}
                       title={timecardPresentDayFilter === idx ? 'Clear present filter' : 'Filter present staff'}
                     >
-                      {`${t('出勤', 'Present')} ${timecardDayAttendanceCount[idx] ?? 0}`}
+                      {`${t('鍑哄嫟', 'Present')} ${timecardDayAttendanceCount[idx] ?? 0}`}
                     </button>
                     <div>
                       {label} {toDateOnly(addDays(weekStart, idx)).slice(5)}
                     </div>
                   </th>
                 ))}
-                <th className="w-[92px] px-2 py-1.5 text-center">{t('合计', 'Total')}</th>
+                <th className="w-[92px] px-2 py-1.5 text-center">{t('鍚堣', 'Total')}</th>
               </tr>
             );
           })()}
@@ -105,11 +107,11 @@ export default function TimecardTableSection({
               <td className="px-2 py-1.5 text-center text-slate-200">
                 {r.shift === 'early' ? (
                   <span className="inline-flex items-center rounded-full border border-amber-300/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
-                    {t('早班', 'Morning')}
+                    {t('鏃╃彮', 'Morning')}
                   </span>
                 ) : r.shift === 'late' ? (
                   <span className="inline-flex items-center rounded-full border border-indigo-300/30 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-semibold text-indigo-200">
-                    {t('晚班', 'Night')}
+                    {t('鏅氱彮', 'Night')}
                   </span>
                 ) : (
                   <span className="text-slate-500">-</span>
@@ -144,26 +146,26 @@ export default function TimecardTableSection({
                               if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
                               return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
                             })()}
-                            title={t('查看/编辑打卡流水', 'View/Edit Punch Log')}
+                            title={t('鏌ョ湅/缂栬緫鎵撳崱娴佹按', 'View/Edit Punch Log')}
                           >
                             {formatHours(h)}
                           </button>
                         ) : r.absentByDay[idx] ? (
                           <span className="inline-flex rounded px-1.5 py-0.5 text-[11px] font-semibold text-rose-200" title="Scheduled but no punch">
-                            {t('缺勤', 'Absent')}
+                            {t('缂哄嫟', 'Absent')}
                           </span>
                         ) : r.leaveByDay[idx] ? (
                           <span className="text-[11px] font-semibold text-violet-300" title="Excuse">
-                            {t('请假', 'Excuse')}
+                            {t('璇峰亣', 'Excuse')}
                           </span>
                         ) : r.tempRestByDay[idx] ? (
                           <span className="text-[11px] font-semibold text-amber-300" title="Temporary Off">
-                            {t('临时排休', 'Temp Off')}
+                            {t('涓存椂鎺掍紤', 'Temp Off')}
                           </span>
                         ) : r.restByDay[idx] &&
                           toDateOnly(addDays(addDays(startOfWeekMonday(serverTime), timecardWeekOffset * 7), idx)) <= toDateOnly(serverTime) ? (
                           <span className="text-[11px] font-semibold text-amber-300" title="Off">
-                            {t('休息', 'Off')}
+                            {t('浼戞伅', 'Off')}
                           </span>
                         ) : (
                           ''
@@ -180,7 +182,7 @@ export default function TimecardTableSection({
                                 return (
                                   <div key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)} className="rounded-md bg-white/5 px-1.5 py-1 text-left">
                                     <div className="text-[10px] text-slate-400">
-                                      {formatCellAuditTime(item.created_at)} · {String(item.actor ?? '').trim() || '-'}
+                                      {formatCellAuditTime(item.created_at)} · {normalizeAuditActor((item as any).actor) || '-'}
                                     </div>
                                     <div>{renderAuditSummary(detail.summary)}</div>
                                     {detail.details.slice(0, 2).map((d: any, idx2: number) => (
@@ -216,7 +218,7 @@ export default function TimecardTableSection({
                       if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
                       return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
                     })()}
-                    title={t('查看本周打卡流水（只读）', 'View this week punch log (read-only)')}
+                    title={t('鏌ョ湅鏈懆鎵撳崱娴佹按锛堝彧璇伙級', 'View this week punch log (read-only)')}
                   >
                     {formatHours(r.totalHours)}
                   </button>
@@ -231,3 +233,4 @@ export default function TimecardTableSection({
     </div>
   );
 }
+
