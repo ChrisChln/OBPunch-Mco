@@ -66,8 +66,15 @@ const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW)
   ? Math.min(23, Math.max(0, DAY_CUTOFF_HOUR_RAW))
   : 5;
 const DEFAULT_TEMP_ACCOUNT_PASSWORD = 'Helloworld2!';
+const normalizeWorkAccountValue = (value: unknown) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const lower = raw.toLowerCase();
+  if (raw === '-' || raw === '--' || raw === '—' || lower === 'n/a' || lower === 'na' || lower === 'null') return '';
+  return raw;
+};
 const resolveDefaultPassword = (workAccount: string, workPassword: string) =>
-  workAccount && !workPassword ? DEFAULT_TEMP_ACCOUNT_PASSWORD : workPassword;
+  normalizeWorkAccountValue(workAccount) && !workPassword ? DEFAULT_TEMP_ACCOUNT_PASSWORD : workPassword;
 
 const toDateOnly = (d: Date) => {
   const y = d.getFullYear();
@@ -124,11 +131,12 @@ const formatShiftLabel = (value: string) => {
 };
 const normalizePositionKey = (value: string): '' | 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer' => {
   const v = String(value ?? '').trim().toLowerCase();
-  if (v === 'pick') return 'Pick';
-  if (v === 'pack') return 'Pack';
-  if (v === 'rebin') return 'Rebin';
-  if (v === 'preship') return 'Preship';
-  if (v === 'transfer') return 'Transfer';
+  if (!v) return '';
+  if (v === 'pick' || v.includes('pick') || v.includes('拣货')) return 'Pick';
+  if (v === 'pack' || v.includes('pack') || v.includes('打包')) return 'Pack';
+  if (v === 'rebin' || v.includes('rebin') || v.includes('上架') || v.includes('回仓')) return 'Rebin';
+  if (v === 'preship' || v.includes('preship') || v.includes('发货')) return 'Preship';
+  if (v === 'transfer' || v.includes('transfer') || v.includes('转运')) return 'Transfer';
   return '';
 };
 const getPositionBadgeClass = (value: string) => {
@@ -344,6 +352,7 @@ export default function DashboardPage() {
   const [accountAssigningStaffId, setAccountAssigningStaffId] = useState<string | null>(null);
   const [accountUsageOpen, setAccountUsageOpen] = useState(false);
   const [accountUsageSearch, setAccountUsageSearch] = useState('');
+  const [accountUsagePositionFilter, setAccountUsagePositionFilter] = useState('');
   const [accountUsageRows, setAccountUsageRows] = useState<TempAccountUsageRow[]>([]);
   const inFlightRef = useRef(false);
   const fetchSeqRef = useRef(0);
@@ -540,9 +549,9 @@ export default function DashboardPage() {
             agency: String(row.agency ?? '').trim(),
             position: String(row.position ?? row.Position ?? '').trim(),
             label: String(row.label ?? row.Label ?? '').trim(),
-            work_account: String(row.work_account ?? '').trim(),
+            work_account: normalizeWorkAccountValue(row.work_account),
             work_password: resolveDefaultPassword(
-              String(row.work_account ?? '').trim(),
+              normalizeWorkAccountValue(row.work_account),
               String(row.work_password ?? '').trim()
             ),
             hire_date: String(row.hire_date ?? '').trim(),
@@ -572,7 +581,7 @@ export default function DashboardPage() {
             label: employee?.label ?? '',
             borrowed_device: '',
             schedule_state: state,
-            work_account: employee?.work_account ?? '',
+            work_account: normalizeWorkAccountValue(employee?.work_account ?? ''),
             work_password: employee?.work_password ?? '',
             hire_date: employee?.hire_date ?? '',
             shift: employee?.shift ?? schedule?.shift ?? '',
@@ -589,14 +598,14 @@ export default function DashboardPage() {
           const isNoProfile =
             !String(row.name ?? '').trim() &&
             !String(row.label ?? '').trim() &&
-            !String(row.work_account ?? '').trim();
+            !normalizeWorkAccountValue(row.work_account);
           if (isNoProfile) return false;
           return isPlannedWork || isOffWorked;
         });
 
       // Rehydrate temporary account assignments created in current operational window.
       const needsAccountRows = nextRows.filter(
-        (row) => !String(row.work_account ?? '').trim() && Boolean(normalizePositionKey(String(row.position ?? '')))
+        (row) => !normalizeWorkAccountValue(row.work_account) && Boolean(normalizePositionKey(String(row.position ?? '')))
       );
       if (needsAccountRows.length > 0) {
         const needStaffIds = needsAccountRows.map((row) => row.staff_id);
@@ -636,7 +645,7 @@ export default function DashboardPage() {
               if (!sid) continue;
               accountBySourceStaff.set(sid, {
                 name: String(src.name ?? '').trim(),
-                work_account: String(src.work_account ?? '').trim(),
+                work_account: normalizeWorkAccountValue(src.work_account),
                 work_password: String(src.work_password ?? '').trim()
               });
             }
@@ -644,7 +653,7 @@ export default function DashboardPage() {
 
           for (const item of ((activeRes.data as any[]) ?? [])) {
             const staff = String(item.staff_id ?? '').trim();
-            const acc = String(item.work_account ?? '').trim();
+            const acc = normalizeWorkAccountValue(item.work_account);
             const sourceTempStaffId = String(item.source_temp_staff_id ?? '').trim();
             const sourceInfo = accountBySourceStaff.get(sourceTempStaffId);
             const pwd = String(sourceInfo?.work_password ?? '').trim() || DEFAULT_TEMP_ACCOUNT_PASSWORD;
@@ -777,7 +786,7 @@ export default function DashboardPage() {
             staff_id: staff,
             name: rowNameByStaff.get(staff) || employeeCacheRef.current.get(staff)?.name || '',
             position: String(item.position ?? '').trim(),
-            work_account: String(item.work_account ?? '').trim(),
+            work_account: normalizeWorkAccountValue(item.work_account),
             account_name: sourceInfo?.name || '',
             source_temp_staff_id: sourceTempStaffId,
             created_at: String(item.created_at ?? ''),
@@ -801,7 +810,7 @@ export default function DashboardPage() {
           if (!active) continue;
           row.temp_account_name = active.account_name || '';
           row.temp_source_staff_id = active.source_temp_staff_id || '';
-          if (!String(row.work_account ?? '').trim()) row.work_account = active.work_account || '';
+          if (!normalizeWorkAccountValue(row.work_account)) row.work_account = normalizeWorkAccountValue(active.work_account) || '';
           if (!String(row.work_password ?? '').trim()) {
             const sourceInfo = sourceInfoBySourceStaff.get(active.source_temp_staff_id || '');
             row.work_password = String(sourceInfo?.work_password ?? '').trim() || DEFAULT_TEMP_ACCOUNT_PASSWORD;
@@ -873,8 +882,11 @@ export default function DashboardPage() {
   );
   const filteredAccountUsageRows = useMemo(() => {
     const q = accountUsageSearch.trim().toLowerCase();
-    if (!q) return accountUsageRows;
-    return accountUsageRows.filter((row) => {
+    const rowsByPosition = accountUsagePositionFilter
+      ? accountUsageRows.filter((row) => String(row.position ?? '').trim() === accountUsagePositionFilter)
+      : accountUsageRows;
+    if (!q) return rowsByPosition;
+    return rowsByPosition.filter((row) => {
       const haystack = [
         row.staff_id,
         row.name,
@@ -886,7 +898,14 @@ export default function DashboardPage() {
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [accountUsageRows, accountUsageSearch]);
+  }, [accountUsageRows, accountUsageSearch, accountUsagePositionFilter]);
+  const accountUsagePositionOptions = useMemo(
+    () =>
+      Array.from(new Set(accountUsageRows.map((row) => String(row.position ?? '').trim()).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b)
+      ),
+    [accountUsageRows]
+  );
   const attendanceCards = useMemo(() => {
     const cards: Array<{
       position: 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer';
@@ -938,14 +957,48 @@ export default function DashboardPage() {
     try {
       const name = String(row.name ?? '').trim() || '-';
       const position = String(row.position ?? '').trim() || '-';
-      const qrDataUrl = await getQrDataUrlCached(staff);
+      const workAccount = normalizeWorkAccountValue(row.work_account);
+      const workPassword = resolveDefaultPassword(workAccount, String(row.work_password ?? '').trim());
+      const accountName = String(row.temp_account_name ?? '').trim() || name;
+      const [qrDataUrl, qrAcc, qrPwd] = await Promise.all([
+        getQrDataUrlCached(staff),
+        workAccount ? getQrDataUrlCached(workAccount) : Promise.resolve(''),
+        workAccount && workPassword ? getQrDataUrlCached(workPassword) : Promise.resolve('')
+      ]);
+      const accountPageHtml =
+        workAccount && workPassword
+          ? `
+    <div class="page-break"></div>
+    <div class="sheet">
+      <div>
+        <div class="name">${escapeHtml(accountName)}</div>
+        <div class="sub">User: ${escapeHtml(name)}</div>
+      </div>
+      <div class="pair">
+        <div class="box">
+          <div class="qrsq"><img src="${escapeHtml(qrAcc)}" alt="QR account ${escapeHtml(staff)}" /></div>
+          <div class="meta">
+            <div class="k">Account</div>
+            <div class="v">${escapeHtml(workAccount)}</div>
+          </div>
+        </div>
+        <div class="box">
+          <div class="qrsq"><img src="${escapeHtml(qrPwd)}" alt="QR password ${escapeHtml(staff)}" /></div>
+          <div class="meta">
+            <div class="k">Password</div>
+            <div class="v">${escapeHtml(workPassword)}</div>
+          </div>
+        </div>
+      </div>
+    </div>`
+          : '';
       const html = `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
     <style>
       @page { size: 4in 2in; margin: 0; }
-      html, body { margin: 0; padding: 0; width: 4in; height: 2in; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      html, body { margin: 0; padding: 0; width: 4in; min-height: 2in; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
       body { background: #ffffff; font-family: Arial, "Microsoft YaHei", sans-serif; color: #0f172a; }
       .sheet { width: 4in; height: 2in; box-sizing: border-box; padding: 0.12in; border: 0; border-radius: 0; display: grid; grid-template-rows: auto 1fr; gap: 0.05in; background: #ffffff; }
       .name { font-size: 14pt; line-height: 1.1; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #0f172a; padding: 0; }
@@ -957,6 +1010,7 @@ export default function DashboardPage() {
       .meta { min-width: 0; }
       .k { font-size: 7.5pt; letter-spacing: 0.1em; font-weight: 700; color: #334155; text-transform: uppercase; }
       .v { margin-top: 0.04in; font-size: 9pt; font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .page-break { break-before: page; page-break-before: always; }
     </style>
   </head>
   <body>
@@ -976,6 +1030,7 @@ export default function DashboardPage() {
         <div></div>
       </div>
     </div>
+    ${accountPageHtml}
   </body>
 </html>`;
       await printHtmlDocument(html, 1500);
@@ -1025,7 +1080,7 @@ export default function DashboardPage() {
           const pwdRes = await supabase
             .from(TEMP_ACCOUNT_TABLE)
             .select('work_password')
-            .eq('work_account', String(current.work_account ?? '').trim())
+            .eq('work_account', normalizeWorkAccountValue(current.work_account))
             .limit(1);
           if (!pwdRes.error) workPassword = String(((pwdRes.data as any[]) ?? [])[0]?.work_password ?? '').trim() || DEFAULT_TEMP_ACCOUNT_PASSWORD;
         }
@@ -1034,7 +1089,7 @@ export default function DashboardPage() {
             item.staff_id === staff
               ? {
                   ...item,
-                  work_account: String(current.work_account ?? '').trim(),
+                  work_account: normalizeWorkAccountValue(current.work_account),
                   work_password: workPassword,
                   temp_account_name: accountName,
                   temp_source_staff_id: sourceStaffId
@@ -1053,7 +1108,7 @@ export default function DashboardPage() {
         .limit(20000);
       const occupied = new Set(
         ((occupiedRes.data as any[]) ?? [])
-          .map((item) => String(item.work_account ?? '').trim())
+          .map((item) => normalizeWorkAccountValue(item.work_account))
           .filter(Boolean)
       );
 
@@ -1067,21 +1122,18 @@ export default function DashboardPage() {
         window.alert(`Assign failed: ${poolRes.error.message}`);
         return false;
       }
-      const candidates = (((poolRes.data as any[]) ?? []) as any[])
+      const allPoolCandidates = (((poolRes.data as any[]) ?? []) as any[])
         .map((item) => ({
           staff_id: String(item.staff_id ?? '').trim(),
           name: String(item.name ?? '').trim(),
           position: String(item.position ?? '').trim(),
-          work_account: String(item.work_account ?? '').trim(),
+          work_account: normalizeWorkAccountValue(item.work_account),
           work_password: String(item.work_password ?? '').trim() || DEFAULT_TEMP_ACCOUNT_PASSWORD
         }))
-        .filter(
-          (item) =>
-            normalizePositionKey(item.position) === position &&
-            item.work_account &&
-            !occupied.has(item.work_account)
-        );
-      const picked = candidates[0];
+        .filter((item) => item.work_account && !occupied.has(item.work_account));
+
+      const positionCandidates = allPoolCandidates.filter((item) => normalizePositionKey(item.position) === position);
+      const picked = positionCandidates[0];
       if (!picked) {
         window.alert(`No available temp account for ${position}.`);
         return false;
@@ -1135,7 +1187,7 @@ export default function DashboardPage() {
   const printAccountCard = async (row: DashboardRow) => {
     const staff = String(row.staff_id ?? '').trim();
     const name = String(row.name ?? '').trim() || '-';
-    const workAccount = String(row.work_account ?? '').trim();
+    const workAccount = normalizeWorkAccountValue(row.work_account);
     const workPassword = resolveDefaultPassword(workAccount, String(row.work_password ?? '').trim());
     const accountName = String(row.temp_account_name ?? '').trim();
     if (!staff || !workAccount || !workPassword) return;
@@ -1426,17 +1478,17 @@ export default function DashboardPage() {
                         </span>
                       </td>
                       <td className={['whitespace-nowrap px-3 py-2 text-slate-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
-                        {row.work_account ? (
+                        {normalizeWorkAccountValue(row.work_account) ? (
                           <button
                             type="button"
-                            disabled={!resolveDefaultPassword(String(row.work_account ?? '').trim(), String(row.work_password ?? '').trim()) || accountPrintingStaffId === row.staff_id}
+                            disabled={!resolveDefaultPassword(normalizeWorkAccountValue(row.work_account), String(row.work_password ?? '').trim()) || accountPrintingStaffId === row.staff_id}
                             onClick={() => void printAccountCard(row)}
                             className="underline decoration-dotted underline-offset-2 transition hover:text-neon disabled:cursor-not-allowed disabled:opacity-60"
-                            title={resolveDefaultPassword(String(row.work_account ?? '').trim(), String(row.work_password ?? '').trim()) ? 'Print account card' : 'Missing password'}
+                            title={resolveDefaultPassword(normalizeWorkAccountValue(row.work_account), String(row.work_password ?? '').trim()) ? 'Print account card' : 'Missing password'}
                           >
                             {accountPrintingStaffId === row.staff_id
                               ? 'Printing...'
-                              : String(row.temp_account_name ?? '').trim() || row.work_account}
+                              : String(row.temp_account_name ?? '').trim() || normalizeWorkAccountValue(row.work_account)}
                           </button>
                         ) : (
                           <button
@@ -1555,12 +1607,26 @@ export default function DashboardPage() {
                 </button>
               </div>
               <div className="border-b border-white/10 px-4 py-3">
-                <input
-                  value={accountUsageSearch}
-                  onChange={(e) => setAccountUsageSearch(e.target.value)}
-                  placeholder="Search by account name / account / user name"
-                  className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon"
-                />
+                <div className="grid gap-3 md:grid-cols-[1fr_220px]">
+                  <input
+                    value={accountUsageSearch}
+                    onChange={(e) => setAccountUsageSearch(e.target.value)}
+                    placeholder="Search by account name / account / user name"
+                    className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon"
+                  />
+                  <select
+                    value={accountUsagePositionFilter}
+                    onChange={(e) => setAccountUsagePositionFilter(e.target.value)}
+                    className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon"
+                  >
+                    <option value="">All positions</option>
+                    {accountUsagePositionOptions.map((position) => (
+                      <option key={position} value={position}>
+                        {position}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <div className="max-h-[65vh] overflow-auto">
                 <table className="min-w-full border-collapse text-sm">
@@ -1569,6 +1635,7 @@ export default function DashboardPage() {
                       <th className="px-3 py-2 text-left">Staff ID</th>
                       <th className="px-3 py-2 text-left">Name</th>
                       <th className="px-3 py-2 text-left">Position</th>
+                      <th className="px-3 py-2 text-left">Account Name</th>
                       <th className="px-3 py-2 text-left">Account</th>
                       <th className="px-3 py-2 text-left">Status</th>
                       <th className="px-3 py-2 text-left">Created</th>
@@ -1580,6 +1647,7 @@ export default function DashboardPage() {
                         <td className="whitespace-nowrap px-3 py-2 font-mono text-slate-200">{item.staff_id || '-'}</td>
                         <td className="whitespace-nowrap px-3 py-2 text-slate-200">{item.name || '-'}</td>
                         <td className="whitespace-nowrap px-3 py-2 text-slate-300">{item.position || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-slate-200">{item.account_name || '-'}</td>
                         <td className="whitespace-nowrap px-3 py-2 font-mono text-slate-100">{item.work_account || '-'}</td>
                         <td className="whitespace-nowrap px-3 py-2">
                           <span
@@ -1598,7 +1666,7 @@ export default function DashboardPage() {
                     ))}
                     {filteredAccountUsageRows.length === 0 && (
                       <tr>
-                        <td className="px-3 py-8 text-center text-slate-500" colSpan={6}>
+                        <td className="px-3 py-8 text-center text-slate-500" colSpan={7}>
                           No assignment records yet.
                         </td>
                       </tr>
