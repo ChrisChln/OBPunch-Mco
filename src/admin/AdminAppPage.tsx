@@ -9893,7 +9893,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
                 {!scheduleError && scheduleEmployeesFiltered.length > 0 && (
                   <div className="no-scrollbar mt-4 min-h-[320px] max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
-                    <table className="min-w-[1620px] w-full table-fixed text-left text-xs leading-tight">
+                    <table className="min-w-[1710px] w-full table-fixed text-left text-xs leading-tight">
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
                           <th className="sticky top-0 z-20 w-[100px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('工号', 'ID')}</th>
@@ -9940,6 +9940,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                               </div>
                             </th>
                           ))}
+                          <th className="sticky top-0 z-20 w-[82px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
+                            {t('离职', 'Depart')}
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
@@ -10148,6 +10151,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                                   </td>
                                 );
                               })}
+                              <td className="px-1 py-1.5 text-center">
+                                <button
+                                  type="button"
+                                  disabled={isLocked}
+                                  onClick={() => {
+                                    void deleteEmployeeRow(staff);
+                                  }}
+                                  className="rounded-md bg-ember px-2 py-1 text-[10px] font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {t('离职', 'Depart')}
+                                </button>
+                              </td>
                             </tr>
                           );
                         })}
