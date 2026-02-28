@@ -6466,11 +6466,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const baseWeekStart = startOfWeekMonday(serverTime);
     const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
     const dayRangeForAudit = canCalcDayHours ? getDayRange(weekStart, timecardPunchDayIndex as number) : null;
-    let snapshotSourceRows = timecardPunchRows;
-    const fullWeekSnapshotRes = await fetchPunchRowsForTimecard(staff, null);
-    if (!fullWeekSnapshotRes.error && fullWeekSnapshotRes.rows.length > 0) {
-      snapshotSourceRows = fullWeekSnapshotRes.rows;
-    }
+    const snapshotSourceRows = timecardPunchRows;
     const punchSnapshot = new Map<string, { action: 'IN' | 'OUT'; created_at: string }>();
     for (const row of snapshotSourceRows) {
       const rowId = String(row.id ?? '').trim();
@@ -6739,12 +6735,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
     });
     if (saveFailed) return;
-    await fetchCellAuditLogs();
     setStatus({ tone: 'success', message: t('打卡流水已保存。', 'Punch records saved.') });
     closeTimecardPunchModal();
+    void fetchCellAuditLogs();
     void fetchTimecard({ reset: true, lockUi: false });
-    void refreshHomePanel();
-    void refreshSchedulePanel();
   };
   const deleteTimecardPunchRow = async (row: PunchRow) => {
     const rowId = String(row.id ?? '').trim();
