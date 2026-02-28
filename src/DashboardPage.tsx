@@ -165,7 +165,7 @@ const getShiftBadgeClass = (value: string) => {
   if (v === 'late') return 'border-indigo-400/60 text-indigo-200 bg-indigo-500/10';
   return 'border-white/20 text-slate-200 bg-white/5';
 };
-const CARD_POSITIONS: Array<'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer'> = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'];
+const DEFAULT_CARD_POSITIONS: string[] = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'];
 const getAttendanceCardClass = (position: string) => {
   const pos = normalizePositionKey(position);
   if (pos === 'Pick') return 'border-sky-400/35 bg-sky-500/[0.04]';
@@ -379,6 +379,7 @@ const getShortGapPunchIndices = (punches: PunchRow[], thresholdMinutes = 10) => 
 export default function DashboardPage() {
   const [rows, setRows] = useState<DashboardRow[]>([]);
   const [cardStatsByKey, setCardStatsByKey] = useState<Record<string, { expected: number; present: number; onClock: number; offWorked: number }>>({});
+  const [cardPositions, setCardPositions] = useState<string[]>(DEFAULT_CARD_POSITIONS);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -674,8 +675,22 @@ export default function DashboardPage() {
         }
       }
       const nextCardStatsByKey: Record<string, { expected: number; present: number; onClock: number; offWorked: number }> = {};
+      const positionOrder = new Map(DEFAULT_CARD_POSITIONS.map((position, index) => [position, index] as const));
+      const positionUniverse = new Set<string>(DEFAULT_CARD_POSITIONS);
+      for (const key of [...staffByKey.keys(), ...restByKey.keys(), ...arrivedByKey.keys(), ...onClockByKey.keys(), ...restWorkedByKey.keys()]) {
+        const position = String(key.split(':')[1] ?? '').trim();
+        if (position) positionUniverse.add(position);
+      }
+      const orderedCardPositions = Array.from(positionUniverse).sort((a, b) => {
+        const rankA = positionOrder.get(a);
+        const rankB = positionOrder.get(b);
+        if (rankA !== undefined && rankB !== undefined) return rankA - rankB;
+        if (rankA !== undefined) return -1;
+        if (rankB !== undefined) return 1;
+        return a.localeCompare(b);
+      });
       for (const shift of ['early', 'late'] as const) {
-        for (const position of CARD_POSITIONS) {
+        for (const position of orderedCardPositions) {
           const key = `${shift}:${position}`;
           const expected = staffByKey.get(key)?.size ?? 0;
           const presentIds = new Set<string>([
@@ -970,6 +985,7 @@ export default function DashboardPage() {
         rowsDigestRef.current = digest;
         setRows(nextRows);
       }
+      setCardPositions(orderedCardPositions);
       setCardStatsByKey(nextCardStatsByKey);
       setAccountUsageRows(nextUsageRows);
       setOperationalDate(currentOperationalDate);
@@ -1051,7 +1067,7 @@ export default function DashboardPage() {
   );
   const attendanceCards = useMemo(() => {
     const cards: Array<{
-      position: 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer';
+      position: string;
       shift: 'early' | 'late';
       expected: number;
       present: number;
@@ -1059,7 +1075,7 @@ export default function DashboardPage() {
       offWorked: number;
     }> = [];
     for (const shift of ['early', 'late'] as const) {
-      for (const position of CARD_POSITIONS) {
+      for (const position of cardPositions) {
         const positionShiftScope = rows.filter(
           (row) =>
             normalizePositionKey(row.position) === position &&
@@ -1071,7 +1087,20 @@ export default function DashboardPage() {
       }
     }
     return cards;
-  }, [rows, cardStatsByKey]);
+  }, [rows, cardPositions, cardStatsByKey]);
+  const outboundShiftCards = useMemo(() => {
+    const shifts: Array<'early' | 'late'> = ['early', 'late'];
+    return shifts.map((shift) => {
+      let expected = 0;
+      let present = 0;
+      for (const position of cardPositions) {
+        const stat = cardStatsByKey[`${shift}:${position}`] ?? { expected: 0, present: 0, onClock: 0, offWorked: 0 };
+        expected += Number(stat.expected || 0);
+        present += Number(stat.present || 0);
+      }
+      return { shift, expected, present };
+    });
+  }, [cardPositions, cardStatsByKey]);
 
   const getQrDataUrlCached = async (rawValue: string) => {
     const value = String(rawValue ?? '').trim();
@@ -1425,6 +1454,44 @@ export default function DashboardPage() {
         </div>
 
         <div className="mt-4 grid gap-2 md:grid-cols-5">
+          <div className="md:col-span-5 grid gap-2 md:grid-cols-2">
+            {outboundShiftCards.map((card) => {
+              const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
+              const isMorning = card.shift === 'early';
+              return (
+                <div
+                  key={`outbound:${card.shift}`}
+                  className={[
+                    'rounded-xl border px-4 py-3',
+                    getAttendanceCardClass(isMorning ? 'Pick' : 'Transfer')
+                  ].join(' ')}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-lg font-bold text-slate-100">
+                        {isMorning ? 'Outbound Morning' : 'Outbound Night'}
+                      </div>
+                      <div className="mt-1.5 text-base text-slate-200">
+                        <span className="text-xl font-bold text-slate-100">{card.present}/{card.expected}</span>
+                        <span
+                          className={[
+                            'ml-2 text-lg font-bold',
+                            ratio < 80
+                              ? 'text-rose-400'
+                              : ratio >= 90
+                                ? getAttendanceCardValueClass(isMorning ? 'Pick' : 'Transfer')
+                                : 'text-slate-300'
+                          ].join(' ')}
+                        >
+                          {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
           {attendanceCards.map((card) => {
             const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
             return (

@@ -11831,8 +11831,8 @@ ${rowsToHtml(late)}
                     </div>
                   </div>
                   <p className="mb-4 text-xs text-slate-400 device-label-preview-chrome">{t('打印尺寸：0.7 x 2 inch 标签纸。', 'Print size: 0.7 x 2 inch label.')}</p>
-                  <div className="overflow-auto rounded-2xl border border-white/10 bg-black/20 p-4 device-label-preview-canvas">
-                    <div className="mx-auto origin-top scale-[2.15] md:scale-[2.45] device-label-preview-scale" style={{ width: '2in' }}>
+                  <div className="overflow-x-auto overflow-y-visible rounded-2xl border border-white/10 bg-black/20 p-4 device-label-preview-canvas">
+                    <div className="mx-auto w-fit origin-top scale-[1.75] md:scale-[2.05] lg:scale-[2.25] device-label-preview-scale" style={{ width: '2in' }}>
                       <div
                         style={{
                           width: '2in',
