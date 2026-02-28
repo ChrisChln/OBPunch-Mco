@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 import { createSupabaseClient } from './lib/supabase';
 import { normalizeStaffId } from './lib/staffId';
 import { getLabelToneClass, loadLabelToneMap } from './lib/labelTone';
+import AppDialog from './components/AppDialog';
 
 type EmployeeRow = {
   staff_id: string;
@@ -395,6 +396,14 @@ export default function DashboardPage() {
   const [accountUsageOpen, setAccountUsageOpen] = useState(false);
   const [accountUsageSearch, setAccountUsageSearch] = useState('');
   const [accountUsagePositionFilter, setAccountUsagePositionFilter] = useState('');
+  const [noticeDialog, setNoticeDialog] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: ''
+  });
+  const openNoticeDialog = (message: string, title = 'Notice') => {
+    setNoticeDialog({ open: true, title, message });
+  };
   const [accountUsageRows, setAccountUsageRows] = useState<TempAccountUsageRow[]>([]);
   const inFlightRef = useRef(false);
   const fetchSeqRef = useRef(0);
@@ -1165,7 +1174,7 @@ export default function DashboardPage() {
 </html>`;
       await printHtmlDocument(html, 1500);
     } catch (err) {
-      window.alert(`Print failed: ${err instanceof Error ? err.message : String(err ?? 'unknown error')}`);
+      openNoticeDialog(`Print failed: ${err instanceof Error ? err.message : String(err ?? 'unknown error')}`, 'Print failed');
     } finally {
       setBadgePrintingStaffId((current) => (current === staff ? null : current));
     }
@@ -1249,7 +1258,7 @@ export default function DashboardPage() {
         .order('updated_at', { ascending: false })
         .limit(2000);
       if (poolRes.error) {
-        window.alert(`Assign failed: ${poolRes.error.message}`);
+        openNoticeDialog(`Assign failed: ${poolRes.error.message}`, 'Assign failed');
         return false;
       }
       const allPoolCandidates = (((poolRes.data as any[]) ?? []) as any[])
@@ -1265,7 +1274,7 @@ export default function DashboardPage() {
       const positionCandidates = allPoolCandidates.filter((item) => normalizePositionKey(item.position) === position);
       const picked = positionCandidates[0];
       if (!picked) {
-        window.alert(`No available temp account for ${position}.`);
+        openNoticeDialog(`No available temp account for ${position}.`, 'No account available');
         return false;
       }
 
@@ -1277,7 +1286,7 @@ export default function DashboardPage() {
         created_at: nowIso
       });
       if (insertRes.error) {
-        window.alert(`Assign failed: ${insertRes.error.message}`);
+        openNoticeDialog(`Assign failed: ${insertRes.error.message}`, 'Assign failed');
         return false;
       }
 
@@ -1372,7 +1381,7 @@ export default function DashboardPage() {
 </html>`;
       await printHtmlDocument(html, 1500);
     } catch (err) {
-      window.alert(`Print failed: ${err instanceof Error ? err.message : String(err ?? 'unknown error')}`);
+      openNoticeDialog(`Print failed: ${err instanceof Error ? err.message : String(err ?? 'unknown error')}`, 'Print failed');
     } finally {
       setAccountPrintingStaffId((current) => (current === staff ? null : current));
     }
@@ -1808,6 +1817,13 @@ export default function DashboardPage() {
             </div>
           </div>
         )}
+        <AppDialog
+          open={noticeDialog.open}
+          title={noticeDialog.title}
+          message={noticeDialog.message}
+          confirmText="OK"
+          onConfirm={() => setNoticeDialog((prev) => ({ ...prev, open: false }))}
+        />
       </section>
     </main>
   );

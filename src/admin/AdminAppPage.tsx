@@ -30,6 +30,7 @@ import TimecardTableSection from './pages/TimecardTableSection';
 import HomeDashboardPage from './pages/HomeDashboardPage';
 import AuditPage from './pages/AuditPage';
 import PunchesPage from './pages/PunchesPage';
+import AppDialog from '../components/AppDialog';
 import type {
   AdminPage,
   AllowedPosition,
@@ -69,6 +70,8 @@ const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as s
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const TEMP_ACCOUNT_TABLE = (import.meta.env.VITE_TEMP_ACCOUNT_TABLE as string | undefined) ?? 'ob_temp_accounts';
+const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
+  (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
 const DEFAULT_WORK_PASSWORD = 'Helloworld2!';
 const resolveDefaultWorkPassword = (workAccount: string, workPassword: string) =>
   workAccount && !workPassword ? DEFAULT_WORK_PASSWORD : workPassword;
@@ -595,6 +598,23 @@ export default function AdminApp() {
   const t = (zh: string, en: string) => (lang === 'en' ? en : zh);
 
   const [status, setStatus] = useState<Status>({ tone: 'idle', message: '请登录后台' });
+  const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: ''
+  });
+  const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
+  const askConfirm = (message: string, title?: string) =>
+    new Promise<boolean>((resolve) => {
+      confirmResolverRef.current = resolve;
+      setConfirmDialog({ open: true, title: title || t('确认操作', 'Confirm'), message });
+    });
+  const closeConfirmDialog = (ok: boolean) => {
+    setConfirmDialog((prev) => ({ ...prev, open: false }));
+    const resolver = confirmResolverRef.current;
+    confirmResolverRef.current = null;
+    resolver?.(ok);
+  };
 
   const [offsetMs, setOffsetMs] = useState(0);
   const [serverTime, setServerTime] = useState(() => new Date());
@@ -2094,7 +2114,38 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     }
 
     await runLocked('device_upload', async () => {
-      const res = await supabase.from(DEVICE_TABLE).upsert(rows as any[], { onConflict: 'device_sn' });
+      const upsertRows = async (payloadRows: any[]) =>
+        supabase.from(DEVICE_TABLE).upsert(payloadRows as any[], { onConflict: 'device_sn' });
+
+      const isTypeConstraintError = (message: string) => {
+        const text = String(message ?? '').toLowerCase();
+        return text.includes('device_type_check') || (text.includes('device_type') && text.includes('check constraint'));
+      };
+
+      let usedFallbackTypeMapper: string | null = null;
+      let res = await upsertRows(rows as any[]);
+      if (res.error && isTypeConstraintError(res.error.message)) {
+        const fallbackCandidates: Array<{
+          name: string;
+          mapType: (value: DeviceType) => string;
+        }> = [
+          { name: 'lowercase', mapType: (value) => value.toLowerCase() },
+          { name: 'legacy_car_upper', mapType: (value) => (value === 'CART' ? 'CAR' : 'PDA') },
+          { name: 'legacy_car_lower', mapType: (value) => (value === 'CART' ? 'car' : 'pda') }
+        ];
+        for (const candidate of fallbackCandidates) {
+          const payloadRows = rows.map((row) => ({
+            ...row,
+            device_type: candidate.mapType(row.device_type)
+          }));
+          const attempt = await upsertRows(payloadRows);
+          if (!attempt.error) {
+            res = attempt;
+            usedFallbackTypeMapper = candidate.name;
+            break;
+          }
+        }
+      }
       if (res.error) {
         setDeviceUploadError(t(`导入失败：${res.error.message}`, `Import failed: ${res.error.message}`));
         return;
@@ -2105,14 +2156,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         payload: {
           file_name: file.name,
           total_rows: rows.length,
-          duplicate_in_file: duplicateInFileCount
+          duplicate_in_file: duplicateInFileCount,
+          device_type_fallback: usedFallbackTypeMapper
         }
       });
       setDeviceUploadError(null);
       if (deviceFileInputRef.current) deviceFileInputRef.current.value = '';
       setStatus({
         tone: 'success',
-        message: t(`设备导入成功：${rows.length} 条。`, `Devices imported: ${rows.length}.`)
+        message: t(
+          `设备导入成功：${rows.length} 条。${usedFallbackTypeMapper ? '（已自动兼容设备类型格式）' : ''}`,
+          `Devices imported: ${rows.length}.${usedFallbackTypeMapper ? ' (device type format auto-adapted)' : ''}`
+        )
       });
       await refreshDevicePanel({ lockUi: false });
     });
@@ -2159,7 +2214,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const to = from + pageSize - 1;
         const res = await supabase
           .from(SCHEDULE_TABLE)
-          .select('id, staff_id, date, position, shift, note, operator, updated_at, created_at')
+          .select('id, staff_id, date, position, note, operator, updated_at, created_at')
           .gte('date', startDate)
           .lte('date', endDate)
           .order('date', { ascending: false })
@@ -2376,7 +2431,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         staff_id: staff,
         date: templateDate,
         position: normalizedPosition,
-        shift: resolvedScheduleShift,
         note: getScheduleNoteFromBaseState(nextState),
         operator: user?.email ?? null,
         updated_at: new Date(serverTime).toISOString()
@@ -2579,7 +2633,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const nextEnd = getTemplateDateByDayIndex(6, 1);
       const nextWeekRes = await supabase
         .from(SCHEDULE_TABLE)
-        .select('staff_id, date, position, shift, note, operator, updated_at')
+        .select('staff_id, date, position, note, operator, updated_at')
         .gte('date', nextStart)
         .lte('date', nextEnd);
       if (nextWeekRes.error) return;
@@ -2602,7 +2656,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           staff_id: normalizeStaffId(String(row.staff_id ?? '').trim()),
           date: toDate,
           position: String(row.position ?? '').trim() || null,
-          shift: String(row.shift ?? '').trim() === 'late' ? 'late' : 'early',
           note: normalizedNote,
           operator: (user?.email ?? String(row.operator ?? '').trim()) || null,
           updated_at: nowIso
@@ -2855,19 +2908,58 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
     }
 
+    const stageByStaff = new Map<string, 'picking' | 'sorting' | 'packing'>();
     const stageEmployees = new Map<'picking' | 'sorting' | 'packing', Map<string, string[]>>();
     for (const employee of latestEmployeeByStaff.values()) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       const workAccount = String(employee.work_account ?? employee.WorkAccount ?? '').trim();
       const stage = positionToStage(String(employee.position ?? employee.Position ?? '').trim());
-      if (!staff || !workAccount || !stage) continue;
+      if (!staff || !stage) continue;
+      stageByStaff.set(staff, stage);
       const key = normalizeWorkAccountKey(workAccount);
       if (!key) continue;
       if (!stageEmployees.has(stage)) stageEmployees.set(stage, new Map<string, string[]>());
       const byKey = stageEmployees.get(stage)!;
       const list = byKey.get(key) ?? [];
-      list.push(staff);
+      if (!list.includes(staff)) list.push(staff);
       byKey.set(key, list);
+    }
+
+    // Include temporary account usage within UPH window, so temp account UPH can be attributed back to employees.
+    if (supabase && stageByStaff.size > 0) {
+      const uphWindowStart = new Date(serverTime);
+      uphWindowStart.setHours(0, 0, 0, 0);
+      uphWindowStart.setDate(uphWindowStart.getDate() - (SCHEDULE_UPH_DAYS - 1));
+      const uphWindowEnd = new Date(serverTime);
+      uphWindowEnd.setHours(0, 0, 0, 0);
+      uphWindowEnd.setDate(uphWindowEnd.getDate() + 1);
+      const staffIds = Array.from(stageByStaff.keys());
+      for (const batch of chunk(staffIds, 200)) {
+        const assignmentsRes = await supabase
+          .from(TEMP_ACCOUNT_ASSIGNMENT_TABLE)
+          .select('staff_id, work_account, created_at')
+          .in('staff_id', batch as any[])
+          .gte('created_at', uphWindowStart.toISOString())
+          .lt('created_at', uphWindowEnd.toISOString())
+          .order('created_at', { ascending: false })
+          .limit(5000);
+        if (assignmentsRes.error) {
+          continue;
+        }
+        const assignmentRows =
+          (assignmentsRes.data as Array<{ staff_id?: string | null; work_account?: string | null }> | null) ?? [];
+        for (const row of assignmentRows) {
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          const stage = staff ? stageByStaff.get(staff) : null;
+          const key = normalizeWorkAccountKey(String(row.work_account ?? '').trim());
+          if (!staff || !stage || !key) continue;
+          if (!stageEmployees.has(stage)) stageEmployees.set(stage, new Map<string, string[]>());
+          const byKey = stageEmployees.get(stage)!;
+          const list = byKey.get(key) ?? [];
+          if (!list.includes(staff)) list.push(staff);
+          byKey.set(key, list);
+        }
+      }
     }
 
     if (stageEmployees.size === 0 || !obupSupabase) {
@@ -3521,8 +3613,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     }
     const staff = String(staffId ?? '').trim();
     if (!staff) return;
+    const normalizedStaff = normalizeStaffId(staff);
+    const employeeSnapshot =
+      employees.find((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) === normalizedStaff) ?? null;
+    const employeeName = employeeSnapshot?.name?.trim() || '';
+    const displayName = employeeName ? `${employeeName} (${staff})` : staff;
 
-    const ok = window.confirm(`确定要删除员工 ${staff} 吗？此操作不可撤销。`);
+    const ok = await askConfirm(
+      t(
+        `确定要删除员工 ${displayName} 吗？此操作不可撤销。`,
+        `Are you sure you want to remove employee ${displayName}? This action cannot be undone.`
+      ),
+      t('离职确认', 'Confirm Departure')
+    );
     if (!ok) return;
 
     await runLocked('employee_delete', async () => {
@@ -3539,14 +3642,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         setEmployeesError(employeeDeleteRes.error.message);
         return;
       }
-      setStatus({ tone: 'success', message: `已删除员工：${staff}（同时删除排班 ${deletedScheduleCount} 条）` });
+      setStatus({ tone: 'success', message: `已删除员工：${displayName}（同时删除排班 ${deletedScheduleCount} 条）` });
       await writeAudit({
         action: 'employee_delete',
         staffId: staff,
         target: EMPLOYEE_TABLE,
-        payload: { deleted_schedule_rows: deletedScheduleCount }
+        payload: {
+          deleted_schedule_rows: deletedScheduleCount,
+          staff_id: staff,
+          name: String(employeeSnapshot?.name ?? '').trim() || null,
+          agency: String(employeeSnapshot?.agency ?? employeeSnapshot?.Agency ?? '').trim() || null,
+          position: String(employeeSnapshot?.position ?? employeeSnapshot?.Position ?? '').trim() || null
+        }
       });
-      const normalizedStaff = normalizeStaffId(staff);
       setEmployees((prev) =>
         prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== normalizedStaff)
       );
@@ -5041,7 +5149,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         push(t('工作密码', 'Work password'), payload?.work_password);
       }
     } else if (action === 'employee_delete') {
-      summary = t('删除员工', 'Employee deleted');
+      const deletedName = String(payload?.name ?? '').trim();
+      summary = deletedName
+        ? t(`删除员工：${deletedName}`, `Employee deleted: ${deletedName}`)
+        : t('删除员工', 'Employee deleted');
+      push(t('姓名', 'Name'), payload?.name);
+      push('Agency', payload?.agency);
+      push(t('岗位', 'Position'), payload?.position);
     } else if (action === 'employee_upload') {
       summary = t('批量上传员工', 'Employee upload');
       push(t('文件', 'File'), payload?.file_name);
@@ -5146,6 +5260,300 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         <span className="rounded-md border border-neon/40 bg-neon/15 px-1.5 py-0.5 font-semibold text-neon">{toText}</span>
       </span>
     );
+  };
+
+  const isUndoableAuditRow = (row: AuditRow) => {
+    const action = String(row?.action ?? '').trim();
+    return (
+      action === 'employee_delete' ||
+      action === 'schedule_work' ||
+      action === 'schedule_rest' ||
+      action === 'schedule_temp_work' ||
+      action === 'schedule_temp_rest' ||
+      action === 'schedule_leave' ||
+      action === 'schedule_clear'
+    );
+  };
+
+  const undoneAuditIdSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of auditRows) {
+      const action = String(row?.action ?? '').trim();
+      if (action !== 'audit_undo') continue;
+      const payload = ((row?.payload ?? {}) as Record<string, unknown>) ?? {};
+      const sourceAuditId = String(payload.source_audit_id ?? '').trim();
+      if (sourceAuditId) set.add(sourceAuditId);
+    }
+    return set;
+  }, [auditRows]);
+
+  const isAuditRowUndone = (row: AuditRow) => {
+    const id = String(row?.id ?? '').trim();
+    if (!id) return false;
+    return undoneAuditIdSet.has(id);
+  };
+
+  const undoAuditRow = async (row: AuditRow) => {
+    if (!supabase) {
+      setStatus({ tone: 'error', message: 'Missing Supabase configuration.' });
+      return;
+    }
+    if (!isUndoableAuditRow(row)) {
+      setStatus({ tone: 'error', message: t('该日志暂不支持撤销。', 'This log item is not undoable yet.') });
+      return;
+    }
+    if (isAuditRowUndone(row)) {
+      setStatus({ tone: 'error', message: t('该日志已撤销。', 'This log entry is already undone.') });
+      return;
+    }
+
+    const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+    const payload = ((row.payload ?? {}) as Record<string, unknown>) ?? {};
+    const action = String(row.action ?? '').trim();
+    if (action === 'employee_delete') {
+      const staffFromPayload = normalizeStaffId(String(payload.staff_id ?? row.staff_id ?? '').trim());
+      if (!staffFromPayload) {
+        setStatus({ tone: 'error', message: t('日志缺少工号，无法撤销。', 'Missing staff id in log payload.') });
+        return;
+      }
+
+      const rowCreatedAtMs = Number.isFinite(Date.parse(String(row.created_at ?? '')))
+        ? Date.parse(String(row.created_at ?? ''))
+        : Number.MAX_SAFE_INTEGER;
+      const pickSnapshot = (raw: Record<string, unknown> | null | undefined) => {
+        const p = (raw ?? {}) as Record<string, unknown>;
+        const after = ((p.after ?? null) as Record<string, unknown> | null) ?? null;
+        const before = ((p.before ?? null) as Record<string, unknown> | null) ?? null;
+        return {
+          name:
+            String(p.name ?? after?.name ?? before?.name ?? '').trim() ||
+            '',
+          agency:
+            String(p.agency ?? after?.agency ?? before?.agency ?? '').trim() ||
+            '',
+          position:
+            String(p.position ?? after?.position ?? before?.position ?? '').trim() ||
+            ''
+        };
+      };
+
+      let resolved = pickSnapshot(payload);
+      const needLookup = !resolved.name || !resolved.agency || !resolved.position;
+      if (needLookup) {
+        // 1) Try currently loaded logs first.
+        for (const candidate of auditRows) {
+          const cStaff = normalizeStaffId(String(candidate.staff_id ?? '').trim());
+          if (cStaff !== staffFromPayload) continue;
+          const cAction = String(candidate.action ?? '').trim();
+          if (cAction !== 'employee_update' && cAction !== 'employee_upsert' && cAction !== 'employee_delete') continue;
+          const cMs = Number.isFinite(Date.parse(String(candidate.created_at ?? '')))
+            ? Date.parse(String(candidate.created_at ?? ''))
+            : 0;
+          if (cMs >= rowCreatedAtMs) continue;
+          const snap = pickSnapshot(((candidate as any).payload ?? {}) as Record<string, unknown>);
+          if (!resolved.name && snap.name) resolved.name = snap.name;
+          if (!resolved.agency && snap.agency) resolved.agency = snap.agency;
+          if (!resolved.position && snap.position) resolved.position = snap.position;
+          if (resolved.name && resolved.agency && resolved.position) break;
+        }
+      }
+      if ((!resolved.name || !resolved.agency || !resolved.position) && supabase) {
+        // 2) Query DB logs for older entries if local page doesn't include enough history.
+        const historyRes = await supabase
+          .from(AUDIT_TABLE)
+          .select('id, created_at, action, payload, staff_id')
+          .eq('staff_id', staffFromPayload)
+          .in('action', ['employee_update', 'employee_upsert', 'employee_delete'] as any)
+          .order('created_at', { ascending: false })
+          .limit(300);
+        if (!historyRes.error) {
+          for (const candidate of (((historyRes.data as any[]) ?? []) as Array<Record<string, unknown>>)) {
+            const cMs = Number.isFinite(Date.parse(String(candidate.created_at ?? '')))
+              ? Date.parse(String(candidate.created_at ?? ''))
+              : 0;
+            if (cMs >= rowCreatedAtMs) continue;
+            const snap = pickSnapshot(((candidate.payload ?? null) as Record<string, unknown> | null) ?? null);
+            if (!resolved.name && snap.name) resolved.name = snap.name;
+            if (!resolved.agency && snap.agency) resolved.agency = snap.agency;
+            if (!resolved.position && snap.position) resolved.position = snap.position;
+            if (resolved.name && resolved.agency && resolved.position) break;
+          }
+        }
+      }
+      const name = resolved.name;
+      const agency = resolved.agency;
+      const position = resolved.position;
+      const ok = await askConfirm(
+        t(
+          `确定撤销删除员工 ${staffFromPayload} 吗？将仅恢复员工信息（不恢复排班）。`,
+          `Undo delete for ${staffFromPayload}? This restores employee info only (not schedules).`
+        ),
+        t('撤销确认', 'Undo Confirmation')
+      );
+      if (!ok) return;
+
+      await runLocked('audit_undo_employee_delete', async () => {
+        const mode = await resolveEmployeeColumnMode();
+        const payloadRow =
+          mode === 'cased'
+            ? {
+                staff_id: staffFromPayload,
+                name: name || null,
+                Agency: agency || null,
+                Position: position || null
+              }
+            : {
+                staff_id: staffFromPayload,
+                name: name || null,
+                agency: agency || null,
+                position: position || null
+              };
+        const restoreRes = await supabase.from(EMPLOYEE_TABLE).upsert([payloadRow as any], { onConflict: 'staff_id' });
+        if (restoreRes.error) {
+          setStatus({ tone: 'error', message: `${t('撤销失败：', 'Undo failed: ')}${restoreRes.error.message}` });
+          return;
+        }
+        setEmployees((prev) => {
+          const next = [...prev];
+          const idx = next.findIndex((e) => normalizeStaffId(String(e.staff_id ?? '').trim()) === staffFromPayload);
+          const localRow: EmployeeRow = {
+            staff_id: staffFromPayload,
+            name: name || '',
+            agency: agency || '',
+            position: position || ''
+          };
+          if (idx >= 0) next[idx] = { ...next[idx], ...localRow };
+          else next.push(localRow);
+          next.sort((a, b) => String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US'));
+          return next;
+        });
+        await writeAudit({
+          action: 'audit_undo',
+          staffId: staffFromPayload,
+          target: EMPLOYEE_TABLE,
+          payload: {
+            source_audit_id: row.id ?? null,
+            source_action: row.action ?? null,
+            restored_employee_only: true
+          }
+        });
+        setStatus({ tone: 'success', message: t('已恢复员工信息（未恢复排班）。', 'Employee info restored (schedules not restored).') });
+        await fetchAudit({ search: auditSearch });
+      });
+      return;
+    }
+
+    const templateDate = String(payload.template_date ?? '').trim();
+    const fromStateRaw = String(payload.from_state ?? '').trim();
+    if (!staff || !/^\d{4}-\d{2}-\d{2}$/.test(templateDate)) {
+      setStatus({ tone: 'error', message: t('日志缺少必要信息，无法撤销。', 'Log payload is incomplete and cannot be undone.') });
+      return;
+    }
+    const validState = (value: string): value is 'empty' | ScheduleBaseState =>
+      value === 'empty' || value === 'work' || value === 'temp_work' || value === 'leave' || value === 'temp_rest' || value === 'rest';
+    if (!validState(fromStateRaw)) {
+      setStatus({ tone: 'error', message: t('日志状态无效，无法撤销。', 'Invalid previous state in log payload.') });
+      return;
+    }
+
+    const ok = await askConfirm(
+      t(
+        `确定撤销这条日志吗？员工 ${staff} 将回到 ${fromStateRaw} 状态。`,
+        `Undo this log entry? Staff ${staff} will be reverted to state "${fromStateRaw}".`
+      ),
+      t('撤销确认', 'Undo Confirmation')
+    );
+    if (!ok) return;
+
+    await runLocked('audit_undo', async () => {
+      const nowIso = new Date(serverTime).toISOString();
+      if (fromStateRaw === 'empty') {
+        const delRes = await supabase.from(SCHEDULE_TABLE).delete().eq('staff_id', staff).eq('date', templateDate);
+        if (delRes.error) {
+          setStatus({ tone: 'error', message: `${t('撤销失败：', 'Undo failed: ')}${delRes.error.message}` });
+          return;
+        }
+        setScheduleRows((prev) =>
+          prev.filter((item) => {
+            const itemStaff = normalizeStaffId(String(item.staff_id ?? '').trim());
+            const itemDate = String(item.date ?? '').trim();
+            return !(itemStaff === staff && itemDate === templateDate);
+          })
+        );
+      } else {
+        const fromPosition =
+          normalizePositionKey(String(payload.from_position ?? payload.position ?? '').trim()) ||
+          normalizePositionKey(
+            String(
+              employees.find((e) => normalizeStaffId(String(e.staff_id ?? '').trim()) === staff)?.position ?? ''
+            ).trim()
+          ) ||
+          ALLOWED_POSITIONS[0];
+
+        const basePayload: Record<string, unknown> = {
+          staff_id: staff,
+          date: templateDate,
+          position: fromPosition,
+          note: getScheduleNoteFromBaseState(fromStateRaw),
+          operator: user?.email ?? null,
+          updated_at: nowIso
+        };
+
+        let upsertRes = await supabase.from(SCHEDULE_TABLE).upsert([basePayload as any], { onConflict: 'staff_id,date' });
+        if (upsertRes.error && /null value in column "shift"/i.test(String(upsertRes.error.message ?? ''))) {
+          const employeeShift =
+            employeeShiftByStaffId[staff]?.shift ||
+            normalizeShiftValue(
+              String(employees.find((e) => normalizeStaffId(String(e.staff_id ?? '').trim()) === staff)?.shift ?? '').trim()
+            ) ||
+            'early';
+          upsertRes = await supabase
+            .from(SCHEDULE_TABLE)
+            .upsert([{ ...basePayload, shift: employeeShift } as any], { onConflict: 'staff_id,date' });
+        }
+        if (upsertRes.error) {
+          setStatus({ tone: 'error', message: `${t('撤销失败：', 'Undo failed: ')}${upsertRes.error.message}` });
+          return;
+        }
+
+        const localRow: ScheduleRow = {
+          staff_id: staff,
+          date: templateDate,
+          position: fromPosition,
+          note: getScheduleNoteFromBaseState(fromStateRaw),
+          operator: user?.email ?? null,
+          updated_at: nowIso
+        };
+        setScheduleRows((prev) => {
+          let replaced = false;
+          const next = prev.map((item) => {
+            const itemStaff = normalizeStaffId(String(item.staff_id ?? '').trim());
+            const itemDate = String(item.date ?? '').trim();
+            if (itemStaff === staff && itemDate === templateDate) {
+              replaced = true;
+              return { ...item, ...localRow };
+            }
+            return item;
+          });
+          if (!replaced) next.push(localRow);
+          return next;
+        });
+      }
+
+      await writeAudit({
+        action: 'audit_undo',
+        staffId: staff,
+        target: SCHEDULE_TABLE,
+        payload: {
+          source_audit_id: row.id ?? null,
+          source_action: row.action ?? null,
+          template_date: templateDate,
+          restored_state: fromStateRaw
+        }
+      });
+      setStatus({ tone: 'success', message: t('已撤销该日志操作。', 'Log operation has been undone.') });
+      await fetchAudit({ search: auditSearch });
+    });
   };
 
   const fetchTimecard = async ({
@@ -6743,7 +7151,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const deleteTimecardPunchRow = async (row: PunchRow) => {
     const rowId = String(row.id ?? '').trim();
     if (!rowId) return;
-    const ok = window.confirm('确定要删除这条打卡记录吗？');
+    const ok = await askConfirm(
+      t('确定要删除这条打卡记录吗？', 'Delete this punch record?'),
+      t('删除确认', 'Delete Confirmation')
+    );
     if (!ok) return;
 
     const pendingAddIdSet = new Set(timecardPunchPendingAddRows.map((r) => String(r.id)));
@@ -8357,8 +8768,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const profile = employeeProfileByStaffId.get(staff);
       if (!profile) continue;
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-      // Daily list should prefer observed work-hour inference over scheduled shift.
-      const shift = inferredShift;
+      const assignedShift = normalizeShiftValue(String((employee as any).shift ?? (employee as any).Shift ?? '').trim());
+      // New-hire demand rows may not have punch logs yet, so prefer employee.shift first.
+      const shift = assignedShift || inferredShift;
       if (shift !== 'early' && shift !== 'late') continue;
       const item: DailyListRow = {
         staff_id: staff,
@@ -9035,7 +9447,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           staff_id: internalStaffId,
           date: templateDate,
           position,
-          shift,
           note: null,
           operator: user?.email ?? null,
           updated_at: nowIso
@@ -9053,7 +9464,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           staff_id: internalStaffId,
           date: templateDate,
           position,
-          shift,
           note: null,
           operator: user?.email ?? null,
           updated_at: nowIso
@@ -9560,6 +9970,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                 auditRows={auditRows}
                 AUDIT_TABLE={AUDIT_TABLE}
                 formatAuditDetail={formatAuditDetail}
+                canUndoAuditRow={isUndoableAuditRow}
+                isAuditRowUndone={isAuditRowUndone}
+                undoAuditRow={undoAuditRow}
               />
             )}
 
@@ -11199,6 +11612,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         <footer className="text-center text-xs text-slate-500">
           {isLocked ? t('请求处理中，已锁定交互', 'Request in progress (locked)') : 'Ready'}
         </footer>
+        <AppDialog
+          open={confirmDialog.open}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          themeMode={themeMode}
+          confirmText={t('确定', 'Confirm')}
+          cancelText={t('取消', 'Cancel')}
+          onConfirm={() => closeConfirmDialog(true)}
+          onCancel={() => closeConfirmDialog(false)}
+          tone="danger"
+        />
       </div>
     </div>
   );

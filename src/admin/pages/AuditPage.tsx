@@ -11,6 +11,9 @@ type AuditPageProps = {
   auditRows: any[];
   AUDIT_TABLE: string;
   formatAuditDetail: (row: any) => { summary: string; details: Array<{ label: string; value: string }> };
+  canUndoAuditRow: (row: any) => boolean;
+  isAuditRowUndone: (row: any) => boolean;
+  undoAuditRow: (row: any) => void | Promise<void>;
 };
 
 export default function AuditPage({
@@ -23,7 +26,10 @@ export default function AuditPage({
   auditError,
   auditRows,
   AUDIT_TABLE,
-  formatAuditDetail
+  formatAuditDetail,
+  canUndoAuditRow,
+  isAuditRowUndone,
+  undoAuditRow
 }: AuditPageProps) {
   return (
     <section className="glass reveal rounded-3xl px-6 py-8">
@@ -97,6 +103,8 @@ export default function AuditPage({
             const staff = String(r.staff_id ?? '').trim() || '-';
             const target = String(r.target ?? '').trim() || '-';
             const auditDetail = formatAuditDetail(r);
+            const undoable = canUndoAuditRow(r);
+            const undone = isAuditRowUndone(r);
 
             return (
               <div key={id} className="rounded-2xl bg-white/5 px-4 py-3">
@@ -119,7 +127,23 @@ export default function AuditPage({
                       {target}
                     </span>
                   </div>
-                  <div className="text-right text-xs text-slate-400">{at}</div>
+                  <div className="flex items-center gap-2">
+                    {undoable && (
+                      <button
+                        type="button"
+                        disabled={isLocked || undone}
+                        onClick={() => void undoAuditRow(r)}
+                        className={`rounded-xl px-3 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                          undone
+                            ? 'bg-emerald-500/20 text-emerald-200'
+                            : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'
+                        }`}
+                      >
+                        {undone ? t('已撤销', 'Undone') : t('撤销', 'Undo')}
+                      </button>
+                    )}
+                    <div className="text-right text-xs text-slate-400">{at}</div>
+                  </div>
                 </div>
                 {auditDetail.details.length > 0 && (
                   <div className="mt-2 grid gap-1 text-xs text-slate-400">
@@ -139,4 +163,3 @@ export default function AuditPage({
     </section>
   );
 }
-
