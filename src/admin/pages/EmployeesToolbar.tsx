@@ -247,8 +247,16 @@ export default function EmployeesToolbar({
                   employeeFilterLabelOptions.map((item) => {
                     const checked = employeeLabels.includes(item);
                     return (
-                      <label
+                      <div
                         key={item}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setEmployeeLabels((prev) => (prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]))}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter' && e.key !== ' ') return;
+                          e.preventDefault();
+                          setEmployeeLabels((prev) => (prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]));
+                        }}
                         className={[
                           'flex cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-sm transition',
                           checked ? 'border-neon/50 bg-neon/10 text-neon' : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
@@ -274,11 +282,12 @@ export default function EmployeesToolbar({
                           <input
                             type="checkbox"
                             checked={checked}
+                            onClick={(e) => e.stopPropagation()}
                             onChange={() => setEmployeeLabels((prev) => (prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]))}
                             className="h-3.5 w-3.5 accent-lime-400"
                           />
                         </div>
-                      </label>
+                      </div>
                     );
                   })
                 )}

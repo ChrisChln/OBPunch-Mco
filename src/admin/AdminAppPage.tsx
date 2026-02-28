@@ -10307,8 +10307,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                             scheduleLabelOptions.map((item) => {
                               const checked = scheduleLabels.includes(item);
                               return (
-                                <label
+                                <div
                                   key={item}
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() =>
+                                    setScheduleLabels((prev) =>
+                                      prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]
+                                    )
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                                    e.preventDefault();
+                                    setScheduleLabels((prev) =>
+                                      prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]
+                                    );
+                                  }}
                                   className={[
                                     'flex cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-sm transition',
                                     checked
@@ -10341,6 +10355,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                                     <input
                                       type="checkbox"
                                       checked={checked}
+                                      onClick={(e) => e.stopPropagation()}
                                       onChange={() =>
                                         setScheduleLabels((prev) =>
                                           prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]
@@ -10349,7 +10364,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                                       className="h-3.5 w-3.5 accent-lime-400"
                                     />
                                   </div>
-                                </label>
+                                </div>
                               );
                             })
                           )}
