@@ -276,7 +276,12 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   const hit = ALLOWED_POSITIONS.find((p) => p.toLowerCase() === String(value ?? '').trim().toLowerCase());
   return hit ?? '';
 };
-const isNewHirePlaceholderStaffId = (value: string) => /^NEWREQ-\d{8}(?:-[A-Z]+)?-\d{3,}$/i.test(String(value ?? '').trim());
+const isNewHirePlaceholderStaffId = (value: string) => {
+  const staff = String(value ?? '').trim().toUpperCase();
+  if (!staff) return false;
+  if (/^NEWREQ-\d{8}(?:-[A-Z]+)?-\d{3,}$/i.test(staff)) return true; // legacy format
+  return /^\d{4}[A-Z]+\d{3,}$/i.test(staff); // MMDD + POSITION + SEQ
+};
 const isNewHirePlaceholderName = (value: string) => /^\d{2}\/\d{2}NEW\s+[A-Z]+(\d+)$/i.test(String(value ?? '').trim());
 const displayStaffId = (value: string) => String(value ?? '').trim();
 const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperCase();
@@ -6141,7 +6146,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const select = m === 'cased' ? 'staff_id, name, "Agency", "Position", shift' : 'staff_id, name, agency, position, shift';
 
         let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
-        q = q.eq('active', true);
         if (agencyValue) q = q.ilike(agencyCol as any, agencyValue);
         if (positionValue) {
           const normalized = normalizePositionKey(positionValue);
@@ -8891,8 +8895,26 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (shift === 'late') lateRows.push(item);
       else earlyRows.push(item);
     }
-    earlyRows.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
-    lateRows.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
+    const positionRank = new Map(ALLOWED_POSITIONS.map((pos, idx) => [pos, idx] as const));
+    const dailyListSort = (a: DailyListRow, b: DailyListRow) => {
+      const aIsNew = isNewHirePlaceholderStaffId(String(a.staff_id ?? '').trim()) || isNewHirePlaceholderName(String(a.name ?? '').trim());
+      const bIsNew = isNewHirePlaceholderStaffId(String(b.staff_id ?? '').trim()) || isNewHirePlaceholderName(String(b.name ?? '').trim());
+      if (aIsNew !== bIsNew) return aIsNew ? -1 : 1;
+
+      const posA = normalizePositionKey(String(a.position ?? '').trim());
+      const posB = normalizePositionKey(String(b.position ?? '').trim());
+      const rankA = posA ? (positionRank.get(posA) ?? 999) : 999;
+      const rankB = posB ? (positionRank.get(posB) ?? 999) : 999;
+      if (rankA !== rankB) return rankA - rankB;
+
+      const agencyA = String(a.agency ?? '').trim().toLowerCase();
+      const agencyB = String(b.agency ?? '').trim().toLowerCase();
+      if (agencyA !== agencyB) return agencyA.localeCompare(agencyB, 'en-US');
+
+      return String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US');
+    };
+    earlyRows.sort(dailyListSort);
+    lateRows.sort(dailyListSort);
 
     return {
       targetDate: toDateOnly(targetDay),
@@ -8952,6 +8974,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const canCopyDailyListAll = tomorrowDailyList.earlyRows.length + tomorrowDailyList.lateRows.length > 0;
   const canCopyDailyListEarly = tomorrowDailyRowsDisplayed.earlyRows.length > 0;
   const canCopyDailyListLate = tomorrowDailyRowsDisplayed.lateRows.length > 0;
+  const dailyListDateDisplay = useMemo(() => {
+    const [yyyy, mm, dd] = String(tomorrowDailyList.targetDate ?? '').split('-');
+    if (!yyyy || !mm || !dd) return String(tomorrowDailyList.targetDate ?? '');
+    return `${mm}/${dd}/${yyyy}`;
+  }, [tomorrowDailyList.targetDate]);
+  const dailyListTotalDemandCount = useMemo(
+    () => Number(tomorrowDailyList.earlyRows.length ?? 0) + Number(tomorrowDailyList.lateRows.length ?? 0),
+    [tomorrowDailyList]
+  );
 
   const scheduleEmployeesBase = useMemo(() => {
     if (page !== 'schedule') return [];
@@ -9395,44 +9426,93 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const formatDailyListStaffId = (row: DailyListRow) => {
     const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
     if (!isNewHirePlaceholderStaffId(staff)) return displayStaffId(staff);
-    const matched = staff.match(/^NEWREQ-(\d{4})(\d{2})(\d{2})(?:-([A-Z]+))?-(\d{3,})$/i);
-    if (matched) {
-      const mm = matched[2] ?? '';
-      const dd = matched[3] ?? '';
-      const pos = String(matched[4] ?? '').toUpperCase();
-      const seq = String(Number(matched[5] ?? '0'));
+    const matchedNew = staff.match(/^(\d{2})(\d{2})([A-Z]+)(\d{3,})$/i);
+    if (matchedNew) {
+      const mm = matchedNew[1] ?? '';
+      const dd = matchedNew[2] ?? '';
+      const pos = String(matchedNew[3] ?? '').toUpperCase();
+      const seq = String(Number(matchedNew[4] ?? '0'));
+      return `${mm}/${dd}NEW ${pos}${seq}`.trim();
+    }
+    const matchedLegacy = staff.match(/^NEWREQ-(\d{4})(\d{2})(\d{2})(?:-([A-Z]+))?-(\d{3,})$/i);
+    if (matchedLegacy) {
+      const mm = matchedLegacy[2] ?? '';
+      const dd = matchedLegacy[3] ?? '';
+      const pos = String(matchedLegacy[4] ?? '').toUpperCase();
+      const seq = String(Number(matchedLegacy[5] ?? '0'));
       return `${mm}/${dd}NEW ${pos}${seq}`.trim();
     }
     const fallbackName = String(row.name ?? '').trim();
     if (isNewHirePlaceholderName(fallbackName)) return fallbackName;
     return staff;
   };
-  const makeDailyListTsv = (rows: DailyListRow[]) =>
-    rows
-      .map((row) => [formatDailyListStaffId(row), row.name, row.agency, row.position, getPlannedStartTime(row.shift, row.position)].map((c) => String(c ?? '')).join('\t'))
+const makeDailyListTsv = (rows: DailyListRow[]) =>
+  rows
+      .map((row, idx) =>
+        [idx + 1, formatDailyListStaffId(row), row.name, row.agency, '', row.position, getPlannedStartTime(row.shift, row.position)]
+          .map((c) => String(c ?? ''))
+          .join('\t')
+      )
       .join('\n');
   const copyDailyList = async (scope: 'early' | 'late' | 'all') => {
     const early = scope === 'all' ? tomorrowDailyList.earlyRows : tomorrowDailyRowsDisplayed.earlyRows;
     const late = scope === 'all' ? tomorrowDailyList.lateRows : tomorrowDailyRowsDisplayed.lateRows;
-    const title = `Daily List ${tomorrowDailyList.targetDate} ${tomorrowDailyList.weekday}`;
+    const mmddyyyy = (() => {
+      const [yyyy, mm, dd] = String(tomorrowDailyList.targetDate ?? '').split('-');
+      if (!yyyy || !mm || !dd) return '';
+      return `${mm}/${dd}/${yyyy}`;
+    })();
+    const nightDividerText = `${mmddyyyy}夜班`;
     const text =
       scope === 'early'
         ? makeDailyListTsv(early)
         : scope === 'late'
           ? makeDailyListTsv(late)
-          : [
-              `${title} - Morning Shift`,
-              makeDailyListTsv(early),
-              '',
-              `${title} - Night Shift`,
-              makeDailyListTsv(late)
-            ].join('\n');
+          : [makeDailyListTsv(early), '', nightDividerText, makeDailyListTsv(late)].filter(Boolean).join('\n');
+    const escapeHtml = (value: string) =>
+      String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    const rowsToHtml = (rows: DailyListRow[]) =>
+      rows
+        .map((row, idx) => {
+          const cells = [
+            idx + 1,
+            formatDailyListStaffId(row),
+            String(row.name ?? ''),
+            String(row.agency ?? ''),
+            '',
+            String(row.position ?? ''),
+            getPlannedStartTime(row.shift, row.position)
+          ];
+          return `<tr>${cells.map((cell) => `<td style="border:1px solid #d1d5db;padding:4px 6px;white-space:pre-wrap;">${escapeHtml(String(cell ?? ''))}</td>`).join('')}</tr>`;
+        })
+        .join('');
+    const html =
+      scope === 'all'
+        ? `<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+${rowsToHtml(early)}
+<tr><td colspan="7" style="padding:6px;border:none;"></td></tr>
+<tr><td colspan="7" style="background:#dc2626;color:#ffffff;font-weight:700;padding:6px 8px;border:1px solid #dc2626;">${escapeHtml(nightDividerText)}</td></tr>
+${rowsToHtml(late)}
+</table>`
+        : `<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;">${rowsToHtml(scope === 'early' ? early : late)}</table>`;
     if (!text.trim()) {
       setStatus({ tone: 'error', message: 'No rows to copy.' });
       return;
     }
     try {
-      if (navigator?.clipboard?.writeText) {
+      const ClipboardItemCtor = (globalThis as any).ClipboardItem;
+      if (navigator?.clipboard?.write && ClipboardItemCtor) {
+        const item = new ClipboardItemCtor({
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+          'text/html': new Blob([html], { type: 'text/html' })
+        });
+        await navigator.clipboard.write([item]);
+      } else if (navigator?.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
       } else {
         const textarea = document.createElement('textarea');
@@ -9488,24 +9568,30 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const d = String(target.getDate()).padStart(2, '0');
       return `${m}/${d}`;
     })();
+    const mmddCompact = mmdd.replace('/', '');
     const positionUpper = String(position).toUpperCase();
     const existingSeqSet = new Set<number>();
     const escapedMmdd = mmdd.replace('/', '\\/');
     const nameSeqRegex = new RegExp(`^${escapedMmdd}NEW\\s+${positionUpper}(\\d+)$`, 'i');
-    const staffSeqRegex = new RegExp(`^NEWREQ-${targetDate.replace(/-/g, '')}-${positionUpper}-(\\d{3,})$`, 'i');
+    const staffSeqRegexNew = new RegExp(`^${mmddCompact}${positionUpper}(\\d{3,})$`, 'i');
+    const staffSeqRegexLegacy = new RegExp(`^NEWREQ-${targetDate.replace(/-/g, '')}-${positionUpper}-(\\d{3,})$`, 'i');
     for (const e of employees) {
       const name = String(e.name ?? '').trim();
       const staff = String(e.staff_id ?? '').trim();
       const m1 = name.match(nameSeqRegex);
       if (m1?.[1]) existingSeqSet.add(Number(m1[1]));
-      const m2 = staff.match(staffSeqRegex);
+      const m2 = staff.match(staffSeqRegexNew);
       if (m2?.[1]) existingSeqSet.add(Number(m2[1]));
+      const m3 = staff.match(staffSeqRegexLegacy);
+      if (m3?.[1]) existingSeqSet.add(Number(m3[1]));
     }
     try {
       const remoteRes = await supabase
         .from(EMPLOYEE_TABLE)
         .select('staff_id, name')
-        .ilike('staff_id', `NEWREQ-${targetDate.replace(/-/g, '')}-${positionUpper}-%`)
+        .or(
+          `staff_id.ilike.${mmddCompact}${positionUpper}%,staff_id.ilike.NEWREQ-${targetDate.replace(/-/g, '')}-${positionUpper}-%`
+        )
         .limit(2000);
       if (!remoteRes.error) {
         const rows = ((remoteRes.data as any[]) ?? []) as Array<{ staff_id?: string | null; name?: string | null }>;
@@ -9514,8 +9600,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           const staff = String(r.staff_id ?? '').trim();
           const m1 = name.match(nameSeqRegex);
           if (m1?.[1]) existingSeqSet.add(Number(m1[1]));
-          const m2 = staff.match(staffSeqRegex);
+          const m2 = staff.match(staffSeqRegexNew);
           if (m2?.[1]) existingSeqSet.add(Number(m2[1]));
+          const m3 = staff.match(staffSeqRegexLegacy);
+          if (m3?.[1]) existingSeqSet.add(Number(m3[1]));
         }
       }
     } catch {
@@ -9532,7 +9620,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const localSchedulesToAdd: ScheduleRow[] = [];
       for (let i = 0; i < count; i += 1) {
         const seq = nextSeq + i;
-        const internalStaffId = `NEWREQ-${targetDate.replace(/-/g, '')}-${positionUpper}-${String(seq).padStart(3, '0')}`;
+        const internalStaffId = `${mmddCompact}${positionUpper}${String(seq).padStart(3, '0')}`;
         const employeeName = note || '-';
         const employeePayload =
           mode === 'cased'
@@ -9786,7 +9874,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const extractNewSeq = (row: { staff_id: string; name: string }) => {
       const nameMatch = String(row.name ?? '').trim().match(/NEW\s+[A-Z]+(\d+)$/i);
       if (nameMatch?.[1]) return Number(nameMatch[1]);
-      const staffMatch = String(row.staff_id ?? '').trim().match(/-(\d{3,})$/);
+      const staffMatch = String(row.staff_id ?? '').trim().match(/(\d{3,})$/);
       if (staffMatch?.[1]) return Number(staffMatch[1]);
       return 999999;
     };
@@ -10784,7 +10872,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                                   <div className="text-[10px] font-semibold uppercase tracking-[0.12em]">
                                     {card.position}
                                   </div>
-                                  <div className="mt-1 text-[11px] leading-tight opacity-90">早 {card.early} · 晚 {card.late}</div>
+                                  <div className="mt-1 text-[11px] leading-tight opacity-90">
+                                    {t('早', 'M')} {card.early} · {t('晚', 'N')} {card.late}
+                                  </div>
                                   <div className="mt-1 text-xl font-bold leading-none">{card.total}</div>
                                 </button>
                               ))}
@@ -10795,15 +10885,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                               type="button"
                               disabled={isLocked}
                               onClick={() => setDailyListNewHireOpen(true)}
-                              className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                              className={[
+                                'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
+                                themeMode === 'light'
+                                  ? 'border border-slate-300 bg-white text-slate-900 hover:bg-slate-100'
+                                  : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                              ].join(' ')}
                             >
-                              {t('新人需求', 'New Hire Demand')}
+                              {t('新人需求', 'New Request')}
                             </button>
                             <button
                               type="button"
                               disabled={!canCopyDailyListAll}
                               onClick={() => void copyDailyList('all')}
-                              className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                              className={[
+                                'rounded-2xl bg-neon px-4 py-2 text-sm font-semibold shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50',
+                                themeMode === 'light' ? 'text-black' : 'text-white'
+                              ].join(' ')}
                             >
                               {t('复制全部', 'Copy all')}
                             </button>
@@ -10817,7 +10915,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                                   : 'bg-white/10 text-slate-200 hover:bg-white/15'
                               ].join(' ')}
                             >
-                              关闭
+                              {t('关闭', 'Close')}
                             </button>
                           </div>
                         </div>
@@ -10878,9 +10976,43 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                               </button>
                             </div>
                           </div>
+                          <div className="md:col-span-2">
+                            <div
+                              className={[
+                                'rounded-xl border px-3 py-2 text-sm font-medium',
+                                themeMode === 'light'
+                                  ? 'border-slate-200 bg-slate-50 text-slate-700'
+                                  : 'border-white/10 bg-white/5 text-slate-200'
+                              ].join(' ')}
+                            >
+                              {lang === 'en' ? `${dailyListDateDisplay} Outbound Request:` : `${dailyListDateDisplay} 出库需求:`}
+                              {' '}
+                              <span className={themeMode === 'light' ? 'text-slate-900' : 'text-white'}>{dailyListTotalDemandCount}</span>
+                              {lang === 'en' ? ' people' : t('人', '')}
+                            </div>
+                          </div>
                           <div className={['rounded-2xl border p-4', themeMode === 'light' ? 'border-emerald-200 bg-emerald-50/50' : 'border-emerald-400/30 bg-emerald-500/[0.04]'].join(' ')}>
                             <div className="mb-3 flex items-center justify-between">
-                              <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-200">{t('早班', 'Morning')}</h4>
+                              <div className="flex items-center gap-2">
+                                <h4
+                                  className={[
+                                    'text-sm font-semibold uppercase tracking-[0.16em]',
+                                    themeMode === 'light' ? 'text-emerald-700' : 'text-emerald-300'
+                                  ].join(' ')}
+                                >
+                                  {t('早班', 'Morning')}
+                                </h4>
+                                <span
+                                  className={[
+                                    'rounded-full border px-2 py-0.5 text-xs font-semibold',
+                                    themeMode === 'light'
+                                      ? 'border-emerald-300 bg-emerald-100 text-emerald-800'
+                                      : 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200'
+                                  ].join(' ')}
+                                >
+                                  {lang === 'en' ? `Total ${tomorrowDailyRowsDisplayed.earlyRows.length}` : `共${tomorrowDailyRowsDisplayed.earlyRows.length}人`}
+                                </span>
+                              </div>
                               <button
                                 type="button"
                                 disabled={!canCopyDailyListEarly}
@@ -10936,7 +11068,26 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
                           <div className={['rounded-2xl border p-4', themeMode === 'light' ? 'border-indigo-200 bg-indigo-50/50' : 'border-indigo-400/30 bg-indigo-500/[0.04]'].join(' ')}>
                             <div className="mb-3 flex items-center justify-between">
-                              <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-indigo-200">{t('晚班', 'Night')}</h4>
+                              <div className="flex items-center gap-2">
+                                <h4
+                                  className={[
+                                    'text-sm font-semibold uppercase tracking-[0.16em]',
+                                    themeMode === 'light' ? 'text-indigo-700' : 'text-indigo-300'
+                                  ].join(' ')}
+                                >
+                                  {t('晚班', 'Night')}
+                                </h4>
+                                <span
+                                  className={[
+                                    'rounded-full border px-2 py-0.5 text-xs font-semibold',
+                                    themeMode === 'light'
+                                      ? 'border-indigo-300 bg-indigo-100 text-indigo-800'
+                                      : 'border-indigo-400/50 bg-indigo-500/15 text-indigo-200'
+                                  ].join(' ')}
+                                >
+                                  {lang === 'en' ? `Total ${tomorrowDailyRowsDisplayed.lateRows.length}` : `共${tomorrowDailyRowsDisplayed.lateRows.length}人`}
+                                </span>
+                              </div>
                               <button
                                 type="button"
                                 disabled={!canCopyDailyListLate}

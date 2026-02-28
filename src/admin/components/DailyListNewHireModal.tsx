@@ -1,4 +1,4 @@
-import { createPortal } from 'react-dom';
+﻿import { createPortal } from 'react-dom';
 import type { AllowedPosition } from '../types';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -48,7 +48,7 @@ export default function DailyListNewHireModal({
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
       <div className="w-full max-w-xl rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-2xl backdrop-blur">
         <div className="flex items-center justify-between">
-          <h3 className="font-display text-xl tracking-[0.08em] text-white">{t('新人需求', 'New Hire Demand')}</h3>
+          <h3 className="font-display text-xl tracking-[0.08em] text-white">{t('新人需求', 'New Request')}</h3>
           <button
             type="button"
             onClick={onClose}
