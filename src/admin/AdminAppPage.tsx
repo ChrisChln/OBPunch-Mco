@@ -686,7 +686,6 @@ export default function AdminApp() {
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [accountSearch, setAccountSearch] = useState('');
   const [accountPositionFilter, setAccountPositionFilter] = useState('');
-  const [accountTempOnly, setAccountTempOnly] = useState(false);
   const [employeeAgency, setEmployeeAgency] = useState('');
   const [employeePosition, setEmployeePosition] = useState('');
   const [employeeShiftFilter, setEmployeeShiftFilter] = useState<'' | 'early' | 'late'>('');
@@ -7598,20 +7597,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     employeeShiftByStaffId
   ]);
   const accountRowsAll = useMemo(() => {
-    const employeeRows = employees
-      .map((e) => {
-        const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
-        const name = String(e.name ?? '').trim();
-        const agency = String(e.agency ?? e.Agency ?? '').trim();
-        const position = String(e.position ?? e.Position ?? '').trim();
-        const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
-        const workPassword = resolveDefaultWorkPassword(
-          workAccount,
-          String(e.work_password ?? e.WorkPassword ?? '').trim()
-        );
-        return { staff, name, agency, position, workAccount, workPassword, isTemp: false };
-      })
-      .filter((row) => Boolean(row.staff && (row.workAccount || row.workPassword)));
     const tempRows = tempAccounts.map((row) => ({
       staff: normalizeStaffId(String(row.staff_id ?? '').trim()),
       name: String(row.name ?? '').trim(),
@@ -7624,31 +7609,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       ),
       isTemp: true
     }));
-    const employeeDedup = new Map<string, { staff: string; name: string; agency: string; position: string; workAccount: string; workPassword: string; isTemp: boolean }>();
-    for (const row of employeeRows) {
-      if (!row.staff || (!row.workAccount && !row.workPassword)) continue;
-      const key = `${row.staff}__${row.workAccount}__${row.workPassword}`;
-      if (!employeeDedup.has(key)) employeeDedup.set(key, row);
-    }
     const tempDedup = new Map<string, { staff: string; name: string; agency: string; position: string; workAccount: string; workPassword: string; isTemp: boolean }>();
     for (const row of tempRows) {
       if (!row.staff || (!row.workAccount && !row.workPassword)) continue;
       const key = `${row.staff}__${row.workAccount}__${row.workPassword}`;
       if (!tempDedup.has(key)) tempDedup.set(key, row);
     }
-
-    if (accountTempOnly) {
-      return Array.from(tempDedup.values()).sort((a, b) => a.staff.localeCompare(b.staff, 'en-US'));
-    }
-
-    const dedup = new Map<string, { staff: string; name: string; agency: string; position: string; workAccount: string; workPassword: string; isTemp: boolean }>();
-    for (const row of [...employeeRows, ...tempRows]) {
-      if (!row.staff || (!row.workAccount && !row.workPassword)) continue;
-      const key = `${row.staff}__${row.workAccount}__${row.workPassword}`;
-      if (!dedup.has(key)) dedup.set(key, row);
-    }
-    return Array.from(dedup.values()).sort((a, b) => a.staff.localeCompare(b.staff, 'en-US'));
-  }, [employees, tempAccounts, accountTempOnly]);
+    return Array.from(tempDedup.values()).sort((a, b) => a.staff.localeCompare(b.staff, 'en-US'));
+  }, [tempAccounts]);
 
   const accountPositionOptions = useMemo(() => {
     const set = new Set<string>();
@@ -9980,7 +9948,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                             const row = scheduleRowsByStaffDayIndex.get(key);
                             if (!row || !isWorkingScheduleRow(row)) continue;
                             const hasPunch = schedulePunchPresenceKeys.has(key);
-                            const targetShift = ((row?.shift as 'early' | 'late' | null) ?? 'early');
+                            const scheduledShiftForAbsent = employeeShiftByStaffId[staff]?.shift ?? '';
+                            const targetShift: 'early' | 'late' =
+                              scheduledShiftForAbsent === 'late'
+                                ? 'late'
+                                : (row?.shift as 'early' | 'late' | null) === 'late'
+                                  ? 'late'
+                                  : 'early';
                             const isPastOperationalDay = dayIndex < homeOperationalDayIndex;
                             const isCurrentOperationalDay = dayIndex === homeOperationalDayIndex;
                             const hideLateAbsent = targetShift === 'late' && scheduleNowMinutes < scheduleLateAbsentVisibleMinutes;
@@ -10661,19 +10635,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
               <AccountManagementPage
                 t={t}
                 isLocked={isLocked}
-                themeMode={themeMode}
                 accountSearch={accountSearch}
                 setAccountSearch={setAccountSearch}
                 accountPositionFilter={accountPositionFilter}
                 setAccountPositionFilter={setAccountPositionFilter}
                 accountPositionOptions={accountPositionOptions}
-                accountTempOnly={accountTempOnly}
-                setAccountTempOnly={setAccountTempOnly}
                 accountRowsFiltered={accountRowsFiltered}
                 accountRowsRendered={accountRowsRendered}
                 setAccountRenderCount={setAccountRenderCount}
                 onRefreshEmployees={async () => {
-                  await fetchEmployees({ reset: true });
                   await fetchTempAccounts({ lockUi: false });
                 }}
                 onDownloadTemplate={downloadTempAccountTemplate}
