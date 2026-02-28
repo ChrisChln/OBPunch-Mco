@@ -29,6 +29,8 @@ export type EmployeeRow = {
   Label?: string | null;
   WorkAccount?: string | null;
   WorkPassword?: string | null;
+  active?: boolean | null;
+  terminated_at?: string | null;
   created_at?: string | null;
 };
 

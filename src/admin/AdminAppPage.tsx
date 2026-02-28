@@ -162,6 +162,16 @@ const parseUph = (value: unknown) => {
 };
 
 const formatUph = (value: number | null | undefined) => (value === null || value === undefined ? '-' : value.toFixed(1));
+const isEmployeeActive = (employee: EmployeeRow | null | undefined) => {
+  if (!employee) return true;
+  const raw = (employee as any).active;
+  if (raw === null || raw === undefined) return true;
+  if (typeof raw === 'boolean') return raw;
+  const text = String(raw).trim().toLowerCase();
+  if (!text) return true;
+  if (text === 'false' || text === '0' || text === 'f' || text === 'no') return false;
+  return true;
+};
 
 const formatTime = (value: Date, locale: string = 'zh-CN') =>
   value.toLocaleString(locale, {
@@ -809,6 +819,7 @@ export default function AdminApp() {
   const [scheduleRowsWeekOffset, setScheduleRowsWeekOffset] = useState(0);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [schedulePunchPresenceKeys, setSchedulePunchPresenceKeys] = useState<Set<string>>(new Set());
+  const [schedulePunchPresenceReady, setSchedulePunchPresenceReady] = useState(false);
   const [scheduleUphByStaffId, setScheduleUphByStaffId] = useState<Record<string, number | null>>({});
   const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
   const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
@@ -2761,8 +2772,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   }) => {
     if (!supabase) {
       setSchedulePunchPresenceKeys(new Set());
+      setSchedulePunchPresenceReady(true);
       return;
     }
+    setSchedulePunchPresenceReady(false);
 
     const sourceEmployees = options?.employeesOverride ?? employees;
     const staffSet = new Set(
@@ -2772,6 +2785,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     );
     if (staffSet.size === 0) {
       setSchedulePunchPresenceKeys(new Set());
+      setSchedulePunchPresenceReady(true);
       return;
     }
 
@@ -2806,6 +2820,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
           if (res.error) {
             setSchedulePunchPresenceKeys(new Set());
+            setSchedulePunchPresenceReady(false);
             return;
           }
 
@@ -2820,6 +2835,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
 
       setSchedulePunchPresenceKeys(found);
+      setSchedulePunchPresenceReady(true);
       return;
     }
 
@@ -2846,6 +2862,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
         if (res.error) {
           setSchedulePunchPresenceKeys(new Set());
+          setSchedulePunchPresenceReady(false);
           return;
         }
 
@@ -2866,6 +2883,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     }
 
     setSchedulePunchPresenceKeys(found);
+    setSchedulePunchPresenceReady(true);
   };
 
   const fetchScheduleUph = async (options?: { employeesOverride?: EmployeeRow[] | null }) => {
@@ -3334,10 +3352,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             ...row,
             work_password: resolveDefaultWorkPassword(workAccount, workPassword)
           } as EmployeeRow;
-        })
+        }).filter((row) => isEmployeeActive(row))
       );
       setEmployeesHasMore(false);
-      fetchedEmployees = all;
+      fetchedEmployees = all.filter((row) => isEmployeeActive(row));
 
       const staffIdsRaw = all.map((e) => String(e.staff_id ?? '').trim()).filter(Boolean);
       const staffIds = Array.from(new Set(staffIdsRaw.map((id) => normalizeStaffId(id)).filter(Boolean)));
@@ -3561,7 +3579,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
               shift: shift || null,
               label: label || null,
               work_account: workAccount || null,
-              work_password: workPassword || null
+              work_password: workPassword || null,
+              active: true,
+              terminated_at: null
             }
           : {
               staff_id: staff,
@@ -3571,12 +3591,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
               shift: shift || null,
               label: label || null,
               work_account: workAccount || null,
-              work_password: workPassword || null
+              work_password: workPassword || null,
+              active: true,
+              terminated_at: null
             };
 
-      const attemptUpsert = await supabase
+      let attemptUpsert = await supabase
         .from(EMPLOYEE_TABLE)
         .upsert([payload as any], { onConflict: 'staff_id', ignoreDuplicates: false });
+      if (attemptUpsert.error && /active|terminated_at/i.test(String(attemptUpsert.error.message ?? ''))) {
+        const fallbackPayload = { ...payload } as Record<string, unknown>;
+        delete fallbackPayload.active;
+        delete fallbackPayload.terminated_at;
+        attemptUpsert = await supabase
+          .from(EMPLOYEE_TABLE)
+          .upsert([fallbackPayload as any], { onConflict: 'staff_id', ignoreDuplicates: false });
+      }
 
       if (attemptUpsert.error) {
         const attemptInsert = await supabase.from(EMPLOYEE_TABLE).insert([payload as any]);
@@ -3637,22 +3667,32 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
       const deletedScheduleCount = ((scheduleDeleteRes.data as any[] | null) ?? []).length;
 
-      const employeeDeleteRes = await supabase.from(EMPLOYEE_TABLE).delete().eq('staff_id', staff);
+      const departPayload = {
+        active: false,
+        terminated_at: new Date(serverTime).toISOString()
+      };
+      const employeeDeleteRes = await supabase.from(EMPLOYEE_TABLE).update(departPayload as any).eq('staff_id', staff);
       if (employeeDeleteRes.error) {
-        setEmployeesError(employeeDeleteRes.error.message);
+        setEmployeesError(
+          /active|terminated_at/i.test(String(employeeDeleteRes.error.message ?? ''))
+            ? `离职失败：${employeeDeleteRes.error.message}。请先执行 sql/2026-02-28_add_employee_soft_delete_columns.sql`
+            : employeeDeleteRes.error.message
+        );
         return;
       }
-      setStatus({ tone: 'success', message: `已删除员工：${displayName}（同时删除排班 ${deletedScheduleCount} 条）` });
+      setStatus({ tone: 'success', message: `已离职员工：${displayName}（同时删除排班 ${deletedScheduleCount} 条）` });
       await writeAudit({
         action: 'employee_delete',
         staffId: staff,
         target: EMPLOYEE_TABLE,
         payload: {
           deleted_schedule_rows: deletedScheduleCount,
+          soft_deleted: true,
           staff_id: staff,
           name: String(employeeSnapshot?.name ?? '').trim() || null,
           agency: String(employeeSnapshot?.agency ?? employeeSnapshot?.Agency ?? '').trim() || null,
-          position: String(employeeSnapshot?.position ?? employeeSnapshot?.Position ?? '').trim() || null
+          position: String(employeeSnapshot?.position ?? employeeSnapshot?.Position ?? '').trim() || null,
+          shift: normalizeShiftValue(String(employeeSnapshot?.shift ?? '').trim()) || null
         }
       });
       setEmployees((prev) =>
@@ -4921,7 +4961,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
               shift: employeeEditShift || null,
               label: label || null,
               work_account: workAccount || null,
-              work_password: workPassword || null
+              work_password: workPassword || null,
+              active: true,
+              terminated_at: null
             }
           : {
               staff_id: nextStaff,
@@ -4931,9 +4973,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
               shift: employeeEditShift || null,
               label: label || null,
               work_account: workAccount || null,
-              work_password: workPassword || null
+              work_password: workPassword || null,
+              active: true,
+              terminated_at: null
             };
-      const { error } = await supabase.from(EMPLOYEE_TABLE).update(payload as any).eq('staff_id', originalStaff);
+      let { error } = await supabase.from(EMPLOYEE_TABLE).update(payload as any).eq('staff_id', originalStaff);
+      if (error && /active|terminated_at/i.test(String(error.message ?? ''))) {
+        const fallbackPayload = { ...payload } as Record<string, unknown>;
+        delete fallbackPayload.active;
+        delete fallbackPayload.terminated_at;
+        const retry = await supabase.from(EMPLOYEE_TABLE).update(fallbackPayload as any).eq('staff_id', originalStaff);
+        error = retry.error as any;
+      }
       if (error) {
         setEmployeesError(error.message);
         return;
@@ -5156,6 +5207,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       push(t('姓名', 'Name'), payload?.name);
       push('Agency', payload?.agency);
       push(t('岗位', 'Position'), payload?.position);
+      push(t('班次', 'Shift'), payload?.shift);
     } else if (action === 'employee_upload') {
       summary = t('批量上传员工', 'Employee upload');
       push(t('文件', 'File'), payload?.file_name);
@@ -5324,6 +5376,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const p = (raw ?? {}) as Record<string, unknown>;
         const after = ((p.after ?? null) as Record<string, unknown> | null) ?? null;
         const before = ((p.before ?? null) as Record<string, unknown> | null) ?? null;
+        const shiftValue =
+          normalizeShiftValue(String(p.shift ?? after?.shift ?? before?.shift ?? '').trim()) || '';
         return {
           name:
             String(p.name ?? after?.name ?? before?.name ?? '').trim() ||
@@ -5333,13 +5387,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             '',
           position:
             String(p.position ?? after?.position ?? before?.position ?? '').trim() ||
-            ''
+            '',
+          shift: shiftValue
         };
       };
 
       let resolved = pickSnapshot(payload);
       const needLookup = !resolved.name || !resolved.agency || !resolved.position;
-      if (needLookup) {
+      if (needLookup || !resolved.shift) {
         // 1) Try currently loaded logs first.
         for (const candidate of auditRows) {
           const cStaff = normalizeStaffId(String(candidate.staff_id ?? '').trim());
@@ -5354,10 +5409,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           if (!resolved.name && snap.name) resolved.name = snap.name;
           if (!resolved.agency && snap.agency) resolved.agency = snap.agency;
           if (!resolved.position && snap.position) resolved.position = snap.position;
-          if (resolved.name && resolved.agency && resolved.position) break;
+          if (!resolved.shift && snap.shift) resolved.shift = snap.shift;
+          if (resolved.name && resolved.agency && resolved.position && resolved.shift) break;
         }
       }
-      if ((!resolved.name || !resolved.agency || !resolved.position) && supabase) {
+      if ((!resolved.name || !resolved.agency || !resolved.position || !resolved.shift) && supabase) {
         // 2) Query DB logs for older entries if local page doesn't include enough history.
         const historyRes = await supabase
           .from(AUDIT_TABLE)
@@ -5376,13 +5432,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             if (!resolved.name && snap.name) resolved.name = snap.name;
             if (!resolved.agency && snap.agency) resolved.agency = snap.agency;
             if (!resolved.position && snap.position) resolved.position = snap.position;
-            if (resolved.name && resolved.agency && resolved.position) break;
+            if (!resolved.shift && snap.shift) resolved.shift = snap.shift;
+            if (resolved.name && resolved.agency && resolved.position && resolved.shift) break;
           }
         }
       }
       const name = resolved.name;
       const agency = resolved.agency;
       const position = resolved.position;
+      const shift = resolved.shift as '' | 'early' | 'late';
       const ok = await askConfirm(
         t(
           `确定撤销删除员工 ${staffFromPayload} 吗？将仅恢复员工信息（不恢复排班）。`,
@@ -5400,18 +5458,48 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                 staff_id: staffFromPayload,
                 name: name || null,
                 Agency: agency || null,
-                Position: position || null
+                Position: position || null,
+                shift: shift || null,
+                active: true,
+                terminated_at: null
               }
             : {
                 staff_id: staffFromPayload,
                 name: name || null,
                 agency: agency || null,
-                position: position || null
+                position: position || null,
+                shift: shift || null,
+                active: true,
+                terminated_at: null
               };
         const restoreRes = await supabase.from(EMPLOYEE_TABLE).upsert([payloadRow as any], { onConflict: 'staff_id' });
         if (restoreRes.error) {
-          setStatus({ tone: 'error', message: `${t('撤销失败：', 'Undo failed: ')}${restoreRes.error.message}` });
-          return;
+          if (/active|terminated_at/i.test(String(restoreRes.error.message ?? ''))) {
+            const fallbackRow =
+              mode === 'cased'
+                ? {
+                    staff_id: staffFromPayload,
+                    name: name || null,
+                    Agency: agency || null,
+                    Position: position || null,
+                    shift: shift || null
+                  }
+                : {
+                    staff_id: staffFromPayload,
+                    name: name || null,
+                    agency: agency || null,
+                    position: position || null,
+                    shift: shift || null
+                  };
+            const fallbackRes = await supabase.from(EMPLOYEE_TABLE).upsert([fallbackRow as any], { onConflict: 'staff_id' });
+            if (fallbackRes.error) {
+              setStatus({ tone: 'error', message: `${t('撤销失败：', 'Undo failed: ')}${fallbackRes.error.message}` });
+              return;
+            }
+          } else {
+            setStatus({ tone: 'error', message: `${t('撤销失败：', 'Undo failed: ')}${restoreRes.error.message}` });
+            return;
+          }
         }
         setEmployees((prev) => {
           const next = [...prev];
@@ -5420,7 +5508,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             staff_id: staffFromPayload,
             name: name || '',
             agency: agency || '',
-            position: position || ''
+            position: position || '',
+            shift: shift || ''
           };
           if (idx >= 0) next[idx] = { ...next[idx], ...localRow };
           else next.push(localRow);
@@ -6052,6 +6141,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const select = m === 'cased' ? 'staff_id, name, "Agency", "Position", shift' : 'staff_id, name, agency, position, shift';
 
         let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
+        q = q.eq('active', true);
         if (agencyValue) q = q.ilike(agencyCol as any, agencyValue);
         if (positionValue) {
           const normalized = normalizePositionKey(positionValue);
@@ -6065,6 +6155,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       };
 
       let employeesAttempt = await buildEmployees(mode);
+      if (employeesAttempt.error && /active/i.test(String(employeesAttempt.error.message ?? ''))) {
+        const buildEmployeesNoActive = (m: EmployeeColumnMode) => {
+          const agencyCol = m === 'cased' ? 'Agency' : 'agency';
+          const positionCol = m === 'cased' ? 'Position' : 'position';
+          const select = m === 'cased' ? 'staff_id, name, "Agency", "Position", shift' : 'staff_id, name, agency, position, shift';
+          let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
+          if (agencyValue) q = q.ilike(agencyCol as any, agencyValue);
+          if (positionValue) {
+            const normalized = normalizePositionKey(positionValue);
+            q = normalized ? q.ilike(positionCol as any, normalized) : q.ilike(positionCol as any, `%${positionValue}%`);
+          }
+          if (searchValue) {
+            const term = `%${searchValue}%`;
+            q = q.or(`staff_id.ilike.${term},name.ilike.${term}`);
+          }
+          return q;
+        };
+        employeesAttempt = await buildEmployeesNoActive(mode);
+      }
       if (isStale()) {
         return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
       }
@@ -9217,8 +9326,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       };
 
       const hideLateAbsent = shift === 'late' && nowMinutes < lateAbsentVisibleMinutes;
-      // 缺勤：工作是打卡状态为false，非补休且非请假
-      if (row && isWorkingScheduleBaseState(baseState) && !hasPunch && !hideLateAbsent) absent.push(item);
+      // 缺勤：仅在打卡存在性加载完成后再判断，避免初始加载闪烁全缺勤
+      if (schedulePunchPresenceReady && row && isWorkingScheduleBaseState(baseState) && !hasPunch && !hideLateAbsent) {
+        absent.push(item);
+      }
       // 排休出勤：休息类状态或无排班，但有打卡
       if (hasPunch && (!row || isRestLikeScheduleBaseState(baseState))) restWorked.push(item);
     }
@@ -9249,6 +9360,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     scheduleRowsByStaffDayIndex,
     homeOperationalDayIndex,
     schedulePunchPresenceKeys,
+    schedulePunchPresenceReady,
     homeNowMinutes,
     homeOnClockShiftByStaffId,
     employeeShiftByStaffId,
@@ -10366,6 +10478,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                             const isCurrentOperationalDay = dayIndex === homeOperationalDayIndex;
                             const hideLateAbsent = targetShift === 'late' && scheduleNowMinutes < scheduleLateAbsentVisibleMinutes;
                             const showAbsent =
+                              schedulePunchPresenceReady &&
                               scheduleIsCurrentWeek &&
                               !hasPunch &&
                               (isPastOperationalDay || (isCurrentOperationalDay && !hideLateAbsent));
@@ -10429,6 +10542,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                                 const hideLateAbsent =
                                   scheduledShiftForAbsent === 'late' && scheduleNowMinutes < scheduleLateAbsentVisibleMinutes;
                                 const showAbsent =
+                                  schedulePunchPresenceReady &&
                                   scheduleIsCurrentWeek &&
                                   row &&
                                   isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)) &&
