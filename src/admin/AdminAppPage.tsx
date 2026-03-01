@@ -1,4 +1,4 @@
-﻿import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
@@ -2680,8 +2680,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const upsertRes = await supabase.from(SCHEDULE_TABLE).upsert(migrated as any[], { onConflict: 'staff_id,date' });
       if (upsertRes.error) return;
 
-      const deleteNextRes = await supabase.from(SCHEDULE_TABLE).delete().gte('date', nextStart).lte('date', nextEnd);
-      if (deleteNextRes.error) return;
+      // 不删除下周数据，仅复制到本周，下周保持不变，实现永久循环
+      // Do NOT delete next week; only copy to this week; next week stays for permanent cycle
 
       await supabase.from(APP_SETTINGS_TABLE).upsert(
         [
