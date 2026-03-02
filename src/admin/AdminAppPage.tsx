@@ -10657,11 +10657,13 @@ ${rowsToHtml(late)}
                           }
                           const effectiveWorkDays = workDays + restWorkedBonusDays - absentPenaltyDays;
                           const workDaysClass =
-                            effectiveWorkDays >= 5
-                              ? 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10'
-                              : effectiveWorkDays >= 1 && effectiveWorkDays <= 4
-                                ? 'border-amber-400/60 text-amber-200 bg-amber-500/10'
-                                : 'border-rose-400/60 text-rose-200 bg-rose-500/10';
+                            effectiveWorkDays > 5
+                              ? 'border-2 border-rose-400 text-rose-100 bg-rose-500/20 shadow-[0_0_0_1px_rgba(248,113,113,0.7)]'
+                              : effectiveWorkDays >= 5
+                                ? 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10'
+                                : effectiveWorkDays >= 1 && effectiveWorkDays <= 4
+                                  ? 'border-amber-400/60 text-amber-200 bg-amber-500/10'
+                                  : 'border-rose-400/60 text-rose-200 bg-rose-500/10';
 
                           return (
                             <tr className="border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-0" key={staff}>
