@@ -5584,17 +5584,26 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
     await runLocked('audit_undo', async () => {
       const nowIso = new Date(serverTime).toISOString();
+      const isThisWeekBucket =
+        templateDate >= '2000-01-03' && templateDate <= '2000-01-09';
+      const nextWeekTemplateDate = isThisWeekBucket
+        ? toDateOnly(addDays(new Date(`${templateDate}T00:00:00`), 7))
+        : null;
+
       if (fromStateRaw === 'empty') {
         const delRes = await supabase.from(SCHEDULE_TABLE).delete().eq('staff_id', staff).eq('date', templateDate);
         if (delRes.error) {
           setStatus({ tone: 'error', message: `${t('撤销失败：', 'Undo failed: ')}${delRes.error.message}` });
           return;
         }
+        if (nextWeekTemplateDate) {
+          await supabase.from(SCHEDULE_TABLE).delete().eq('staff_id', staff).eq('date', nextWeekTemplateDate);
+        }
         setScheduleRows((prev) =>
           prev.filter((item) => {
             const itemStaff = normalizeStaffId(String(item.staff_id ?? '').trim());
             const itemDate = String(item.date ?? '').trim();
-            return !(itemStaff === staff && itemDate === templateDate);
+            return !(itemStaff === staff && (itemDate === templateDate || itemDate === nextWeekTemplateDate));
           })
         );
       } else {
@@ -5631,6 +5640,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (upsertRes.error) {
           setStatus({ tone: 'error', message: `${t('撤销失败：', 'Undo failed: ')}${upsertRes.error.message}` });
           return;
+        }
+        if (nextWeekTemplateDate) {
+          const nextWeekPayload = {
+            staff_id: staff,
+            date: nextWeekTemplateDate,
+            position: basePayload.position,
+            note: basePayload.note,
+            operator: basePayload.operator,
+            updated_at: nowIso
+          };
+          await supabase.from(SCHEDULE_TABLE).upsert([nextWeekPayload as any], { onConflict: 'staff_id,date' });
         }
 
         const localRow: ScheduleRow = {
@@ -9584,7 +9604,13 @@ ${rowsToHtml(late)}
       return;
     }
     const dayIndex = (target.getDay() + 6) % 7;
-    const templateDate = getTemplateDateByDayIndex(dayIndex, scheduleWeekOffset);
+    const baseWeekStart = startOfWeekMonday(new Date(serverTime));
+    const targetWeekStart = startOfWeekMonday(target);
+    const weekOffsetRaw = Math.round(
+      (targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000)
+    );
+    const weekOffset = clamp(weekOffsetRaw, 0, 1);
+    const templateDate = getTemplateDateByDayIndex(dayIndex, weekOffset);
     const position = normalizePositionKey(dailyListNewHirePosition);
     const shift = dailyListNewHireShift;
     const agency = dailyListNewHireAgency.trim();
