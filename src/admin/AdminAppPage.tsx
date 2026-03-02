@@ -2543,17 +2543,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
     const exec = async () => {
       setScheduleError(null);
-      const resetRes = await supabase
+      const nowIso = new Date(serverTime).toISOString();
+      const op = user?.email ?? null;
+      // 临时排休、请假 -> 工作 (note=null); 临时工作 -> 休息 (note=__rest__)
+      const toWorkRes = await supabase
         .from(SCHEDULE_TABLE)
-        .update({
-          note: null,
-          operator: user?.email ?? null,
-          updated_at: new Date(serverTime).toISOString()
-        } as any)
-        .in('note', [SCHEDULE_TEMP_WORK_NOTE, SCHEDULE_LEAVE_NOTE, SCHEDULE_TEMP_REST_NOTE] as any);
-
-      if (resetRes.error) {
-        setScheduleError(resetRes.error.message);
+        .update({ note: null, operator: op, updated_at: nowIso } as any)
+        .in('note', [SCHEDULE_TEMP_REST_NOTE, SCHEDULE_LEAVE_NOTE] as any);
+      if (toWorkRes.error) {
+        setScheduleError(toWorkRes.error.message);
+        return;
+      }
+      const toRestRes = await supabase
+        .from(SCHEDULE_TABLE)
+        .update({ note: SCHEDULE_REST_NOTE, operator: op, updated_at: nowIso } as any)
+        .eq('note', SCHEDULE_TEMP_WORK_NOTE);
+      if (toRestRes.error) {
+        setScheduleError(toRestRes.error.message);
         return;
       }
 
@@ -2581,9 +2587,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       setScheduleRows((prev) =>
         prev.map((row) => {
           const note = String(row.note ?? '').trim();
-          if (note === SCHEDULE_TEMP_WORK_NOTE || note === SCHEDULE_LEAVE_NOTE || note === SCHEDULE_TEMP_REST_NOTE) {
-            return { ...row, note: null };
-          }
+          if (note === SCHEDULE_TEMP_REST_NOTE || note === SCHEDULE_LEAVE_NOTE) return { ...row, note: null };
+          if (note === SCHEDULE_TEMP_WORK_NOTE) return { ...row, note: SCHEDULE_REST_NOTE };
           return row;
         })
       );
@@ -6440,6 +6445,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim(), timecardWeekOffset);
         if (!staff || dayIndex === null || dayIndex < 0 || dayIndex > 6) continue;
         stateByStaffDay.set(`${staff}__${dayIndex}`, getScheduleBaseStateFromNote(row.note));
+      }
+
+      // 本周之前 ob_schedules 无数据（只有本周/下周 bucket），跳过重算避免误删已有标记
+      if (timecardWeekOffset < 0 && stateByStaffDay.size === 0) {
+        setStatus({
+          tone: 'info',
+          message: t(
+            '历史周无排班模板数据，无法重算；仅刷新列表，保留已有标记。',
+            'Past week has no schedule template; skip recompute, keep existing marks.'
+          )
+        });
+        await fetchTimecard({ reset: true, lockUi: false });
+        return;
       }
 
       const weekRange = getDayRange(weekStart, 0, 7);
