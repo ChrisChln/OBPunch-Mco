@@ -2404,6 +2404,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         return true;
       };
 
+      // 修改本周时同步到下周；修改下周不影响本周
+      const syncToNextWeek = scheduleWeekOffset === 0;
+      const nextWeekTemplateDate = syncToNextWeek ? getTemplateDateByDayIndex(dayIndex, 1) : null;
+
       if (nextState === 'empty') {
         const delRes =
           existing?.id != null
@@ -2412,6 +2416,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (delRes.error) {
           setScheduleError(delRes.error.message);
           return;
+        }
+        if (nextWeekTemplateDate) {
+          await supabase.from(SCHEDULE_TABLE).delete().eq('staff_id', staff).eq('date', nextWeekTemplateDate);
         }
         setScheduleRows((prev) =>
           prev.filter((row) => {
@@ -2466,6 +2473,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             return;
           }
         }
+      }
+      if (nextWeekTemplateDate) {
+        const nextWeekPayload = {
+          staff_id: staff,
+          date: nextWeekTemplateDate,
+          position: payload.position,
+          note: payload.note,
+          operator: payload.operator,
+          updated_at: payload.updated_at
+        };
+        await supabase.from(SCHEDULE_TABLE).upsert([nextWeekPayload as any], { onConflict: 'staff_id,date' });
       }
 
       const localRow: ScheduleRow = {
