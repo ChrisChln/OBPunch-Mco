@@ -2544,7 +2544,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
   const resetScheduleTransientStatesForWeek = async (options?: { lockUi?: boolean }) => {
     if (!supabase) return;
-    const weekStart = toDateOnly(startOfWeekMonday(new Date(serverTime)));
+    const now = new Date(Date.now() + offsetMs);
+    if (now.getDay() !== 1) return;
+    const thisMonday = startOfWeekMonday(now);
+    const resetAt = new Date(thisMonday);
+    resetAt.setHours(5, 0, 0, 0);
+    if (now.getTime() < resetAt.getTime()) return;
+    const weekStart = toDateOnly(thisMonday);
     const lockUi = options?.lockUi ?? true;
 
     const settingRes = await supabase
