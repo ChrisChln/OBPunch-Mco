@@ -3593,6 +3593,26 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const label = employeeNewLabel.trim();
     const workAccount = employeeNewWorkAccount.trim();
     const workPassword = resolveDefaultWorkPassword(workAccount, employeeNewWorkPassword.trim());
+    if (!name) {
+      setEmployeesError('Name is required.');
+      return;
+    }
+    if (!agency) {
+      setEmployeesError('Agency is required.');
+      return;
+    }
+    if (!position) {
+      setEmployeesError('Position is required.');
+      return;
+    }
+    if (!shift) {
+      setEmployeesError('Shift is required.');
+      return;
+    }
+    if (!label) {
+      setEmployeesError('Label is required.');
+      return;
+    }
     const normalizedPos = normalizePositionKey(position);
     if (!normalizedPos) {
       setEmployeesError(`Position 只能是：${ALLOWED_POSITIONS.join(', ')}`);
@@ -11273,6 +11293,7 @@ ${rowsToHtml(late)}
 
                 <EmployeeAddModal
                   t={t}
+                  themeMode={themeMode}
                   open={employeeAddOpen}
                   isLocked={isLocked}
                   employeeNewStaffId={employeeNewStaffId}

@@ -834,38 +834,31 @@ export default function DashboardPage() {
       }
 
       const borrowedDeviceByStaff = new Map<string, string[]>();
-      for (const staffBatch of chunkArray(displayStaffIds, 120)) {
-        const loansRes = await supabase
+      const targetStaffSet = new Set(displayStaffIds.map((staffId) => normalizeStaffId(staffId)).filter(Boolean));
+      const baseLoans = () =>
+        supabase
           .from(DEVICE_LOANS_TABLE)
           .select('id, staff_id, device_sn, action, created_at')
-          .in('staff_id', staffBatch)
-          .order('created_at', { ascending: true })
           .limit(20000);
-        if (loansRes.error) continue;
-        const loanRows = ((loansRes.data as any[]) ?? [])
-          .map((row) => ({
-            id: String(row.id ?? ''),
-            staff_id: String(row.staff_id ?? '').trim(),
-            device_sn: normalizeDeviceSn(String(row.device_sn ?? '')),
-            action: String(row.action ?? '').trim().toLowerCase() === 'return' ? 'return' : 'borrow',
-            created_at: String(row.created_at ?? '')
-          }))
-          .filter((row) => row.staff_id && row.device_sn);
-        loanRows.sort((a, b) => {
-          const aMs = Date.parse(a.created_at) || 0;
-          const bMs = Date.parse(b.created_at) || 0;
-          if (aMs !== bMs) return aMs - bMs;
-          return a.id.localeCompare(b.id, 'en-US');
-        });
+      const loansOrdered = await baseLoans().order('created_at', { ascending: false });
+      const loansRes = loansOrdered.error ? await baseLoans().order('id', { ascending: false }) : loansOrdered;
+      if (!loansRes.error) {
         const currentBorrowBySn = new Map<string, string>();
-        for (const row of loanRows) {
-          if (row.action === 'borrow') currentBorrowBySn.set(row.device_sn, row.staff_id);
-          else currentBorrowBySn.delete(row.device_sn);
+        const resolvedSn = new Set<string>();
+        for (const row of ((loansRes.data as any[]) ?? [])) {
+          const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
+          if (!sn || resolvedSn.has(sn)) continue;
+          const action = String(row.action ?? '').trim().toLowerCase();
+          if (action === 'return') {
+            resolvedSn.add(sn);
+            continue;
+          }
+          const staffId = normalizeStaffId(String(row.staff_id ?? '').trim());
+          resolvedSn.add(sn);
+          if (!staffId || !targetStaffSet.has(staffId)) continue;
+          currentBorrowBySn.set(sn, staffId);
         }
-        const activeSnList = Array.from(currentBorrowBySn.entries())
-          .filter(([, staffId]) => staffBatch.includes(staffId))
-          .map(([sn]) => sn);
-        if (activeSnList.length === 0) continue;
+        const activeSnList = Array.from(currentBorrowBySn.keys());
         const nameBySn = new Map<string, string>();
         for (const snBatch of chunkArray(activeSnList, 150)) {
           const deviceRes = await supabase
@@ -881,7 +874,6 @@ export default function DashboardPage() {
           }
         }
         for (const [sn, staffId] of currentBorrowBySn.entries()) {
-          if (!staffBatch.includes(staffId)) continue;
           const list = borrowedDeviceByStaff.get(staffId) ?? [];
           list.push(nameBySn.get(sn) || sn);
           borrowedDeviceByStaff.set(staffId, list);

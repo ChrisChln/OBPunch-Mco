@@ -1,4 +1,4 @@
-﻿import type { RefObject } from 'react';
+﻿import { useEffect, useRef, type RefObject } from 'react';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -63,6 +63,31 @@ export default function EmployeesToolbar({
   getScheduleLabelToneClass,
   cycleScheduleLabelTone
 }: EmployeesToolbarProps) {
+  const labelDetailsRef = useRef<HTMLDetailsElement | null>(null);
+
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      const root = labelDetailsRef.current;
+      if (!root || !root.open) return;
+      const target = event.target as Node | null;
+      if (target && root.contains(target)) return;
+      root.open = false;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const root = labelDetailsRef.current;
+      if (!root || !root.open) return;
+      root.open = false;
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -208,7 +233,7 @@ export default function EmployeesToolbar({
         </div>
         <div>
           <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('标签', 'Label')}</label>
-          <details className="relative mt-2">
+          <details ref={labelDetailsRef} className="relative mt-2">
             <summary
               className={[
                 'flex h-[46px] cursor-pointer list-none items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition',
@@ -310,3 +335,4 @@ export default function EmployeesToolbar({
     </>
   );
 }
+
