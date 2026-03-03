@@ -6514,7 +6514,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       // 本周之前 ob_schedules 无数据（只有本周/下周 bucket），跳过重算避免误删已有标记
       if (timecardWeekOffset < 0 && stateByStaffDay.size === 0) {
         setStatus({
-          tone: 'info',
+          tone: 'idle',
           message: t(
             '历史周无排班模板数据，无法重算；仅刷新列表，保留已有标记。',
             'Past week has no schedule template; skip recompute, keep existing marks.'
@@ -11375,6 +11375,7 @@ ${rowsToHtml(late)}
                 <EmployeeEditModal
                   open={employeeEditOpen}
                   t={t}
+                  themeMode={themeMode}
                   isLocked={isLocked}
                   userEmail={String(user?.email ?? '')}
                   staffIdEditorEmail={STAFF_ID_EDITOR_EMAIL}
