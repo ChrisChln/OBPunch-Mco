@@ -867,6 +867,8 @@ export default function AdminApp() {
   const [dailyListNewHireCount, setDailyListNewHireCount] = useState(1);
   const [dailyListNewHireAgency, setDailyListNewHireAgency] = useState('');
   const [dailyListNewHireShift, setDailyListNewHireShift] = useState<'' | 'early' | 'late'>('');
+  const [dailyListNewHireLabel, setDailyListNewHireLabel] = useState('');
+  const [dailyListNewHireEntryTime, setDailyListNewHireEntryTime] = useState('');
   const [dailyListNewHireNote, setDailyListNewHireNote] = useState('');
   const [dailyListSelectedPositions, setDailyListSelectedPositions] = useState<Record<AllowedPosition, boolean>>(
     createEmptyPositionFlags
@@ -874,6 +876,8 @@ export default function AdminApp() {
   const [dailyListFilterPositions, setDailyListFilterPositions] = useState<Record<AllowedPosition, boolean>>(
     createEmptyPositionFlags
   );
+  const schedulePositionDetailsRef = useRef<HTMLDetailsElement | null>(null);
+  const scheduleLabelDetailsRef = useRef<HTMLDetailsElement | null>(null);
   const deferredScheduleSearch = useDeferredValue(scheduleSearch);
   const deferredEmployeeSearch = useDeferredValue(employeeSearch);
   const deferredAccountSearch = useDeferredValue(accountSearch);
@@ -2798,6 +2802,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       window.removeEventListener('scroll', close, true);
     };
   }, [schedulePicker.open]);
+
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      const posRoot = schedulePositionDetailsRef.current;
+      const labelRoot = scheduleLabelDetailsRef.current;
+      if (posRoot?.open && target && !posRoot.contains(target)) posRoot.open = false;
+      if (labelRoot?.open && target && !labelRoot.contains(target)) labelRoot.open = false;
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+    };
+  }, [page]);
 
   const fetchSchedulePunchPresence = async (options?: {
     employeesOverride?: EmployeeRow[] | null;
@@ -9113,6 +9134,33 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
   }, [employees, deferredSchedulePosition]);
+  const dailyListNewHireLabelOptions = useMemo(() => {
+    const targetPosition = normalizePositionKey(dailyListNewHirePosition);
+    if (!targetPosition) return [];
+    const out = new Set<string>();
+    for (const employee of employees) {
+      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+      if (!position || position !== targetPosition) continue;
+      const label = String(employee.label ?? employee.Label ?? '').trim();
+      if (label) out.add(label);
+    }
+    return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  }, [employees, dailyListNewHirePosition]);
+  useEffect(() => {
+    if (!dailyListNewHireLabel) return;
+    if (dailyListNewHireLabelOptions.includes(dailyListNewHireLabel)) return;
+    setDailyListNewHireLabel('');
+  }, [dailyListNewHireLabel, dailyListNewHireLabelOptions]);
+  useEffect(() => {
+    if (!dailyListNewHireOpen) return;
+    const position = normalizePositionKey(dailyListNewHirePosition);
+    const shift = dailyListNewHireShift;
+    if (!position || !shift) {
+      setDailyListNewHireEntryTime('');
+      return;
+    }
+    setDailyListNewHireEntryTime(getPlannedStartTime(shift, position) || '');
+  }, [dailyListNewHireOpen, dailyListNewHirePosition, dailyListNewHireShift]);
   const getSchedulePositionBadgeClass = (position: string) =>
     getPositionBadgeClass(position, schedulePositionToneByPosition);
   const getSchedulePositionBadgeClassLight = (position: string) =>
@@ -9640,6 +9688,7 @@ ${rowsToHtml(late)}
     const position = normalizePositionKey(dailyListNewHirePosition);
     const shift = dailyListNewHireShift;
     const agency = dailyListNewHireAgency.trim();
+    const label = dailyListNewHireLabel.trim();
     const note = dailyListNewHireNote.trim();
     const count = clamp(Number(dailyListNewHireCount) || 0, 1, 200);
     if (!position) {
@@ -9648,6 +9697,11 @@ ${rowsToHtml(late)}
     }
     if (!shift) {
       setStatus({ tone: 'error', message: 'Please choose shift.' });
+      return;
+    }
+    const entryTime = dailyListNewHireEntryTime.trim();
+    if (!entryTime) {
+      setStatus({ tone: 'error', message: 'Please set entry time.' });
       return;
     }
 
@@ -9718,7 +9772,7 @@ ${rowsToHtml(late)}
                 Agency: agency || null,
                 Position: position,
                 shift,
-                label: null,
+                label: label || null,
                 created_at: nowIso
               }
             : {
@@ -9727,7 +9781,7 @@ ${rowsToHtml(late)}
                 agency: agency || null,
                 position,
                 shift,
-                label: null,
+                label: label || null,
                 created_at: nowIso
               };
         employeeRows.push(employeePayload as Record<string, unknown>);
@@ -9745,7 +9799,7 @@ ${rowsToHtml(late)}
           agency: agency || null,
           position,
           shift,
-          label: null,
+          label: label || null,
           created_at: nowIso
         });
         localSchedulesToAdd.push({
@@ -9781,6 +9835,8 @@ ${rowsToHtml(late)}
       setDailyListNewHireAgency('');
       setDailyListNewHirePosition('');
       setDailyListNewHireShift('');
+      setDailyListNewHireLabel('');
+      setDailyListNewHireEntryTime('');
       setDailyListNewHireNote('');
       setEmployees((prev) => {
         const byStaff = new Map<string, EmployeeRow>();
@@ -10325,7 +10381,7 @@ ${rowsToHtml(late)}
                   </div>
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('岗位', 'Position')}</label>
-                    <details className="relative mt-2">
+                    <details ref={schedulePositionDetailsRef} className="relative mt-2">
                       <summary
                         className={[
                           'flex h-12 cursor-pointer list-none items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition',
@@ -10444,7 +10500,7 @@ ${rowsToHtml(late)}
                   </div>
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('标签', 'Label')}</label>
-                    <details className="relative mt-2">
+                    <details ref={scheduleLabelDetailsRef} className="relative mt-2">
                       <summary
                         className={[
                           'flex h-12 cursor-pointer list-none items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition',
@@ -11239,6 +11295,7 @@ ${rowsToHtml(late)}
                 <DailyListNewHireModal
                   open={dailyListNewHireOpen}
                   t={t}
+                  themeMode={themeMode}
                   isLocked={isLocked}
                   allowedPositions={ALLOWED_POSITIONS}
                   dailyListNewHirePosition={dailyListNewHirePosition}
@@ -11249,6 +11306,11 @@ ${rowsToHtml(late)}
                   setDailyListNewHireCount={setDailyListNewHireCount}
                   dailyListNewHireAgency={dailyListNewHireAgency}
                   setDailyListNewHireAgency={setDailyListNewHireAgency}
+                  dailyListNewHireLabel={dailyListNewHireLabel}
+                  setDailyListNewHireLabel={setDailyListNewHireLabel}
+                  dailyListLabelOptions={dailyListNewHireLabelOptions}
+                  dailyListNewHireEntryTime={dailyListNewHireEntryTime}
+                  setDailyListNewHireEntryTime={setDailyListNewHireEntryTime}
                   dailyListNewHireNote={dailyListNewHireNote}
                   setDailyListNewHireNote={setDailyListNewHireNote}
                   clamp={clamp}
