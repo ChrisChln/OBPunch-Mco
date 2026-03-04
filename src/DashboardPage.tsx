@@ -62,6 +62,8 @@ const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
   (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
+const DEVICE_LOANS_FETCH_LIMIT = 50000;
+const DASHBOARD_REFRESH_INTERVAL_MS = 15000;
 const supabase = createSupabaseClient({ persistSession: false });
 const QR_PRINT_SIZE = 320;
 const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
@@ -839,9 +841,10 @@ export default function DashboardPage() {
         supabase
           .from(DEVICE_LOANS_TABLE)
           .select('id, staff_id, device_sn, action, created_at')
-          .limit(20000);
-      const loansOrdered = await baseLoans().order('created_at', { ascending: false });
-      const loansRes = loansOrdered.error ? await baseLoans().order('id', { ascending: false }) : loansOrdered;
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .limit(DEVICE_LOANS_FETCH_LIMIT);
+      const loansRes = await baseLoans();
       if (!loansRes.error) {
         const currentBorrowBySn = new Map<string, string>();
         const resolvedSn = new Set<string>();
@@ -849,6 +852,7 @@ export default function DashboardPage() {
           const sn = normalizeDeviceSn(String(row.device_sn ?? ''));
           if (!sn || resolvedSn.has(sn)) continue;
           const action = String(row.action ?? '').trim().toLowerCase();
+          if (action !== 'borrow' && action !== 'return') continue;
           if (action === 'return') {
             resolvedSn.add(sn);
             continue;
@@ -990,6 +994,33 @@ export default function DashboardPage() {
 
   useEffect(() => {
     void fetchData(true);
+  }, []);
+
+  useEffect(() => {
+    if (!supabase) return;
+    const tick = () => {
+      void fetchData(true);
+    };
+    const timer = window.setInterval(tick, DASHBOARD_REFRESH_INTERVAL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    const schema = String(import.meta.env.VITE_SUPABASE_SCHEMA || 'public').trim() || 'public';
+    const channel = supabase
+      .channel('dashboard-live-refresh')
+      .on('postgres_changes', { event: '*', schema, table: PUNCHES_TABLE }, tick)
+      .on('postgres_changes', { event: '*', schema, table: SCHEDULE_TABLE }, tick)
+      .on('postgres_changes', { event: '*', schema, table: TEMP_ACCOUNT_ASSIGNMENT_TABLE }, tick)
+      .on('postgres_changes', { event: '*', schema, table: DEVICE_LOANS_TABLE }, tick)
+      .subscribe();
+
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      void supabase.removeChannel(channel);
+    };
   }, []);
 
   const positionOptions = useMemo(
@@ -1887,4 +1918,3 @@ export default function DashboardPage() {
     </main>
   );
 }
-

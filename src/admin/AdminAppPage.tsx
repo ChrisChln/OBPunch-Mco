@@ -69,6 +69,7 @@ const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | 
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
+const DEVICE_LOANS_FETCH_LIMIT = 50000;
 const TEMP_ACCOUNT_TABLE = (import.meta.env.VITE_TEMP_ACCOUNT_TABLE as string | undefined) ?? 'ob_temp_accounts';
 const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
   (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
@@ -1988,7 +1989,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         .from(DEVICE_LOANS_TABLE)
         .select('id, created_at, operator, staff_id, device_sn, action, note')
         .order('created_at', { ascending: false })
-        .limit(5000);
+        .order('id', { ascending: false })
+        .limit(DEVICE_LOANS_FETCH_LIMIT);
       if (res.error) {
         setDeviceLoans([]);
         return;
@@ -4692,7 +4694,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     <div class="sheet">
       <div class="qr-wrap"><img src="${safe(label.qrDataUrl)}" alt="QR ${safe(label.sn)}" /></div>
       <div class="meta">
-        <div class="kicker">OUTBOUNT DEVICE</div>
+        <div class="kicker">OUTBOUND DEVICE</div>
         <div class="name">${safe(label.name)}</div>
         <div class="sub">${safe(label.type)} · ${safe(label.position)}</div>
         <div></div>
@@ -11963,30 +11965,59 @@ ${rowsToHtml(late)}
                   }
                 }
               `}</style>
-              <div className="device-label-preview-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4 py-10">
-                <div className="w-full max-w-3xl rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-2xl backdrop-blur">
+              <div
+                className={[
+                  'device-label-preview-overlay fixed inset-0 z-50 flex justify-center overflow-y-auto px-4 py-6 md:py-10',
+                  themeMode === 'light' ? 'bg-slate-900/35' : 'bg-black/65'
+                ].join(' ')}
+              >
+                <div
+                  className={[
+                    'my-auto w-full max-w-5xl rounded-3xl border p-6 md:p-7 shadow-2xl backdrop-blur',
+                    themeMode === 'light' ? 'border-slate-200 bg-white/95' : 'border-white/10 bg-slate-950/95'
+                  ].join(' ')}
+                >
                   <div className="mb-4 flex items-center justify-between device-label-preview-chrome">
-                    <h3 className="font-display text-xl tracking-[0.08em] text-white">{t('打印设备标签', 'Print Device Label')}</h3>
+                    <h3 className={['font-display text-xl tracking-[0.08em]', themeMode === 'light' ? 'text-slate-900' : 'text-white'].join(' ')}>
+                      {t('打印设备标签', 'Print Device Label')}
+                    </h3>
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
                         onClick={() => printDeviceLabelSheet(deviceLabelPreview)}
-                        className="rounded-xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl"
+                        className={[
+                          'rounded-xl px-4 py-2 text-sm font-semibold transition hover:-translate-y-0.5',
+                          themeMode === 'light'
+                            ? 'bg-neon text-white shadow-[0_8px_20px_rgba(132,255,0,0.35)] hover:shadow-[0_12px_24px_rgba(132,255,0,0.45)]'
+                            : 'bg-neon text-white shadow-glow hover:shadow-xl'
+                        ].join(' ')}
                       >
                         {t('打印', 'Print')}
                       </button>
                       <button
                         type="button"
                         onClick={() => setDeviceLabelPreview(null)}
-                        className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/15"
+                        className={[
+                          'rounded-xl px-4 py-2 text-sm font-semibold transition',
+                          themeMode === 'light'
+                            ? 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                            : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                        ].join(' ')}
                       >
                         {t('关闭', 'Close')}
                       </button>
                     </div>
                   </div>
-                  <p className="mb-4 text-xs text-slate-400 device-label-preview-chrome">{t('打印尺寸：0.7 x 2 inch 标签纸。', 'Print size: 0.7 x 2 inch label.')}</p>
-                  <div className="overflow-x-auto overflow-y-visible rounded-2xl border border-white/10 bg-black/20 p-4 device-label-preview-canvas">
-                    <div className="mx-auto w-fit origin-top scale-[1.75] md:scale-[2.05] lg:scale-[2.25] device-label-preview-scale" style={{ width: '2in' }}>
+                  <p className={['mb-4 text-xs device-label-preview-chrome', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                    {t('打印尺寸：0.7 x 2 inch 标签纸。', 'Print size: 0.7 x 2 inch label.')}
+                  </p>
+                  <div
+                    className={[
+                      'device-label-preview-canvas min-h-[220px] max-h-[calc(100vh-11rem)] overflow-auto rounded-2xl border p-5 flex items-center justify-center',
+                      themeMode === 'light' ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20'
+                    ].join(' ')}
+                  >
+                    <div className="device-label-preview-scale mx-auto w-fit origin-center scale-[1.7] sm:scale-[2] md:scale-[2.25] lg:scale-[2.4]" style={{ width: '2in' }}>
                       <div
                         style={{
                           width: '2in',
@@ -12022,7 +12053,7 @@ ${rowsToHtml(late)}
                           />
                         </div>
                         <div style={{ display: 'grid', gridTemplateRows: 'auto auto auto 1fr auto', gap: '0.008in', minWidth: 0 }}>
-                          <div style={{ fontSize: '7pt', fontWeight: 800, letterSpacing: '0.08em', color: '#334155' }}>OUTBOUNT DEVICE</div>
+                          <div style={{ fontSize: '7pt', fontWeight: 800, letterSpacing: '0.08em', color: '#334155' }}>OUTBOUND DEVICE</div>
                           <div style={{ fontSize: '9pt', fontWeight: 800, lineHeight: 1.05, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {deviceLabelPreview.name}
                           </div>
