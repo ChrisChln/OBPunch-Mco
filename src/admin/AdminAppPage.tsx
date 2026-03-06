@@ -8534,6 +8534,62 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     });
   };
 
+  const editTempAccount = async (
+    row: { staff: string; name: string; position: string; workAccount: string; workPassword: string },
+    payload: { name: string; position: string; workAccount: string; workPassword: string }
+  ) => {
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase configuration.') });
+      return;
+    }
+    const staff = normalizeStaffId(String(row.staff ?? '').trim());
+    if (!staff) {
+      setStatus({ tone: 'error', message: t('账号缺少 staff_id。', 'Account is missing staff_id.') });
+      return;
+    }
+    await runLocked('accounts_edit', async () => {
+      const nextName = payload.name.trim() || null;
+      const nextPosition = payload.position.trim() || null;
+      const nextWorkAccount = payload.workAccount.trim() || null;
+      const nextWorkPassword = payload.workPassword.trim() || null;
+      const updateRes = await supabase
+        .from(TEMP_ACCOUNT_TABLE)
+        .update({
+          name: nextName,
+          position: nextPosition,
+          work_account: nextWorkAccount,
+          work_password: nextWorkPassword,
+          updated_at: new Date(serverTime).toISOString()
+        })
+        .eq('staff_id', staff);
+      if (updateRes.error) {
+        setStatus({ tone: 'error', message: t(`保存账号失败：${updateRes.error.message}`, `Failed to save account: ${updateRes.error.message}`) });
+        return;
+      }
+      await writeAudit({
+        action: 'temp_account_edit',
+        staffId: staff,
+        target: TEMP_ACCOUNT_TABLE,
+        payload: {
+          before: {
+            name: row.name ?? null,
+            position: row.position ?? null,
+            work_account: row.workAccount ?? null,
+            work_password: row.workPassword ?? null
+          },
+          after: {
+            name: nextName,
+            position: nextPosition,
+            work_account: nextWorkAccount,
+            work_password: nextWorkPassword
+          }
+        }
+      });
+      setStatus({ tone: 'success', message: t('账号已更新。', 'Account updated.') });
+      await fetchTempAccounts({ lockUi: false });
+    });
+  };
+
   const exportEmployees = async () => {
     await runLocked('employees_export', async () => {
       const rows = employeesFiltered;
@@ -11534,6 +11590,7 @@ ${rowsToHtml(late)}
             {page === 'accounts' && (
               <AccountManagementPage
                 t={t}
+                themeMode={themeMode}
                 isLocked={isLocked}
                 accountSearch={accountSearch}
                 setAccountSearch={setAccountSearch}
@@ -11551,6 +11608,7 @@ ${rowsToHtml(late)}
                 onExportAccounts={exportTempAccounts}
                 accountCardPrintingStaffId={accountCardPrintingStaffId}
                 onPrintAccountCard={printAccountCard}
+                onEditAccount={editTempAccount}
               />
             )}
 
