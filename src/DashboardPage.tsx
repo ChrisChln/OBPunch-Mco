@@ -808,13 +808,13 @@ export default function DashboardPage() {
         });
 
       // Attach recent 7-day mistake counts by employee_staff_id.
+      const manualMistakeCountByStaff = new Map<string, number>();
       if (nextRows.length > 0) {
         const endDate = currentOperationalDate;
         const end = new Date(`${endDate}T00:00:00`);
         const start = Number.isNaN(end.getTime()) ? new Date() : end;
         start.setDate(start.getDate() - 6);
         const startDate = toDateOnly(start);
-        const countByStaff = new Map<string, number>();
         const targetStaffIds = Array.from(new Set(nextRows.map((row) => normalizeStaffId(String(row.staff_id ?? '').trim())).filter(Boolean)));
         for (const batch of chunkArray(targetStaffIds, 200)) {
           const reportRes = await supabase
@@ -833,11 +833,11 @@ export default function DashboardPage() {
           for (const rec of ((reportRes.data as any[] | null) ?? [])) {
             const staff = normalizeStaffId(String(rec.employee_staff_id ?? '').trim());
             if (!staff) continue;
-            countByStaff.set(staff, (countByStaff.get(staff) ?? 0) + 1);
+            manualMistakeCountByStaff.set(staff, (manualMistakeCountByStaff.get(staff) ?? 0) + 1);
           }
         }
         for (const row of nextRows) {
-          const manualCount = countByStaff.get(normalizeStaffId(String(row.staff_id ?? '').trim())) ?? 0;
+          const manualCount = manualMistakeCountByStaff.get(normalizeStaffId(String(row.staff_id ?? '').trim())) ?? 0;
           const autoCount = row.attendance === 'Absent' || row.attendance === 'Off Worked' ? 1 : 0;
           row.mistake_count_7d = manualCount + autoCount;
         }
@@ -1659,8 +1659,10 @@ export default function DashboardPage() {
         operational_date: String(item.operational_date ?? '').trim(),
         created_at: String(item.created_at ?? '').trim()
       }));
-      const autoRow = buildAutoMistakeDetailRow(row, endDate);
-      setMistakeDetailRows(autoRow ? [autoRow, ...nextRows] : nextRows);
+      const autoRows: MistakeDetailRow[] = [];
+      const attendanceAuto = buildAutoMistakeDetailRow(row, endDate);
+      if (attendanceAuto) autoRows.push(attendanceAuto);
+      setMistakeDetailRows([...autoRows, ...nextRows]);
     } finally {
       setMistakeDetailLoading(false);
     }

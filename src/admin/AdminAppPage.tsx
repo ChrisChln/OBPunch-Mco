@@ -599,6 +599,7 @@ export default function AdminApp() {
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
   const scheduleMistakeRequestRef = useRef(0);
+  const schedulePunchPresenceRequestRef = useRef(0);
 
   const [page, setPage] = useState<AdminPage>('home');
 
@@ -855,6 +856,7 @@ export default function AdminApp() {
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [schedulePunchPresenceKeys, setSchedulePunchPresenceKeys] = useState<Set<string>>(new Set());
   const [schedulePunchPresenceReady, setSchedulePunchPresenceReady] = useState(false);
+  const [schedulePunchPresenceWeekOffset, setSchedulePunchPresenceWeekOffset] = useState<number | null>(null);
   const [scheduleUphByStaffId, setScheduleUphByStaffId] = useState<Record<string, number | null>>({});
   const [scheduleMistakeByStaffId, setScheduleMistakeByStaffId] = useState<Record<string, number>>({});
   const [scheduleMistakeDetailsByStaffId, setScheduleMistakeDetailsByStaffId] = useState<Record<string, ScheduleMistakeDetail[]>>({});
@@ -2869,12 +2871,21 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     weekOffsetOverride?: number;
     mode?: 'week' | 'operational_day';
   }) => {
+    const requestId = schedulePunchPresenceRequestRef.current + 1;
+    schedulePunchPresenceRequestRef.current = requestId;
+    const isStale = () => requestId !== schedulePunchPresenceRequestRef.current;
     if (!supabase) {
-      setSchedulePunchPresenceKeys(new Set());
-      setSchedulePunchPresenceReady(true);
+      if (!isStale()) {
+        setSchedulePunchPresenceKeys(new Set());
+        setSchedulePunchPresenceReady(true);
+        setSchedulePunchPresenceWeekOffset(null);
+      }
       return;
     }
-    setSchedulePunchPresenceReady(false);
+    if (!isStale()) {
+      setSchedulePunchPresenceReady(false);
+      setSchedulePunchPresenceWeekOffset(null);
+    }
 
     const sourceEmployees = options?.employeesOverride ?? employees;
     const staffSet = new Set(
@@ -2883,8 +2894,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         .filter((staff): staff is string => Boolean(staff))
     );
     if (staffSet.size === 0) {
-      setSchedulePunchPresenceKeys(new Set());
-      setSchedulePunchPresenceReady(true);
+      if (!isStale()) {
+        setSchedulePunchPresenceKeys(new Set());
+        setSchedulePunchPresenceReady(true);
+        setSchedulePunchPresenceWeekOffset(options?.weekOffsetOverride ?? scheduleWeekOffset);
+      }
       return;
     }
 
@@ -2918,8 +2932,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             .range(from, to);
 
           if (res.error) {
-            setSchedulePunchPresenceKeys(new Set());
-            setSchedulePunchPresenceReady(false);
+            if (!isStale()) {
+              setSchedulePunchPresenceKeys(new Set());
+              setSchedulePunchPresenceReady(false);
+              setSchedulePunchPresenceWeekOffset(null);
+            }
             return;
           }
 
@@ -2933,8 +2950,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         }
       }
 
-      setSchedulePunchPresenceKeys(found);
-      setSchedulePunchPresenceReady(true);
+      if (!isStale()) {
+        setSchedulePunchPresenceKeys(found);
+        setSchedulePunchPresenceReady(true);
+        setSchedulePunchPresenceWeekOffset(null);
+      }
       return;
     }
 
@@ -2960,8 +2980,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           .range(from, to);
 
         if (res.error) {
-          setSchedulePunchPresenceKeys(new Set());
-          setSchedulePunchPresenceReady(false);
+          if (!isStale()) {
+            setSchedulePunchPresenceKeys(new Set());
+            setSchedulePunchPresenceReady(false);
+            setSchedulePunchPresenceWeekOffset(null);
+          }
           return;
         }
 
@@ -2981,8 +3004,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
     }
 
-    setSchedulePunchPresenceKeys(found);
-    setSchedulePunchPresenceReady(true);
+    if (!isStale()) {
+      setSchedulePunchPresenceKeys(found);
+      setSchedulePunchPresenceReady(true);
+      setSchedulePunchPresenceWeekOffset(weekOffset);
+    }
   };
 
   const fetchScheduleUph = async (options?: { employeesOverride?: EmployeeRow[] | null }) => {
@@ -10481,10 +10507,11 @@ ${rowsToHtml(late)}
     return now.getHours() * 60 + now.getMinutes();
   }, [serverTime]);
   const scheduleIsCurrentWeek = scheduleWeekOffset === 0;
+  const schedulePunchPresenceMatchesWeek = schedulePunchPresenceWeekOffset === scheduleWeekOffset;
   const scheduleLateAbsentVisibleMinutes = 16 * 60 + 30;
   const scheduleAutoMistakeByStaffId = useMemo(() => {
     const nextMap: Record<string, number> = {};
-    if (page !== 'schedule' || !scheduleIsCurrentWeek || !schedulePunchPresenceReady) return nextMap;
+    if (page !== 'schedule' || !scheduleIsCurrentWeek || !schedulePunchPresenceReady || !schedulePunchPresenceMatchesWeek) return nextMap;
     for (const employee of scheduleEmployeesBase) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff) continue;
@@ -10516,6 +10543,7 @@ ${rowsToHtml(late)}
   }, [
     page,
     scheduleIsCurrentWeek,
+    schedulePunchPresenceMatchesWeek,
     schedulePunchPresenceReady,
     homeOperationalDayIndex,
     scheduleDays,
@@ -10529,7 +10557,7 @@ ${rowsToHtml(late)}
   ]);
   const scheduleAutoMistakeDetailsByStaffId = useMemo(() => {
     const nextMap: Record<string, ScheduleMistakeDetail[]> = {};
-    if (page !== 'schedule' || !scheduleIsCurrentWeek || !schedulePunchPresenceReady) return nextMap;
+    if (page !== 'schedule' || !scheduleIsCurrentWeek || !schedulePunchPresenceReady || !schedulePunchPresenceMatchesWeek) return nextMap;
     for (const employee of scheduleEmployeesBase) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff) continue;
@@ -10572,6 +10600,7 @@ ${rowsToHtml(late)}
   }, [
     page,
     scheduleIsCurrentWeek,
+    schedulePunchPresenceMatchesWeek,
     schedulePunchPresenceReady,
     homeOperationalDayIndex,
     scheduleDays,
@@ -11139,6 +11168,7 @@ ${rowsToHtml(late)}
                             const hideLateAbsent = targetShift === 'late' && scheduleNowMinutes < scheduleLateAbsentVisibleMinutes;
                             const showAbsent =
                               schedulePunchPresenceReady &&
+                              schedulePunchPresenceMatchesWeek &&
                               scheduleIsCurrentWeek &&
                               !hasPunch &&
                               (isPastOperationalDay || (isCurrentOperationalDay && !hideLateAbsent));
@@ -11279,6 +11309,7 @@ ${rowsToHtml(late)}
                                   scheduledShiftForAbsent === 'late' && scheduleNowMinutes < scheduleLateAbsentVisibleMinutes;
                                 const showAbsent =
                                   schedulePunchPresenceReady &&
+                                  schedulePunchPresenceMatchesWeek &&
                                   scheduleIsCurrentWeek &&
                                   row &&
                                   isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)) &&
