@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import { createSupabaseClient } from './lib/supabase';
 import { normalizeStaffId } from './lib/staffId';
@@ -56,6 +57,29 @@ type MistakeDetailRow = {
   reporter_staff_id: string;
   operational_date: string;
   created_at: string;
+};
+
+const getAutoMistakeReasonText = (attendance: DashboardRow['attendance']) => {
+  if (attendance === 'Absent') return 'Absent';
+  if (attendance === 'Off Worked') return 'Off Worked';
+  return null;
+};
+
+const buildAutoMistakeDetailRow = (row: DashboardRow, date: string): MistakeDetailRow | null => {
+  const reason = getAutoMistakeReasonText(row.attendance);
+  if (!reason) return null;
+  const staffId = normalizeStaffId(String(row.staff_id ?? '').trim());
+  if (!staffId) return null;
+  const createdAt = new Date(`${date}T00:00:00`).toISOString();
+  return {
+    id: `auto:${staffId}:${date}`,
+    employee_staff_id: staffId,
+    position: String(row.position ?? '').trim(),
+    reason,
+    reporter_staff_id: 'SYSTEM',
+    operational_date: date,
+    created_at: createdAt
+  };
 };
 
 type TempAssignmentPayload = {
@@ -813,7 +837,9 @@ export default function DashboardPage() {
           }
         }
         for (const row of nextRows) {
-          row.mistake_count_7d = countByStaff.get(normalizeStaffId(String(row.staff_id ?? '').trim())) ?? 0;
+          const manualCount = countByStaff.get(normalizeStaffId(String(row.staff_id ?? '').trim())) ?? 0;
+          const autoCount = row.attendance === 'Absent' || row.attendance === 'Off Worked' ? 1 : 0;
+          row.mistake_count_7d = manualCount + autoCount;
         }
       }
 
@@ -1633,7 +1659,8 @@ export default function DashboardPage() {
         operational_date: String(item.operational_date ?? '').trim(),
         created_at: String(item.created_at ?? '').trim()
       }));
-      setMistakeDetailRows(nextRows);
+      const autoRow = buildAutoMistakeDetailRow(row, endDate);
+      setMistakeDetailRows(autoRow ? [autoRow, ...nextRows] : nextRows);
     } finally {
       setMistakeDetailLoading(false);
     }
@@ -2158,84 +2185,87 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {mistakeDetailOpen && (
-          <div
-            className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 p-4 pt-12"
-            onClick={() => {
-              if (mistakeDetailLoading) return;
-              setMistakeDetailOpen(false);
-            }}
-          >
+        {mistakeDetailOpen &&
+          typeof document !== 'undefined' &&
+          createPortal(
             <div
-              className="w-full max-w-6xl overflow-hidden rounded-2xl border border-white/10 bg-slate-950 shadow-2xl"
-              onClick={(event) => event.stopPropagation()}
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
+              onClick={() => {
+                if (mistakeDetailLoading) return;
+                setMistakeDetailOpen(false);
+              }}
             >
-              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-                <div>
-                  <div className="text-lg font-semibold text-slate-100">Mistake Details</div>
-                  <div className="text-xs text-slate-400">
-                    {mistakeDetailStaffId
-                      ? `Employee: ${mistakeDetailStaffId}${mistakeDetailStaffName ? ` - ${mistakeDetailStaffName}` : ''}`
-                      : 'Employee details'}
+              <div
+                className="flex h-[78vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-950 shadow-2xl"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-100">Mistake Details</div>
+                    <div className="text-xs text-slate-400">
+                      {mistakeDetailStaffId
+                        ? `Employee: ${mistakeDetailStaffId}${mistakeDetailStaffName ? ` - ${mistakeDetailStaffName}` : ''}`
+                        : 'Employee details'}
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setMistakeDetailOpen(false)}
+                    disabled={mistakeDetailLoading}
+                    className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Close
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setMistakeDetailOpen(false)}
-                  disabled={mistakeDetailLoading}
-                  className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Close
-                </button>
+                <div className="min-h-0 flex-1 overflow-auto">
+                  <table className="min-w-full table-fixed border-collapse text-sm">
+                    <thead className="sticky top-0 z-10 bg-slate-950/95 text-xs uppercase tracking-[0.16em] text-slate-400">
+                      <tr>
+                        <th className="w-[120px] px-3 py-2 text-left">Date</th>
+                        <th className="w-[140px] px-3 py-2 text-left">Position</th>
+                        <th className="px-3 py-2 text-left">Reason</th>
+                        <th className="w-[140px] px-3 py-2 text-left">Reporter USID</th>
+                        <th className="w-[190px] px-3 py-2 text-left">Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mistakeDetailLoading && (
+                        <tr>
+                          <td className="px-3 py-8 text-center text-slate-500" colSpan={5}>
+                            Loading...
+                          </td>
+                        </tr>
+                      )}
+                      {!mistakeDetailLoading && mistakeDetailError && (
+                        <tr>
+                          <td className="px-3 py-8 text-center text-rose-300" colSpan={5}>
+                            Load failed: {mistakeDetailError}
+                          </td>
+                        </tr>
+                      )}
+                      {!mistakeDetailLoading && !mistakeDetailError && mistakeDetailRows.map((item) => (
+                        <tr key={item.id || `${item.employee_staff_id}-${item.created_at}-${item.reason}`} className="border-t border-white/5 odd:bg-white/[0.03]">
+                          <td className="whitespace-nowrap px-3 py-2 align-top text-slate-300">{item.operational_date || '-'}</td>
+                          <td className="whitespace-nowrap px-3 py-2 align-top text-slate-200">{item.position || '-'}</td>
+                          <td className="px-3 py-2 align-top text-slate-200 whitespace-pre-wrap break-words">{item.reason || '-'}</td>
+                          <td className="whitespace-nowrap px-3 py-2 align-top font-mono text-slate-200">{item.reporter_staff_id || '-'}</td>
+                          <td className="whitespace-nowrap px-3 py-2 align-top text-slate-300">{item.created_at ? formatDateTime(item.created_at) : '-'}</td>
+                        </tr>
+                      ))}
+                      {!mistakeDetailLoading && !mistakeDetailError && mistakeDetailRows.length === 0 && (
+                        <tr>
+                          <td className="px-3 py-8 text-center text-slate-500" colSpan={5}>
+                            No mistake reports in the last 7 days.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-              <div className="max-h-[65vh] overflow-auto">
-                <table className="min-w-full table-fixed border-collapse text-sm">
-                  <thead className="sticky top-0 z-10 bg-slate-950/95 text-xs uppercase tracking-[0.16em] text-slate-400">
-                    <tr>
-                      <th className="w-[120px] px-3 py-2 text-left">Date</th>
-                      <th className="w-[140px] px-3 py-2 text-left">Position</th>
-                      <th className="px-3 py-2 text-left">Reason</th>
-                      <th className="w-[140px] px-3 py-2 text-left">Reporter USID</th>
-                      <th className="w-[190px] px-3 py-2 text-left">Created</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {mistakeDetailLoading && (
-                      <tr>
-                        <td className="px-3 py-8 text-center text-slate-500" colSpan={5}>
-                          Loading...
-                        </td>
-                      </tr>
-                    )}
-                    {!mistakeDetailLoading && mistakeDetailError && (
-                      <tr>
-                        <td className="px-3 py-8 text-center text-rose-300" colSpan={5}>
-                          Load failed: {mistakeDetailError}
-                        </td>
-                      </tr>
-                    )}
-                    {!mistakeDetailLoading && !mistakeDetailError && mistakeDetailRows.map((item) => (
-                      <tr key={item.id || `${item.employee_staff_id}-${item.created_at}-${item.reason}`} className="border-t border-white/5 odd:bg-white/[0.03]">
-                        <td className="whitespace-nowrap px-3 py-2 align-top text-slate-300">{item.operational_date || '-'}</td>
-                        <td className="whitespace-nowrap px-3 py-2 align-top text-slate-200">{item.position || '-'}</td>
-                        <td className="px-3 py-2 align-top text-slate-200 whitespace-pre-wrap break-words">{item.reason || '-'}</td>
-                        <td className="whitespace-nowrap px-3 py-2 align-top font-mono text-slate-200">{item.reporter_staff_id || '-'}</td>
-                        <td className="whitespace-nowrap px-3 py-2 align-top text-slate-300">{item.created_at ? formatDateTime(item.created_at) : '-'}</td>
-                      </tr>
-                    ))}
-                    {!mistakeDetailLoading && !mistakeDetailError && mistakeDetailRows.length === 0 && (
-                      <tr>
-                        <td className="px-3 py-8 text-center text-slate-500" colSpan={5}>
-                          No mistake reports in the last 7 days.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
+            </div>,
+            document.body
+          )}
 
         {accountUsageOpen && (
           <div

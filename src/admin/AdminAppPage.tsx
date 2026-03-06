@@ -60,6 +60,14 @@ type ScheduleMistakeDetail = {
   reporter_staff_id: string;
   created_at: string;
 };
+type ScheduleMistakeDraft = {
+  open: boolean;
+  staff_id: string;
+  name: string;
+  position: string;
+  reason: string;
+  saving: boolean;
+};
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
@@ -850,6 +858,14 @@ export default function AdminApp() {
   const [scheduleUphByStaffId, setScheduleUphByStaffId] = useState<Record<string, number | null>>({});
   const [scheduleMistakeByStaffId, setScheduleMistakeByStaffId] = useState<Record<string, number>>({});
   const [scheduleMistakeDetailsByStaffId, setScheduleMistakeDetailsByStaffId] = useState<Record<string, ScheduleMistakeDetail[]>>({});
+  const [scheduleMistakeDraft, setScheduleMistakeDraft] = useState<ScheduleMistakeDraft>({
+    open: false,
+    staff_id: '',
+    name: '',
+    position: '',
+    reason: '',
+    saving: false
+  });
   const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
   const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
   const [schedulePrintDate, setSchedulePrintDate] = useState(() => toDateOnly(new Date()));
@@ -3284,6 +3300,77 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       setScheduleMistakeByStaffId(nextMap);
       setScheduleMistakeDetailsByStaffId(nextDetailMap);
     }
+  };
+  const getCurrentOperationalDate = () => {
+    const now = new Date(serverTime);
+    const operationalStart = new Date(now);
+    operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
+    if (now.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
+    return toDateOnly(operationalStart);
+  };
+  const openScheduleMistakeCreate = (employee: EmployeeRow) => {
+    const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+    if (!staff) return;
+    const name = String(employee.name ?? '').trim();
+    const position = String(employee.position ?? employee.Position ?? '').trim();
+    setScheduleMistakeDraft({
+      open: true,
+      staff_id: staff,
+      name,
+      position,
+      reason: '',
+      saving: false
+    });
+  };
+  const closeScheduleMistakeCreate = () => {
+    setScheduleMistakeDraft((prev) => ({ ...prev, open: false, saving: false }));
+  };
+  const saveScheduleMistakeCreate = async () => {
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
+      return;
+    }
+    const staff = normalizeStaffId(String(scheduleMistakeDraft.staff_id ?? '').trim());
+    const reason = String(scheduleMistakeDraft.reason ?? '').trim();
+    const position = String(scheduleMistakeDraft.position ?? '').trim();
+    if (!staff) {
+      setStatus({ tone: 'error', message: t('员工工号无效。', 'Invalid employee USID.') });
+      return;
+    }
+    if (!reason) {
+      setStatus({ tone: 'error', message: t('请填写原因。', 'Please enter a reason.') });
+      return;
+    }
+    const reporterName = String(userDisplayName ?? '').trim() || String(user?.email ?? '').trim() || 'ADMIN';
+    const operationalDate = getCurrentOperationalDate();
+    setScheduleMistakeDraft((prev) => ({ ...prev, saving: true }));
+    await runLocked('schedule_mistake_create', async () => {
+      const { error } = await supabase.from(MISTAKE_REPORT_TABLE).insert([
+        {
+          position: position || '-',
+          employee_staff_id: staff,
+          reason,
+          reporter_staff_id: reporterName,
+          operational_date: operationalDate,
+          created_at: new Date(serverTime).toISOString()
+        }
+      ] as any);
+      if (error) {
+        setStatus({ tone: 'error', message: `${t('保存失败：', 'Save failed: ')}${error.message}` });
+        setScheduleMistakeDraft((prev) => ({ ...prev, saving: false }));
+        return;
+      }
+      setScheduleMistakeDraft({
+        open: false,
+        staff_id: '',
+        name: '',
+        position: '',
+        reason: '',
+        saving: false
+      });
+      setStatus({ tone: 'success', message: t('Mistake 已添加。', 'Mistake added.') });
+      await fetchScheduleMistakeCounts();
+    });
   };
 
   const fetchRecentPunches = async (options?: { search?: string; lockUi?: boolean }) => {
@@ -10395,6 +10482,107 @@ ${rowsToHtml(late)}
   }, [serverTime]);
   const scheduleIsCurrentWeek = scheduleWeekOffset === 0;
   const scheduleLateAbsentVisibleMinutes = 16 * 60 + 30;
+  const scheduleAutoMistakeByStaffId = useMemo(() => {
+    const nextMap: Record<string, number> = {};
+    if (page !== 'schedule' || !scheduleIsCurrentWeek || !schedulePunchPresenceReady) return nextMap;
+    for (const employee of scheduleEmployeesBase) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff) continue;
+      for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+        const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
+        const hasPunch = schedulePunchPresenceKeys.has(`${staff}__${dayIndex}`);
+        const scheduledShiftForAbsent = employeeShiftByStaffId[staff]?.shift ?? '';
+        const targetShift: 'early' | 'late' =
+          scheduledShiftForAbsent === 'late'
+            ? 'late'
+            : (row?.shift as 'early' | 'late' | null) === 'late'
+              ? 'late'
+              : 'early';
+        const isPastOperationalDay = dayIndex < homeOperationalDayIndex;
+        const isCurrentOperationalDay = dayIndex === homeOperationalDayIndex;
+        const hideLateAbsent = targetShift === 'late' && scheduleNowMinutes < scheduleLateAbsentVisibleMinutes;
+        const showAbsent =
+          row &&
+          isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)) &&
+          !hasPunch &&
+          (isPastOperationalDay || (isCurrentOperationalDay && !hideLateAbsent));
+        const state: ScheduleDisplayState = getScheduleDisplayState(row, hasPunch, { showAbsent: Boolean(showAbsent) });
+        if (state === 'absent' || state === 'rest_worked') {
+          nextMap[staff] = (nextMap[staff] ?? 0) + 1;
+        }
+      }
+    }
+    return nextMap;
+  }, [
+    page,
+    scheduleIsCurrentWeek,
+    schedulePunchPresenceReady,
+    homeOperationalDayIndex,
+    scheduleDays,
+    serverTime,
+    scheduleEmployeesBase,
+    scheduleRowsByStaffDayIndex,
+    schedulePunchPresenceKeys,
+    employeeShiftByStaffId,
+    scheduleNowMinutes,
+    scheduleLateAbsentVisibleMinutes
+  ]);
+  const scheduleAutoMistakeDetailsByStaffId = useMemo(() => {
+    const nextMap: Record<string, ScheduleMistakeDetail[]> = {};
+    if (page !== 'schedule' || !scheduleIsCurrentWeek || !schedulePunchPresenceReady) return nextMap;
+    for (const employee of scheduleEmployeesBase) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff) continue;
+      const details: ScheduleMistakeDetail[] = [];
+      for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+        const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
+        const hasPunch = schedulePunchPresenceKeys.has(`${staff}__${dayIndex}`);
+        const scheduledShiftForAbsent = employeeShiftByStaffId[staff]?.shift ?? '';
+        const targetShift: 'early' | 'late' =
+          scheduledShiftForAbsent === 'late'
+            ? 'late'
+            : (row?.shift as 'early' | 'late' | null) === 'late'
+              ? 'late'
+              : 'early';
+        const isPastOperationalDay = dayIndex < homeOperationalDayIndex;
+        const isCurrentOperationalDay = dayIndex === homeOperationalDayIndex;
+        const hideLateAbsent = targetShift === 'late' && scheduleNowMinutes < scheduleLateAbsentVisibleMinutes;
+        const showAbsent =
+          row &&
+          isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)) &&
+          !hasPunch &&
+          (isPastOperationalDay || (isCurrentOperationalDay && !hideLateAbsent));
+        const state: ScheduleDisplayState = getScheduleDisplayState(row, hasPunch, { showAbsent: Boolean(showAbsent) });
+        if (state !== 'absent' && state !== 'rest_worked') continue;
+        const operationalDate = toDateOnly(scheduleDays[dayIndex] ?? new Date(serverTime));
+        const createdAt = new Date(`${operationalDate}T00:00:00`).toISOString();
+        details.push({
+          operational_date: operationalDate,
+          position: String(row?.position ?? employee.position ?? employee.Position ?? '').trim() || '-',
+          reason: state === 'absent' ? 'Absent' : 'Off Worked',
+          reporter_staff_id: 'SYSTEM',
+          created_at: createdAt
+        });
+      }
+      if (details.length > 0) {
+        nextMap[staff] = details;
+      }
+    }
+    return nextMap;
+  }, [
+    page,
+    scheduleIsCurrentWeek,
+    schedulePunchPresenceReady,
+    homeOperationalDayIndex,
+    scheduleDays,
+    serverTime,
+    scheduleEmployeesBase,
+    scheduleRowsByStaffDayIndex,
+    schedulePunchPresenceKeys,
+    employeeShiftByStaffId,
+    scheduleNowMinutes,
+    scheduleLateAbsentVisibleMinutes
+  ]);
 
   if (!supabase) {
     return (
@@ -11007,8 +11195,13 @@ ${rowsToHtml(late)}
                               <td className="px-1.5 py-2 text-center font-mono text-slate-200">{formatUph(scheduleUphByStaffId[staff])}</td>
                               <td className="px-1.5 py-2 text-center">
                                 {(() => {
-                                  const count = Number(scheduleMistakeByStaffId[staff] ?? 0);
-                                  const details = scheduleMistakeDetailsByStaffId[staff] ?? [];
+                                  const manualCount = Number(scheduleMistakeByStaffId[staff] ?? 0);
+                                  const autoCount = Number(scheduleAutoMistakeByStaffId[staff] ?? 0);
+                                  const count = manualCount + autoCount;
+                                  const details = [
+                                    ...(scheduleAutoMistakeDetailsByStaffId[staff] ?? []),
+                                    ...(scheduleMistakeDetailsByStaffId[staff] ?? [])
+                                  ];
                                   const toneClass =
                                     count <= 0
                                       ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
@@ -11017,14 +11210,21 @@ ${rowsToHtml(late)}
                                         : 'border-rose-400/60 bg-rose-500/15 text-rose-200';
                                   return (
                                     <div className="group relative inline-flex">
-                                      <span
+                                      <button
+                                        type="button"
+                                        disabled={isLocked}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          openScheduleMistakeCreate(employee);
+                                        }}
                                         className={[
-                                          'inline-flex min-w-[46px] items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold transition hover:brightness-110 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.18)]',
+                                          'inline-flex min-w-[46px] items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold transition hover:brightness-110 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.18)] disabled:cursor-not-allowed disabled:opacity-60',
                                           toneClass
                                         ].join(' ')}
+                                        title="Add mistake for this employee"
                                       >
                                         {count}
-                                      </span>
+                                      </button>
                                       <div className="pointer-events-none absolute left-1/2 top-full z-30 mt-2 hidden w-[420px] -translate-x-1/2 overflow-hidden rounded-xl border border-white/15 bg-slate-950/95 text-left shadow-2xl backdrop-blur group-hover:block">
                                         <div className="border-b border-white/10 px-3 py-2 text-[11px] font-semibold tracking-[0.12em] text-slate-300">
                                           Mistake details (last 7 days)
@@ -11035,11 +11235,12 @@ ${rowsToHtml(late)}
                                               <div key={`${item.created_at}_${idx}`} className="border-b border-white/5 px-3 py-2 last:border-b-0">
                                                 <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
                                                   {(() => {
-                                                    const reporterStaff = normalizeStaffId(String(item.reporter_staff_id ?? '').trim());
-                                                    const reporterName = employeeNameByStaffId.get(reporterStaff) ?? '';
+                                                    const reporterRaw = String(item.reporter_staff_id ?? '').trim();
+                                                    const reporterStaff = normalizeStaffId(reporterRaw);
+                                                    const reporterName = reporterStaff ? (employeeNameByStaffId.get(reporterStaff) ?? '') : '';
                                                     const reporterDisplay = reporterName
                                                       ? `${reporterName} (${reporterStaff || '-'})`
-                                                      : reporterStaff || '-';
+                                                      : reporterStaff || reporterRaw || '-';
                                                     return (
                                                       <>
                                                         <span>{item.operational_date || '-'}</span>
@@ -12169,6 +12370,102 @@ ${rowsToHtml(late)}
             )}
           </>
         )}
+
+        {scheduleMistakeDraft.open &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <div
+              className={['fixed inset-0 z-[90] flex items-center justify-center p-4', themeMode === 'light' ? 'bg-slate-900/35' : 'bg-black/70'].join(' ')}
+              onClick={() => {
+                if (scheduleMistakeDraft.saving) return;
+                closeScheduleMistakeCreate();
+              }}
+            >
+              <div
+                className={[
+                  'w-full max-w-xl rounded-3xl border shadow-2xl',
+                  themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950/95 backdrop-blur'
+                ].join(' ')}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className={['flex items-center justify-between border-b px-5 py-4', themeMode === 'light' ? 'border-slate-200' : 'border-white/10'].join(' ')}>
+                  <div>
+                    <div className={['text-base font-semibold tracking-[0.06em]', themeMode === 'light' ? 'text-slate-800' : 'text-slate-100'].join(' ')}>
+                      Add Mistake
+                    </div>
+                    <div className={['mt-1 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                      {`${scheduleMistakeDraft.staff_id}${scheduleMistakeDraft.name ? ` - ${scheduleMistakeDraft.name}` : ''}`}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isLocked || scheduleMistakeDraft.saving}
+                    onClick={closeScheduleMistakeCreate}
+                    className={[
+                      'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                      themeMode === 'light'
+                        ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                    ].join(' ')}
+                  >
+                    {t('关闭', 'Close')}
+                  </button>
+                </div>
+                <div className="space-y-4 px-5 py-5">
+                  <div className={['text-xs', themeMode === 'light' ? 'text-slate-600' : 'text-slate-300'].join(' ')}>
+                    {t('岗位', 'Position')}: {scheduleMistakeDraft.position || '-'}
+                  </div>
+                  <div>
+                    <div className={['text-xs uppercase tracking-[0.2em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                      Reason
+                    </div>
+                    <textarea
+                      value={scheduleMistakeDraft.reason}
+                      disabled={isLocked || scheduleMistakeDraft.saving}
+                      onChange={(e) => setScheduleMistakeDraft((prev) => ({ ...prev, reason: e.target.value }))}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter' || e.shiftKey) return;
+                        e.preventDefault();
+                        void saveScheduleMistakeCreate();
+                      }}
+                      placeholder="Describe the mistake"
+                      rows={5}
+                      className={[
+                        'mt-2 w-full rounded-2xl px-4 py-3 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                        themeMode === 'light'
+                          ? 'border border-slate-300 bg-white text-slate-900'
+                          : 'border border-white/10 bg-black/30 text-white'
+                      ].join(' ')}
+                    />
+                  </div>
+                </div>
+                <div className={['flex items-center justify-end gap-2 border-t px-5 py-4', themeMode === 'light' ? 'border-slate-200' : 'border-white/10'].join(' ')}>
+                  <button
+                    type="button"
+                    disabled={isLocked || scheduleMistakeDraft.saving}
+                    onClick={closeScheduleMistakeCreate}
+                    className={[
+                      'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                      themeMode === 'light'
+                        ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                    ].join(' ')}
+                  >
+                    {t('取消', 'Cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isLocked || scheduleMistakeDraft.saving}
+                    onClick={() => void saveScheduleMistakeCreate()}
+                    className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {scheduleMistakeDraft.saving ? t('保存中...', 'Saving...') : t('保存', 'Save')}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
 
         <BusyOverlay visible={busyVisible} themeMode={themeMode} t={t} />
 
