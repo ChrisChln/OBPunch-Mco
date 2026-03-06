@@ -2616,11 +2616,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       setScheduleError(null);
       const nowIso = new Date(serverTime).toISOString();
       const op = user?.email ?? null;
-      // 临时排休、请假 -> 工作 (note=null); 临时工作 -> 休息 (note=__rest__)
+      // 临时排休 -> 工作 (note=null); 临时工作 -> 休息 (note=__rest__)
       const toWorkRes = await supabase
         .from(SCHEDULE_TABLE)
         .update({ note: null, operator: op, updated_at: nowIso } as any)
-        .in('note', [SCHEDULE_TEMP_REST_NOTE, SCHEDULE_LEAVE_NOTE] as any);
+        .in('note', [SCHEDULE_TEMP_REST_NOTE] as any);
       if (toWorkRes.error) {
         setScheduleError(toWorkRes.error.message);
         return;
@@ -2658,7 +2658,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       setScheduleRows((prev) =>
         prev.map((row) => {
           const note = String(row.note ?? '').trim();
-          if (note === SCHEDULE_TEMP_REST_NOTE || note === SCHEDULE_LEAVE_NOTE) return { ...row, note: null };
+          if (note === SCHEDULE_TEMP_REST_NOTE) return { ...row, note: null };
           if (note === SCHEDULE_TEMP_WORK_NOTE) return { ...row, note: SCHEDULE_REST_NOTE };
           return row;
         })
