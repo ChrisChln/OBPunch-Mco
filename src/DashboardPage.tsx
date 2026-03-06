@@ -436,6 +436,8 @@ export default function DashboardPage() {
   const [mistakeReportOpen, setMistakeReportOpen] = useState(false);
   const [mistakeReportPosition, setMistakeReportPosition] = useState('');
   const [mistakeReportEmployeeStaffId, setMistakeReportEmployeeStaffId] = useState('');
+  const [mistakeReportEmployeeQuery, setMistakeReportEmployeeQuery] = useState('');
+  const [mistakeReportEmployeeDropdownOpen, setMistakeReportEmployeeDropdownOpen] = useState(false);
   const [mistakeReportReason, setMistakeReportReason] = useState('');
   const [mistakeReportReporterStaffId, setMistakeReportReporterStaffId] = useState('');
   const [mistakeReportSubmitting, setMistakeReportSubmitting] = useState(false);
@@ -457,6 +459,7 @@ export default function DashboardPage() {
   };
   const [accountUsageRows, setAccountUsageRows] = useState<TempAccountUsageRow[]>([]);
   const inFlightRef = useRef(false);
+  const mistakeEmployeePickerRef = useRef<HTMLDivElement | null>(null);
   const fetchSeqRef = useRef(0);
   const employeeCacheRef = useRef<Map<string, EmployeeRow>>(new Map());
   const qrDataUrlCacheRef = useRef<Map<string, string>>(new Map());
@@ -1238,6 +1241,20 @@ export default function DashboardPage() {
       String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US')
     );
   }, [presentRows, mistakeReportPosition]);
+  const mistakeReportEmployeeFilteredOptions = useMemo(() => {
+    const q = String(mistakeReportEmployeeQuery ?? '').trim().toLowerCase();
+    if (!q) return mistakeReportEmployeeOptions;
+    return mistakeReportEmployeeOptions.filter((row) => {
+      const staff = String(row.staff_id ?? '').toLowerCase();
+      const name = String(row.name ?? '').toLowerCase();
+      return staff.includes(q) || name.includes(q);
+    });
+  }, [mistakeReportEmployeeOptions, mistakeReportEmployeeQuery]);
+  const selectedMistakeReportEmployeeLabel = useMemo(() => {
+    const selected = mistakeReportEmployeeOptions.find((row) => String(row.staff_id ?? '') === mistakeReportEmployeeStaffId);
+    if (!selected) return '';
+    return `${selected.staff_id} - ${selected.name || '-'}`;
+  }, [mistakeReportEmployeeOptions, mistakeReportEmployeeStaffId]);
   const presentStaffIdSet = useMemo(() => {
     const set = new Set<string>();
     for (const row of presentRows) {
@@ -1246,6 +1263,17 @@ export default function DashboardPage() {
     }
     return set;
   }, [presentRows]);
+  useEffect(() => {
+    if (!mistakeReportEmployeeDropdownOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      const root = mistakeEmployeePickerRef.current;
+      if (!root || !target || root.contains(target)) return;
+      setMistakeReportEmployeeDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [mistakeReportEmployeeDropdownOpen]);
 
   const getQrDataUrlCached = async (rawValue: string) => {
     const value = String(rawValue ?? '').trim();
@@ -1610,12 +1638,19 @@ export default function DashboardPage() {
       setMistakeReportOpen(false);
       setMistakeReportPosition('');
       setMistakeReportEmployeeStaffId('');
+      setMistakeReportEmployeeQuery('');
+      setMistakeReportEmployeeDropdownOpen(false);
       setMistakeReportReason('');
       setMistakeReportReporterStaffId('');
       openNoticeDialog('Mistake report submitted.', 'Saved');
     } finally {
       setMistakeReportSubmitting(false);
     }
+  };
+  const closeMistakeReportDialog = () => {
+    setMistakeReportOpen(false);
+    setMistakeReportEmployeeDropdownOpen(false);
+    if (!mistakeReportEmployeeStaffId) setMistakeReportEmployeeQuery('');
   };
 
   const openMistakeDetails = async (row: DashboardRow) => {
@@ -2079,7 +2114,7 @@ export default function DashboardPage() {
             className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 p-4 pt-12"
             onClick={() => {
               if (mistakeReportSubmitting) return;
-              setMistakeReportOpen(false);
+              closeMistakeReportDialog();
             }}
           >
             <div
@@ -2094,7 +2129,7 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   disabled={mistakeReportSubmitting}
-                  onClick={() => setMistakeReportOpen(false)}
+                  onClick={closeMistakeReportDialog}
                   className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Close
@@ -2108,6 +2143,8 @@ export default function DashboardPage() {
                     onChange={(e) => {
                       setMistakeReportPosition(e.target.value);
                       setMistakeReportEmployeeStaffId('');
+                      setMistakeReportEmployeeQuery('');
+                      setMistakeReportEmployeeDropdownOpen(false);
                     }}
                     disabled={mistakeReportSubmitting}
                     className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
@@ -2123,19 +2160,88 @@ export default function DashboardPage() {
 
                 <div>
                   <label className="mb-1 block text-xs uppercase tracking-[0.14em] text-slate-400">Employee (USID)</label>
-                  <select
-                    value={mistakeReportEmployeeStaffId}
-                    onChange={(e) => setMistakeReportEmployeeStaffId(e.target.value)}
-                    disabled={mistakeReportSubmitting || !mistakeReportPosition}
-                    className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <option value="">{mistakeReportPosition ? 'Select employee USID' : 'Select position first'}</option>
-                    {mistakeReportEmployeeOptions.map((row) => (
-                      <option key={row.staff_id} value={row.staff_id}>
-                        {`${row.staff_id} - ${row.name || '-'}`}
-                      </option>
-                    ))}
-                  </select>
+                  <div ref={mistakeEmployeePickerRef} className="relative">
+                    <div
+                      className={[
+                        'flex h-10 w-full items-center rounded-xl border bg-black/30 px-3 text-sm text-slate-100 transition',
+                        mistakeReportSubmitting || !mistakeReportPosition ? 'border-white/10 opacity-60' : 'border-white/10 focus-within:border-neon'
+                      ].join(' ')}
+                    >
+                      <input
+                        value={mistakeReportEmployeeQuery}
+                        onChange={(e) => {
+                          setMistakeReportEmployeeQuery(e.target.value);
+                          if (!mistakeReportEmployeeDropdownOpen) setMistakeReportEmployeeDropdownOpen(true);
+                          if (mistakeReportEmployeeStaffId) setMistakeReportEmployeeStaffId('');
+                        }}
+                        onFocus={() => {
+                          if (!mistakeReportSubmitting && mistakeReportPosition) {
+                            setMistakeReportEmployeeDropdownOpen(true);
+                            if (!mistakeReportEmployeeQuery && selectedMistakeReportEmployeeLabel) {
+                              setMistakeReportEmployeeQuery(selectedMistakeReportEmployeeLabel);
+                            }
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') {
+                            setMistakeReportEmployeeDropdownOpen(false);
+                            return;
+                          }
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const first = mistakeReportEmployeeFilteredOptions[0];
+                            if (!first) return;
+                            setMistakeReportEmployeeStaffId(String(first.staff_id ?? ''));
+                            setMistakeReportEmployeeQuery(`${first.staff_id} - ${first.name || '-'}`);
+                            setMistakeReportEmployeeDropdownOpen(false);
+                          }
+                        }}
+                        disabled={mistakeReportSubmitting || !mistakeReportPosition}
+                        placeholder={mistakeReportPosition ? 'Type to search employee USID / name' : 'Select position first'}
+                        className="h-full flex-1 bg-transparent text-slate-100 outline-none placeholder:text-slate-500 disabled:cursor-not-allowed"
+                      />
+                      <button
+                        type="button"
+                        disabled={mistakeReportSubmitting || !mistakeReportPosition}
+                        onClick={() => setMistakeReportEmployeeDropdownOpen((prev) => !prev)}
+                        className="ml-2 text-slate-400 transition hover:text-slate-200 disabled:cursor-not-allowed"
+                      >
+                        ▾
+                      </button>
+                    </div>
+                    {mistakeReportEmployeeDropdownOpen && mistakeReportPosition && (
+                      <div className="absolute z-30 mt-1 w-full overflow-hidden rounded-xl border border-white/10 bg-slate-950 shadow-2xl">
+                        <div className="max-h-56 overflow-auto py-1">
+                          {mistakeReportEmployeeFilteredOptions.length === 0 ? (
+                            <div className="px-3 py-2 text-sm text-slate-500">No matched employee</div>
+                          ) : (
+                            mistakeReportEmployeeFilteredOptions.map((row) => {
+                              const staff = String(row.staff_id ?? '');
+                              const label = `${staff} - ${row.name || '-'}`;
+                              const selected = staff === mistakeReportEmployeeStaffId;
+                              return (
+                                <button
+                                  key={staff}
+                                  type="button"
+                                  onClick={() => {
+                                    setMistakeReportEmployeeStaffId(staff);
+                                    setMistakeReportEmployeeQuery(label);
+                                    setMistakeReportEmployeeDropdownOpen(false);
+                                  }}
+                                  className={[
+                                    'flex w-full items-center px-3 py-2 text-left text-sm transition',
+                                    selected ? 'bg-neon/15 text-neon' : 'text-slate-200 hover:bg-white/10'
+                                  ].join(' ')}
+                                >
+                                  {label}
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div>
@@ -2169,7 +2275,7 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   disabled={mistakeReportSubmitting}
-                  onClick={() => setMistakeReportOpen(false)}
+                  onClick={closeMistakeReportDialog}
                   className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Cancel
