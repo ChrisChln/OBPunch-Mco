@@ -28,6 +28,7 @@ type DashboardRow = EmployeeRow & {
   punches: PunchRow[];
   attendance: 'Absent' | 'Off Worked' | 'Normal';
   work_hours_today: number;
+  mistake_count_7d: number;
   display_shift: '' | 'early' | 'late';
   borrowed_device: string;
   schedule_state: string;
@@ -47,6 +48,16 @@ type TempAccountUsageRow = {
   status: 'Active' | 'Expired';
 };
 
+type MistakeDetailRow = {
+  id: string;
+  employee_staff_id: string;
+  position: string;
+  reason: string;
+  reporter_staff_id: string;
+  operational_date: string;
+  created_at: string;
+};
+
 type TempAssignmentPayload = {
   work_account: string;
   work_password: string;
@@ -63,6 +74,7 @@ const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const DEVICE_LOANS_FETCH_LIMIT = 50000;
+const MISTAKE_REPORT_TABLE = (import.meta.env.VITE_MISTAKE_REPORT_TABLE as string | undefined) ?? 'ob_mistake_reports';
 const DASHBOARD_REFRESH_INTERVAL_MS = 15000;
 const supabase = createSupabaseClient({ persistSession: false });
 const QR_PRINT_SIZE = 320;
@@ -397,6 +409,18 @@ export default function DashboardPage() {
   const [accountPrintingStaffId, setAccountPrintingStaffId] = useState<string | null>(null);
   const [accountAssigningStaffId, setAccountAssigningStaffId] = useState<string | null>(null);
   const [accountUsageOpen, setAccountUsageOpen] = useState(false);
+  const [mistakeReportOpen, setMistakeReportOpen] = useState(false);
+  const [mistakeReportPosition, setMistakeReportPosition] = useState('');
+  const [mistakeReportEmployeeStaffId, setMistakeReportEmployeeStaffId] = useState('');
+  const [mistakeReportReason, setMistakeReportReason] = useState('');
+  const [mistakeReportReporterStaffId, setMistakeReportReporterStaffId] = useState('');
+  const [mistakeReportSubmitting, setMistakeReportSubmitting] = useState(false);
+  const [mistakeDetailOpen, setMistakeDetailOpen] = useState(false);
+  const [mistakeDetailLoading, setMistakeDetailLoading] = useState(false);
+  const [mistakeDetailRows, setMistakeDetailRows] = useState<MistakeDetailRow[]>([]);
+  const [mistakeDetailStaffId, setMistakeDetailStaffId] = useState('');
+  const [mistakeDetailStaffName, setMistakeDetailStaffName] = useState('');
+  const [mistakeDetailError, setMistakeDetailError] = useState<string | null>(null);
   const [accountUsageSearch, setAccountUsageSearch] = useState('');
   const [accountUsagePositionFilter, setAccountUsagePositionFilter] = useState('');
   const [noticeDialog, setNoticeDialog] = useState<{ open: boolean; title: string; message: string }>({
@@ -741,6 +765,7 @@ export default function DashboardPage() {
             shift: normalizedShift,
             display_shift: displayShift,
             work_hours_today: workHoursToday,
+            mistake_count_7d: 0,
             temp_account_name: '',
             temp_source_staff_id: '',
             punches,
@@ -757,6 +782,40 @@ export default function DashboardPage() {
           if (isPlannedWork && !hasProfile && row.work_hours_today <= 0) return false;
           return isPlannedWork || isOffWorked;
         });
+
+      // Attach recent 7-day mistake counts by employee_staff_id.
+      if (nextRows.length > 0) {
+        const endDate = currentOperationalDate;
+        const end = new Date(`${endDate}T00:00:00`);
+        const start = Number.isNaN(end.getTime()) ? new Date() : end;
+        start.setDate(start.getDate() - 6);
+        const startDate = toDateOnly(start);
+        const countByStaff = new Map<string, number>();
+        const targetStaffIds = Array.from(new Set(nextRows.map((row) => normalizeStaffId(String(row.staff_id ?? '').trim())).filter(Boolean)));
+        for (const batch of chunkArray(targetStaffIds, 200)) {
+          const reportRes = await supabase
+            .from(MISTAKE_REPORT_TABLE)
+            .select('employee_staff_id, operational_date')
+            .in('employee_staff_id', batch)
+            .gte('operational_date', startDate)
+            .lte('operational_date', endDate)
+            .limit(10000);
+          if (reportRes.error) {
+            if (!isMissingTableError(reportRes.error.message, MISTAKE_REPORT_TABLE)) {
+              console.warn('[dashboard] load mistake reports failed:', reportRes.error.message);
+            }
+            break;
+          }
+          for (const rec of ((reportRes.data as any[] | null) ?? [])) {
+            const staff = normalizeStaffId(String(rec.employee_staff_id ?? '').trim());
+            if (!staff) continue;
+            countByStaff.set(staff, (countByStaff.get(staff) ?? 0) + 1);
+          }
+        }
+        for (const row of nextRows) {
+          row.mistake_count_7d = countByStaff.get(normalizeStaffId(String(row.staff_id ?? '').trim())) ?? 0;
+        }
+      }
 
       // Rehydrate temporary account assignments created in current operational window.
       const needsAccountRows = nextRows.filter(
@@ -972,7 +1031,7 @@ export default function DashboardPage() {
       const digest = `${nextRows.length}|${nextRows
         .map(
           (r) =>
-            `${r.staff_id}:${r.attendance}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}:${r.schedule_state}:${r.work_account}:${r.temp_account_name}`
+            `${r.staff_id}:${r.attendance}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}:${r.schedule_state}:${r.work_account}:${r.temp_account_name}:${r.mistake_count_7d ?? 0}`
         )
         .join(';')}`;
 
@@ -1124,6 +1183,43 @@ export default function DashboardPage() {
       return { shift, expected, present };
     });
   }, [cardPositions, cardStatsByKey]);
+
+  const presentRows = useMemo(
+    () => rows.filter((row) => row.attendance !== 'Absent' && !isNewHirePlaceholderStaffId(String(row.staff_id ?? '').trim())),
+    [rows]
+  );
+  const mistakeReportPositionOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          presentRows
+            .map((row) => normalizePositionKey(String(row.position ?? '').trim()) || String(row.position ?? '').trim())
+            .filter(Boolean)
+        )
+      ).sort((a, b) => a.localeCompare(b, 'en-US')),
+    [presentRows]
+  );
+  const mistakeReportEmployeeOptions = useMemo(() => {
+    const byStaff = new Map<string, DashboardRow>();
+    for (const row of presentRows) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) continue;
+      const position = normalizePositionKey(String(row.position ?? '').trim()) || String(row.position ?? '').trim();
+      if (mistakeReportPosition && position !== mistakeReportPosition) continue;
+      if (!byStaff.has(staff)) byStaff.set(staff, row);
+    }
+    return Array.from(byStaff.values()).sort((a, b) =>
+      String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US')
+    );
+  }, [presentRows, mistakeReportPosition]);
+  const presentStaffIdSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of presentRows) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (staff) set.add(staff);
+    }
+    return set;
+  }, [presentRows]);
 
   const getQrDataUrlCached = async (rawValue: string) => {
     const value = String(rawValue ?? '').trim();
@@ -1439,6 +1535,110 @@ export default function DashboardPage() {
     }
   };
 
+  const submitMistakeReport = async () => {
+    if (!supabase) {
+      openNoticeDialog('Missing Supabase configuration.', 'Save failed');
+      return;
+    }
+    const position = String(mistakeReportPosition ?? '').trim();
+    const employeeStaffId = normalizeStaffId(String(mistakeReportEmployeeStaffId ?? '').trim());
+    const reason = String(mistakeReportReason ?? '').trim();
+    const reporterStaffId = normalizeStaffId(String(mistakeReportReporterStaffId ?? '').trim());
+    if (!position) {
+      openNoticeDialog('Please select a position.', 'Validation');
+      return;
+    }
+    if (!employeeStaffId) {
+      openNoticeDialog('Please select an employee USID.', 'Validation');
+      return;
+    }
+    if (!reason) {
+      openNoticeDialog('Please enter a mistake reason.', 'Validation');
+      return;
+    }
+    if (!reporterStaffId) {
+      openNoticeDialog('Please select a reporter USID.', 'Validation');
+      return;
+    }
+    if (!presentStaffIdSet.has(reporterStaffId)) {
+      openNoticeDialog('Reporter USID must be a present employee for today.', 'Validation');
+      return;
+    }
+    setMistakeReportSubmitting(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const { error: insertError } = await supabase.from(MISTAKE_REPORT_TABLE).insert([
+        {
+          position,
+          employee_staff_id: employeeStaffId,
+          reason,
+          reporter_staff_id: reporterStaffId,
+          operational_date: operationalDate || getOperationalRange().operationalDate,
+          created_at: nowIso
+        }
+      ]);
+      if (insertError) {
+        openNoticeDialog(`Failed to save report: ${insertError.message}`, 'Save failed');
+        return;
+      }
+      setMistakeReportOpen(false);
+      setMistakeReportPosition('');
+      setMistakeReportEmployeeStaffId('');
+      setMistakeReportReason('');
+      setMistakeReportReporterStaffId('');
+      openNoticeDialog('Mistake report submitted.', 'Saved');
+    } finally {
+      setMistakeReportSubmitting(false);
+    }
+  };
+
+  const openMistakeDetails = async (row: DashboardRow) => {
+    if (!supabase) {
+      openNoticeDialog('Missing Supabase configuration.', 'Load failed');
+      return;
+    }
+    const staffId = normalizeStaffId(String(row.staff_id ?? '').trim());
+    if (!staffId) return;
+    const endDate = operationalDate || getOperationalRange().operationalDate;
+    const end = new Date(`${endDate}T00:00:00`);
+    const start = Number.isNaN(end.getTime()) ? new Date() : end;
+    start.setDate(start.getDate() - 6);
+    const startDate = toDateOnly(start);
+
+    setMistakeDetailOpen(true);
+    setMistakeDetailLoading(true);
+    setMistakeDetailError(null);
+    setMistakeDetailRows([]);
+    setMistakeDetailStaffId(staffId);
+    setMistakeDetailStaffName(String(row.name ?? '').trim());
+    try {
+      const res = await supabase
+        .from(MISTAKE_REPORT_TABLE)
+        .select('id, employee_staff_id, position, reason, reporter_staff_id, operational_date, created_at')
+        .eq('employee_staff_id', staffId)
+        .gte('operational_date', startDate)
+        .lte('operational_date', endDate)
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (res.error) {
+        setMistakeDetailError(res.error.message);
+        return;
+      }
+      const nextRows: MistakeDetailRow[] = (((res.data as any[]) ?? []) as any[]).map((item) => ({
+        id: String(item.id ?? ''),
+        employee_staff_id: normalizeStaffId(String(item.employee_staff_id ?? '').trim()),
+        position: String(item.position ?? '').trim(),
+        reason: String(item.reason ?? '').trim(),
+        reporter_staff_id: normalizeStaffId(String(item.reporter_staff_id ?? '').trim()),
+        operational_date: String(item.operational_date ?? '').trim(),
+        created_at: String(item.created_at ?? '').trim()
+      }));
+      setMistakeDetailRows(nextRows);
+    } finally {
+      setMistakeDetailLoading(false);
+    }
+  };
+
   return (
     <main className="min-h-screen px-6 py-6 text-paper">
       <section className="glass rounded-3xl px-5 py-5">
@@ -1450,6 +1650,13 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setMistakeReportOpen(true)}
+              className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-slate-200 transition hover:bg-white/15"
+            >
+              Mistake Report
+            </button>
             <button
               type="button"
               onClick={() => setAccountUsageOpen(true)}
@@ -1615,7 +1822,6 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {loading && <p className="mt-3 text-sm text-slate-300">Loading...</p>}
         {error && <p className="mt-3 text-sm text-rose-300">Load failed: {error}</p>}
 
         {!error && (
@@ -1631,6 +1837,7 @@ export default function DashboardPage() {
                   <th className="px-3 py-2 text-left">Device</th>
                   <th className="px-3 py-2 text-left">Account</th>
                   <th className="px-3 py-2 text-left">Shift</th>
+                  <th className="px-3 py-2 text-left">Mistake</th>
                   <th className="px-3 py-2 text-left">Punch Logs</th>
                 </tr>
               </thead>
@@ -1745,6 +1952,30 @@ export default function DashboardPage() {
                           {formatShiftLabel(row.display_shift || row.shift)}
                         </span>
                       </td>
+                      <td className={['whitespace-nowrap px-3 py-2', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                        {(() => {
+                          const count = Number(row.mistake_count_7d ?? 0);
+                          const toneClass =
+                            count <= 0
+                              ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
+                              : count <= 2
+                                ? 'border-amber-400/60 bg-amber-500/15 text-amber-200'
+                                : 'border-rose-400/60 bg-rose-500/15 text-rose-200';
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => void openMistakeDetails(row)}
+                              className={[
+                                'inline-flex min-w-[48px] items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold transition hover:brightness-110',
+                                toneClass
+                              ].join(' ')}
+                              title="View mistake report details"
+                            >
+                              {count}
+                            </button>
+                          );
+                        })()}
+                      </td>
                       <td
                         className={[
                           'whitespace-nowrap px-3 py-2',
@@ -1793,7 +2024,7 @@ export default function DashboardPage() {
                 })}
                 {!loading && renderedRows.length === 0 && (
                   <tr>
-                    <td className="px-3 py-6 text-center text-slate-500" colSpan={9}>
+                    <td className="px-3 py-6 text-center text-slate-500" colSpan={10}>
                       No scheduled work rows for this operational date.
                     </td>
                   </tr>
@@ -1811,6 +2042,198 @@ export default function DashboardPage() {
             >
               Load more
             </button>
+          </div>
+        )}
+
+        {mistakeReportOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 p-4 pt-12"
+            onClick={() => {
+              if (mistakeReportSubmitting) return;
+              setMistakeReportOpen(false);
+            }}
+          >
+            <div
+              className="w-full max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-slate-950 shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                <div>
+                  <div className="text-lg font-semibold text-slate-100">Mistake Report</div>
+                  <div className="text-xs text-slate-400">Create a daily mistake report</div>
+                </div>
+                <button
+                  type="button"
+                  disabled={mistakeReportSubmitting}
+                  onClick={() => setMistakeReportOpen(false)}
+                  className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="grid gap-4 px-4 py-4">
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-[0.14em] text-slate-400">Position</label>
+                  <select
+                    value={mistakeReportPosition}
+                    onChange={(e) => {
+                      setMistakeReportPosition(e.target.value);
+                      setMistakeReportEmployeeStaffId('');
+                    }}
+                    disabled={mistakeReportSubmitting}
+                    className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <option value="">Select position</option>
+                    {mistakeReportPositionOptions.map((position) => (
+                      <option key={position} value={position}>
+                        {position}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-[0.14em] text-slate-400">Employee (USID)</label>
+                  <select
+                    value={mistakeReportEmployeeStaffId}
+                    onChange={(e) => setMistakeReportEmployeeStaffId(e.target.value)}
+                    disabled={mistakeReportSubmitting || !mistakeReportPosition}
+                    className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <option value="">{mistakeReportPosition ? 'Select employee USID' : 'Select position first'}</option>
+                    {mistakeReportEmployeeOptions.map((row) => (
+                      <option key={row.staff_id} value={row.staff_id}>
+                        {`${row.staff_id} - ${row.name || '-'}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-[0.14em] text-slate-400">Mistake Reason</label>
+                  <textarea
+                    value={mistakeReportReason}
+                    onChange={(e) => setMistakeReportReason(e.target.value)}
+                    disabled={mistakeReportSubmitting}
+                    rows={4}
+                    placeholder="Describe the mistake"
+                    className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-[0.14em] text-slate-400">Reporter (USID)</label>
+                  <input
+                    value={mistakeReportReporterStaffId}
+                    onChange={(e) => setMistakeReportReporterStaffId(normalizeStaffId(e.target.value))}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter') return;
+                      setMistakeReportReporterStaffId((prev) => normalizeStaffId(prev));
+                    }}
+                    disabled={mistakeReportSubmitting}
+                    placeholder="Scan or enter reporter USID"
+                    className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2 border-t border-white/10 px-4 py-3">
+                <button
+                  type="button"
+                  disabled={mistakeReportSubmitting}
+                  onClick={() => setMistakeReportOpen(false)}
+                  className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={mistakeReportSubmitting}
+                  onClick={() => void submitMistakeReport()}
+                  className="rounded-xl bg-neon px-4 py-1.5 text-xs font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {mistakeReportSubmitting ? 'Submitting...' : 'Submit'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {mistakeDetailOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 p-4 pt-12"
+            onClick={() => {
+              if (mistakeDetailLoading) return;
+              setMistakeDetailOpen(false);
+            }}
+          >
+            <div
+              className="w-full max-w-6xl overflow-hidden rounded-2xl border border-white/10 bg-slate-950 shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                <div>
+                  <div className="text-lg font-semibold text-slate-100">Mistake Details</div>
+                  <div className="text-xs text-slate-400">
+                    {mistakeDetailStaffId
+                      ? `Employee: ${mistakeDetailStaffId}${mistakeDetailStaffName ? ` - ${mistakeDetailStaffName}` : ''}`
+                      : 'Employee details'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMistakeDetailOpen(false)}
+                  disabled={mistakeDetailLoading}
+                  className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="max-h-[65vh] overflow-auto">
+                <table className="min-w-full table-fixed border-collapse text-sm">
+                  <thead className="sticky top-0 z-10 bg-slate-950/95 text-xs uppercase tracking-[0.16em] text-slate-400">
+                    <tr>
+                      <th className="w-[120px] px-3 py-2 text-left">Date</th>
+                      <th className="w-[140px] px-3 py-2 text-left">Position</th>
+                      <th className="px-3 py-2 text-left">Reason</th>
+                      <th className="w-[140px] px-3 py-2 text-left">Reporter USID</th>
+                      <th className="w-[190px] px-3 py-2 text-left">Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mistakeDetailLoading && (
+                      <tr>
+                        <td className="px-3 py-8 text-center text-slate-500" colSpan={5}>
+                          Loading...
+                        </td>
+                      </tr>
+                    )}
+                    {!mistakeDetailLoading && mistakeDetailError && (
+                      <tr>
+                        <td className="px-3 py-8 text-center text-rose-300" colSpan={5}>
+                          Load failed: {mistakeDetailError}
+                        </td>
+                      </tr>
+                    )}
+                    {!mistakeDetailLoading && !mistakeDetailError && mistakeDetailRows.map((item) => (
+                      <tr key={item.id || `${item.employee_staff_id}-${item.created_at}-${item.reason}`} className="border-t border-white/5 odd:bg-white/[0.03]">
+                        <td className="whitespace-nowrap px-3 py-2 align-top text-slate-300">{item.operational_date || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 align-top text-slate-200">{item.position || '-'}</td>
+                        <td className="px-3 py-2 align-top text-slate-200 whitespace-pre-wrap break-words">{item.reason || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 align-top font-mono text-slate-200">{item.reporter_staff_id || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 align-top text-slate-300">{item.created_at ? formatDateTime(item.created_at) : '-'}</td>
+                      </tr>
+                    ))}
+                    {!mistakeDetailLoading && !mistakeDetailError && mistakeDetailRows.length === 0 && (
+                      <tr>
+                        <td className="px-3 py-8 text-center text-slate-500" colSpan={5}>
+                          No mistake reports in the last 7 days.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
 

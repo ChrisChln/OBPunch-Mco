@@ -53,6 +53,14 @@ import type {
   TimecardRow
 } from './types';
 
+type ScheduleMistakeDetail = {
+  operational_date: string;
+  position: string;
+  reason: string;
+  reporter_staff_id: string;
+  created_at: string;
+};
+
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
 const createEmptyPositionFlags = (): Record<AllowedPosition, boolean> => ({
@@ -82,6 +90,7 @@ const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | 
 const OBUP_REPORT_DETAILS_TABLE =
   (import.meta.env.VITE_OBUP_REPORT_DETAILS_TABLE as string | undefined) ?? 'report_details';
 const OBUP_UPLOAD_RECORDS_TABLE = (import.meta.env.VITE_OBUP_UPLOAD_RECORDS_TABLE as string | undefined) ?? 'upload_records';
+const MISTAKE_REPORT_TABLE = (import.meta.env.VITE_MISTAKE_REPORT_TABLE as string | undefined) ?? 'ob_mistake_reports';
 const SCHEDULE_UPH_DAYS = 30;
 const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
@@ -160,6 +169,16 @@ const parseUph = (value: unknown) => {
   if (!Number.isFinite(n)) return null;
   if (n < 0) return null;
   return n;
+};
+
+const isMissingTableError = (message: unknown, table: string) => {
+  const text = String(message ?? '').toLowerCase();
+  const target = String(table ?? '').toLowerCase();
+  return (
+    text.includes('could not find the table') ||
+    text.includes('relation') ||
+    text.includes('does not exist')
+  ) && text.includes(target);
 };
 
 const formatUph = (value: number | null | undefined) => (value === null || value === undefined ? '-' : value.toFixed(1));
@@ -571,6 +590,7 @@ export default function AdminApp() {
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
+  const scheduleMistakeRequestRef = useRef(0);
 
   const [page, setPage] = useState<AdminPage>('home');
 
@@ -828,6 +848,8 @@ export default function AdminApp() {
   const [schedulePunchPresenceKeys, setSchedulePunchPresenceKeys] = useState<Set<string>>(new Set());
   const [schedulePunchPresenceReady, setSchedulePunchPresenceReady] = useState(false);
   const [scheduleUphByStaffId, setScheduleUphByStaffId] = useState<Record<string, number | null>>({});
+  const [scheduleMistakeByStaffId, setScheduleMistakeByStaffId] = useState<Record<string, number>>({});
+  const [scheduleMistakeDetailsByStaffId, setScheduleMistakeDetailsByStaffId] = useState<Record<string, ScheduleMistakeDetail[]>>({});
   const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
   const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
   const [schedulePrintDate, setSchedulePrintDate] = useState(() => toDateOnly(new Date()));
@@ -2642,6 +2664,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     await fetchSchedulePublishSetting();
     await fetchSchedulePunchPresence({ employeesOverride: latestEmployees });
     await fetchScheduleUph({ employeesOverride: latestEmployees });
+    await fetchScheduleMistakeCounts({ employeesOverride: latestEmployees });
   };
 
   const refreshHomePanel = async (options?: { lockUi?: boolean }) => {
@@ -3177,6 +3200,89 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         stages
       });
       setScheduleUphByStaffId(nextMap);
+    }
+  };
+
+  const fetchScheduleMistakeCounts = async (options?: { employeesOverride?: EmployeeRow[] | null }) => {
+    const requestId = scheduleMistakeRequestRef.current + 1;
+    scheduleMistakeRequestRef.current = requestId;
+    const employeesForMistake = options?.employeesOverride ?? employees;
+
+    if (!supabase) {
+      if (requestId === scheduleMistakeRequestRef.current) {
+        setScheduleMistakeByStaffId({});
+        setScheduleMistakeDetailsByStaffId({});
+      }
+      return;
+    }
+
+    const staffIds = Array.from(
+      new Set(
+        employeesForMistake
+          .map((employee) => normalizeStaffId(String(employee.staff_id ?? '').trim()))
+          .filter(Boolean)
+      )
+    );
+    if (staffIds.length === 0) {
+      if (requestId === scheduleMistakeRequestRef.current) {
+        setScheduleMistakeByStaffId({});
+        setScheduleMistakeDetailsByStaffId({});
+      }
+      return;
+    }
+
+    const endDate = toDateOnly(serverTime);
+    const startDate = toDateOnly(addDays(serverTime, -6));
+    const countByStaff = new Map<string, number>();
+    const detailByStaff = new Map<string, ScheduleMistakeDetail[]>();
+    for (const batch of chunk(staffIds, 200)) {
+      const res = await supabase
+        .from(MISTAKE_REPORT_TABLE)
+        .select('employee_staff_id, operational_date, position, reason, reporter_staff_id, created_at')
+        .in('employee_staff_id', batch as any[])
+        .gte('operational_date', startDate)
+        .lte('operational_date', endDate)
+        .limit(10000);
+      if (res.error) {
+        if (!isMissingTableError(res.error.message, MISTAKE_REPORT_TABLE)) {
+          console.warn('[schedule] load mistake counts failed:', res.error.message);
+        }
+        if (requestId === scheduleMistakeRequestRef.current) {
+          setScheduleMistakeByStaffId({});
+          setScheduleMistakeDetailsByStaffId({});
+        }
+        return;
+      }
+      for (const row of ((res.data as any[] | null) ?? [])) {
+        const staff = normalizeStaffId(String(row.employee_staff_id ?? '').trim());
+        if (!staff) continue;
+        countByStaff.set(staff, (countByStaff.get(staff) ?? 0) + 1);
+        const list = detailByStaff.get(staff) ?? [];
+        list.push({
+          operational_date: String(row.operational_date ?? '').trim(),
+          position: String(row.position ?? '').trim(),
+          reason: String(row.reason ?? '').trim(),
+          reporter_staff_id: normalizeStaffId(String(row.reporter_staff_id ?? '').trim()),
+          created_at: String(row.created_at ?? '').trim()
+        });
+        detailByStaff.set(staff, list);
+      }
+    }
+
+    const nextMap: Record<string, number> = {};
+    const nextDetailMap: Record<string, ScheduleMistakeDetail[]> = {};
+    for (const staff of staffIds) {
+      nextMap[staff] = countByStaff.get(staff) ?? 0;
+      const sorted = [...(detailByStaff.get(staff) ?? [])].sort((a, b) => {
+        const aTs = Date.parse(a.created_at) || 0;
+        const bTs = Date.parse(b.created_at) || 0;
+        return bTs - aTs;
+      });
+      nextDetailMap[staff] = sorted.slice(0, 12);
+    }
+    if (requestId === scheduleMistakeRequestRef.current) {
+      setScheduleMistakeByStaffId(nextMap);
+      setScheduleMistakeDetailsByStaffId(nextDetailMap);
     }
   };
 
@@ -7545,6 +7651,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   useEffect(() => {
     if (page !== 'schedule') return;
     void fetchScheduleUph();
+    void fetchScheduleMistakeCounts();
   }, [page, employees]);
 
   useEffect(() => {
@@ -10742,7 +10849,7 @@ ${rowsToHtml(late)}
 
                 {!scheduleError && scheduleEmployeesFiltered.length > 0 && (
                   <div className="no-scrollbar mt-4 min-h-[320px] max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
-                    <table className="min-w-[1710px] w-full table-fixed text-left text-xs leading-tight">
+                    <table className="min-w-[1788px] w-full table-fixed text-left text-xs leading-tight">
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
                           <th className="sticky top-0 z-20 w-[100px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('工号', 'ID')}</th>
@@ -10766,6 +10873,9 @@ ${rowsToHtml(late)}
                             >
                               UPH{scheduleSortByUphDesc ? ' ↓' : ''}
                             </button>
+                          </th>
+                          <th className="sticky top-0 z-20 w-[78px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">
+                            Mistake
                           </th>
                           {scheduleDays.map((day, idx) => (
                             <th key={toDateOnly(day)} className="sticky top-0 z-20 w-[92px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
@@ -10895,6 +11005,67 @@ ${rowsToHtml(late)}
                                 })()}
                               </td>
                               <td className="px-1.5 py-2 text-center font-mono text-slate-200">{formatUph(scheduleUphByStaffId[staff])}</td>
+                              <td className="px-1.5 py-2 text-center">
+                                {(() => {
+                                  const count = Number(scheduleMistakeByStaffId[staff] ?? 0);
+                                  const details = scheduleMistakeDetailsByStaffId[staff] ?? [];
+                                  const toneClass =
+                                    count <= 0
+                                      ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
+                                      : count <= 2
+                                        ? 'border-amber-400/60 bg-amber-500/15 text-amber-200'
+                                        : 'border-rose-400/60 bg-rose-500/15 text-rose-200';
+                                  return (
+                                    <div className="group relative inline-flex">
+                                      <span
+                                        className={[
+                                          'inline-flex min-w-[46px] items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold transition hover:brightness-110 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.18)]',
+                                          toneClass
+                                        ].join(' ')}
+                                      >
+                                        {count}
+                                      </span>
+                                      <div className="pointer-events-none absolute left-1/2 top-full z-30 mt-2 hidden w-[420px] -translate-x-1/2 overflow-hidden rounded-xl border border-white/15 bg-slate-950/95 text-left shadow-2xl backdrop-blur group-hover:block">
+                                        <div className="border-b border-white/10 px-3 py-2 text-[11px] font-semibold tracking-[0.12em] text-slate-300">
+                                          Mistake details (last 7 days)
+                                        </div>
+                                        {details.length > 0 ? (
+                                          <div className="max-h-64 overflow-auto">
+                                            {details.map((item, idx) => (
+                                              <div key={`${item.created_at}_${idx}`} className="border-b border-white/5 px-3 py-2 last:border-b-0">
+                                                <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+                                                  {(() => {
+                                                    const reporterStaff = normalizeStaffId(String(item.reporter_staff_id ?? '').trim());
+                                                    const reporterName = employeeNameByStaffId.get(reporterStaff) ?? '';
+                                                    const reporterDisplay = reporterName
+                                                      ? `${reporterName} (${reporterStaff || '-'})`
+                                                      : reporterStaff || '-';
+                                                    return (
+                                                      <>
+                                                        <span>{item.operational_date || '-'}</span>
+                                                        <span>{item.position || '-'}</span>
+                                                        <span>Reporter: {reporterDisplay}</span>
+                                                      </>
+                                                    );
+                                                  })()}
+                                                </div>
+                                                <div className="mt-1 whitespace-pre-wrap break-words text-[12px] text-slate-100">
+                                                  {item.reason || '-'}
+                                                </div>
+                                                <div className="mt-1 text-[10px] text-slate-500">
+                                                  {item.created_at ? formatTime(new Date(item.created_at), locale) : '-'}
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        ) : (
+                                          <div className="px-3 py-3 text-xs text-slate-400">No mistake reports in last 7 days.</div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
+                              </td>
                               {scheduleDays.map((_, dayIndex) => {
                                 const key = `${staff}__${dayIndex}`;
                                 const row = scheduleRowsByStaffDayIndex.get(key);
