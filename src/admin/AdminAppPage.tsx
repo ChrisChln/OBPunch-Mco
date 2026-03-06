@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
@@ -778,6 +778,7 @@ export default function AdminApp() {
   const [timecardError, setTimecardError] = useState<string | null>(null);
   const [timecardSearch, setTimecardSearch] = useState('');
   const [timecardAgency, setTimecardAgency] = useState('');
+  const [timecardAgencySort, setTimecardAgencySort] = useState<'' | 'asc' | 'desc'>('');
   const [timecardPosition, setTimecardPosition] = useState('');
   const [timecardShift, setTimecardShift] = useState<'' | 'early' | 'late'>('');
   const [timecardInProgressOnly, setTimecardInProgressOnly] = useState(false);
@@ -1858,7 +1859,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       action === 'schedule_clear' ||
       action === 'punch_manual_add' ||
       action === 'punch_manual_edit' ||
-      action === 'punch_manual_delete'
+      action === 'punch_manual_delete' ||
+      action === 'punch_count_verified'
     ) {
       setCellAuditRows((prev) => [row, ...prev].slice(0, 1200));
     }
@@ -1931,7 +1933,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       'schedule_clear',
       'punch_manual_add',
       'punch_manual_edit',
-      'punch_manual_delete'
+      'punch_manual_delete',
+      'punch_count_verified'
     ];
     const res = await supabase
       .from(AUDIT_TABLE)
@@ -5304,6 +5307,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       summary = t('手动删除打卡', 'Manual punch delete');
       const hoursText = fmtHoursDelta(payload?.hours_before, payload?.hours_after);
       if (hoursText) summary = `${summary}: ${hoursText}`;
+    } else if (action === 'punch_count_verified') {
+      summary = t('打卡次数已核实', 'Punch count verified');
+      push(t('打卡次数', 'Punch count'), payload?.punch_count);
+      push(t('期望次数', 'Expected count'), payload?.expected_count);
     } else if (action === 'device_add') {
       summary = t('新增设备', 'Device added');
       push(t('设备名', 'Device name'), payload?.device_name);
@@ -7140,13 +7147,42 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
       return totalMs / 3600000;
     };
+    const computeSnapshotDayPunchCount = () => {
+      if (!dayRangeForAudit) return Number.NaN;
+      let count = 0;
+      for (const row of punchSnapshot.values()) {
+        const at = new Date(row.created_at);
+        if (Number.isNaN(at.getTime())) continue;
+        const bucketTimeMs = getOperationalBucketTimeMs(at, row.action);
+        if (bucketTimeMs >= dayRangeForAudit.start.getTime() && bucketTimeMs < dayRangeForAudit.end.getTime()) {
+          count += 1;
+        }
+      }
+      return count;
+    };
     const dayDateForAudit = dayRangeForAudit ? toDateOnly(dayRangeForAudit.start) : '';
 
     if (changed.length === 0 && deleteIds.length === 0 && pendingAdds.length === 0) {
       setTimecardPunchError(null);
-      setStatus({ tone: 'idle', message: t('没有可保存的改动。', 'No changes to save.') });
+      const punchCount = computeSnapshotDayPunchCount();
+      if (dayDateForAudit && Number.isFinite(punchCount) && punchCount > 0 && punchCount !== 4) {
+        await writeAudit({
+          action: 'punch_count_verified',
+          staffId: staff,
+          target: 'ob_punches',
+          payload: {
+            work_date: dayDateForAudit,
+            punch_count: punchCount,
+            expected_count: 4
+          }
+        });
+        setStatus({ tone: 'success', message: t('Punch count verified and saved.', 'Punch count verified and saved.') });
+      } else {
+        setStatus({ tone: 'idle', message: t('No changes to save.', 'No changes to save.') });
+      }
       closeTimecardPunchModal();
       void fetchTimecard({ reset: true, lockUi: false });
+      void fetchCellAuditLogs();
       void refreshHomePanel();
       void refreshSchedulePanel();
       return;
@@ -7341,6 +7377,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const totalChanged = editedCount + addedCount + deletedCount;
       if (totalChanged > 0) {
         const hoursAfterBatch = computeSnapshotDayHours();
+        const punchCountAfterBatch = computeSnapshotDayPunchCount();
         let batchAction = 'punch_manual_edit';
         if (editedCount === 0 && addedCount > 0 && deletedCount === 0) batchAction = 'punch_manual_add';
         else if (editedCount === 0 && addedCount === 0 && deletedCount > 0) batchAction = 'punch_manual_delete';
@@ -7358,6 +7395,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             hours_after: Number.isFinite(hoursAfterBatch) ? Math.round(hoursAfterBatch * 100) / 100 : null
           }
         });
+        if (dayDateForAudit && Number.isFinite(punchCountAfterBatch) && punchCountAfterBatch > 0 && punchCountAfterBatch !== 4) {
+          await writeAudit({
+            action: 'punch_count_verified',
+            staffId: staff,
+            target: 'ob_punches',
+            payload: {
+              work_date: dayDateForAudit,
+              punch_count: punchCountAfterBatch,
+              expected_count: 4
+            }
+          });
+        }
       }
     });
     if (saveFailed) return;
@@ -8602,12 +8651,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       return score;
     };
     return [...filtered].sort((a, b) => {
+      if (timecardAgencySort) {
+        const agencyA = String(a.agency ?? '').trim();
+        const agencyB = String(b.agency ?? '').trim();
+        const agencyDiff = agencyA.localeCompare(agencyB, 'zh-CN', { sensitivity: 'base' });
+        if (agencyDiff !== 0) return timecardAgencySort === 'asc' ? agencyDiff : -agencyDiff;
+      }
       const anomalyDiff = getAnomalyScore(b) - getAnomalyScore(a);
       if (anomalyDiff !== 0) return anomalyDiff;
       if (b.totalHours !== a.totalHours) return b.totalHours - a.totalHours;
       return String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US');
     });
-  }, [page, timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter]);
+  }, [page, timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter, timecardAgencySort]);
   const timecardRowsRendered = useMemo(
     () => timecardRowsFiltered.slice(0, Math.max(0, timecardRenderCount)),
     [timecardRowsFiltered, timecardRenderCount]
@@ -8921,6 +8976,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           ? toOperationalDateFromAudit(String(before.created_at ?? ''), String(before.action ?? ''))
           : '';
         if (key) dateKeys.add(key);
+      } else if (action === 'punch_count_verified') {
+        // use payload.work_date when available
       } else {
         continue;
       }
@@ -11548,6 +11605,10 @@ ${rowsToHtml(late)}
                   timecardDayAttendanceCount={timecardDayAttendanceCount}
                   timecardPresentDayFilter={timecardPresentDayFilter}
                   setTimecardPresentDayFilter={setTimecardPresentDayFilter}
+                  timecardAgencySort={timecardAgencySort}
+                  onToggleTimecardAgencySort={() =>
+                    setTimecardAgencySort((prev) => (prev === '' ? 'asc' : prev === 'asc' ? 'desc' : ''))
+                  }
                   timecardRowsRendered={timecardRowsRendered}
                   timecardAuditByStaffDate={timecardAuditByStaffDate}
                   openTimecardPunchModal={openTimecardPunchModal}

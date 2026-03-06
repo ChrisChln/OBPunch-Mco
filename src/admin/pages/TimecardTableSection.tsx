@@ -15,6 +15,8 @@ type TimecardTableSectionProps = {
   timecardDayAttendanceCount: number[];
   timecardPresentDayFilter: number | null;
   setTimecardPresentDayFilter: (value: number | null | ((prev: number | null) => number | null)) => void;
+  timecardAgencySort: '' | 'asc' | 'desc';
+  onToggleTimecardAgencySort: () => void;
   timecardRowsRendered: any[];
   timecardAuditByStaffDate: Map<string, any[]>;
   openTimecardPunchModal: (staffId: string, dayIndex: number | null) => void | Promise<void>;
@@ -39,6 +41,8 @@ export default function TimecardTableSection({
   timecardDayAttendanceCount,
   timecardPresentDayFilter,
   setTimecardPresentDayFilter,
+  timecardAgencySort,
+  onToggleTimecardAgencySort,
   timecardRowsRendered,
   timecardAuditByStaffDate,
   openTimecardPunchModal,
@@ -59,7 +63,21 @@ export default function TimecardTableSection({
               <tr>
                 <th className="w-[108px] px-2 py-1.5">ID</th>
                 <th className="w-[200px] px-2 py-1.5">Name</th>
-                <th className="w-[140px] px-2 py-1.5">Agency</th>
+                <th className="w-[140px] px-2 py-1.5">
+                  <button
+                    type="button"
+                    disabled={isLocked}
+                    onClick={onToggleTimecardAgencySort}
+                    className={[
+                      'inline-flex items-center gap-1 rounded px-1 py-0.5 transition',
+                      timecardAgencySort ? 'text-sky-300 hover:bg-white/10' : 'text-slate-400 hover:bg-white/10',
+                      isLocked ? 'cursor-not-allowed opacity-60' : ''
+                    ].join(' ')}
+                    title={t('按 Agency 排序', 'Sort by agency')}
+                  >
+                    <span>Agency</span>
+                  </button>
+                </th>
                 <th className="w-[120px] px-2 py-1.5">{t('岗位', 'Position')}</th>
                 <th className="w-[80px] px-2 py-1.5">{t('班次', 'Shift')}</th>
                 {days.map((label, idx) => (
@@ -134,9 +152,25 @@ export default function TimecardTableSection({
                               const inProgress = r.inProgressByDay[idx];
                               const manual = r.manualByDay[idx];
                               const punchCountMismatch = r.punchCountMismatchByDay[idx];
+                              const latestPunchReviewAction = timecardCellAudit.find((item: any) => {
+                                const action = String(item?.action ?? '').trim();
+                                return (
+                                  action === 'punch_count_verified' ||
+                                  action === 'punch_manual_add' ||
+                                  action === 'punch_manual_edit' ||
+                                  action === 'punch_manual_delete'
+                                );
+                              })?.action;
+                              const punchCountVerified = latestPunchReviewAction === 'punch_count_verified';
                               const base = 'rounded px-1.5 py-0.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
                               if (manual) return [base, 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'].join(' ');
                               if (punchCountMismatch) {
+                                if (punchCountVerified) {
+                                  return [
+                                    base,
+                                    'border-2 border-teal-500 bg-teal-500/20 text-teal-100 shadow-[0_0_0_1px_rgba(20,184,166,0.55)] hover:bg-teal-500/30'
+                                  ].join(' ');
+                                }
                                 return [
                                   base,
                                   'border-2 border-rose-500 bg-rose-500/20 text-rose-100 shadow-[0_0_0_1px_rgba(244,63,94,0.55)] hover:bg-rose-500/30'
@@ -233,4 +267,3 @@ export default function TimecardTableSection({
     </div>
   );
 }
-
