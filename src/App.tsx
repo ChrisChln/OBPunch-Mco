@@ -1190,6 +1190,17 @@ export default function App() {
         playError();
         return;
       }
+      const lastPunch = await fetchLastPunch(staffId);
+      if (lastPunch.error) {
+        setDeviceQuickError(lastPunch.error);
+        playError();
+        return;
+      }
+      if (lastPunch.action !== 'IN') {
+        setDeviceQuickError('Employee must be signed in before borrowing a device.');
+        playError();
+        return;
+      }
     } else {
       const holder = await resolveBorrowerBySn(sn);
       if (holder.error) {

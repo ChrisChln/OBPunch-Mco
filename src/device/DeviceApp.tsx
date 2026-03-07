@@ -147,6 +147,28 @@ export default function DeviceApp() {
   const snRef = useRef<HTMLInputElement | null>(null);
   const countingSnRef = useRef<HTMLInputElement | null>(null);
 
+  const fetchLastPunchAction = async (staffId: string) => {
+    if (!supabase) {
+      return { action: null as 'IN' | 'OUT' | null, error: 'Missing Supabase configuration.' };
+    }
+    const normalized = normalizeStaffId(String(staffId ?? '').trim());
+    if (!normalized) {
+      return { action: null as 'IN' | 'OUT' | null, error: 'Invalid staff ID.' };
+    }
+    const base = () => supabase.from('ob_punches').select('id, action, created_at').eq('staff_id', normalized).limit(1);
+    const attemptCreatedAt = await base().order('created_at', { ascending: false });
+    const attempt = attemptCreatedAt.error ? await base().order('id', { ascending: false }) : attemptCreatedAt;
+    if (attempt.error) {
+      return { action: null as 'IN' | 'OUT' | null, error: attempt.error.message };
+    }
+    const row = ((attempt.data as Array<{ action?: string | null }> | null) ?? [])[0] ?? null;
+    const action = String(row?.action ?? '').trim().toUpperCase();
+    return {
+      action: action === 'IN' || action === 'OUT' ? (action as 'IN' | 'OUT') : null,
+      error: null as string | null
+    };
+  };
+
   const canonicalDevices = useMemo(() => {
     return devices
       .map((row) => ({
@@ -468,6 +490,21 @@ export default function DeviceApp() {
         return;
       }
       borrowStaffName = String(employeeRows[0]?.name ?? '').trim();
+      const lastPunch = await fetchLastPunchAction(staffId);
+      if (lastPunch.error) {
+        setMessage({ tone: 'error', text: `Failed to verify sign-in: ${lastPunch.error}` });
+        pushOpLog('error', 'Borrow sign-in verify error');
+        clearBorrowInputsOnFailure();
+        playDeviceSound('error');
+        return;
+      }
+      if (lastPunch.action !== 'IN') {
+        setMessage({ tone: 'error', text: 'Employee must be signed in before borrowing a device.' });
+        pushOpLog('error', 'Borrow blocked: employee not signed in');
+        clearBorrowInputsOnFailure();
+        playDeviceSound('error');
+        return;
+      }
     }
     const device = deviceBySn.get(sn);
     if (!device) {

@@ -182,7 +182,7 @@ export default function EmployeesToolbar({
             value={employeeSearch}
             onChange={(e) => setEmployeeSearch(e.target.value)}
             disabled={isLocked}
-            placeholder={t('通过ID/名字/标签搜索', 'Search by id / name / label')}
+            placeholder={t('通过ID/名字/标签/工作账号搜索', 'Search by id / name / label / work account')}
             className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
           />
         </div>
@@ -335,4 +335,3 @@ export default function EmployeesToolbar({
     </>
   );
 }
-

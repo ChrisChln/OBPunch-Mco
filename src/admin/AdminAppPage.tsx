@@ -2258,7 +2258,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     });
   };
 
-  const fetchSchedule = async (options?: { weekOffsetOverride?: number }) => {
+  const fetchSchedule = async (options?: { weekOffsetOverride?: number; lockUi?: boolean }) => {
     if (!supabase) {
       setScheduleError('缺少 Supabase 配置。');
       setScheduleRows([]);
@@ -2266,10 +2266,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     }
 
     const weekOffset = options?.weekOffsetOverride ?? scheduleWeekOffset;
+    const lockUi = options?.lockUi ?? true;
     const startDate = getTemplateDateByDayIndex(0, weekOffset);
     const endDate = getTemplateDateByDayIndex(6, weekOffset);
 
-    await runLocked('schedule', async () => {
+    const exec = async () => {
       setScheduleError(null);
       const pageSize = 1000;
       const maxPages = 20;
@@ -2297,7 +2298,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
       setScheduleRows(allRows);
       setScheduleRowsWeekOffset(weekOffset);
-    });
+    };
+
+    if (!lockUi) {
+      await exec();
+      return;
+    }
+    await runLocked('schedule', exec);
   };
 
   const fetchSchedulePublishSetting = async () => {
@@ -2676,19 +2683,46 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
   const refreshSchedulePanel = async (options?: { lockUi?: boolean }) => {
     const lockUi = options?.lockUi ?? true;
-    await resetScheduleTransientStatesForWeek({ lockUi });
-    await fetchSchedule();
-    const latestEmployees = await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [], lockUi });
-    await fetchSchedulePublishSetting();
-    await fetchSchedulePunchPresence({ employeesOverride: latestEmployees });
-    await fetchScheduleUph({ employeesOverride: latestEmployees });
-    await fetchScheduleMistakeCounts({ employeesOverride: latestEmployees });
+    const exec = async () => {
+      await resetScheduleTransientStatesForWeek({ lockUi: false });
+      await Promise.all([
+        fetchSchedule({ lockUi: false }),
+        fetchSchedulePublishSetting()
+      ]);
+      const latestEmployees = await fetchEmployees({
+        reset: true,
+        search: '',
+        agency: '',
+        position: '',
+        labels: [],
+        lockUi: false,
+        includePunchMeta: false
+      });
+      await Promise.all([
+        fetchSchedulePunchPresence({ employeesOverride: latestEmployees }),
+        fetchScheduleUph({ employeesOverride: latestEmployees }),
+        fetchScheduleMistakeCounts({ employeesOverride: latestEmployees })
+      ]);
+    };
+    if (!lockUi) {
+      await exec();
+      return;
+    }
+    await runLocked('schedule_refresh', exec);
   };
 
   const refreshHomePanel = async (options?: { lockUi?: boolean }) => {
     const lockUi = options?.lockUi ?? true;
-    await fetchSchedule({ weekOffsetOverride: 0 });
-    const latestEmployees = await fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [], lockUi });
+    await fetchSchedule({ weekOffsetOverride: 0, lockUi: false });
+    const latestEmployees = await fetchEmployees({
+      reset: true,
+      search: '',
+      agency: '',
+      position: '',
+      labels: [],
+      lockUi,
+      includePunchMeta: false
+    });
     // Home dashboard should use current week punch presence, independent of Schedule page week navigation.
     await fetchSchedulePunchPresence({ employeesOverride: latestEmployees, weekOffsetOverride: 0, mode: 'operational_day' });
   };
@@ -3558,7 +3592,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
   const fetchEmployees = async ({
     reset: _reset,
-    lockUi: lockUiOption
+    lockUi: lockUiOption,
+    includePunchMeta = true
   }: {
     reset: boolean;
     search?: string;
@@ -3566,6 +3601,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     position?: string;
     labels?: string[];
     lockUi?: boolean;
+    includePunchMeta?: boolean;
   }): Promise<EmployeeRow[] | null> => {
     if (!supabase) {
       setEmployeesError('缺少 Supabase 配置。');
@@ -3580,8 +3616,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       setEmployeesError(null);
 
       const pageSize = 200;
-      const rangeEnd = new Date(serverTime);
-      const rangeStart = addDays(rangeEnd, -SHIFT_ANALYSIS_DAYS);
 
       const build = (_mode: EmployeeColumnMode, from: number, to: number) => {
         // Use wildcard select to tolerate mixed legacy schemas:
@@ -3638,6 +3672,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
       const staffIdsRaw = all.map((e) => String(e.staff_id ?? '').trim()).filter(Boolean);
       const staffIds = Array.from(new Set(staffIdsRaw.map((id) => normalizeStaffId(id)).filter(Boolean)));
+      if (staffIds.length === 0) {
+        setEmployeeShiftByStaffId({});
+        if (includePunchMeta) setEmployeeLastPunchAtByStaffId({});
+        return;
+      }
+
+      const shiftMap: Record<string, { shift: '' | 'early' | 'late'; earlyHours: number; lateHours: number }> = {};
+      for (const emp of fetchedEmployees ?? []) {
+        const s = normalizeStaffId(String(emp.staff_id ?? '').trim());
+        if (!s) continue;
+        const dbShift = normalizeShiftValue(String(emp.shift ?? '').trim());
+        shiftMap[s] = { shift: dbShift, earlyHours: 0, lateHours: 0 };
+      }
+      setEmployeeShiftByStaffId(shiftMap);
+
+      if (!includePunchMeta) {
+        return;
+      }
+
       const staffIdsForQuery = Array.from(
         new Set(
           staffIdsRaw
@@ -3649,11 +3702,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             .filter(Boolean)
         )
       );
-      if (staffIds.length === 0) {
-        setEmployeeShiftByStaffId({});
-        setEmployeeLastPunchAtByStaffId({});
-        return;
-      }
 
       const fetchLatestPunchAtByStaff = async (ids: string[]) => {
         const out: Record<string, string | null> = {};
@@ -3707,71 +3755,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         setEmployeeLastPunchAtByStaffId(latestPunchRes.map);
       }
 
-      const fetchPunchesForStaff = async (ids: string[]) => {
-        const batches = chunk(ids, 200);
-        const allRows: Array<{ staff_id: string; action: string; created_at: string | null; id?: any }> = [];
-        const punchPageSize = 1000;
-        const maxPages = 80;
-
-        for (const batch of batches) {
-          const base = () =>
-            supabase
-              .from('ob_punches')
-              .select('id, staff_id, action, created_at')
-              .in('staff_id', batch)
-              .gte('created_at', rangeStart.toISOString())
-              .lt('created_at', rangeEnd.toISOString());
-
-          for (let page = 0; page < maxPages; page += 1) {
-            const from = page * punchPageSize;
-            const to = from + punchPageSize - 1;
-            const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
-            const attempt = attemptCreatedAt.error
-              ? await base().order('id', { ascending: true }).range(from, to)
-              : attemptCreatedAt;
-            if (attempt.error) {
-              return { rows: null as any, error: attempt.error.message };
-            }
-            const rows = (attempt.data as any[] | null) ?? [];
-            allRows.push(...rows);
-            if (rows.length < punchPageSize) break;
-            if (page === maxPages - 1) {
-              return { rows: null as any, error: 'Punch data too large; please narrow shift analysis range.' };
-            }
-          }
-        }
-
-        return { rows: allRows, error: null as string | null };
-      };
-
-      const punchesRes = await fetchPunchesForStaff(staffIdsForQuery);
-      if (punchesRes.error) {
-        setEmployeeShiftByStaffId({});
-        return;
-      }
-
-      const eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT' }>> = {};
-      for (const p of punchesRes.rows ?? []) {
-        const staff = normalizeStaffId(String(p.staff_id ?? '').trim());
-        const action = String(p.action ?? '').toUpperCase();
-        const atRaw = String(p.created_at ?? '').trim();
-        if (!staff || (action !== 'IN' && action !== 'OUT') || !atRaw) continue;
-        const at = new Date(atRaw);
-        if (Number.isNaN(at.getTime())) continue;
-        (eventsByStaff[staff] ??= []).push({ at, action: action === 'OUT' ? 'OUT' : 'IN' });
-      }
-      for (const staff of Object.keys(eventsByStaff)) {
-        eventsByStaff[staff]!.sort((a, b) => a.at.getTime() - b.at.getTime());
-      }
-
-      const shiftMap: Record<string, { shift: '' | 'early' | 'late'; earlyHours: number; lateHours: number }> = {};
-      for (const emp of fetchedEmployees ?? []) {
-        const s = normalizeStaffId(String(emp.staff_id ?? '').trim());
-        if (!s) continue;
-        const dbShift = normalizeShiftValue(String(emp.shift ?? '').trim());
-        shiftMap[s] = { shift: dbShift, earlyHours: 0, lateHours: 0 };
-      }
-      setEmployeeShiftByStaffId(shiftMap);
     };
     if (!lockUi) {
       await exec();
@@ -8438,6 +8421,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const agency = String(e.agency ?? e.Agency ?? '').trim();
       const position = String(e.position ?? e.Position ?? '').trim();
       const label = String(e.label ?? e.Label ?? '').trim();
+      const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
       const shiftInfo = employeeShiftByStaffId[staff];
       const shift = shiftInfo?.shift || '';
       if (agencyNeedle && !agency.toLowerCase().includes(agencyNeedle)) return false;
@@ -8449,7 +8433,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (!hit) return false;
       }
       if (!searchNeedle) return true;
-      return [staff, name, label].join(' ').toLowerCase().includes(searchNeedle);
+      return [staff, name, label, workAccount].join(' ').toLowerCase().includes(searchNeedle);
     });
     if (employeeSortByHireDateDesc) {
       return [...rows].sort((a, b) => {
