@@ -11250,12 +11250,13 @@ ${rowsToHtml(late)}
                                       >
                                         {count}
                                       </button>
-                                      <div className="pointer-events-none absolute left-1/2 top-full z-30 mt-2 hidden w-[420px] -translate-x-1/2 overflow-hidden rounded-xl border border-white/15 bg-slate-950/95 text-left shadow-2xl backdrop-blur group-hover:block">
+                                      <div className="pointer-events-none absolute left-1/2 top-full z-20 h-2 w-[420px] -translate-x-1/2" />
+                                      <div className="pointer-events-auto invisible absolute left-1/2 top-full z-30 mt-1 w-[420px] -translate-x-1/2 overflow-hidden rounded-xl border border-white/15 bg-slate-950/95 text-left opacity-0 shadow-2xl backdrop-blur transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
                                         <div className="border-b border-white/10 px-3 py-2 text-[11px] font-semibold tracking-[0.12em] text-slate-300">
                                           Mistake details (last 7 days)
                                         </div>
                                         {details.length > 0 ? (
-                                          <div className="max-h-64 overflow-auto">
+                                          <div className="max-h-72 overflow-y-auto overscroll-contain">
                                             {details.map((item, idx) => (
                                               <div key={`${item.created_at}_${idx}`} className="border-b border-white/5 px-3 py-2 last:border-b-0">
                                                 <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">

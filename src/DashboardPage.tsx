@@ -449,6 +449,10 @@ export default function DashboardPage() {
   const [mistakeDetailStaffId, setMistakeDetailStaffId] = useState('');
   const [mistakeDetailStaffName, setMistakeDetailStaffName] = useState('');
   const [mistakeDetailError, setMistakeDetailError] = useState<string | null>(null);
+  const [punchDetailOpen, setPunchDetailOpen] = useState(false);
+  const [punchDetailStaffId, setPunchDetailStaffId] = useState('');
+  const [punchDetailStaffName, setPunchDetailStaffName] = useState('');
+  const [punchDetailRows, setPunchDetailRows] = useState<PunchRow[]>([]);
   const [accountUsageSearch, setAccountUsageSearch] = useState('');
   const [accountUsagePositionFilter, setAccountUsagePositionFilter] = useState('');
   const [noticeDialog, setNoticeDialog] = useState<{ open: boolean; title: string; message: string }>({
@@ -1293,6 +1297,13 @@ export default function DashboardPage() {
     return dataUrl;
   };
 
+  const openPunchDetails = (row: DashboardRow) => {
+    setPunchDetailStaffId(String(row.staff_id ?? '').trim());
+    setPunchDetailStaffName(String(row.name ?? '').trim());
+    setPunchDetailRows([...(row.punches ?? [])]);
+    setPunchDetailOpen(true);
+  };
+
   const printTempBadge = async (row: DashboardRow) => {
     const staff = String(row.staff_id ?? '').trim();
     if (!staff || isNewHirePlaceholderStaffId(staff)) return;
@@ -2089,7 +2100,7 @@ export default function DashboardPage() {
                         {row.punches.length === 0 ? (
                           <span className="font-semibold text-rose-300">Absent</span>
                         ) : (
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-2">
                             {Array.from({ length: 4 }).map((_, idx) => {
                               const punch = visiblePunches[idx];
                               if (!punch) {
@@ -2120,6 +2131,17 @@ export default function DashboardPage() {
                                 </span>
                               );
                             })}
+                            {hasOverPunch && (
+                              <button
+                                type="button"
+                                onClick={() => openPunchDetails(row)}
+                                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-amber-400/80 bg-amber-500/20 text-sm font-bold text-amber-200 transition hover:bg-amber-500/30 hover:text-amber-100"
+                                title="View all punches for today"
+                                aria-label="View all punches for today"
+                              >
+                                !
+                              </button>
+                            )}
                           </div>
                         )}
                       </td>
@@ -2409,6 +2431,74 @@ export default function DashboardPage() {
                         <tr>
                           <td className="px-3 py-8 text-center text-slate-500" colSpan={5}>
                             No mistake reports in the last 7 days.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
+
+        {punchDetailOpen &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" onClick={() => setPunchDetailOpen(false)}>
+              <div
+                className="flex max-h-[78vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-950 shadow-2xl"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-100">Punch Details</div>
+                    <div className="text-xs text-slate-400">
+                      {punchDetailStaffId
+                        ? `Employee: ${punchDetailStaffId}${punchDetailStaffName ? ` - ${punchDetailStaffName}` : ''}`
+                        : 'Today punch details'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPunchDetailOpen(false)}
+                    className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto">
+                  <table className="min-w-full table-fixed border-collapse text-sm">
+                    <thead className="sticky top-0 z-10 bg-slate-950/95 text-xs uppercase tracking-[0.16em] text-slate-400">
+                      <tr>
+                        <th className="w-[120px] px-3 py-2 text-left">Action</th>
+                        <th className="w-[120px] px-3 py-2 text-left">Time</th>
+                        <th className="px-3 py-2 text-left">Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {punchDetailRows.map((punch, idx) => (
+                        <tr key={punch.id || `${punch.staff_id}-${punch.created_at}-${idx}`} className="border-t border-white/5 odd:bg-white/[0.03]">
+                          <td className="px-3 py-2 align-top">
+                            <span
+                              className={[
+                                'inline-flex min-w-[72px] items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold',
+                                punch.action === 'IN'
+                                  ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
+                                  : 'border-sky-400/60 bg-sky-500/15 text-sky-200'
+                              ].join(' ')}
+                            >
+                              {punch.action}
+                            </span>
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2 align-top text-slate-200">{formatTimeOnly(punch.created_at)}</td>
+                          <td className="whitespace-nowrap px-3 py-2 align-top text-slate-300">{formatDateTime(punch.created_at)}</td>
+                        </tr>
+                      ))}
+                      {punchDetailRows.length === 0 && (
+                        <tr>
+                          <td className="px-3 py-8 text-center text-slate-500" colSpan={3}>
+                            No punches for today.
                           </td>
                         </tr>
                       )}
