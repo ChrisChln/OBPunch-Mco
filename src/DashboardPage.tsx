@@ -55,6 +55,7 @@ type MistakeDetailRow = {
   position: string;
   reason: string;
   reporter_staff_id: string;
+  reporter_name?: string;
   operational_date: string;
   created_at: string;
 };
@@ -77,6 +78,7 @@ const buildAutoMistakeDetailRow = (row: DashboardRow, date: string): MistakeDeta
     position: String(row.position ?? '').trim(),
     reason,
     reporter_staff_id: 'SYSTEM',
+    reporter_name: 'System',
     operational_date: date,
     created_at: createdAt
   };
@@ -1694,10 +1696,48 @@ export default function DashboardPage() {
         operational_date: String(item.operational_date ?? '').trim(),
         created_at: String(item.created_at ?? '').trim()
       }));
+      const reporterNameByStaff = new Map<string, string>();
+      for (const item of nextRows) {
+        const reporterStaffId = normalizeStaffId(String(item.reporter_staff_id ?? '').trim());
+        if (!reporterStaffId || reporterStaffId === 'SYSTEM') continue;
+        const cachedName = String(employeeCacheRef.current.get(reporterStaffId)?.name ?? '').trim();
+        if (cachedName) reporterNameByStaff.set(reporterStaffId, cachedName);
+      }
+      const missingReporterIds = Array.from(
+        new Set(
+          nextRows
+            .map((item) => normalizeStaffId(String(item.reporter_staff_id ?? '').trim()))
+            .filter((staffId) => Boolean(staffId && staffId !== 'SYSTEM' && !reporterNameByStaff.has(staffId)))
+        )
+      );
+      for (const batch of chunkArray(missingReporterIds, 200)) {
+        const reporterRes = await supabase
+          .from(EMPLOYEE_TABLE)
+          .select('staff_id, name')
+          .in('staff_id', batch)
+          .limit(1000);
+        if (reporterRes.error) continue;
+        for (const employee of ((reporterRes.data as any[] | null) ?? [])) {
+          const reporterStaffId = normalizeStaffId(String(employee.staff_id ?? '').trim());
+          const reporterName = String(employee.name ?? '').trim();
+          if (reporterStaffId && reporterName) reporterNameByStaff.set(reporterStaffId, reporterName);
+        }
+      }
+      const resolvedRows = nextRows.map((item) => {
+        const reporterStaffId = normalizeStaffId(String(item.reporter_staff_id ?? '').trim());
+        const reporterName =
+          reporterStaffId === 'SYSTEM'
+            ? 'System'
+            : String(reporterNameByStaff.get(reporterStaffId) ?? '').trim();
+        return {
+          ...item,
+          reporter_name: reporterName || item.reporter_staff_id || ''
+        };
+      });
       const autoRows: MistakeDetailRow[] = [];
       const attendanceAuto = buildAutoMistakeDetailRow(row, endDate);
       if (attendanceAuto) autoRows.push(attendanceAuto);
-      setMistakeDetailRows([...autoRows, ...nextRows]);
+      setMistakeDetailRows([...autoRows, ...resolvedRows]);
     } finally {
       setMistakeDetailLoading(false);
     }
@@ -2332,7 +2372,7 @@ export default function DashboardPage() {
                         <th className="w-[120px] px-3 py-2 text-left">Date</th>
                         <th className="w-[140px] px-3 py-2 text-left">Position</th>
                         <th className="px-3 py-2 text-left">Reason</th>
-                        <th className="w-[140px] px-3 py-2 text-left">Reporter USID</th>
+                        <th className="w-[180px] px-3 py-2 text-left">Reporter</th>
                         <th className="w-[190px] px-3 py-2 text-left">Created</th>
                       </tr>
                     </thead>
@@ -2356,7 +2396,12 @@ export default function DashboardPage() {
                           <td className="whitespace-nowrap px-3 py-2 align-top text-slate-300">{item.operational_date || '-'}</td>
                           <td className="whitespace-nowrap px-3 py-2 align-top text-slate-200">{item.position || '-'}</td>
                           <td className="px-3 py-2 align-top text-slate-200 whitespace-pre-wrap break-words">{item.reason || '-'}</td>
-                          <td className="whitespace-nowrap px-3 py-2 align-top font-mono text-slate-200">{item.reporter_staff_id || '-'}</td>
+                          <td className="px-3 py-2 align-top text-slate-200">
+                            <div>{item.reporter_name || item.reporter_staff_id || '-'}</div>
+                            {item.reporter_staff_id && item.reporter_name && item.reporter_name !== item.reporter_staff_id && (
+                              <div className="font-mono text-xs text-slate-500">{item.reporter_staff_id}</div>
+                            )}
+                          </td>
                           <td className="whitespace-nowrap px-3 py-2 align-top text-slate-300">{item.created_at ? formatDateTime(item.created_at) : '-'}</td>
                         </tr>
                       ))}
