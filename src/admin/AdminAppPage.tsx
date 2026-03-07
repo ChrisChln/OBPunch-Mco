@@ -7380,6 +7380,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       return count;
     };
     const dayDateForAudit = dayRangeForAudit ? toDateOnly(dayRangeForAudit.start) : '';
+    const queueTimecardRefresh = () => {
+      const run = () => {
+        void fetchTimecard({ reset: true, lockUi: false });
+      };
+      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
+        (window as any).requestIdleCallback(run, { timeout: 1500 });
+      } else {
+        window.setTimeout(run, 200);
+      }
+    };
 
     if (changed.length === 0 && deleteIds.length === 0 && pendingAdds.length === 0) {
       setTimecardPunchError(null);
@@ -7400,10 +7410,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         setStatus({ tone: 'idle', message: t('No changes to save.', 'No changes to save.') });
       }
       closeTimecardPunchModal();
-      void fetchTimecard({ reset: true, lockUi: false });
       void fetchCellAuditLogs();
-      void refreshHomePanel();
-      void refreshSchedulePanel();
+      queueTimecardRefresh();
       return;
     }
 
@@ -7481,50 +7489,53 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           prevMetaById.set(id, rec?.metadata ?? null);
         }
 
-        const updateJobs = changed.map(async (item) => {
-          const createdAt = parseLocalDateTimeInputValue(item.edit.atLocal);
-          if (!createdAt) return { ok: false as const, error: '时间格式不正确。', item };
-          const prevMeta = prevMetaById.get(item.rowId);
-          const nextMeta =
-            prevMeta && typeof prevMeta === 'object'
-              ? {
-                  ...prevMeta,
-                  device: 'admin_console',
-                  kind: 'manual_edit',
-                  manual: true,
-                  operator: user?.email ?? null,
-                  edited_at: new Date(serverTime).toISOString()
-                }
-              : {
-                  device: 'admin_console',
-                  kind: 'manual_edit',
-                  manual: true,
-                  operator: user?.email ?? null,
-                  edited_at: new Date(serverTime).toISOString()
-                };
-          const { error } = await supabase
-            .from('ob_punches')
-            .update({ action: item.edit.action, created_at: createdAt, metadata: nextMeta })
-            .eq('id', item.rowId);
-          if (error) return { ok: false as const, error: error.message, item };
-          return { ok: true as const, item, createdAt };
-        });
-
-        const updateResults = await Promise.all(updateJobs);
-        const firstError = updateResults.find((r) => !r.ok);
-        if (firstError && !firstError.ok) {
-          saveFailed = true;
-          setTimecardPunchError(firstError.error);
-          return;
-        }
-        for (const result of updateResults) {
-          if (!result.ok) continue;
-          punchSnapshot.set(result.item.rowId, {
-            action: result.item.edit.action,
-            created_at: result.createdAt
+        const editedAtIso = new Date(serverTime).toISOString();
+        for (const batch of chunk(changed, 20)) {
+          const updateJobs = batch.map(async (item) => {
+            const createdAt = parseLocalDateTimeInputValue(item.edit.atLocal);
+            if (!createdAt) return { ok: false as const, error: '时间格式不正确。', item };
+            const prevMeta = prevMetaById.get(item.rowId);
+            const nextMeta =
+              prevMeta && typeof prevMeta === 'object'
+                ? {
+                    ...prevMeta,
+                    device: 'admin_console',
+                    kind: 'manual_edit',
+                    manual: true,
+                    operator: user?.email ?? null,
+                    edited_at: editedAtIso
+                  }
+                : {
+                    device: 'admin_console',
+                    kind: 'manual_edit',
+                    manual: true,
+                    operator: user?.email ?? null,
+                    edited_at: editedAtIso
+                  };
+            const { error } = await supabase
+              .from('ob_punches')
+              .update({ action: item.edit.action, created_at: createdAt, metadata: nextMeta })
+              .eq('id', item.rowId);
+            if (error) return { ok: false as const, error: error.message, item };
+            return { ok: true as const, item, createdAt };
           });
-          editedCount += 1;
+          const updateResults = await Promise.all(updateJobs);
+          const firstError = updateResults.find((r) => !r.ok);
+          if (firstError && !firstError.ok) {
+            saveFailed = true;
+            setTimecardPunchError(firstError.error);
+            return;
+          }
+          for (const result of updateResults) {
+            if (!result.ok) continue;
+            punchSnapshot.set(result.item.rowId, {
+              action: result.item.edit.action,
+              created_at: result.createdAt
+            });
+            editedCount += 1;
+          }
         }
+        if (saveFailed) return;
       }
       if (pendingAdds.length > 0) {
         const rowsToInsert = pendingAdds
@@ -7632,7 +7643,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     setStatus({ tone: 'success', message: t('打卡流水已保存。', 'Punch records saved.') });
     closeTimecardPunchModal();
     void fetchCellAuditLogs();
-    void fetchTimecard({ reset: true, lockUi: false });
+    queueTimecardRefresh();
   };
   const deleteTimecardPunchRow = async (row: PunchRow) => {
     const rowId = String(row.id ?? '').trim();
