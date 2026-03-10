@@ -102,6 +102,8 @@ const SCHEDULE_POSITION_TONES_KEY = 'schedule_position_tones_v1';
 const SCHEDULE_REST_NOTE = '__rest__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
 const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
+const SCHEDULE_PLANNED_LEAVE_NOTE = '__planned_leave__';
+const SCHEDULE_PLANNED_TEMP_REST_NOTE = '__planned_temp_rest__';
 const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
 const ROSTER_RESET_HOUR_RAW = Number(import.meta.env.VITE_ROSTER_RESET_HOUR ?? 0);
 const ROSTER_RESET_HOUR = Number.isFinite(ROSTER_RESET_HOUR_RAW) ? Math.max(0, Math.min(23, ROSTER_RESET_HOUR_RAW)) : 5;
@@ -134,7 +136,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isRestLikeScheduleNote = (note: unknown) => {
   const value = String(note ?? '').trim();
-  return value === SCHEDULE_REST_NOTE || value === SCHEDULE_LEAVE_NOTE || value === SCHEDULE_TEMP_REST_NOTE;
+  return (
+    value === SCHEDULE_REST_NOTE ||
+    value === SCHEDULE_LEAVE_NOTE ||
+    value === SCHEDULE_TEMP_REST_NOTE ||
+    value === SCHEDULE_PLANNED_LEAVE_NOTE ||
+    value === SCHEDULE_PLANNED_TEMP_REST_NOTE
+  );
 };
 
 const toEpochMs = (value: unknown) => {

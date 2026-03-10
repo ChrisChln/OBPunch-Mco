@@ -303,13 +303,16 @@ const pickLatestByStaff = <T extends { staff_id?: unknown; updated_at?: unknown;
 const getScheduleStateFromNote = (note: unknown) => {
   const raw = String(note ?? '').trim();
   if (raw === '__temp_work__') return 'temp_work';
+  if (raw === '__planned_temp_work__') return 'planned_temp_work';
   if (raw === '__leave__') return 'leave';
+  if (raw === '__planned_leave__') return 'planned_leave';
   if (raw === '__temp_rest__') return 'temp_rest';
+  if (raw === '__planned_temp_rest__') return 'planned_temp_rest';
   if (raw === '__rest__') return 'rest';
   return 'work';
 };
 
-const isWorkingScheduleState = (state: string) => state === 'work' || state === 'temp_work';
+const isWorkingScheduleState = (state: string) => state === 'work' || state === 'temp_work' || state === 'planned_temp_work';
 
 const isMissingColumnError = (message: unknown, column: string) =>
   (() => {

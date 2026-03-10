@@ -11,7 +11,15 @@ export type AllowedPosition = 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer'
 
 export type DeviceType = 'PDA' | 'CART';
 
-export type ScheduleBaseState = 'work' | 'temp_work' | 'leave' | 'temp_rest' | 'rest';
+export type ScheduleBaseState =
+  | 'work'
+  | 'temp_work'
+  | 'leave'
+  | 'temp_rest'
+  | 'rest'
+  | 'planned_temp_work'
+  | 'planned_leave'
+  | 'planned_temp_rest';
 export type ScheduleDisplayState = 'empty' | ScheduleBaseState | 'rest_worked' | 'absent';
 
 export type EmployeeRow = {

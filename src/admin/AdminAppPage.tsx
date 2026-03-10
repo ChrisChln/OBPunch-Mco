@@ -31,6 +31,15 @@ import HomeDashboardPage from './pages/HomeDashboardPage';
 import AuditPage from './pages/AuditPage';
 import PunchesPage from './pages/PunchesPage';
 import AppDialog from '../components/AppDialog';
+import {
+  activatePlannedScheduleNote,
+  buildDailyPlannedActivationUpserts,
+  buildWeeklyRolloverUpserts,
+  normalizeScheduleNoteForWeeklyReset,
+  shouldActivateDailyPlannedStates,
+  shouldRunWeeklyScheduleReset,
+  shouldRunWeeklyScheduleRollover
+} from './scheduleWeek';
 import type {
   AdminPage,
   AllowedPosition,
@@ -104,6 +113,7 @@ const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
 const SCHEDULE_WEEK_RESET_KEY = 'schedule_transient_reset_week';
 const SCHEDULE_WEEK_ROLLOVER_KEY = 'schedule_week_rollover_marker';
+const SCHEDULE_DAILY_PLAN_ACTIVATION_KEY = 'schedule_daily_plan_activation_marker';
 const DAILY_LIST_LIGHTS_KEY = 'daily_list_position_lights';
 const SCHEDULE_LABEL_TONES_KEY = 'schedule_label_tones_v1';
 const SCHEDULE_POSITION_TONES_KEY = 'schedule_position_tones_v1';
@@ -111,6 +121,9 @@ const SCHEDULE_REST_NOTE = '__rest__';
 const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
 const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
+const SCHEDULE_PLANNED_TEMP_WORK_NOTE = '__planned_temp_work__';
+const SCHEDULE_PLANNED_LEAVE_NOTE = '__planned_leave__';
+const SCHEDULE_PLANNED_TEMP_REST_NOTE = '__planned_temp_rest__';
 const STALE_TIMECARD_REQUEST = '__stale_timecard_request__';
 const DEVICE_TYPES = ['PDA', 'CART'] as const;
 
@@ -119,6 +132,9 @@ const getScheduleBaseStateFromNote = (note: unknown): ScheduleBaseState => {
   if (value === SCHEDULE_TEMP_WORK_NOTE) return 'temp_work';
   if (value === SCHEDULE_LEAVE_NOTE) return 'leave';
   if (value === SCHEDULE_TEMP_REST_NOTE) return 'temp_rest';
+  if (value === SCHEDULE_PLANNED_TEMP_WORK_NOTE) return 'planned_temp_work';
+  if (value === SCHEDULE_PLANNED_LEAVE_NOTE) return 'planned_leave';
+  if (value === SCHEDULE_PLANNED_TEMP_REST_NOTE) return 'planned_temp_rest';
   if (value === SCHEDULE_REST_NOTE) return 'rest';
   return 'work';
 };
@@ -128,12 +144,16 @@ const getScheduleNoteFromBaseState = (state: ScheduleBaseState): string | null =
   if (state === 'temp_work') return SCHEDULE_TEMP_WORK_NOTE;
   if (state === 'leave') return SCHEDULE_LEAVE_NOTE;
   if (state === 'temp_rest') return SCHEDULE_TEMP_REST_NOTE;
+  if (state === 'planned_temp_work') return SCHEDULE_PLANNED_TEMP_WORK_NOTE;
+  if (state === 'planned_leave') return SCHEDULE_PLANNED_LEAVE_NOTE;
+  if (state === 'planned_temp_rest') return SCHEDULE_PLANNED_TEMP_REST_NOTE;
   return SCHEDULE_REST_NOTE;
 };
 
-const isWorkingScheduleBaseState = (state: ScheduleBaseState) => state === 'work' || state === 'temp_work';
+const isWorkingScheduleBaseState = (state: ScheduleBaseState) =>
+  state === 'work' || state === 'temp_work' || state === 'planned_temp_work';
 const isRestLikeScheduleBaseState = (state: ScheduleBaseState) =>
-  state === 'rest' || state === 'temp_rest' || state === 'leave';
+  state === 'rest' || state === 'temp_rest' || state === 'leave' || state === 'planned_temp_rest' || state === 'planned_leave';
 
 const isWorkingScheduleRow = (row: ScheduleRow | null | undefined) =>
   Boolean(row && isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)));
@@ -1893,8 +1913,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     if (
       action === 'schedule_work' ||
       action === 'schedule_temp_work' ||
+      action === 'schedule_planned_temp_work' ||
       action === 'schedule_leave' ||
+      action === 'schedule_planned_leave' ||
       action === 'schedule_temp_rest' ||
+      action === 'schedule_planned_temp_rest' ||
       action === 'schedule_rest' ||
       action === 'schedule_clear' ||
       action === 'punch_manual_add' ||
@@ -1967,8 +1990,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const actions = [
       'schedule_work',
       'schedule_temp_work',
+      'schedule_planned_temp_work',
       'schedule_leave',
+      'schedule_planned_leave',
       'schedule_temp_rest',
+      'schedule_planned_temp_rest',
       'schedule_rest',
       'schedule_clear',
       'punch_manual_add',
@@ -2413,11 +2439,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         }
 
         const marksToWrite: Array<'absent' | 'excuse' | 'temporary_leave'> = [];
-        if (nextState === 'leave') {
+        if (nextState === 'leave' || nextState === 'planned_leave') {
           marksToWrite.push('excuse');
-        } else if (nextState === 'temp_rest') {
+        } else if (nextState === 'temp_rest' || nextState === 'planned_temp_rest') {
           marksToWrite.push('temporary_leave');
-        } else if (nextState === 'work' || nextState === 'temp_work') {
+        } else if (nextState === 'work' || nextState === 'temp_work' || nextState === 'planned_temp_work') {
           const workRange = getWorkDateRange(targetWorkDate);
           if (workRange) {
             const now = new Date(serverTime);
@@ -2574,10 +2600,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             ? 'schedule_work'
             : nextState === 'temp_work'
               ? 'schedule_temp_work'
+              : nextState === 'planned_temp_work'
+                ? 'schedule_planned_temp_work'
               : nextState === 'leave'
                 ? 'schedule_leave'
+                : nextState === 'planned_leave'
+                  ? 'schedule_planned_leave'
                 : nextState === 'temp_rest'
                   ? 'schedule_temp_rest'
+                  : nextState === 'planned_temp_rest'
+                    ? 'schedule_planned_temp_rest'
                   : 'schedule_rest',
         staffId: staff,
         target: SCHEDULE_TABLE,
@@ -2598,14 +2630,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     });
   };
 
+  const scheduleWeekResetInFlightRef = useRef(false);
+  const scheduleWeekResetDoneKeyRef = useRef('');
   const resetScheduleTransientStatesForWeek = async (options?: { lockUi?: boolean }) => {
     if (!supabase) return;
     const now = new Date(Date.now() + offsetMs);
-    if (now.getDay() !== 1) return;
     const thisMonday = startOfWeekMonday(now);
-    const resetAt = new Date(thisMonday);
-    resetAt.setHours(5, 0, 0, 0);
-    if (now.getTime() < resetAt.getTime()) return;
     const weekStart = toDateOnly(thisMonday);
     const lockUi = options?.lockUi ?? true;
 
@@ -2615,11 +2645,24 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       .eq('key', SCHEDULE_WEEK_RESET_KEY)
       .order('updated_at', { ascending: false })
       .limit(1);
-    if (settingRes.error) return;
+    if (settingRes.error) {
+      scheduleWeekResetInFlightRef.current = false;
+      return;
+    }
 
     const existing = (((settingRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
     const existingWeek = String(existing?.value?.week_start ?? '');
-    if (existingWeek === weekStart) return;
+    const gate = shouldRunWeeklyScheduleReset({
+      now,
+      inFlight: scheduleWeekResetInFlightRef.current,
+      doneWeek: scheduleWeekResetDoneKeyRef.current,
+      existingWeek
+    });
+    if (!gate.shouldRun) {
+      if (existingWeek === weekStart) scheduleWeekResetDoneKeyRef.current = weekStart;
+      return;
+    }
+    scheduleWeekResetInFlightRef.current = true;
 
     const exec = async () => {
       setScheduleError(null);
@@ -2666,25 +2709,200 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
       setScheduleRows((prev) =>
         prev.map((row) => {
-          const note = String(row.note ?? '').trim();
-          if (note === SCHEDULE_TEMP_REST_NOTE) return { ...row, note: null };
-          if (note === SCHEDULE_TEMP_WORK_NOTE) return { ...row, note: SCHEDULE_REST_NOTE };
-          return row;
+          const nextNote = normalizeScheduleNoteForWeeklyReset(
+            String(row.note ?? '').trim() || null,
+            SCHEDULE_REST_NOTE,
+            SCHEDULE_TEMP_WORK_NOTE,
+            SCHEDULE_TEMP_REST_NOTE
+          );
+          return nextNote === row.note ? row : { ...row, note: nextNote };
         })
       );
+      scheduleWeekResetDoneKeyRef.current = weekStart;
     };
 
-    if (!lockUi) {
-      await exec();
+    try {
+      if (!lockUi) {
+        await exec();
+        return;
+      }
+      await runLocked('schedule_week_reset', exec);
+    } finally {
+      scheduleWeekResetInFlightRef.current = false;
+    }
+  };
+
+  const scheduleDailyPlanActivationInFlightRef = useRef(false);
+  const scheduleDailyPlanActivationDoneDateRef = useRef('');
+  const activatePlannedScheduleStatesForToday = async (options?: { lockUi?: boolean }) => {
+    if (!supabase) return;
+    const now = new Date(Date.now() + offsetMs);
+    const dateKey = toDateOnly(now);
+    const lockUi = options?.lockUi ?? true;
+
+    const markerRes = await supabase
+      .from(APP_SETTINGS_TABLE)
+      .select('key, value, updated_at')
+      .eq('key', SCHEDULE_DAILY_PLAN_ACTIVATION_KEY)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (markerRes.error) {
+      scheduleDailyPlanActivationInFlightRef.current = false;
       return;
     }
-    await runLocked('schedule_week_reset', exec);
+
+    const existing = (((markerRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
+    const existingDate = String(existing?.value?.date ?? '');
+    const existingStatus = String(existing?.value?.status ?? '').trim();
+    const gate = shouldActivateDailyPlannedStates({
+      now,
+      inFlight: scheduleDailyPlanActivationInFlightRef.current,
+      doneDate: scheduleDailyPlanActivationDoneDateRef.current,
+      existingDate: existingStatus === 'done' ? existingDate : '',
+      triggerHour: 6
+    });
+    if (!gate.shouldRun) {
+      if (existingStatus === 'done' && existingDate === dateKey) scheduleDailyPlanActivationDoneDateRef.current = dateKey;
+      return;
+    }
+    scheduleDailyPlanActivationInFlightRef.current = true;
+
+    const exec = async () => {
+      setScheduleError(null);
+      const nowIso = new Date(serverTime).toISOString();
+      const op = user?.email ?? null;
+      const lockToken = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      const lockPayload = {
+        key: SCHEDULE_DAILY_PLAN_ACTIVATION_KEY,
+        value: {
+          date: dateKey,
+          status: 'running',
+          lock_token: lockToken,
+          updated_at: nowIso,
+          operator: op
+        },
+        updated_at: nowIso
+      };
+      const lockRes = await supabase.from(APP_SETTINGS_TABLE).upsert([lockPayload as any], { onConflict: 'key' });
+      if (lockRes.error) {
+        setScheduleError(lockRes.error.message);
+        return;
+      }
+
+      const lockCheckRes = await supabase
+        .from(APP_SETTINGS_TABLE)
+        .select('value')
+        .eq('key', SCHEDULE_DAILY_PLAN_ACTIVATION_KEY)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      if (lockCheckRes.error) {
+        setScheduleError(lockCheckRes.error.message);
+        return;
+      }
+      const lockRow = (((lockCheckRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
+      const lockValue = (lockRow?.value ?? {}) as Record<string, unknown>;
+      if (
+        String(lockValue.date ?? '') !== dateKey ||
+        String(lockValue.status ?? '') !== 'running' ||
+        String(lockValue.lock_token ?? '') !== lockToken
+      ) {
+        return;
+      }
+
+      const planRowsRes = await supabase
+        .from(SCHEDULE_TABLE)
+        .select('staff_id, date, note, operator')
+        .lte('date', dateKey)
+        .in('note', [SCHEDULE_PLANNED_TEMP_WORK_NOTE, SCHEDULE_PLANNED_LEAVE_NOTE, SCHEDULE_PLANNED_TEMP_REST_NOTE] as any);
+      if (planRowsRes.error) {
+        setScheduleError(planRowsRes.error.message);
+        return;
+      }
+
+      const rows = (((planRowsRes.data as any[]) ?? []) as Array<{ staff_id?: string; date?: string; note?: string | null; operator?: string | null }>);
+      if (rows.length > 0) {
+        const payload = buildDailyPlannedActivationUpserts(
+          rows,
+          dateKey,
+          nowIso,
+          SCHEDULE_TEMP_WORK_NOTE,
+          SCHEDULE_LEAVE_NOTE,
+          SCHEDULE_TEMP_REST_NOTE,
+          SCHEDULE_PLANNED_TEMP_WORK_NOTE,
+          SCHEDULE_PLANNED_LEAVE_NOTE,
+          SCHEDULE_PLANNED_TEMP_REST_NOTE
+        ).map((row) => ({
+          ...row,
+          staff_id: normalizeStaffId(row.staff_id),
+          operator: op
+        }));
+        const upsertRes = await supabase.from(SCHEDULE_TABLE).upsert(payload as any[], { onConflict: 'staff_id,date' });
+        if (upsertRes.error) {
+          setScheduleError(upsertRes.error.message);
+          return;
+        }
+      }
+
+      const markerPayload = {
+        key: SCHEDULE_DAILY_PLAN_ACTIVATION_KEY,
+        value: {
+          date: dateKey,
+          status: 'done',
+          lock_token: lockToken,
+          updated_at: new Date(serverTime).toISOString(),
+          operator: user?.email ?? null
+        },
+        updated_at: new Date(serverTime).toISOString()
+      };
+      const markerUpsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([markerPayload as any], { onConflict: 'key' });
+      if (markerUpsertRes.error) {
+        const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(markerPayload as any).eq('key', SCHEDULE_DAILY_PLAN_ACTIVATION_KEY);
+        if (updateRes.error) {
+          const insertRes = await supabase.from(APP_SETTINGS_TABLE).insert([markerPayload as any]);
+          if (insertRes.error) {
+            setScheduleError(insertRes.error.message);
+            return;
+          }
+        }
+      }
+
+      if (rows.length > 0) {
+        setScheduleRows((prev) =>
+          prev.map((row) => {
+            const rowDate = String(row.date ?? '').trim();
+            if (!rowDate || rowDate > dateKey) return row;
+            const nextNote = activatePlannedScheduleNote(
+              row.note ?? null,
+              SCHEDULE_TEMP_WORK_NOTE,
+              SCHEDULE_LEAVE_NOTE,
+              SCHEDULE_TEMP_REST_NOTE,
+              SCHEDULE_PLANNED_TEMP_WORK_NOTE,
+              SCHEDULE_PLANNED_LEAVE_NOTE,
+              SCHEDULE_PLANNED_TEMP_REST_NOTE
+            );
+            return nextNote === row.note ? row : { ...row, note: nextNote, operator: op, updated_at: nowIso };
+          })
+        );
+      }
+      scheduleDailyPlanActivationDoneDateRef.current = dateKey;
+    };
+
+    try {
+      if (!lockUi) {
+        await exec();
+        return;
+      }
+      await runLocked('schedule_daily_plan_activation', exec);
+    } finally {
+      scheduleDailyPlanActivationInFlightRef.current = false;
+    }
   };
 
   const refreshSchedulePanel = async (options?: { lockUi?: boolean }) => {
     const lockUi = options?.lockUi ?? true;
     const exec = async () => {
       await resetScheduleTransientStatesForWeek({ lockUi: false });
+      await activatePlannedScheduleStatesForToday({ lockUi: false });
       await Promise.all([
         fetchSchedule({ lockUi: false }),
         fetchSchedulePublishSetting()
@@ -2730,19 +2948,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const scheduleWeekRolloverInFlightRef = useRef(false);
   const scheduleWeekRolloverDoneKeyRef = useRef('');
   const maybeRolloverScheduleWeek = async () => {
-    if (!supabase || scheduleWeekRolloverInFlightRef.current) return;
+    if (!supabase) return;
     const now = new Date(Date.now() + offsetMs);
-    // Rollover should only run on Monday after 05:00 local time.
-    // Without this guard, missing marker data could trigger rollover repeatedly on other days.
-    if (now.getDay() !== 1) return;
     const thisMonday = startOfWeekMonday(now);
-    const rolloverAt = new Date(thisMonday);
-    rolloverAt.setHours(5, 0, 0, 0);
-    if (now.getTime() < rolloverAt.getTime()) return;
-    const weekKey = toDateOnly(rolloverAt);
-    if (scheduleWeekRolloverDoneKeyRef.current === weekKey) return;
-
-    scheduleWeekRolloverInFlightRef.current = true;
     try {
       const markerRes = await supabase
         .from(APP_SETTINGS_TABLE)
@@ -2753,10 +2961,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (markerRes.error) return;
       const marker = (((markerRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
       const doneWeek = String(marker?.value?.week_start ?? '').trim();
-      if (doneWeek === weekKey) {
-        scheduleWeekRolloverDoneKeyRef.current = weekKey;
+      const weekKey = toDateOnly(thisMonday);
+      const gate = shouldRunWeeklyScheduleRollover({
+        now,
+        inFlight: scheduleWeekRolloverInFlightRef.current,
+        doneWeek: scheduleWeekRolloverDoneKeyRef.current,
+        existingWeek: doneWeek
+      });
+      if (!gate.shouldRun) {
+        if (doneWeek === weekKey) scheduleWeekRolloverDoneKeyRef.current = weekKey;
         return;
       }
+      scheduleWeekRolloverInFlightRef.current = true;
 
       const nextStart = getTemplateDateByDayIndex(0, 1);
       const nextEnd = getTemplateDateByDayIndex(6, 1);
@@ -2770,28 +2986,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (nextRows.length === 0) return;
 
       const nowIso = now.toISOString();
-      const migrated = nextRows.map((row) => {
-        const rawDate = String(row.date ?? '').trim();
-        const dt = new Date(`${rawDate}T00:00:00`);
-        const toDate = Number.isNaN(dt.getTime()) ? rawDate : toDateOnly(addDays(dt, -7));
-        const rawNote = String(row.note ?? '').trim();
-        const normalizedNote =
-          rawNote === SCHEDULE_TEMP_REST_NOTE
-            ? null // 临时排休 -> 工作
-            : rawNote === SCHEDULE_TEMP_WORK_NOTE
-              ? SCHEDULE_REST_NOTE // 临时工作 -> 休息
-              : row.note ?? null;
-        return {
-          staff_id: normalizeStaffId(String(row.staff_id ?? '').trim()),
-          date: toDate,
-          position: String(row.position ?? '').trim() || null,
-          note: normalizedNote,
-          operator: (user?.email ?? String(row.operator ?? '').trim()) || null,
-          updated_at: nowIso
-        };
-      });
-      const upsertRes = await supabase.from(SCHEDULE_TABLE).upsert(migrated as any[], { onConflict: 'staff_id,date' });
-      if (upsertRes.error) return;
+      const currentStart = getTemplateDateByDayIndex(0, 0);
+      const currentEnd = getTemplateDateByDayIndex(6, 0);
+      const currentWeekRes = await supabase
+        .from(SCHEDULE_TABLE)
+        .select('staff_id, date')
+        .gte('date', currentStart)
+        .lte('date', currentEnd);
+      if (currentWeekRes.error) return;
+
+      const migrated = buildWeeklyRolloverUpserts(nextRows, ((currentWeekRes.data as any[]) ?? []) as any[], nowIso).map((row) => ({
+        ...row,
+        staff_id: normalizeStaffId(row.staff_id)
+      }));
+      if (migrated.length > 0) {
+        const upsertRes = await supabase.from(SCHEDULE_TABLE).upsert(migrated as any[], { onConflict: 'staff_id,date' });
+        if (upsertRes.error) return;
+      }
 
       // 不删除下周数据，仅复制到本周，下周保持不变，实现永久循环
       // Do NOT delete next week; only copy to this week; next week stays for permanent cycle
@@ -2858,6 +3069,35 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       anchorTop
     });
   };
+
+  const schedulePickerMode = useMemo(() => {
+    const workDate = String(schedulePicker.workDate ?? '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(workDate)) return 'current';
+    const now = new Date(serverTime);
+    const operationalStart = new Date(now);
+    operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
+    if (now.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
+    const operationalDate = toDateOnly(operationalStart);
+    if (workDate > operationalDate) return 'future';
+    return 'current';
+  }, [schedulePicker.workDate, serverTime]);
+
+  const schedulePickerOptions = useMemo(() => {
+    const base = [
+      { key: 'work', labelZh: '工作', labelEn: 'Work', cls: themeMode === 'light' ? 'bg-neon text-slate-950' : 'bg-neon text-white', mode: 'all' },
+      { key: 'temp_work', labelZh: '临时工作', labelEn: 'Temporary Work', cls: 'bg-emerald-700 text-white', mode: 'current' },
+      { key: 'planned_temp_work', labelZh: '计划临时工作', labelEn: 'Planned Temporary Work', cls: 'bg-emerald-500 text-white', mode: 'future' },
+      { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white', mode: 'current' },
+      { key: 'planned_leave', labelZh: '计划请假', labelEn: 'Planned Leave', cls: 'bg-fuchsia-600 text-white', mode: 'future' },
+      { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Temporary Off', cls: 'bg-red-800 text-red-100', mode: 'current' },
+      { key: 'planned_temp_rest', labelZh: '计划临时排休', labelEn: 'Planned Temporary Off', cls: 'bg-rose-600 text-white', mode: 'future' },
+      { key: 'rest', labelZh: '休息', labelEn: 'Off', cls: 'bg-ember text-white', mode: 'all' }
+    ] as Array<{ key: ScheduleBaseState; labelZh: string; labelEn: string; cls: string; mode: 'all' | 'current' | 'future' }>;
+
+    const preferred = base.filter((item) => item.mode === 'all' || item.mode === schedulePickerMode);
+    const secondary = base.filter((item) => item.mode !== 'all' && item.mode !== schedulePickerMode);
+    return [...preferred, ...secondary];
+  }, [schedulePickerMode]);
 
   useEffect(() => {
     if (!schedulePicker.open) return;
@@ -3362,11 +3602,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     }
   };
   const getCurrentOperationalDate = () => {
-    const now = new Date(serverTime);
-    const operationalStart = new Date(now);
-    operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
-    if (now.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
-    return toDateOnly(operationalStart);
+    return currentOperationalDate;
   };
   const openScheduleMistakeCreate = (employee: EmployeeRow) => {
     const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
@@ -5422,16 +5658,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
       if (state === 'work') return t('工作', 'Work');
       if (state === 'temp_work') return t('临时工作', 'Temporary Work');
+      if (state === 'planned_temp_work') return t('计划临时工作', 'Planned Temporary Work');
       if (state === 'leave') return t('请假', 'Excuse');
+      if (state === 'planned_leave') return t('计划请假', 'Planned Leave');
       if (state === 'temp_rest') return t('临时排休', 'Temporary Off');
+      if (state === 'planned_temp_rest') return t('计划临时排休', 'Planned Temporary Off');
       if (state === 'rest') return t('休息', 'Off');
       if (state === 'rest_worked') return t('休息', 'Off');
       if (state === 'absent') return t('缺勤', 'Absent');
       if (state === 'empty') return t('休息', 'Off');
       if (state === '工作') return t('工作', 'Work');
       if (state === '临时工作') return t('临时工作', 'Temporary Work');
+      if (state === '计划临时工作') return t('计划临时工作', 'Planned Temporary Work');
       if (state === '请假') return t('请假', 'Excuse');
+      if (state === '计划请假') return t('计划请假', 'Planned Leave');
       if (state === '临时排休') return t('临时排休', 'Temporary Off');
+      if (state === '计划临时排休') return t('计划临时排休', 'Planned Temporary Off');
       if (state === '休息') return t('休息', 'Off');
       return '-';
     };
@@ -5539,13 +5781,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const fromState = getScheduleFromState('empty');
       const toState = getScheduleToState('temp_work');
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
+    } else if (action === 'schedule_planned_temp_work') {
+      const fromState = getScheduleFromState('empty');
+      const toState = getScheduleToState('planned_temp_work');
+      summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_leave') {
       const fromState = getScheduleFromState('empty');
       const toState = getScheduleToState('leave');
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
+    } else if (action === 'schedule_planned_leave') {
+      const fromState = getScheduleFromState('empty');
+      const toState = getScheduleToState('planned_leave');
+      summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_temp_rest') {
       const fromState = getScheduleFromState('empty');
       const toState = getScheduleToState('temp_rest');
+      summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
+    } else if (action === 'schedule_planned_temp_rest') {
+      const fromState = getScheduleFromState('empty');
+      const toState = getScheduleToState('planned_temp_rest');
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_rest') {
       const fromState = getScheduleFromState('empty');
@@ -5607,8 +5861,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       action === 'schedule_work' ||
       action === 'schedule_rest' ||
       action === 'schedule_temp_work' ||
+      action === 'schedule_planned_temp_work' ||
       action === 'schedule_temp_rest' ||
+      action === 'schedule_planned_temp_rest' ||
       action === 'schedule_leave' ||
+      action === 'schedule_planned_leave' ||
       action === 'schedule_clear'
     );
   };
@@ -5825,7 +6082,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       return;
     }
     const validState = (value: string): value is 'empty' | ScheduleBaseState =>
-      value === 'empty' || value === 'work' || value === 'temp_work' || value === 'leave' || value === 'temp_rest' || value === 'rest';
+      value === 'empty' ||
+      value === 'work' ||
+      value === 'temp_work' ||
+      value === 'planned_temp_work' ||
+      value === 'leave' ||
+      value === 'planned_leave' ||
+      value === 'temp_rest' ||
+      value === 'planned_temp_rest' ||
+      value === 'rest';
     if (!validState(fromStateRaw)) {
       setStatus({ tone: 'error', message: t('日志状态无效，无法撤销。', 'Invalid previous state in log payload.') });
       return;
@@ -6813,7 +7078,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const workDate = weekDateByIndex[dayIndex];
         if (!workDate) continue;
 
-        if (state === 'leave') {
+        if (state === 'leave' || state === 'planned_leave') {
           marksToInsert.push({
             staff_id: staff,
             work_date: workDate,
@@ -6825,7 +7090,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           });
           continue;
         }
-        if (state === 'temp_rest') {
+        if (state === 'temp_rest' || state === 'planned_temp_rest') {
           marksToInsert.push({
             staff_id: staff,
             work_date: workDate,
@@ -7764,9 +8029,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   useEffect(() => {
     if (page !== 'schedule') return;
     void maybeRolloverScheduleWeek();
+    void activatePlannedScheduleStatesForToday({ lockUi: false });
     const timer = window.setInterval(() => {
       if (document.hidden) return;
       void maybeRolloverScheduleWeek();
+      void activatePlannedScheduleStatesForToday({ lockUi: false });
     }, 5 * 60 * 1000);
     return () => window.clearInterval(timer);
   }, [page, user?.id, offsetMs]);
@@ -9188,8 +9455,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const scheduleActions = new Set([
       'schedule_work',
       'schedule_temp_work',
+      'schedule_planned_temp_work',
       'schedule_leave',
+      'schedule_planned_leave',
       'schedule_temp_rest',
+      'schedule_planned_temp_rest',
       'schedule_rest',
       'schedule_clear'
     ]);
@@ -9677,6 +9947,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
     if (now.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
     return (operationalStart.getDay() + 6) % 7;
+  }, [serverTime]);
+  const currentOperationalDate = useMemo(() => {
+    const now = new Date(serverTime);
+    const operationalStart = new Date(now);
+    operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
+    if (now.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
+    return toDateOnly(operationalStart);
   }, [serverTime]);
   const homeNowMinutes = useMemo(() => {
     const now = new Date(serverTime);
@@ -10241,8 +10518,11 @@ ${rowsToHtml(late)}
               const state = getScheduleBaseStateFromNote(row.note);
               if (state === 'work') return shift === 'late' ? '晚1' : '早1';
               if (state === 'temp_work') return '临时工作';
+              if (state === 'planned_temp_work') return '计划临时工作';
               if (state === 'leave') return '请假';
+              if (state === 'planned_leave') return '计划请假';
               if (state === 'temp_rest') return '临时排休';
+              if (state === 'planned_temp_rest') return '计划临时排休';
               return '休息';
             });
             return ['', staff, name, ...dayCells];
@@ -11341,8 +11621,12 @@ ${rowsToHtml(late)}
                                               ? 'bg-neon text-white shadow-glow'
                                               : state === 'temp_work'
                                                 ? 'bg-emerald-700 text-white'
+                                              : state === 'planned_temp_work'
+                                                ? 'bg-emerald-500 text-white'
                                               : state === 'leave'
                                                 ? 'bg-violet-500 text-white'
+                                              : state === 'planned_leave'
+                                                ? 'bg-fuchsia-600 text-white'
                                               : state === 'rest_worked'
                                                 ? 'bg-sky-500 text-white'
                                               : state === 'absent'
@@ -11351,6 +11635,8 @@ ${rowsToHtml(late)}
                                                   : 'bg-white text-slate-900'
                                               : state === 'temp_rest'
                                                 ? 'bg-red-800 text-red-100'
+                                              : state === 'planned_temp_rest'
+                                                ? 'bg-rose-600 text-white'
                                               : 'bg-ember text-white'
                                           ].join(' ')}
                                         >
@@ -11358,14 +11644,20 @@ ${rowsToHtml(late)}
                                             ? t('工作', 'Work')
                                             : state === 'temp_work'
                                               ? t('临时工作', 'Temporary Work')
+                                            : state === 'planned_temp_work'
+                                              ? t('计划临时工作', 'Planned Temporary Work')
                                             : state === 'leave'
                                               ? t('请假', 'Excuse')
+                                            : state === 'planned_leave'
+                                              ? t('计划请假', 'Planned Leave')
                                             : state === 'rest_worked'
                                               ? t('排休出勤', 'Off Worked')
                                             : state === 'absent'
                                               ? t('缺勤', 'Absent')
                                             : state === 'temp_rest'
                                                 ? t('临时排休', 'Temporary Off')
+                                              : state === 'planned_temp_rest'
+                                                ? t('计划临时排休', 'Planned Temporary Off')
                                               : t('休息', 'Off')}
                                         </button>
                                         {scheduleCellAudit.length > 0 && (
@@ -11373,6 +11665,7 @@ ${rowsToHtml(late)}
                                             className={[
                                               'pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full',
                                               state === 'rest' || state === 'temp_rest'
+                                                || state === 'planned_temp_rest'
                                                 ? 'bg-neon shadow-glow'
                                                 : 'bg-rose-500 shadow-[0_0_0_1px_rgba(244,63,94,0.55)]'
                                             ].join(' ')}
@@ -11435,18 +11728,15 @@ ${rowsToHtml(late)}
                   createPortal(
                     <div
                       data-schedule-popover="true"
-                      className="fixed z-[80] w-44 -translate-x-1/2 rounded-xl border border-white/10 bg-slate-950/95 p-1.5 shadow-2xl backdrop-blur"
+                      className={[
+                        'fixed z-[80] w-44 -translate-x-1/2 rounded-xl p-1.5 shadow-2xl backdrop-blur',
+                        themeMode === 'light'
+                          ? 'border border-slate-300 bg-white/95 shadow-[0_18px_40px_rgba(15,23,42,0.18)]'
+                          : 'border border-white/10 bg-slate-950/95'
+                      ].join(' ')}
                       style={{ left: `${schedulePicker.anchorLeft}px`, top: `${schedulePicker.anchorTop}px` }}
                     >
-                      {(
-                        [
-                          { key: 'work', labelZh: '工作', labelEn: 'Work', cls: 'bg-neon text-white' },
-                          { key: 'temp_work', labelZh: '临时工作', labelEn: 'Temporary Work', cls: 'bg-emerald-700 text-white' },
-                          { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white' },
-                          { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Temporary Off', cls: 'bg-red-800 text-red-100' },
-                          { key: 'rest', labelZh: '休息', labelEn: 'Off', cls: 'bg-ember text-white' }
-                        ] as Array<{ key: ScheduleBaseState; labelZh: string; labelEn: string; cls: string }>
-                      ).map((item) => (
+                      {schedulePickerOptions.map((item) => (
                         <button
                           key={item.key}
                           type="button"
@@ -11461,11 +11751,22 @@ ${rowsToHtml(late)}
                             setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
                           }}
                           className={[
-                            'mb-1 w-full rounded-lg px-2 py-1.5 text-left text-xs font-semibold transition hover:brightness-110 last:mb-0',
-                            item.cls
+                            'mb-1 flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs font-semibold transition hover:brightness-110 last:mb-0',
+                            item.cls,
+                            item.mode !== 'all' && item.mode !== schedulePickerMode ? 'opacity-60' : '',
+                            schedulePicker.currentState === item.key
+                              ? themeMode === 'light'
+                                ? 'ring-2 ring-slate-900/70'
+                                : 'ring-2 ring-white/70'
+                              : ''
                           ].join(' ')}
                         >
-                          {t(item.labelZh, item.labelEn)}
+                          <span>{t(item.labelZh, item.labelEn)}</span>
+                          {schedulePicker.currentState === item.key ? (
+                            <span className="text-[10px] uppercase tracking-[0.18em]">Now</span>
+                          ) : item.mode !== 'all' && item.mode === schedulePickerMode ? (
+                            <span className="text-[10px] uppercase tracking-[0.18em]">{t('推荐', 'Recommended')}</span>
+                          ) : null}
                         </button>
                       ))}
                     </div>,
