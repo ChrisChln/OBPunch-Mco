@@ -2,7 +2,6 @@ type TranslateFn = (zh: string, en: string) => string;
 
 type AuditPageProps = {
   t: TranslateFn;
-  locale: string;
   isLocked: boolean;
   auditSearch: string;
   setAuditSearch: (value: string) => void;
@@ -11,6 +10,11 @@ type AuditPageProps = {
   auditRows: any[];
   AUDIT_TABLE: string;
   formatAuditDetail: (row: any) => { summary: string; details: Array<{ label: string; value: string }> };
+  renderAuditSummary: (summary: string) => any;
+  formatAuditActionLabel: (action: string) => string;
+  resolveAuditStaffName: (staffId: string) => string;
+  formatAuditCreatedAt: (value: string | null | undefined) => string;
+  resolveAuditBusinessDate: (row: any) => string;
   canUndoAuditRow: (row: any) => boolean;
   isAuditRowUndone: (row: any) => boolean;
   undoAuditRow: (row: any) => void | Promise<void>;
@@ -18,7 +22,6 @@ type AuditPageProps = {
 
 export default function AuditPage({
   t,
-  locale,
   isLocked,
   auditSearch,
   setAuditSearch,
@@ -27,6 +30,11 @@ export default function AuditPage({
   auditRows,
   AUDIT_TABLE,
   formatAuditDetail,
+  renderAuditSummary,
+  formatAuditActionLabel,
+  resolveAuditStaffName,
+  formatAuditCreatedAt,
+  resolveAuditBusinessDate,
   canUndoAuditRow,
   isAuditRowUndone,
   undoAuditRow
@@ -52,7 +60,7 @@ export default function AuditPage({
             value={auditSearch}
             onChange={(e) => setAuditSearch(e.target.value)}
             disabled={isLocked}
-            placeholder={t('通过工号搜索', 'Search by staff id / actor / action')}
+            placeholder={t('通过工号、员工名、操作者或动作搜索', 'Search by staff id, employee name, actor, or action')}
             className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
           />
         </div>
@@ -84,7 +92,7 @@ export default function AuditPage({
           {t('加载失败：', 'Load failed: ')}
           {auditError}
           <span className="ml-2 text-xs text-slate-400">
-            {t('（需要创建表：', '(Need table: ')}
+            {t('（需要表：', '(Need table: ')}
             {AUDIT_TABLE}
             {t('）', ')')}
           </span>
@@ -94,63 +102,78 @@ export default function AuditPage({
       {!auditError && auditRows.length === 0 && <p className="mt-3 text-sm text-slate-400">{t('暂无日志。', 'No audit records.')}</p>}
 
       {!auditError && auditRows.length > 0 && (
-        <div className="mt-4 space-y-2">
-          {auditRows.map((r, idx) => {
-            const id = String(r.id ?? idx);
-            const at = r.created_at ? new Date(r.created_at).toLocaleString(locale, { hour12: false }) : '';
-            const actor = String(r.actor ?? '').trim() || '-';
-            const action = String(r.action ?? '').trim() || '-';
-            const staff = String(r.staff_id ?? '').trim() || '-';
-            const target = String(r.target ?? '').trim() || '-';
-            const auditDetail = formatAuditDetail(r);
-            const undoable = canUndoAuditRow(r);
-            const undone = isAuditRowUndone(r);
+        <div className="mt-4 space-y-3">
+          {auditRows.map((row, idx) => {
+            const id = String(row.id ?? idx);
+            const at = formatAuditCreatedAt(row.created_at);
+            const actor = String(row.actor ?? '').trim() || '-';
+            const action = String(row.action ?? '').trim() || '-';
+            const staff = String(row.staff_id ?? '').trim() || '-';
+            const staffName = staff !== '-' ? resolveAuditStaffName(staff) : '';
+            const target = String(row.target ?? '').trim() || '-';
+            const businessDate = resolveAuditBusinessDate(row);
+            const auditDetail = formatAuditDetail(row);
+            const undoable = canUndoAuditRow(row);
+            const undone = isAuditRowUndone(row);
 
             return (
-              <div key={id} className="rounded-2xl bg-white/5 px-4 py-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-200">
-                      {action}
-                    </span>
-                    <span className="text-sm text-slate-200">{auditDetail.summary}</span>
-                    <span className="text-sm text-slate-200">
-                      {t('工号：', 'Staff: ')}
-                      <span className="font-mono">{staff}</span>
-                    </span>
-                    <span className="text-xs text-slate-400">
-                      {t('操作者：', 'Actor: ')}
-                      {actor}
-                    </span>
-                    <span className="text-xs text-slate-500">
-                      {t('目标：', 'Target: ')}
-                      {target}
-                    </span>
+              <div key={id} className="rounded-2xl border border-white/8 bg-white/5 px-4 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-200">
+                        {formatAuditActionLabel(action)}
+                      </span>
+                      {staff !== '-' && (
+                        <span className="rounded-full bg-neon/10 px-2 py-0.5 text-[11px] font-medium text-neon">
+                          {staffName ? `${staffName} (${staff})` : staff}
+                        </span>
+                      )}
+                      <span className="text-xs text-slate-500">{target}</span>
+                    </div>
+
+                    <div className="mt-2 text-sm text-slate-100">{renderAuditSummary(auditDetail.summary)}</div>
+
+                    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
+                      <span>
+                        {t('操作者：', 'Actor: ')}
+                        <span className="text-slate-200">{actor}</span>
+                      </span>
+                      {businessDate && (
+                        <span>
+                          {t('日期：', 'Date: ')}
+                          <span className="text-slate-200">{businessDate}</span>
+                        </span>
+                      )}
+                      <span>
+                        {t('时间：', 'Time: ')}
+                        <span className="text-slate-200">{at || '-'}</span>
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {undoable && (
-                      <button
-                        type="button"
-                        disabled={isLocked || undone}
-                        onClick={() => void undoAuditRow(r)}
-                        className={`rounded-xl px-3 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                          undone
-                            ? 'bg-emerald-500/20 text-emerald-200'
-                            : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'
-                        }`}
-                      >
-                        {undone ? t('已撤销', 'Undone') : t('撤销', 'Undo')}
-                      </button>
-                    )}
-                    <div className="text-right text-xs text-slate-400">{at}</div>
-                  </div>
+
+                  {undoable && (
+                    <button
+                      type="button"
+                      disabled={isLocked || undone}
+                      onClick={() => void undoAuditRow(row)}
+                      className={`rounded-xl px-3 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                        undone
+                          ? 'bg-emerald-500/20 text-emerald-200'
+                          : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'
+                      }`}
+                    >
+                      {undone ? t('已撤销', 'Undone') : t('撤销', 'Undo')}
+                    </button>
+                  )}
                 </div>
+
                 {auditDetail.details.length > 0 && (
-                  <div className="mt-2 grid gap-1 text-xs text-slate-400">
+                  <div className="mt-3 grid gap-2 rounded-2xl bg-black/10 px-3 py-3 text-xs">
                     {auditDetail.details.map((item, detailIdx) => (
-                      <div key={`${id}-detail-${detailIdx}`} className="flex flex-wrap items-center gap-2">
+                      <div key={`${id}-detail-${detailIdx}`} className="grid gap-1 md:grid-cols-[120px_1fr] md:items-start">
                         <span className="text-slate-500">{item.label}</span>
-                        <span className="text-slate-200">{item.value}</span>
+                        <span className="break-words text-slate-100">{item.value}</span>
                       </div>
                     ))}
                   </div>

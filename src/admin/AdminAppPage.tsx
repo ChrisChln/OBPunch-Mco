@@ -1958,28 +1958,162 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
     await runLocked('audit', async () => {
       setAuditError(null);
+      const searchLower = searchValue.toLowerCase();
+      const matchedStaffIds = searchValue
+        ? employees
+            .filter((employee) => String(employee.name ?? '').trim().toLowerCase().includes(searchLower))
+            .map((employee) => normalizeStaffId(String(employee.staff_id ?? '').trim()))
+            .filter(Boolean)
+        : [];
       let q = supabase
         .from(AUDIT_TABLE)
         .select('id, created_at, actor, action, staff_id, target, payload')
         .order('created_at', { ascending: false })
-        .limit(200);
+        .limit(searchValue ? 500 : 200);
       if (searchValue) {
         const term = `%${searchValue}%`;
         q = q.or(`staff_id.ilike.${term},actor.ilike.${term},action.ilike.${term}`);
       }
-      const res = await q;
-      if (res.error) {
-        setAuditError(res.error.message);
+      const [res, nameRes] = await Promise.all([
+        q,
+        matchedStaffIds.length > 0
+          ? supabase
+              .from(AUDIT_TABLE)
+              .select('id, created_at, actor, action, staff_id, target, payload')
+              .in('staff_id', matchedStaffIds as any)
+              .order('created_at', { ascending: false })
+              .limit(500)
+          : Promise.resolve({ data: [], error: null } as any)
+      ]);
+      if (res.error || nameRes?.error) {
+        setAuditError(res.error?.message ?? nameRes?.error?.message ?? 'Failed to load audit records.');
         return;
       }
-      const rawRows = (((res.data as any[]) ?? []) as AuditRow[]);
+      const byId = new Map<string, AuditRow>();
+      for (const row of (((res.data as any[]) ?? []) as AuditRow[])) {
+        byId.set(String(row.id ?? `${row.created_at}_${row.staff_id}_${row.action}`), row);
+      }
+      for (const row of (((nameRes.data as any[]) ?? []) as AuditRow[])) {
+        byId.set(String(row.id ?? `${row.created_at}_${row.staff_id}_${row.action}`), row);
+      }
+      const rawRows = Array.from(byId.values()).sort((a, b) =>
+        String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''), 'en-US')
+      );
       await rememberAuditActorDisplayNames(rawRows.map((row) => row.actor));
-      const nextAuditRows = rawRows.map((row) => ({
-        ...row,
-        actor: normalizeAuditActor((row as any).actor)
-      }));
+      const nextAuditRows = rawRows
+        .map((row) => ({
+          ...row,
+          actor: normalizeAuditActor((row as any).actor)
+        }))
+        .filter((row) => {
+          if (!searchValue) return true;
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          const employeeName = staff ? String(employees.find((employee) => normalizeStaffId(String(employee.staff_id ?? '').trim()) === staff)?.name ?? '').trim() : '';
+          const haystack = [staff, employeeName, String(row.actor ?? '').trim(), String(row.action ?? '').trim(), String(row.target ?? '').trim()]
+            .join(' ')
+            .toLowerCase();
+          return haystack.includes(searchLower);
+        })
+        .slice(0, 200);
       setAuditRows(nextAuditRows);
     });
+  };
+
+  const formatAuditActionLabel = (actionRaw: string) => {
+    const action = String(actionRaw ?? '').trim();
+    if (!action) return '-';
+    const labels: Record<string, string> = {
+      employee_upsert: t('员工导入', 'Employee Upsert'),
+      employee_update: t('员工更新', 'Employee Update'),
+      employee_delete: t('员工删除', 'Employee Delete'),
+      employee_upload: t('批量上传', 'Employee Upload'),
+      punch_manual_add: t('补打卡', 'Punch Add'),
+      punch_manual_edit: t('改打卡', 'Punch Edit'),
+      punch_manual_delete: t('删打卡', 'Punch Delete'),
+      punch_count_verified: t('次数核实', 'Punch Verified'),
+      schedule_work: t('排班工作', 'Schedule Work'),
+      schedule_temp_work: t('临时工作', 'Temp Work'),
+      schedule_planned_temp_work: t('计划临时工作', 'Planned Temp Work'),
+      schedule_leave: t('请假', 'Leave'),
+      schedule_planned_leave: t('计划请假', 'Planned Leave'),
+      schedule_temp_rest: t('临时排休', 'Temp Off'),
+      schedule_planned_temp_rest: t('计划临时排休', 'Planned Temp Off'),
+      schedule_rest: t('排班休息', 'Schedule Off'),
+      schedule_clear: t('清空排班', 'Schedule Clear'),
+      device_add: t('新增设备', 'Device Add'),
+      device_update: t('更新设备', 'Device Update'),
+      device_borrow: t('借出设备', 'Device Borrow'),
+      device_return: t('归还设备', 'Device Return'),
+      audit_undo: t('撤销日志', 'Audit Undo')
+    };
+    return labels[action] ?? action.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+  };
+
+  const resolveAuditStaffName = (staffIdRaw: string) => {
+    const staffId = normalizeStaffId(String(staffIdRaw ?? '').trim());
+    if (!staffId) return '';
+    const employee = employees.find((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) === staffId);
+    return String(employee?.name ?? '').trim();
+  };
+
+  const formatAuditCreatedAt = (value: string | null | undefined) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    const dt = new Date(raw);
+    if (Number.isNaN(dt.getTime())) return raw;
+    const weekday = dt.toLocaleDateString(locale, { weekday: 'short' });
+    const dateText = dt.toLocaleString(locale, { hour12: false });
+    return `${weekday} ${dateText}`;
+  };
+
+  const resolveAuditBusinessDate = (row: AuditRow) => {
+    const payload = ((row.payload ?? {}) as Record<string, unknown>) ?? {};
+    const workDate = String(payload.work_date ?? '').trim();
+    const operationalDate = String(payload.operational_date ?? '').trim();
+    const formatRealDate = (dateOnly: string) => {
+      const dt = new Date(`${dateOnly}T00:00:00`);
+      if (!Number.isNaN(dt.getTime())) {
+        const weekday = dt.toLocaleDateString(locale, { weekday: 'short' });
+        return `${weekday} ${dateOnly}`;
+      }
+      return dateOnly;
+    };
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(workDate)) return formatRealDate(workDate);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(operationalDate)) return formatRealDate(operationalDate);
+
+    const templateDate = String(payload.template_date ?? '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(templateDate)) {
+      const templateDt = new Date(`${templateDate}T00:00:00`);
+      const createdAt = new Date(String(row.created_at ?? ''));
+      if (!Number.isNaN(templateDt.getTime()) && !Number.isNaN(createdAt.getTime())) {
+        const diffDays = Math.round((templateDt.getTime() - SCHEDULE_TEMPLATE_WEEK_START.getTime()) / (24 * 60 * 60 * 1000));
+        if (diffDays >= 0) {
+          const bucketWeekOffset = Math.floor(diffDays / 7);
+          const dayIndex = diffDays % 7;
+          const operationalStart = new Date(createdAt);
+          operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
+          if (createdAt.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
+          const actualWeekStart = startOfWeekMonday(operationalStart);
+          const actualDate = toDateOnly(addDays(actualWeekStart, bucketWeekOffset * 7 + dayIndex));
+          return formatRealDate(actualDate);
+        }
+      }
+      return '';
+    }
+
+    const action = String(row.action ?? '').trim();
+    const payloadAny = payload as Record<string, any>;
+    if (action === 'punch_manual_add') {
+      const key = toOperationalDateFromAudit(String(payloadAny.created_at ?? ''), String(payloadAny.action ?? ''));
+      if (key) return `${new Date(`${key}T00:00:00`).toLocaleDateString(locale, { weekday: 'short' })} ${key}`;
+    }
+    if (action === 'punch_manual_edit' || action === 'punch_manual_delete') {
+      const before = (payloadAny.before ?? null) as Record<string, any> | null;
+      const key = before ? toOperationalDateFromAudit(String(before.created_at ?? ''), String(before.action ?? '')) : '';
+      if (key) return `${new Date(`${key}T00:00:00`).toLocaleDateString(locale, { weekday: 'short' })} ${key}`;
+    }
+    return '';
   };
 
   const fetchCellAuditLogs = async () => {
@@ -11019,7 +11153,6 @@ ${rowsToHtml(late)}
             {page === 'audit' && (
               <AuditPage
                 t={t}
-                locale={locale}
                 isLocked={isLocked}
                 auditSearch={auditSearch}
                 setAuditSearch={setAuditSearch}
@@ -11028,6 +11161,11 @@ ${rowsToHtml(late)}
                 auditRows={auditRows}
                 AUDIT_TABLE={AUDIT_TABLE}
                 formatAuditDetail={formatAuditDetail}
+                renderAuditSummary={renderAuditSummary}
+                formatAuditActionLabel={formatAuditActionLabel}
+                resolveAuditStaffName={resolveAuditStaffName}
+                formatAuditCreatedAt={formatAuditCreatedAt}
+                resolveAuditBusinessDate={resolveAuditBusinessDate}
                 canUndoAuditRow={isUndoableAuditRow}
                 isAuditRowUndone={isAuditRowUndone}
                 undoAuditRow={undoAuditRow}
