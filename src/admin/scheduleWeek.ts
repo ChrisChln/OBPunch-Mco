@@ -136,12 +136,14 @@ export const buildDailyPlannedActivationUpserts = (
       return {
         staff_id: String(row.staff_id ?? '').trim(),
         date: rowDate,
+        position: String(row.position ?? '').trim() || null,
         note: nextNote,
         operator: String(row.operator ?? '').trim() || null,
         updated_at: nowIso
       };
     })
     .filter((row) => row.staff_id && row.date && row.date <= dateKey)
+    .filter((row) => row.position)
     .filter((row) => row.note !== null);
 
 export const buildWeeklyRolloverUpserts = (
@@ -168,5 +170,6 @@ export const buildWeeklyRolloverUpserts = (
       };
     })
     .filter((row) => row.staff_id && row.date)
+    .filter((row) => row.position)
     .filter((row) => !existingKeys.has(`${row.staff_id}__${row.date}`));
 };

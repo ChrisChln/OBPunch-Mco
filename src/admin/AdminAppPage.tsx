@@ -287,6 +287,20 @@ const isAbortLikeError = (error: unknown) => {
     message.includes('aborted without reason')
   );
 };
+const normalizeAttendanceFetchError = (error: unknown) => {
+  const rawMessage = String((error as any)?.message ?? error ?? '').trim();
+  const message = rawMessage.toLowerCase();
+  if (
+    message.includes('failed to fetch') ||
+    message.includes('load failed') ||
+    message.includes('networkerror') ||
+    message.includes('network request failed') ||
+    (message.includes('typeerror') && message.includes('fetch'))
+  ) {
+    return '无法连接考勤服务，请检查网络或稍后重试。';
+  }
+  return rawMessage || '考勤服务请求失败。';
+};
 
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? clamp(DAY_CUTOFF_HOUR_RAW, 0, 23) : 5;
@@ -1390,21 +1404,34 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const maxPages = 10;
       const latestByStaff = new Map<string, { action: 'IN' | 'OUT'; at: string }>();
       const firstInByStaff = new Map<string, { at: string }>();
+      const runAttendanceQuery = async <T,>(queryFactory: () => PromiseLike<{ data: T | null; error: any }>) => {
+        let lastRes = await queryFactory();
+        if (!lastRes.error) return lastRes;
+        if (isAbortLikeError(lastRes.error)) return lastRes;
+        const normalized = normalizeAttendanceFetchError(lastRes.error);
+        if (normalized === '无法连接考勤服务，请检查网络或稍后重试。') {
+          await new Promise((resolve) => window.setTimeout(resolve, 250));
+          lastRes = await queryFactory();
+        }
+        return lastRes;
+      };
 
       for (let page = 0; page < maxPages; page += 1) {
         const from = page * pageSize;
         const to = from + pageSize - 1;
-        const res = await supabase
-          .from('ob_punches')
-          .select('staff_id, action, created_at, id')
-          .gte('created_at', rangeStart.toISOString())
-          .order('created_at', { ascending: false })
-          .range(from, to);
+        const res = await runAttendanceQuery(() =>
+          supabase
+            .from('ob_punches')
+            .select('staff_id, action, created_at, id')
+            .gte('created_at', rangeStart.toISOString())
+            .order('created_at', { ascending: false })
+            .range(from, to)
+        );
 
         if (seq !== attendanceFetchSeqRef.current) return;
 
         if (res.error) {
-          if (!isAbortLikeError(res.error.message)) setAttendanceError(res.error.message);
+          if (!isAbortLikeError(res.error)) setAttendanceError(normalizeAttendanceFetchError(res.error));
           return;
         }
 
@@ -1426,18 +1453,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       for (let page = 0; page < maxPages; page += 1) {
         const from = page * pageSize;
         const to = from + pageSize - 1;
-        const res = await supabase
-          .from('ob_punches')
-          .select('staff_id, created_at, id')
-          .eq('action', 'IN')
-          .gte('created_at', rangeStart.toISOString())
-          .order('created_at', { ascending: true })
-          .range(from, to);
+        const res = await runAttendanceQuery(() =>
+          supabase
+            .from('ob_punches')
+            .select('staff_id, created_at, id')
+            .eq('action', 'IN')
+            .gte('created_at', rangeStart.toISOString())
+            .order('created_at', { ascending: true })
+            .range(from, to)
+        );
 
         if (seq !== attendanceFetchSeqRef.current) return;
 
         if (res.error) {
-          if (!isAbortLikeError(res.error.message)) setAttendanceError(res.error.message);
+          if (!isAbortLikeError(res.error)) setAttendanceError(normalizeAttendanceFetchError(res.error));
           return;
         }
 
@@ -1481,7 +1510,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         }
         if (seq !== attendanceFetchSeqRef.current) return;
         if (res.error) {
-          if (!isAbortLikeError(res.error.message)) setAttendanceError(res.error.message);
+          if (!isAbortLikeError(res.error)) setAttendanceError(normalizeAttendanceFetchError(res.error));
           return;
         }
         for (const r of (res.data as any[] | null) ?? []) {
@@ -1528,7 +1557,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       setHomeOnClockShiftByStaffId(onClockShiftByStaffId);
     } catch (err: any) {
       if (!isAbortLikeError(err)) {
-        setAttendanceError(String(err?.message ?? err));
+        setAttendanceError(normalizeAttendanceFetchError(err));
       }
     }
   };
@@ -2945,7 +2974,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
       const planRowsRes = await supabase
         .from(SCHEDULE_TABLE)
-        .select('staff_id, date, note, operator')
+        .select('staff_id, date, position, note, operator')
         .lte('date', dateKey)
         .in('note', [SCHEDULE_PLANNED_TEMP_WORK_NOTE, SCHEDULE_PLANNED_LEAVE_NOTE, SCHEDULE_PLANNED_TEMP_REST_NOTE] as any);
       if (planRowsRes.error) {
@@ -2953,7 +2982,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         return;
       }
 
-      const rows = (((planRowsRes.data as any[]) ?? []) as Array<{ staff_id?: string; date?: string; note?: string | null; operator?: string | null }>);
+      const rows = (((planRowsRes.data as any[]) ?? []) as Array<{
+        staff_id?: string;
+        date?: string;
+        position?: string | null;
+        note?: string | null;
+        operator?: string | null;
+      }>);
       if (rows.length > 0) {
         const payload = buildDailyPlannedActivationUpserts(
           rows,
@@ -6468,8 +6503,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
       const scheduledByStaff: Record<string, boolean[]> = {};
       const scheduleStateByStaff: Record<string, ScheduleBaseState[]> = {};
+      const scheduleKnownByStaff: Record<string, boolean[]> = {};
       if (!supabase || staffIds.length === 0) {
-        return { scheduledByStaff, scheduleStateByStaff, error: null as string | null };
+        return { scheduledByStaff, scheduleStateByStaff, scheduleKnownByStaff, error: null as string | null };
       }
       const batches = chunk(staffIds, 200);
       const startDate = getTemplateDateByDayIndex(0, offset);
@@ -6485,6 +6521,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           return {
             scheduledByStaff: {} as Record<string, boolean[]>,
             scheduleStateByStaff: {} as Record<string, ScheduleBaseState[]>,
+            scheduleKnownByStaff: {} as Record<string, boolean[]>,
             error: STALE_TIMECARD_REQUEST
           };
         }
@@ -6492,6 +6529,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           return {
             scheduledByStaff: {} as Record<string, boolean[]>,
             scheduleStateByStaff: {} as Record<string, ScheduleBaseState[]>,
+            scheduleKnownByStaff: {} as Record<string, boolean[]>,
             error: error.message
           };
         }
@@ -6501,12 +6539,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           if (!staff || dayIndex === null) continue;
           const arr = (scheduledByStaff[staff] ??= new Array(7).fill(false) as boolean[]);
           const stateArr = (scheduleStateByStaff[staff] ??= new Array(7).fill('work') as ScheduleBaseState[]);
+          const knownArr = (scheduleKnownByStaff[staff] ??= new Array(7).fill(false) as boolean[]);
           const state = getScheduleBaseStateFromNote((row as ScheduleRow).note);
           stateArr[dayIndex] = state;
+          knownArr[dayIndex] = true;
           arr[dayIndex] = isWorkingScheduleBaseState(state);
         }
       }
-      return { scheduledByStaff, scheduleStateByStaff, error: null as string | null };
+      return { scheduledByStaff, scheduleStateByStaff, scheduleKnownByStaff, error: null as string | null };
     };
 
     const fetchAttendanceMarksByStaff = async (staffIds: string[]) => {
@@ -6618,6 +6658,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       eventsByStaff,
       scheduledByStaff,
       scheduleStateByStaff,
+      scheduleKnownByStaff,
       marksByStaff,
       capEnd
     }: {
@@ -6629,6 +6670,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT'; manual: boolean }>>;
       scheduledByStaff: Record<string, boolean[]>;
       scheduleStateByStaff: Record<string, ScheduleBaseState[]>;
+      scheduleKnownByStaff: Record<string, boolean[]>;
       marksByStaff: Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }>;
       capEnd: Date;
     }): TimecardRow => {
@@ -6702,7 +6744,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const leaveByDay = [...markRec.leaveByDay];
       const tempRestByDay = [...markRec.tempRestByDay];
       const scheduleStates = scheduleStateByStaff[staff] ?? (new Array(7).fill('work') as ScheduleBaseState[]);
-      const restByDay = scheduleStates.map((state) => state === 'rest');
+      const scheduleKnownByDay = scheduleKnownByStaff[staff] ?? (new Array(7).fill(false) as boolean[]);
+      const restByDay = scheduleStates.map((state, idx) => state === 'rest' && scheduleKnownByDay[idx]);
       const absentVisibleByNoon = Array.from({ length: 7 }, (_, idx) => {
         const workDate = toDateOnly(addDays(weekStart, idx));
         const noon = new Date(`${workDate}T00:00:00`);
@@ -6718,6 +6761,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (leaveByDay[idx] || tempRestByDay[idx]) continue;
         if (!absentVisibleByNoon[idx]) continue;
         absentByDay[idx] = true;
+      }
+      if (timecardWeekOffset < 0) {
+        for (let idx = 0; idx < 7; idx += 1) {
+          if (scheduleKnownByDay[idx]) continue;
+          if (hasPunchByDay[idx]) continue;
+          if (absentByDay[idx] || leaveByDay[idx] || tempRestByDay[idx]) continue;
+          if (!closedDayByIndex[idx]) continue;
+          restByDay[idx] = true;
+        }
       }
       const punchCountMismatchByDay = punchCountByDay.map((count, idx) => {
         if (!closedDayByIndex[idx]) return false;
@@ -6829,6 +6881,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             eventsByStaff,
             scheduledByStaff: scheduledRes.scheduledByStaff,
             scheduleStateByStaff: scheduledRes.scheduleStateByStaff,
+            scheduleKnownByStaff: scheduledRes.scheduleKnownByStaff ?? {},
             marksByStaff: marksRes.marksByStaff,
             capEnd
           });
@@ -7013,6 +7066,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           eventsByStaff,
           scheduledByStaff: scheduledRes.scheduledByStaff,
           scheduleStateByStaff: scheduledRes.scheduleStateByStaff,
+          scheduleKnownByStaff: scheduledRes.scheduleKnownByStaff ?? {},
           marksByStaff: marksRes.marksByStaff,
           capEnd
         });

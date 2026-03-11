@@ -168,6 +168,24 @@ describe('schedule week note handling', () => {
     ]);
   });
 
+  test('week rollover skips rows with missing position', () => {
+    const result = buildWeeklyRolloverUpserts(
+      [
+        {
+          staff_id: 'US003',
+          date: '2026-03-18',
+          position: null,
+          note: TEMP_WORK_NOTE,
+          operator: 'planner@example.com'
+        }
+      ],
+      [],
+      '2026-03-09T05:01:00.000Z'
+    );
+
+    expect(result).toEqual([]);
+  });
+
   test('week rollover uses the same Monday-after-05:00 gate and done markers', () => {
     expect(
       shouldRunWeeklyScheduleRollover({
@@ -310,9 +328,9 @@ describe('schedule week note handling', () => {
     expect(
       buildDailyPlannedActivationUpserts(
         [
-          { staff_id: 'US001', date: '2026-03-09', note: PLANNED_LEAVE_NOTE, operator: 'planner@example.com' },
-          { staff_id: 'US002', date: '2026-03-10', note: PLANNED_TEMP_REST_NOTE, operator: 'planner@example.com' },
-          { staff_id: 'US003', date: '2026-03-11', note: PLANNED_TEMP_WORK_NOTE, operator: 'planner@example.com' }
+          { staff_id: 'US001', date: '2026-03-09', position: 'Pick', note: PLANNED_LEAVE_NOTE, operator: 'planner@example.com' },
+          { staff_id: 'US002', date: '2026-03-10', position: 'Pack', note: PLANNED_TEMP_REST_NOTE, operator: 'planner@example.com' },
+          { staff_id: 'US003', date: '2026-03-11', position: 'Rebin', note: PLANNED_TEMP_WORK_NOTE, operator: 'planner@example.com' }
         ],
         '2026-03-10',
         '2026-03-10T06:01:00.000Z',
@@ -327,6 +345,7 @@ describe('schedule week note handling', () => {
       {
         staff_id: 'US001',
         date: '2026-03-09',
+        position: 'Pick',
         note: '__leave__',
         operator: 'planner@example.com',
         updated_at: '2026-03-10T06:01:00.000Z'
@@ -334,10 +353,27 @@ describe('schedule week note handling', () => {
       {
         staff_id: 'US002',
         date: '2026-03-10',
+        position: 'Pack',
         note: TEMP_REST_NOTE,
         operator: 'planner@example.com',
         updated_at: '2026-03-10T06:01:00.000Z'
       }
     ]);
+  });
+
+  test('daily planned-state activation skips rows with missing position', () => {
+    expect(
+      buildDailyPlannedActivationUpserts(
+        [{ staff_id: 'US001', date: '2026-03-10', note: PLANNED_LEAVE_NOTE, operator: 'planner@example.com' }],
+        '2026-03-10',
+        '2026-03-10T06:01:00.000Z',
+        TEMP_WORK_NOTE,
+        '__leave__',
+        TEMP_REST_NOTE,
+        PLANNED_TEMP_WORK_NOTE,
+        PLANNED_LEAVE_NOTE,
+        PLANNED_TEMP_REST_NOTE
+      )
+    ).toEqual([]);
   });
 });
