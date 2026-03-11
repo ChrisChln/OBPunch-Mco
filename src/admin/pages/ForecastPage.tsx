@@ -58,6 +58,8 @@ type ForecastManualInputRow = {
   weekday: WeekdayValue;
   previous_day_backlog: number;
   current_cumulative_volume_12: number;
+  inventory_level: number;
+  severe_weather: boolean;
   full_day_capacity: number;
   yesterday_inflow_00_14: number;
   updated_at?: string | null;
@@ -68,6 +70,8 @@ type ForecastManualInputDraftRow = {
   input_date: string;
   previous_day_backlog: string;
   predicted_full_day_volume_12: string;
+  inventory_level: string;
+  severe_weather: boolean;
   full_day_capacity: string;
   yesterday_inflow_00_14: string;
 };
@@ -660,6 +664,8 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
         weekday: Number(row.weekday ?? 0) as WeekdayValue,
         previous_day_backlog: Number(row.previous_day_backlog ?? 0),
         current_cumulative_volume_12: Number((row as any).current_cumulative_volume_12 ?? 0),
+        inventory_level: Number((row as any).inventory_level ?? 0),
+        severe_weather: Boolean((row as any).severe_weather ?? false),
         full_day_capacity: Number(row.full_day_capacity ?? 0),
         yesterday_inflow_00_14: Number(row.yesterday_inflow_00_14 ?? 0),
         updated_at: row.updated_at ?? null,
@@ -814,6 +820,8 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           input_date: inputDate,
           previous_day_backlog: existing ? String(existing.previous_day_backlog) : '',
           predicted_full_day_volume_12: predictedFullDayVolume12 === null ? '' : String(predictedFullDayVolume12),
+          inventory_level: existing ? String(existing.inventory_level) : '',
+          severe_weather: existing ? Boolean(existing.severe_weather) : false,
           full_day_capacity: existing ? String(existing.full_day_capacity) : '',
           yesterday_inflow_00_14:
             autoYesterdayInflow !== null ? String(autoYesterdayInflow) : existing ? String(existing.yesterday_inflow_00_14) : ''
@@ -1113,6 +1121,8 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       input_date: string;
       previous_day_backlog: number;
       current_cumulative_volume_12: number;
+      inventory_level: number;
+      severe_weather: boolean;
       full_day_capacity: number;
       yesterday_inflow_00_14: number;
     }> = [];
@@ -1124,11 +1134,13 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       }
 
       const previousDayBacklog = parseNonNegativeInt(draftRow.previous_day_backlog);
+      const inventoryLevel = parseNonNegativeInt(draftRow.inventory_level);
       const existingManualRow = manualInputRows.find((row) => row.input_date === inputDate);
       const fullDayCapacity = parseNonNegativeInt(draftRow.full_day_capacity);
       const yesterdayInflow0014 = parseNonNegativeInt(draftRow.yesterday_inflow_00_14);
       if (
         previousDayBacklog === null ||
+        inventoryLevel === null ||
         fullDayCapacity === null ||
         yesterdayInflow0014 === null
       ) {
@@ -1138,15 +1150,18 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
 
       const hasAnyValue = [
         draftRow.previous_day_backlog,
+        draftRow.inventory_level,
         draftRow.full_day_capacity,
         draftRow.yesterday_inflow_00_14
-      ].some((value) => String(value ?? '').trim() !== '');
+      ].some((value) => String(value ?? '').trim() !== '') || draftRow.severe_weather;
       if (!hasAnyValue) continue;
 
       payloadRows.push({
         input_date: inputDate,
         previous_day_backlog: previousDayBacklog ?? 0,
         current_cumulative_volume_12: Number(existingManualRow?.current_cumulative_volume_12 ?? 0),
+        inventory_level: inventoryLevel ?? 0,
+        severe_weather: Boolean(draftRow.severe_weather),
         full_day_capacity: fullDayCapacity ?? 0,
         yesterday_inflow_00_14: yesterdayInflow0014 ?? 0
       });
@@ -1488,6 +1503,8 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                       <th className="px-3 py-2">{t('日期', 'Date')}</th>
                       <th className="px-3 py-2">{t('积压', 'Backlog')}</th>
                       <th className="px-3 py-2">{t('12点累计', '12:00 cum')}</th>
+                      <th className="px-3 py-2">{t('库存量', 'Inventory')}</th>
+                      <th className="px-3 py-2">{t('恶劣天气', 'Severe weather')}</th>
                       <th className="px-3 py-2">{t('全天产能', 'Capacity')}</th>
                       <th className="px-3 py-2">{t('昨日0-14流入', 'Yday 0-14 inflow')}</th>
                     </tr>
@@ -1495,7 +1512,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   <tbody>
                     {selectedWeekdayManualRows.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className={['px-3 py-6 text-center', helperClass].join(' ')}>
+                        <td colSpan={7} className={['px-3 py-6 text-center', helperClass].join(' ')}>
                           {manualInputsLoading ? t('Loading...', 'Loading...') : t('No saved rows', 'No saved rows')}
                         </td>
                       </tr>
@@ -1507,6 +1524,8 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                           </td>
                           <td className="px-3 py-2">{formatNumber(row.previous_day_backlog)}</td>
                           <td className="px-3 py-2">{formatNumber(row.current_cumulative_volume_12)}</td>
+                          <td className="px-3 py-2">{formatNumber(row.inventory_level)}</td>
+                          <td className="px-3 py-2">{row.severe_weather ? t('是', 'Yes') : t('否', 'No')}</td>
                           <td className="px-3 py-2">{formatNumber(row.full_day_capacity)}</td>
                           <td className="px-3 py-2">{formatNumber(row.yesterday_inflow_00_14)}</td>
                         </tr>
@@ -1676,7 +1695,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           >
             <div
               className={[
-                'w-full max-w-[1200px] min-h-[78vh] rounded-3xl border p-5 shadow-2xl max-h-[92vh] overflow-y-auto',
+                'w-full max-w-[1360px] min-h-[78vh] rounded-3xl border p-5 shadow-2xl max-h-[92vh] overflow-y-auto',
                 isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950/95 backdrop-blur'
               ].join(' ')}
               onClick={(e) => e.stopPropagation()}
@@ -1738,20 +1757,32 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                 {forecastDialogView === 'weekly' ? (
                   <div className={['overflow-auto rounded-2xl', tableWrapClass].join(' ')}>
                     <table className="min-w-full table-fixed text-left text-xs">
+                      <colgroup>
+                        <col className="w-[150px]" />
+                        <col className="w-[56px]" />
+                        <col className="w-[170px]" />
+                        <col className="w-[150px]" />
+                        <col className="w-[130px]" />
+                        <col className="w-[100px]" />
+                        <col className="w-[140px]" />
+                        <col className="w-[160px]" />
+                      </colgroup>
                       <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
                         <tr>
-                          <th className="px-3 py-2">{t('日期', 'Date')}</th>
-                          <th className="px-3 py-2">{t('星期', 'Weekday')}</th>
-                          <th className="px-3 py-2">{t('前一日积压（全天待拣货）', 'Previous day backlog (full-day pending picks)')}</th>
-                          <th className="px-3 py-2">{t('今日预测单量', 'Predicted volume at 12:00')}</th>
-                          <th className="px-3 py-2">{t('全天产能', 'Full-day capacity')}</th>
-                          <th className="px-3 py-2">{t('昨日00:00-14:00流入量', 'Yesterday 00:00-14:00 inflow')}</th>
+                          <th className="px-2 py-2">{t('日期', 'Date')}</th>
+                          <th className="px-2 py-2">{t('星期', 'Weekday')}</th>
+                          <th className="px-2 py-2">{t('前一日积压（全天待拣货）', 'Previous day backlog (full-day pending picks)')}</th>
+                          <th className="px-2 py-2">{t('今日预测单量', 'Predicted volume at 12:00')}</th>
+                          <th className="px-2 py-2">{t('库存量', 'Inventory')}</th>
+                          <th className="px-2 py-2">{t('恶劣天气', 'Severe weather')}</th>
+                          <th className="px-2 py-2">{t('全天产能', 'Full-day capacity')}</th>
+                          <th className="px-2 py-2">{t('昨日00:00-14:00流入量', 'Yesterday 00:00-14:00 inflow')}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {manualInputDraftRows.map((draftRow, index) => (
                           <tr key={draftRow.input_date} className={tableRowClass}>
-                            <td className="px-3 py-3 align-top">
+                            <td className="px-2 py-3 align-top">
                               <input
                                 type="date"
                                 value={draftRow.input_date}
@@ -1762,7 +1793,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                 ].join(' ')}
                               />
                             </td>
-                            <td className="px-3 py-3 align-middle">
+                            <td className="px-2 py-3 align-middle">
                               <div className={['text-sm font-semibold', valueClass].join(' ')}>
                                 {t(
                                   WEEKDAY_OPTIONS[(getWeekdayFromDateOnly(draftRow.input_date) ?? 1) - 1]?.zh ?? '周一',
@@ -1770,7 +1801,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                 )}
                               </div>
                             </td>
-                            <td className="px-3 py-3 align-top">
+                            <td className="px-2 py-3 align-top">
                               <input
                                 value={draftRow.previous_day_backlog}
                                 onChange={(e) =>
@@ -1788,7 +1819,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                 ].join(' ')}
                               />
                             </td>
-                            <td className="px-3 py-3 align-top">
+                            <td className="px-2 py-3 align-top">
                               <input
                                 value={draftRow.predicted_full_day_volume_12}
                                 readOnly
@@ -1802,7 +1833,41 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                 ].join(' ')}
                               />
                             </td>
-                            <td className="px-3 py-3 align-top">
+                            <td className="px-2 py-3 align-top">
+                              <input
+                                value={draftRow.inventory_level}
+                                onChange={(e) =>
+                                  setManualInputDraftRows((prev) =>
+                                    prev.map((row, rowIndex) => (rowIndex === index ? { ...row, inventory_level: e.target.value } : row))
+                                  )
+                                }
+                                disabled={manualInputSaving}
+                                inputMode="numeric"
+                                className={[
+                                  'h-10 w-full rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                                  isLight
+                                    ? 'border border-slate-300 bg-white text-slate-900 focus:border-neon/60'
+                                    : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                                ].join(' ')}
+                              />
+                            </td>
+                            <td className="px-2 py-3 align-middle">
+                              <label className={['flex items-center gap-1.5 text-sm font-medium', valueClass].join(' ')}>
+                                <input
+                                  type="checkbox"
+                                  checked={draftRow.severe_weather}
+                                  onChange={(e) =>
+                                    setManualInputDraftRows((prev) =>
+                                      prev.map((row, rowIndex) => (rowIndex === index ? { ...row, severe_weather: e.target.checked } : row))
+                                    )
+                                  }
+                                  disabled={manualInputSaving}
+                                  className="h-4 w-4 rounded border-slate-300"
+                                />
+                                <span>{t('恶劣', 'Severe')}</span>
+                              </label>
+                            </td>
+                            <td className="px-2 py-3 align-top">
                               <input
                                 value={draftRow.full_day_capacity}
                                 onChange={(e) =>
@@ -1820,7 +1885,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                 ].join(' ')}
                               />
                             </td>
-                            <td className="px-3 py-3 align-top">
+                            <td className="px-2 py-3 align-top">
                               <input
                                 value={draftRow.yesterday_inflow_00_14}
                                 readOnly
