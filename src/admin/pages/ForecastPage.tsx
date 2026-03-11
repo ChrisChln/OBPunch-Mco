@@ -198,6 +198,15 @@ function ForecastRangeChart({
   themeMode: 'light' | 'dark';
 }) {
   const isLight = themeMode === 'light';
+  type Annotation = {
+    key: 'lower' | 'forecast' | 'upper';
+    markerX: number;
+    baseLabelX: number;
+    label: string;
+    value: string;
+    color: string;
+    textAnchor?: 'start' | 'middle' | 'end';
+  };
   const width = 720;
   const height = 200;
   const paddingX = 28;
@@ -219,9 +228,70 @@ function ForecastRangeChart({
   const upperLabelX = finiteUpperBound !== null ? clampTextX(upperX) : width - paddingX - 8;
   const forecastLabelX = forecast !== null ? clampTextX(forecastX) : paddingX;
   const currentValueY = upperLabelY + 18;
-  const lowerValueY = lowerLabelY + 16;
-  const forecastValueY = lowerLabelY + 16;
-  const upperValueY = lowerLabelY + 38;
+  const annotationSpacing = 86;
+  const annotationLaneYs = [lowerLabelY - 6, lowerLabelY + 22, lowerLabelY + 50];
+  const annotations: Annotation[] = [];
+
+  if (lowerBound !== null) {
+    annotations.push({
+      key: 'lower',
+      markerX: lowerX,
+      baseLabelX: lowerLabelX,
+      label: 'LOW',
+      value: formatNumber(lowerBound),
+      color: 'rgba(45,212,191,0.95)'
+    });
+  }
+  if (forecast !== null) {
+    annotations.push({
+      key: 'forecast',
+      markerX: forecastX,
+      baseLabelX: forecastLabelX,
+      label: 'FORECAST',
+      value: formatNumber(forecast),
+      color: 'rgba(132,204,22,1)'
+    });
+  }
+  annotations.push({
+    key: 'upper',
+    markerX: upperX,
+    baseLabelX: upperLabelX,
+    label: 'HIGH',
+    value: finiteUpperBound !== null ? formatNumber(finiteUpperBound) : 'INF',
+    color: 'rgba(56,189,248,1)',
+    textAnchor: finiteUpperBound !== null ? 'middle' : 'end'
+  });
+
+  const sortedAnnotations = annotations.slice().sort((a, b) => a.baseLabelX - b.baseLabelX);
+  sortedAnnotations.forEach((annotation, index) => {
+    const minX = paddingX + 24;
+    const maxX = width - paddingX - 24;
+    const prevX = index > 0 ? sortedAnnotations[index - 1] : null;
+    const prevPlacedX = index > 0 ? (sortedAnnotations[index - 1] as Annotation & { placedX?: number }).placedX ?? minX : minX;
+    let nextX = Math.max(minX, Math.min(maxX, annotation.baseLabelX));
+    if (prevX && nextX - prevPlacedX < annotationSpacing) {
+      nextX = Math.min(maxX, prevPlacedX + annotationSpacing);
+    }
+    (annotation as Annotation & { placedX?: number }).placedX = nextX;
+  });
+  for (let index = sortedAnnotations.length - 2; index >= 0; index -= 1) {
+    const current = sortedAnnotations[index] as Annotation & { placedX?: number };
+    const next = sortedAnnotations[index + 1] as Annotation & { placedX?: number };
+    if ((next.placedX ?? width) - (current.placedX ?? 0) < annotationSpacing) {
+      current.placedX = Math.max(paddingX + 24, (next.placedX ?? width) - annotationSpacing);
+    }
+  }
+  const positionedAnnotations = sortedAnnotations.map((annotation, index) => {
+    const laneIndex = sortedAnnotations.length > 1 ? index % annotationLaneYs.length : 0;
+    const placedX = (annotation as Annotation & { placedX?: number }).placedX ?? annotation.baseLabelX;
+    return {
+      ...annotation,
+      x: placedX,
+      laneIndex,
+      labelY: annotationLaneYs[laneIndex],
+      valueY: annotationLaneYs[laneIndex] + 16
+    };
+  });
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="h-[200px] w-full overflow-visible">
@@ -274,50 +344,42 @@ function ForecastRangeChart({
           INF
         </text>
       )}
-      {lowerBound !== null && (
-        <>
-          <text x={lowerLabelX} y={lowerLabelY} textAnchor="middle" fill="rgba(45,212,191,0.95)" fontSize="12" fontWeight="700">
-            LOW
+      {positionedAnnotations.map((annotation) => (
+        <g key={annotation.key}>
+          <path
+            d={`M ${annotation.markerX} ${axisY + 10} C ${annotation.markerX} ${axisY + 24}, ${annotation.x} ${annotation.labelY - 18}, ${annotation.x} ${annotation.labelY - 4}`}
+            fill="none"
+            stroke={annotation.color}
+            strokeOpacity="0.45"
+            strokeWidth="1.5"
+            strokeDasharray="3 3"
+          />
+          <text
+            x={annotation.x}
+            y={annotation.labelY}
+            textAnchor={annotation.textAnchor ?? 'middle'}
+            fill={annotation.color}
+            fontSize="12"
+            fontWeight="700"
+          >
+            {annotation.label}
           </text>
-          <text x={lowerLabelX} y={lowerValueY} textAnchor="middle" fill={isLight ? 'rgba(15,23,42,0.86)' : 'rgba(226,232,240,0.9)'} fontSize="12">
-            {formatNumber(lowerBound)}
+          <text
+            x={annotation.x}
+            y={annotation.valueY}
+            textAnchor={annotation.textAnchor ?? 'middle'}
+            fill={isLight ? 'rgba(15,23,42,0.86)' : 'rgba(226,232,240,0.9)'}
+            fontSize="12"
+          >
+            {annotation.value}
           </text>
-        </>
-      )}
-      {forecast !== null && (
-        <>
-          <text x={forecastLabelX} y={lowerLabelY} textAnchor="middle" fill="rgba(132,204,22,1)" fontSize="12" fontWeight="700">
-            FORECAST
-          </text>
-          <text x={forecastLabelX} y={forecastValueY} textAnchor="middle" fill={isLight ? 'rgba(15,23,42,0.86)' : 'rgba(226,232,240,0.9)'} fontSize="12">
-            {formatNumber(forecast)}
-          </text>
-        </>
-      )}
+        </g>
+      ))}
       <text x={currentLabelX} y={upperLabelY} textAnchor="middle" fill="rgba(248,113,113,0.95)" fontSize="12" fontWeight="700">
         CURRENT
       </text>
       <text x={currentLabelX} y={currentValueY} textAnchor="middle" fill={isLight ? 'rgba(15,23,42,0.86)' : 'rgba(226,232,240,0.9)'} fontSize="12">
         {formatNumber(currentCumVolume)}
-      </text>
-      <text
-        x={upperLabelX}
-        y={lowerLabelY}
-        textAnchor={finiteUpperBound !== null ? 'middle' : 'end'}
-        fill="rgba(56,189,248,1)"
-        fontSize="12"
-        fontWeight="700"
-      >
-        HIGH
-      </text>
-      <text
-        x={upperLabelX}
-        y={upperValueY}
-        textAnchor={finiteUpperBound !== null ? 'middle' : 'end'}
-        fill={isLight ? 'rgba(15,23,42,0.86)' : 'rgba(226,232,240,0.9)'}
-        fontSize="12"
-      >
-        {finiteUpperBound !== null ? formatNumber(finiteUpperBound) : 'INF'}
       </text>
       <text x={paddingX} y={topY} fill={isLight ? 'rgba(100,116,139,0.85)' : 'rgba(148,163,184,0.76)'} fontSize="11">
         MIN {formatNumber(minValue)}
@@ -694,19 +756,19 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           <div className={['rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
             <div className="grid gap-4 lg:grid-cols-3">
               <div className={['rounded-2xl border p-4', isLight ? 'border-emerald-200 bg-emerald-50' : 'border-emerald-400/20 bg-emerald-500/10'].join(' ')}>
-                <div className={['text-[10px] uppercase tracking-[0.18em]', isLight ? 'text-emerald-700/80' : 'text-emerald-200/70'].join(' ')}>{t('棰勬祴鍏ㄥぉ鍗曢噺', 'Forecast')}</div>
+                <div className={['text-[10px] uppercase tracking-[0.18em]', isLight ? 'text-emerald-700/80' : 'text-emerald-200/70'].join(' ')}>{t('预测全天件量', 'Forecast')}</div>
                 <div className={['mt-3 font-display text-4xl tracking-[0.06em]', isLight ? 'text-emerald-900' : 'text-emerald-200'].join(' ')}>
                   {formatNumber(result.forecast)}
                 </div>
               </div>
               <div className={['rounded-2xl border p-4', isLight ? 'border-teal-200 bg-teal-50' : 'border-teal-400/20 bg-teal-500/10'].join(' ')}>
-                <div className={['text-[10px] uppercase tracking-[0.18em]', isLight ? 'text-teal-700/80' : 'text-teal-200/70'].join(' ')}>{t('鍖洪棿涓嬮檺', 'Lower')}</div>
+                <div className={['text-[10px] uppercase tracking-[0.18em]', isLight ? 'text-teal-700/80' : 'text-teal-200/70'].join(' ')}>{t('预测范围下限', 'Lower')}</div>
                 <div className={['mt-3 font-display text-4xl tracking-[0.06em]', isLight ? 'text-teal-900' : 'text-teal-200'].join(' ')}>
                   {formatNumber(result.lowerBound)}
                 </div>
               </div>
               <div className={['rounded-2xl border p-4', isLight ? 'border-sky-200 bg-sky-50' : 'border-sky-400/20 bg-sky-500/10'].join(' ')}>
-                <div className={['text-[10px] uppercase tracking-[0.18em]', isLight ? 'text-sky-700/80' : 'text-sky-200/70'].join(' ')}>{t('鍖洪棿涓婇檺', 'Upper')}</div>
+                <div className={['text-[10px] uppercase tracking-[0.18em]', isLight ? 'text-sky-700/80' : 'text-sky-200/70'].join(' ')}>{t('预测范围上限', 'Upper')}</div>
                 <div className={['mt-3 font-display text-4xl tracking-[0.06em]', isLight ? 'text-sky-900' : 'text-sky-200'].join(' ')}>
                   {formatNumber(result.upperBound)}
                 </div>
