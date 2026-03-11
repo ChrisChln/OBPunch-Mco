@@ -1,4 +1,4 @@
-export type AdminPage = 'home' | 'employee_upload' | 'punches' | 'employees' | 'accounts' | 'timecard' | 'audit' | 'schedule' | 'devices';
+export type AdminPage = 'home' | 'employee_upload' | 'punches' | 'employees' | 'accounts' | 'timecard' | 'audit' | 'schedule' | 'devices' | 'forecast';
 
 export type StatusTone = 'idle' | 'pending' | 'success' | 'error';
 

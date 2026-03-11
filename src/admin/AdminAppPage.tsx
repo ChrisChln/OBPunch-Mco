@@ -30,6 +30,7 @@ import TimecardTableSection from './pages/TimecardTableSection';
 import HomeDashboardPage from './pages/HomeDashboardPage';
 import AuditPage from './pages/AuditPage';
 import PunchesPage from './pages/PunchesPage';
+import ForecastPage from './pages/ForecastPage';
 import AppDialog from '../components/AppDialog';
 import {
   activatePlannedScheduleNote,
@@ -11188,6 +11189,9 @@ ${rowsToHtml(late)}
                 printDeviceLabel={printDeviceLabel}
                 toggleDeviceActive={toggleDeviceActive}
               />
+            )}
+            {page === 'forecast' && (
+              <ForecastPage t={t} isLocked={isLocked} serverTime={serverTime} supabase={supabase} themeMode={themeMode} />
             )}
             {page === 'punches' && (
               <PunchesPage

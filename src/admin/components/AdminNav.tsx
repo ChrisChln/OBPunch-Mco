@@ -37,6 +37,9 @@ export default function AdminNav({ page, isLocked, onSetPage, tabClass, t }: Adm
       <button type="button" disabled={isLocked} onClick={() => onSetPage('devices')} className={tabClass(page === 'devices')}>
         {t('设备管理', 'Devices')}
       </button>
+      <button type="button" disabled={isLocked} onClick={() => onSetPage('forecast')} className={tabClass(page === 'forecast')}>
+        {t('件量预测', 'Forecast')}
+      </button>
     </nav>
   );
 }
