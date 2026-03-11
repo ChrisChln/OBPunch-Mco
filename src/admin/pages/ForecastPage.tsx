@@ -109,9 +109,9 @@ const formatNumber = (value: number | null, digits = 0) => {
   });
 };
 
-const formatPercent = (value: number) => {
+const formatPercent = (value: number, digits = 1) => {
   if (!Number.isFinite(value)) return '-';
-  return `${(value * 100).toFixed(1)}%`;
+  return `${(value * 100).toFixed(digits)}%`;
 };
 
 const parseNumericCell = (value: unknown) => {
@@ -356,7 +356,7 @@ function ForecastRangeChart({
   const lowerLabelX = lowerBound !== null ? clampTextX(lowerX) : paddingX;
   const upperLabelX = finiteUpperBound !== null ? clampTextX(upperX) : width - paddingX - 8;
   const forecastLabelX = forecast !== null ? clampTextX(forecastX) : paddingX;
-  const currentValueY = upperLabelY + 18;
+  const currentValueY = upperLabelY - 14;
   const annotationSpacing = 86;
   const annotationLaneYs = [lowerLabelY - 6, lowerLabelY + 22, lowerLabelY + 50];
   const annotations: Annotation[] = [];
@@ -531,7 +531,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const initialWeekday = getIsoWeekday(serverTime) as WeekdayValue;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedWeekday, setSelectedWeekday] = useState<WeekdayValue>(initialWeekday);
-  const [lookbackMode, setLookbackMode] = useState<LookbackMode>(28);
+  const [lookbackMode, setLookbackMode] = useState<LookbackMode>('all');
   const [modelRows, setModelRows] = useState<ForecastModelRow[]>([]);
   const [manualInputRows, setManualInputRows] = useState<ForecastManualInputRow[]>([]);
   const [manualInputsLoading, setManualInputsLoading] = useState(false);
@@ -777,6 +777,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     [manualInputRows, selectedWeekday]
   );
   const selectedManualInput = selectedWeekdayManualRows[0] ?? null;
+  const manualInputByDate = useMemo(() => new Map(manualInputRows.map((row) => [row.input_date, row])), [manualInputRows]);
   const getDefaultHistoryPasteDate = (weekDates: string[]) => {
     const today = toDateOnly(serverTime);
     if (weekDates.includes(today)) return today;
@@ -802,6 +803,16 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     const forecast = calculateForecast(noonCumVolume, FIXED_FORECAST_HOUR, weekday, coefficient).forecast;
     return forecast === null ? null : Math.round(forecast);
   };
+  const latestSelectedWeekdayCardRow = useMemo(() => {
+    const latestManualRow = selectedWeekdayManualRows[0] ?? null;
+    if (!latestManualRow) return null;
+    const historyRow = historyWindowRows.find((row) => row.date === latestManualRow.input_date) ?? null;
+    const predictedFullDayVolume12 = calculateNoonPredictedFullDayVolume(latestManualRow.input_date, historyRow);
+    return {
+      ...latestManualRow,
+      predicted_full_day_volume_12: predictedFullDayVolume12
+    };
+  }, [calculateNoonPredictedFullDayVolume, historyWindowRows, selectedWeekdayManualRows]);
   const buildManualInputDraftRows = (weekOffset: number, historyRowsOverride?: VolumeHistoryUploadRow[]) => {
     const existingByDate = new Map(manualInputRows.map((row) => [row.input_date, row]));
     const historyRows = historyRowsOverride ?? historyWindowRows;
@@ -1385,9 +1396,6 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-display text-2xl tracking-[0.08em]">{t('Forecast', 'Forecast')}</h2>
-          <p className={['mt-2 text-sm', helperClass].join(' ')}>
-            {t('Full-day forecast based on same-weekday cumulative shares.', 'Full-day forecast based on same-weekday cumulative shares.')}
-          </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           {WEEKDAY_OPTIONS.map((option) => (
@@ -1493,57 +1501,70 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                 <span>{t('日期列表', 'Date list')}</span>
                 <span>{t(selectedWeekdayOption.zh, selectedWeekdayOption.en)}</span>
               </div>
-              <div className={['mt-3 text-xs', helperClass].join(' ')}>
-                {t('列表按日期倒序显示，预测默认使用最新一行。', 'Rows are sorted by date desc; forecast uses the latest row.')}
+              <div className={['mt-3 max-h-[300px] space-y-2 overflow-auto rounded-2xl p-2', tableWrapClass].join(' ')}>
+                {!latestSelectedWeekdayCardRow ? (
+                  <div className={['px-3 py-6 text-center text-xs', helperClass].join(' ')}>
+                    {manualInputsLoading ? t('Loading...', 'Loading...') : t('No saved rows', 'No saved rows')}
+                  </div>
+                ) : (
+                  [latestSelectedWeekdayCardRow].map((row, index) => (
+                    <div
+                      key={row.input_date}
+                      className={[
+                        'rounded-2xl border p-3',
+                        isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20',
+                        index === 0 && isLight ? 'border-emerald-200 bg-emerald-50/60' : '',
+                        index === 0 && !isLight ? 'border-emerald-500/30 bg-emerald-500/5' : ''
+                      ].join(' ')}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className={['text-sm font-semibold', index === 0 ? (isLight ? 'text-emerald-800' : 'text-emerald-300') : valueClass].join(' ')}>
+                          {row.input_date}
+                        </div>
+                        <div className={['text-[10px] uppercase tracking-[0.18em]', labelClass].join(' ')}>
+                          {index === 0 ? t('最新', 'Latest') : t(selectedWeekdayOption.zh, selectedWeekdayOption.shortEn)}
+                        </div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                        <div>
+                          <div className={labelClass}>{t('积压', 'Backlog')}</div>
+                          <div className={valueClass}>{formatNumber(row.previous_day_backlog)}</div>
+                        </div>
+                        <div>
+                          <div className={labelClass}>{t('今日预测(12点)', 'Predicted today (12:00)')}</div>
+                          <div className={valueClass}>{formatNumber(row.predicted_full_day_volume_12)}</div>
+                        </div>
+                        <div>
+                          <div className={labelClass}>{t('库存量', 'Inventory')}</div>
+                          <div className={valueClass}>{formatNumber(row.inventory_level)}</div>
+                        </div>
+                        <div>
+                          <div className={labelClass}>{t('恶劣天气', 'Severe weather')}</div>
+                          <div className={valueClass}>{row.severe_weather ? t('是', 'Yes') : t('否', 'No')}</div>
+                        </div>
+                        <div>
+                          <div className={labelClass}>{t('全天产能', 'Capacity')}</div>
+                          <div className={valueClass}>{formatNumber(row.full_day_capacity)}</div>
+                        </div>
+                        <div>
+                          <div className={labelClass}>{t('昨日0-14流入', 'Yday 0-14 inflow')}</div>
+                          <div className={valueClass}>{formatNumber(row.yesterday_inflow_00_14)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
-              <div className={['mt-3 overflow-auto rounded-2xl', tableWrapClass].join(' ')}>
-                <table className="min-w-full table-fixed text-left text-xs">
-                  <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
-                    <tr>
-                      <th className="px-3 py-2">{t('日期', 'Date')}</th>
-                      <th className="px-3 py-2">{t('积压', 'Backlog')}</th>
-                      <th className="px-3 py-2">{t('12点累计', '12:00 cum')}</th>
-                      <th className="px-3 py-2">{t('库存量', 'Inventory')}</th>
-                      <th className="px-3 py-2">{t('恶劣天气', 'Severe weather')}</th>
-                      <th className="px-3 py-2">{t('全天产能', 'Capacity')}</th>
-                      <th className="px-3 py-2">{t('昨日0-14流入', 'Yday 0-14 inflow')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selectedWeekdayManualRows.length === 0 ? (
-                      <tr>
-                        <td colSpan={7} className={['px-3 py-6 text-center', helperClass].join(' ')}>
-                          {manualInputsLoading ? t('Loading...', 'Loading...') : t('No saved rows', 'No saved rows')}
-                        </td>
-                      </tr>
-                    ) : (
-                      selectedWeekdayManualRows.map((row, index) => (
-                        <tr key={row.input_date} className={tableRowClass}>
-                          <td className={['px-3 py-2 font-semibold', index === 0 ? (isLight ? 'text-emerald-700' : 'text-emerald-300') : ''].join(' ')}>
-                            {row.input_date}
-                          </td>
-                          <td className="px-3 py-2">{formatNumber(row.previous_day_backlog)}</td>
-                          <td className="px-3 py-2">{formatNumber(row.current_cumulative_volume_12)}</td>
-                          <td className="px-3 py-2">{formatNumber(row.inventory_level)}</td>
-                          <td className="px-3 py-2">{row.severe_weather ? t('是', 'Yes') : t('否', 'No')}</td>
-                          <td className="px-3 py-2">{formatNumber(row.full_day_capacity)}</td>
-                          <td className="px-3 py-2">{formatNumber(row.yesterday_inflow_00_14)}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <div className={['mt-3 flex items-center justify-between gap-3 text-sm', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
-                <span className={labelClass}>{t('预测截止时点', 'Forecast cutoff')}</span>
-                <div className="flex items-center gap-2">
-                  {hasAutoForecastSnapshot && <span className={['text-xs', helperClass].join(' ')}>{autoForecastSnapshot?.date}</span>}
+              <div className={['mt-3 flex items-center justify-between gap-2 text-sm', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
+                <span className={labelClass}>{t('预测截止至', 'Forecast cutoff')}</span>
+                <div className="flex items-center gap-2 whitespace-nowrap">
+                  {hasAutoForecastSnapshot && <span className={['text-sm font-medium', helperClass].join(' ')}>{autoForecastSnapshot?.date}</span>}
                   <select
                     value={String(effectiveForecastHour)}
                     disabled={isLocked || loading || forecastHourOptions.length <= 1}
                     onChange={(e) => setSelectedForecastHour(Number(e.target.value))}
                     className={[
-                      'h-10 rounded-xl px-3 text-sm font-semibold outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                      'h-10 min-w-[84px] rounded-xl px-3 text-sm font-semibold outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
                       isLight ? 'border border-slate-300 bg-white text-slate-900' : 'border border-white/10 bg-black/30 text-white'
                     ].join(' ')}
                   >
@@ -1611,16 +1632,16 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
         <div className="grid gap-4">
           <div className={['rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
             <div className="grid gap-4 lg:grid-cols-3">
-              <div className={['rounded-2xl border p-4', isLight ? 'border-emerald-200 bg-emerald-50' : 'border-emerald-400/20 bg-emerald-500/10'].join(' ')}>
-                <div className={['text-[10px] uppercase tracking-[0.18em]', isLight ? 'text-emerald-700/80' : 'text-emerald-200/70'].join(' ')}>{t('预测全天件量', 'Forecast')}</div>
-                <div className={['mt-3 font-display text-4xl tracking-[0.06em]', isLight ? 'text-emerald-900' : 'text-emerald-200'].join(' ')}>
-                  {formatNumber(result.forecast)}
-                </div>
-              </div>
               <div className={['rounded-2xl border p-4', isLight ? 'border-teal-200 bg-teal-50' : 'border-teal-400/20 bg-teal-500/10'].join(' ')}>
                 <div className={['text-[10px] uppercase tracking-[0.18em]', isLight ? 'text-teal-700/80' : 'text-teal-200/70'].join(' ')}>{t('预测范围下限', 'Lower')}</div>
                 <div className={['mt-3 font-display text-4xl tracking-[0.06em]', isLight ? 'text-teal-900' : 'text-teal-200'].join(' ')}>
                   {formatNumber(result.lowerBound)}
+                </div>
+              </div>
+              <div className={['rounded-2xl border p-4', isLight ? 'border-emerald-200 bg-emerald-50' : 'border-emerald-400/20 bg-emerald-500/10'].join(' ')}>
+                <div className={['text-[10px] uppercase tracking-[0.18em]', isLight ? 'text-emerald-700/80' : 'text-emerald-200/70'].join(' ')}>{t('预测全天件量', 'Forecast')}</div>
+                <div className={['mt-3 font-display text-4xl tracking-[0.06em]', isLight ? 'text-emerald-900' : 'text-emerald-200'].join(' ')}>
+                  {formatNumber(result.forecast)}
                 </div>
               </div>
               <div className={['rounded-2xl border p-4', isLight ? 'border-sky-200 bg-sky-50' : 'border-sky-400/20 bg-sky-500/10'].join(' ')}>
@@ -1987,6 +2008,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                             <th className="px-3 py-2">{t('截止12点预测', '12:00 forecast')}</th>
                             <th className="px-3 py-2">{t('实际差异', 'Actual variance')}</th>
                             <th className="px-3 py-2">{t('当日总流入', 'Daily total')}</th>
+                            <th className="px-3 py-2">{t('库存转换率', 'ITR')}</th>
                             {HOUR_COLUMNS.map((hourKey, index) => (
                               <th key={hourKey} className="px-3 py-2">{`${String(index).padStart(2, '0')}:00`}</th>
                             ))}
@@ -2004,10 +2026,13 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                             const dailyTotal = row
                               ? HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0)
                               : null;
+                            const inventoryLevel = Number(manualInputByDate.get(date)?.inventory_level ?? 0);
+                            const isCompleteHistoryDay = row ? Number(row.last_filled_hour ?? inferLastFilledHour(row)) >= 23 : false;
                             const actualVariance =
-                              dailyTotal !== null && noonForecast !== null && noonForecast > 0
+                              isCompleteHistoryDay && dailyTotal !== null && noonForecast !== null && noonForecast > 0
                                 ? (dailyTotal - noonForecast) / noonForecast
                                 : null;
+                            const itr = dailyTotal !== null && inventoryLevel > 0 ? dailyTotal / inventoryLevel : null;
                             return (
                               <tr key={date} className={tableRowClass}>
                                 <td className="px-3 py-2 font-semibold">{date}</td>
@@ -2015,8 +2040,9 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                   {t(WEEKDAY_OPTIONS[weekday - 1]?.zh ?? '周一', WEEKDAY_OPTIONS[weekday - 1]?.shortEn ?? 'Mon')}
                                 </td>
                                 <td className="px-3 py-2">{formatNumber(noonForecast)}</td>
-                                <td className="px-3 py-2">{actualVariance === null ? '-' : formatPercent(actualVariance)}</td>
+                                <td className="px-3 py-2">{actualVariance === null ? '-' : formatPercent(actualVariance, 2)}</td>
                                 <td className="px-3 py-2">{formatNumber(dailyTotal)}</td>
+                                <td className="px-3 py-2">{itr === null ? '-' : formatPercent(itr, 2)}</td>
                                 {HOUR_COLUMNS.map((hourKey) => (
                                   <td key={`${date}-${hourKey}`} className="px-3 py-2">
                                     {row ? formatNumber(Number(row[hourKey] ?? 0)) : '-'}
@@ -2027,7 +2053,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                           })}
                           {historyWindowLoading && (
                             <tr>
-                              <td colSpan={HOUR_COLUMNS.length + 5} className={['px-3 py-6 text-center', helperClass].join(' ')}>
+                              <td colSpan={HOUR_COLUMNS.length + 6} className={['px-3 py-6 text-center', helperClass].join(' ')}>
                                 {t('Loading...', 'Loading...')}
                               </td>
                             </tr>
