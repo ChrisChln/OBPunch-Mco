@@ -67,7 +67,7 @@ type ForecastManualInputRow = {
 type ForecastManualInputDraftRow = {
   input_date: string;
   previous_day_backlog: string;
-  current_cumulative_volume_12: string;
+  predicted_full_day_volume_12: string;
   full_day_capacity: string;
   yesterday_inflow_00_14: string;
 };
@@ -549,6 +549,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const [manualInputSaveMessage, setManualInputSaveMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [allHistoryModelRows, setAllHistoryModelRows] = useState<ForecastModelRow[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
@@ -595,13 +596,17 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       .from('volume_history')
       .select(selectWithMarker)
       .eq('weekday', weekday)
-      .not('last_filled_hour', 'is', null)
       .order('date', { ascending: false })
       .limit(1);
 
     let row = ((res.data as VolumeHistoryUploadRow[] | null) ?? [])[0];
+    const toSelectableCutoffHour = (lastFilledHour: number | null) => {
+      if (lastFilledHour === null || lastFilledHour < 0) return null;
+      if (lastFilledHour >= 23) return 23;
+      return lastFilledHour + 1;
+    };
     let cutoffHour =
-      row?.last_filled_hour === null || row?.last_filled_hour === undefined ? null : Number(row.last_filled_hour) + 1;
+      row?.last_filled_hour === null || row?.last_filled_hour === undefined ? null : toSelectableCutoffHour(Number(row.last_filled_hour));
 
     if (res.error && isMissingColumnError(res.error, 'last_filled_hour', 'volume_history')) {
       res = await supabase
@@ -612,10 +617,10 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
         .limit(1);
       row = ((res.data as VolumeHistoryUploadRow[] | null) ?? [])[0];
       const inferredLastFilledHour = row ? inferLastFilledHour(row as Partial<Record<HourColumnKey, number>>) : null;
-      cutoffHour = inferredLastFilledHour === null ? null : inferredLastFilledHour + 1;
+      cutoffHour = toSelectableCutoffHour(inferredLastFilledHour);
     }
 
-    if (res.error || !row || !cutoffHour || cutoffHour <= 0 || cutoffHour >= 24) {
+    if (res.error || !row || !cutoffHour || cutoffHour <= 0) {
       setAutoForecastSnapshot(null);
       return;
     }
@@ -664,6 +669,35 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     setManualInputsLoading(false);
   };
 
+  const loadAllHistoryModel = async () => {
+    if (!supabase) {
+      setAllHistoryModelRows([]);
+      return;
+    }
+
+    const res = await supabase.rpc('get_forecasting_model', {
+      p_lookback_days: null
+    });
+    if (res.error) {
+      setAllHistoryModelRows([]);
+      return;
+    }
+
+    setAllHistoryModelRows(
+      (((res.data as ForecastModelRow[] | null) ?? [])
+        .filter((row) => FORECAST_HOURS.includes(Number(row.hour_of_day ?? 0) as any))
+        .map((row) => ({
+          ...row,
+          weekday: Number(row.weekday ?? 0),
+          hour_of_day: Number(row.hour_of_day ?? 0),
+          avg_share: Number(row.avg_share ?? 0),
+          stddev_share: Number(row.stddev_share ?? 0),
+          sample_size: Number(row.sample_size ?? 0),
+          lookback_days: Number(row.lookback_days ?? 0) || null
+        })) as ForecastModelRow[])
+    );
+  };
+
   const loadModel = async (mode: LookbackMode = lookbackMode) => {
     if (!supabase) {
       setError(t('Missing Supabase configuration.', 'Missing Supabase configuration.'));
@@ -706,7 +740,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
 
   useEffect(() => {
     const run = async () => {
-      await Promise.all([loadModel(lookbackMode), loadManualInputs()]);
+      await Promise.all([loadModel(lookbackMode), loadManualInputs(), loadAllHistoryModel()]);
     };
     void run();
   }, [lookbackMode, supabase]);
@@ -724,6 +758,11 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     });
   }, [autoForecastSnapshot?.cutoffHour]);
 
+  useEffect(() => {
+    if (!manualInputDialogOpen) return;
+    setManualInputDraftRows(buildManualInputDraftRows(manualInputWeekOffset));
+  }, [allHistoryModelRows, historyWindowRows, manualInputDialogOpen, manualInputRows, manualInputWeekOffset]);
+
   const selectedWeekdayManualRows = useMemo(
     () =>
       manualInputRows
@@ -737,6 +776,26 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     if (weekDates.includes(today)) return today;
     return weekDates[selectedWeekday - 1] ?? weekDates[0] ?? '';
   };
+  const noonAllHistoryCoefficientByWeekday = useMemo(
+    () =>
+      new Map(
+        WEEKDAY_OPTIONS.map((option) => [
+          option.value,
+          allHistoryModelRows.find((row) => row.weekday === option.value && row.hour_of_day === FIXED_FORECAST_HOUR) ?? null
+        ])
+      ),
+    [allHistoryModelRows]
+  );
+  const calculateNoonPredictedFullDayVolume = (date: string, historyRow?: VolumeHistoryUploadRow | null) => {
+    if (!historyRow) return null;
+    const weekday = getWeekdayFromDateOnly(date);
+    if (!weekday) return null;
+    const coefficient = noonAllHistoryCoefficientByWeekday.get(weekday) ?? null;
+    if (!coefficient) return null;
+    const noonCumVolume = calculateCumulativeVolume(historyRow as Pick<VolumeHistoryUploadRow, HourColumnKey>, FIXED_FORECAST_HOUR);
+    const forecast = calculateForecast(noonCumVolume, FIXED_FORECAST_HOUR, weekday, coefficient).forecast;
+    return forecast === null ? null : Math.round(forecast);
+  };
   const buildManualInputDraftRows = (weekOffset: number, historyRowsOverride?: VolumeHistoryUploadRow[]) => {
     const existingByDate = new Map(manualInputRows.map((row) => [row.input_date, row]));
     const historyRows = historyRowsOverride ?? historyWindowRows;
@@ -749,10 +808,12 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           previousHistoryRow
             ? YESTERDAY_INFLOW_HOUR_KEYS.reduce((sum, hourKey) => sum + Number(previousHistoryRow[hourKey] ?? 0), 0)
             : null;
+        const currentHistoryRow = historyByDate.get(inputDate);
+        const predictedFullDayVolume12 = calculateNoonPredictedFullDayVolume(inputDate, currentHistoryRow);
         return {
           input_date: inputDate,
           previous_day_backlog: existing ? String(existing.previous_day_backlog) : '',
-          current_cumulative_volume_12: existing ? String(existing.current_cumulative_volume_12) : '',
+          predicted_full_day_volume_12: predictedFullDayVolume12 === null ? '' : String(predictedFullDayVolume12),
           full_day_capacity: existing ? String(existing.full_day_capacity) : '',
           yesterday_inflow_00_14:
             autoYesterdayInflow !== null ? String(autoYesterdayInflow) : existing ? String(existing.yesterday_inflow_00_14) : ''
@@ -1063,12 +1124,11 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       }
 
       const previousDayBacklog = parseNonNegativeInt(draftRow.previous_day_backlog);
-      const currentCumulativeVolume12 = parseNonNegativeInt(draftRow.current_cumulative_volume_12);
+      const existingManualRow = manualInputRows.find((row) => row.input_date === inputDate);
       const fullDayCapacity = parseNonNegativeInt(draftRow.full_day_capacity);
       const yesterdayInflow0014 = parseNonNegativeInt(draftRow.yesterday_inflow_00_14);
       if (
         previousDayBacklog === null ||
-        currentCumulativeVolume12 === null ||
         fullDayCapacity === null ||
         yesterdayInflow0014 === null
       ) {
@@ -1078,7 +1138,6 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
 
       const hasAnyValue = [
         draftRow.previous_day_backlog,
-        draftRow.current_cumulative_volume_12,
         draftRow.full_day_capacity,
         draftRow.yesterday_inflow_00_14
       ].some((value) => String(value ?? '').trim() !== '');
@@ -1087,7 +1146,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       payloadRows.push({
         input_date: inputDate,
         previous_day_backlog: previousDayBacklog ?? 0,
-        current_cumulative_volume_12: currentCumulativeVolume12 ?? 0,
+        current_cumulative_volume_12: Number(existingManualRow?.current_cumulative_volume_12 ?? 0),
         full_day_capacity: fullDayCapacity ?? 0,
         yesterday_inflow_00_14: yesterdayInflow0014 ?? 0
       });
@@ -1684,7 +1743,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                           <th className="px-3 py-2">{t('日期', 'Date')}</th>
                           <th className="px-3 py-2">{t('星期', 'Weekday')}</th>
                           <th className="px-3 py-2">{t('前一日积压（全天待拣货）', 'Previous day backlog (full-day pending picks)')}</th>
-                          <th className="px-3 py-2">{t('12点累计件量', '12:00 cumulative volume')}</th>
+                          <th className="px-3 py-2">{t('今日预测单量', 'Predicted volume at 12:00')}</th>
                           <th className="px-3 py-2">{t('全天产能', 'Full-day capacity')}</th>
                           <th className="px-3 py-2">{t('昨日00:00-14:00流入量', 'Yesterday 00:00-14:00 inflow')}</th>
                         </tr>
@@ -1731,19 +1790,15 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                             </td>
                             <td className="px-3 py-3 align-top">
                               <input
-                                value={draftRow.current_cumulative_volume_12}
-                                onChange={(e) =>
-                                  setManualInputDraftRows((prev) =>
-                                    prev.map((row, rowIndex) => (rowIndex === index ? { ...row, current_cumulative_volume_12: e.target.value } : row))
-                                  )
-                                }
-                                disabled={manualInputSaving}
+                                value={draftRow.predicted_full_day_volume_12}
+                                readOnly
+                                disabled
                                 inputMode="numeric"
                                 className={[
-                                  'h-10 w-full rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                                  'h-10 w-full rounded-xl px-3 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-100',
                                   isLight
-                                    ? 'border border-slate-300 bg-white text-slate-900 focus:border-neon/60'
-                                    : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                                    ? 'border border-slate-300 bg-slate-50 text-slate-900'
+                                    : 'border border-white/10 bg-black/20 text-white'
                                 ].join(' ')}
                               />
                             </td>
