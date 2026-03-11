@@ -19,7 +19,10 @@ export type ForecastResult = {
   sampleSize: number;
 };
 
-export const FORECAST_HOURS = [8, 9, 10, 11, 12] as const;
+export const FORECAST_HOURS = [
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+  13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23
+] as const;
 
 export const getIsoWeekday = (value: Date) => {
   const day = value.getDay();
@@ -66,4 +69,3 @@ export const calculateForecast = (
     sampleSize
   };
 };
-

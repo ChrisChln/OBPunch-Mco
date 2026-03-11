@@ -1,66 +1,12 @@
-create table if not exists public.volume_history (
-  date date primary key,
-  weekday int generated always as (extract(isodow from date)::int) stored,
-  last_filled_hour int null,
-  h00 int not null default 0,
-  h01 int not null default 0,
-  h02 int not null default 0,
-  h03 int not null default 0,
-  h04 int not null default 0,
-  h05 int not null default 0,
-  h06 int not null default 0,
-  h07 int not null default 0,
-  h08 int not null default 0,
-  h09 int not null default 0,
-  h10 int not null default 0,
-  h11 int not null default 0,
-  h12 int not null default 0,
-  h13 int not null default 0,
-  h14 int not null default 0,
-  h15 int not null default 0,
-  h16 int not null default 0,
-  h17 int not null default 0,
-  h18 int not null default 0,
-  h19 int not null default 0,
-  h20 int not null default 0,
-  h21 int not null default 0,
-  h22 int not null default 0,
-  h23 int not null default 0,
-  total_volume int generated always as (
-    h00 + h01 + h02 + h03 + h04 + h05 + h06 + h07 + h08 + h09 + h10 + h11 +
-    h12 + h13 + h14 + h15 + h16 + h17 + h18 + h19 + h20 + h21 + h22 + h23
-  ) stored,
-  updated_at timestamptz not null default now(),
-  constraint volume_history_weekday_chk check (weekday between 1 and 7),
-  constraint volume_history_last_filled_hour_chk check (last_filled_hour is null or (last_filled_hour between 0 and 23)),
-  constraint volume_history_h00_chk check (h00 >= 0),
-  constraint volume_history_h01_chk check (h01 >= 0),
-  constraint volume_history_h02_chk check (h02 >= 0),
-  constraint volume_history_h03_chk check (h03 >= 0),
-  constraint volume_history_h04_chk check (h04 >= 0),
-  constraint volume_history_h05_chk check (h05 >= 0),
-  constraint volume_history_h06_chk check (h06 >= 0),
-  constraint volume_history_h07_chk check (h07 >= 0),
-  constraint volume_history_h08_chk check (h08 >= 0),
-  constraint volume_history_h09_chk check (h09 >= 0),
-  constraint volume_history_h10_chk check (h10 >= 0),
-  constraint volume_history_h11_chk check (h11 >= 0),
-  constraint volume_history_h12_chk check (h12 >= 0),
-  constraint volume_history_h13_chk check (h13 >= 0),
-  constraint volume_history_h14_chk check (h14 >= 0),
-  constraint volume_history_h15_chk check (h15 >= 0),
-  constraint volume_history_h16_chk check (h16 >= 0),
-  constraint volume_history_h17_chk check (h17 >= 0),
-  constraint volume_history_h18_chk check (h18 >= 0),
-  constraint volume_history_h19_chk check (h19 >= 0),
-  constraint volume_history_h20_chk check (h20 >= 0),
-  constraint volume_history_h21_chk check (h21 >= 0),
-  constraint volume_history_h22_chk check (h22 >= 0),
-  constraint volume_history_h23_chk check (h23 >= 0)
-);
+alter table public.volume_history
+  add column if not exists last_filled_hour int null;
 
-create index if not exists volume_history_weekday_date_idx
-  on public.volume_history (weekday, date desc);
+alter table public.volume_history
+  drop constraint if exists volume_history_last_filled_hour_chk;
+
+alter table public.volume_history
+  add constraint volume_history_last_filled_hour_chk
+  check (last_filled_hour is null or (last_filled_hour between 0 and 23));
 
 create or replace function public.get_forecasting_model(
   p_lookback_days int default 28
@@ -134,9 +80,6 @@ as $$
     from eligible_days ed
     cross join lateral (
       values
-        -- Match the Excel template semantics:
-        -- cutoff 08:00 means cumulative volume from 00:00-07:59,
-        -- cutoff 12:00 means cumulative volume from 00:00-11:59.
         (0, 0::numeric),
         (1, (ed.h00)::numeric),
         (2, (ed.h00 + ed.h01)::numeric),
@@ -182,54 +125,4 @@ as $$
   cross join eligible_summary es
   group by sp.weekday, sp.hour_of_day, lb.lookback_days, lb.lookback_start, lb.lookback_end, es.min_date
   order by sp.weekday, sp.hour_of_day;
-$$;
-
-create or replace view public.forecasting_model as
-select *
-from public.get_forecasting_model(28);
-
-create or replace function public.calculate_volume_forecast(
-  p_current_cum_volume numeric,
-  p_current_hour int,
-  p_weekday int,
-  p_lookback_days int default 28
-)
-returns table (
-  weekday int,
-  hour_of_day int,
-  current_cum_volume numeric,
-  avg_share double precision,
-  stddev_share double precision,
-  forecast double precision,
-  lower_bound double precision,
-  upper_bound double precision,
-  upper_unbounded boolean,
-  sample_size int
-)
-language sql
-stable
-as $$
-  select
-    fm.weekday,
-    fm.hour_of_day,
-    p_current_cum_volume as current_cum_volume,
-    fm.avg_share,
-    fm.stddev_share,
-    case
-      when fm.avg_share > 0 then (p_current_cum_volume::double precision / fm.avg_share)
-      else null::double precision
-    end as forecast,
-    case
-      when (fm.avg_share + fm.stddev_share) > 0 then (p_current_cum_volume::double precision / (fm.avg_share + fm.stddev_share))
-      else null::double precision
-    end as lower_bound,
-    case
-      when (fm.avg_share - fm.stddev_share) > 0 then (p_current_cum_volume::double precision / (fm.avg_share - fm.stddev_share))
-      else 'Infinity'::double precision
-    end as upper_bound,
-    ((fm.avg_share - fm.stddev_share) <= 0) as upper_unbounded,
-    fm.sample_size
-  from public.get_forecasting_model(p_lookback_days) fm
-  where fm.weekday = p_weekday
-    and fm.hour_of_day = p_current_hour;
 $$;

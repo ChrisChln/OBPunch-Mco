@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ForecastModelRow } from '../forecast';
 import { FORECAST_HOURS, calculateForecast, getIsoWeekday } from '../forecast';
 
@@ -14,6 +15,7 @@ type ForecastPageProps = {
 
 type VolumeHistoryUploadRow = {
   date: string;
+  last_filled_hour?: number | null;
   h00: number;
   h01: number;
   h02: number;
@@ -42,6 +44,33 @@ type VolumeHistoryUploadRow = {
 
 type HourColumnKey = Exclude<keyof VolumeHistoryUploadRow, 'date'>;
 type LookbackMode = 28 | 42 | 'all';
+type WeekdayValue = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+type ForecastDialogView = 'weekly' | 'history';
+type AutoForecastSnapshot = {
+  date: string;
+  cutoffHour: number;
+  currentCumVolume: number;
+  row: VolumeHistoryUploadRow;
+};
+
+type ForecastManualInputRow = {
+  input_date: string;
+  weekday: WeekdayValue;
+  previous_day_backlog: number;
+  current_cumulative_volume_12: number;
+  full_day_capacity: number;
+  yesterday_inflow_00_14: number;
+  updated_at?: string | null;
+  updated_by?: string | null;
+};
+
+type ForecastManualInputDraftRow = {
+  input_date: string;
+  previous_day_backlog: string;
+  current_cumulative_volume_12: string;
+  full_day_capacity: string;
+  yesterday_inflow_00_14: string;
+};
 
 const HOUR_COLUMNS = Array.from({ length: 24 }, (_, idx) => `h${String(idx).padStart(2, '0')}`) as HourColumnKey[];
 const TEMPLATE_HOUR_HEADERS = Array.from({ length: 24 }, (_, idx) => {
@@ -54,6 +83,18 @@ const LOOKBACK_OPTIONS: { value: LookbackMode; label: string }[] = [
   { value: 42, label: '42 days' },
   { value: 'all', label: 'All history' }
 ];
+const FORECAST_INPUT_TABLE = 'volume_forecast_daily_inputs';
+const FIXED_FORECAST_HOUR = 12;
+const YESTERDAY_INFLOW_HOUR_KEYS = HOUR_COLUMNS.slice(0, 14);
+const WEEKDAY_OPTIONS: { value: WeekdayValue; zh: string; en: string; shortEn: string }[] = [
+  { value: 1, zh: '周一', en: 'Monday', shortEn: 'Mon' },
+  { value: 2, zh: '周二', en: 'Tuesday', shortEn: 'Tue' },
+  { value: 3, zh: '周三', en: 'Wednesday', shortEn: 'Wed' },
+  { value: 4, zh: '周四', en: 'Thursday', shortEn: 'Thu' },
+  { value: 5, zh: '周五', en: 'Friday', shortEn: 'Fri' },
+  { value: 6, zh: '周六', en: 'Saturday', shortEn: 'Sat' },
+  { value: 7, zh: '周天', en: 'Sunday', shortEn: 'Sun' }
+];
 
 const formatNumber = (value: number | null, digits = 0) => {
   if (value === null || Number.isNaN(value)) return '-';
@@ -65,13 +106,95 @@ const formatNumber = (value: number | null, digits = 0) => {
 };
 
 const formatPercent = (value: number) => {
-  if (!Number.isFinite(value) || value <= 0) return '-';
+  if (!Number.isFinite(value)) return '-';
   return `${(value * 100).toFixed(1)}%`;
+};
+
+const parseNumericCell = (value: unknown) => {
+  const text = String(value ?? '').trim();
+  if (!text) return 0;
+  const normalized = text.replace(/,/g, '');
+  const number = Number(normalized);
+  if (!Number.isFinite(number) || number < 0 || !Number.isInteger(number)) return null;
+  return number;
+};
+
+const parseNonNegativeInt = (value: string) => {
+  const text = String(value ?? '').trim();
+  if (!text) return 0;
+  const number = Number(text);
+  if (!Number.isFinite(number) || number < 0 || !Number.isInteger(number)) return null;
+  return number;
+};
+
+const getWeekdayFromDateOnly = (value: string): WeekdayValue | null => {
+  if (!isValidDateOnly(value)) return null;
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return getIsoWeekday(date) as WeekdayValue;
+};
+
+const toDateOnly = (date: Date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const addDays = (date: Date, days: number) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
+const getWeekDates = (baseDate: Date, weekOffset = 0) => {
+  const anchor = new Date(baseDate);
+  anchor.setHours(0, 0, 0, 0);
+  const currentWeekday = getIsoWeekday(anchor);
+  const monday = addDays(anchor, -(currentWeekday - 1) - weekOffset * 7);
+  return Array.from({ length: 7 }, (_, index) => toDateOnly(addDays(monday, index)));
 };
 
 const normalizeHeaderKey = (value: string) => String(value ?? '').trim().toLowerCase().replace(/\s+/g, '').replace(/_/g, '');
 
 const isValidDateOnly = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+const parseTabSeparatedRows = (text: string) =>
+  String(text ?? '')
+    .split(/\r?\n/)
+    .map((line) => {
+      const raw = String(line ?? '').trim();
+      if (!raw) return [];
+      if (raw.includes('\t')) return raw.split('\t').map((cell) => String(cell ?? '').trim());
+      return raw.split(/\s+/).map((cell) => String(cell ?? '').trim());
+    })
+    .filter((row) => row.some((cell) => cell.length > 0));
+
+const calculateCumulativeVolume = (row: Pick<VolumeHistoryUploadRow, HourColumnKey>, cutoffHour: number) => {
+  const clampedHour = Math.max(0, Math.min(24, Math.floor(cutoffHour)));
+  return HOUR_COLUMNS.slice(0, clampedHour).reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0);
+};
+
+const isMissingColumnError = (error: unknown, column: string, table?: string) => {
+  const text = String((error as any)?.message ?? error ?? '').toLowerCase();
+  const targetColumn = String(column ?? '').trim().toLowerCase();
+  const targetTable = String(table ?? '').trim().toLowerCase();
+  const mentionsColumn =
+    text.includes(`'${targetColumn}'`) ||
+    text.includes(`"${targetColumn}"`) ||
+    text.includes(targetColumn);
+  const mentionsTable = !targetTable || text.includes(targetTable);
+  return mentionsColumn && mentionsTable && (text.includes('schema cache') || text.includes('column') || text.includes('could not find'));
+};
+
+const inferLastFilledHour = (row: Partial<Record<HourColumnKey, number | null | undefined>>) => {
+  for (let index = HOUR_COLUMNS.length - 1; index >= 0; index -= 1) {
+    const hourKey = HOUR_COLUMNS[index];
+    const value = Number(row[hourKey] ?? 0);
+    if (value > 0) return index;
+  }
+  return null;
+};
 
 const excelSerialDateToDateOnly = (value: number) => {
   if (!Number.isFinite(value)) return '';
@@ -91,7 +214,7 @@ const normalizeImportedDate = (raw: unknown) => {
   if (isValidDateOnly(text)) return text;
 
   const numeric = Number(text);
-  if (Number.isFinite(numeric) && /^\d+(\.\d+)?$/.test(text)) {
+  if (Number.isFinite(numeric) && /^\d+(\.\d+)?$/.test(text) && numeric >= 20000 && numeric <= 80000) {
     const fromSerial = excelSerialDateToDateOnly(numeric);
     if (fromSerial) return fromSerial;
   }
@@ -118,12 +241,14 @@ const normalizeImportedDate = (raw: unknown) => {
     }
   }
 
-  const parsed = new Date(text);
-  if (!Number.isNaN(parsed.getTime())) {
-    const y = parsed.getFullYear();
-    const m = String(parsed.getMonth() + 1).padStart(2, '0');
-    const d = String(parsed.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+  if (/[\/.-]/.test(text) || /[a-zA-Z]/.test(text)) {
+    const parsed = new Date(text);
+    if (!Number.isNaN(parsed.getTime())) {
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const d = String(parsed.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
   }
 
   return '';
@@ -399,14 +524,29 @@ function ForecastRangeChart({
 
 export default function ForecastPage({ t, isLocked, serverTime, supabase, themeMode }: ForecastPageProps) {
   const isLight = themeMode === 'light';
-  const todayWeekday = getIsoWeekday(serverTime);
-  const initialHour = Math.min(12, Math.max(8, serverTime.getHours()));
-  const initialSelectedHour = FORECAST_HOURS.includes(initialHour as (typeof FORECAST_HOURS)[number]) ? initialHour : 8;
+  const initialWeekday = getIsoWeekday(serverTime) as WeekdayValue;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [selectedHour, setSelectedHour] = useState<number>(initialSelectedHour);
+  const [selectedWeekday, setSelectedWeekday] = useState<WeekdayValue>(initialWeekday);
   const [lookbackMode, setLookbackMode] = useState<LookbackMode>(28);
-  const [currentCumVolumeInput, setCurrentCumVolumeInput] = useState('');
   const [modelRows, setModelRows] = useState<ForecastModelRow[]>([]);
+  const [manualInputRows, setManualInputRows] = useState<ForecastManualInputRow[]>([]);
+  const [manualInputsLoading, setManualInputsLoading] = useState(false);
+  const [manualInputsError, setManualInputsError] = useState<string | null>(null);
+  const [manualInputDialogOpen, setManualInputDialogOpen] = useState(false);
+  const [manualInputDraftRows, setManualInputDraftRows] = useState<ForecastManualInputDraftRow[]>([]);
+  const [manualInputWeekOffset, setManualInputWeekOffset] = useState(0);
+  const [forecastDialogView, setForecastDialogView] = useState<ForecastDialogView>('weekly');
+  const [historyWindowRows, setHistoryWindowRows] = useState<VolumeHistoryUploadRow[]>([]);
+  const [historyWindowLoading, setHistoryWindowLoading] = useState(false);
+  const [historyWindowError, setHistoryWindowError] = useState<string | null>(null);
+  const [historyPasteValue, setHistoryPasteValue] = useState('');
+  const [historyPasteDate, setHistoryPasteDate] = useState('');
+  const [historyPasteSaving, setHistoryPasteSaving] = useState(false);
+  const [autoForecastSnapshot, setAutoForecastSnapshot] = useState<AutoForecastSnapshot | null>(null);
+  const [selectedForecastHour, setSelectedForecastHour] = useState<number>(FIXED_FORECAST_HOUR);
+  const [manualInputSaving, setManualInputSaving] = useState(false);
+  const [manualInputSaveError, setManualInputSaveError] = useState<string | null>(null);
+  const [manualInputSaveMessage, setManualInputSaveMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -421,12 +561,108 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     ? 'rounded-2xl border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60'
     : 'rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60';
   const labelClass = isLight ? 'text-slate-500' : 'text-slate-400';
-  const valueClass = isLight ? 'text-slate-900' : 'text-slate-100';
-  const helperClass = isLight ? 'text-slate-500' : 'text-slate-400';
+  const valueClass = isLight ? 'text-slate-950' : 'text-slate-100';
+  const helperClass = isLight ? 'text-slate-700' : 'text-slate-400';
   const chartWrapClass = isLight ? 'border border-slate-200 bg-white' : 'border border-white/10 bg-slate-950/50';
   const tableWrapClass = isLight ? 'border border-slate-200 bg-white' : 'border border-white/10';
-  const tableHeadClass = isLight ? 'bg-slate-50 text-slate-500' : 'bg-slate-950/95 text-slate-400';
-  const tableRowClass = isLight ? 'border-t border-slate-100 text-slate-700' : 'border-t border-white/5 text-slate-200';
+  const tableHeadClass = isLight ? 'bg-slate-50 text-slate-700' : 'bg-slate-950/95 text-slate-400';
+  const tableRowClass = isLight ? 'border-t border-slate-100 text-slate-800' : 'border-t border-white/5 text-slate-200';
+  const weekdayButtonClass = (weekday: WeekdayValue) =>
+    [
+      'rounded-2xl px-4 py-2 text-sm font-semibold transition',
+      selectedWeekday === weekday
+        ? isLight
+          ? 'border border-emerald-400 bg-emerald-50 text-emerald-900 shadow-sm'
+          : 'border border-neon/70 bg-neon/15 text-neon'
+        : isLight
+          ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+          : 'border border-white/10 bg-black/20 text-slate-300 hover:bg-white/10'
+    ].join(' ');
+  const selectedWeekdayOption = WEEKDAY_OPTIONS.find((option) => option.value === selectedWeekday) ?? WEEKDAY_OPTIONS[0];
+
+  const loadAutoForecastSnapshot = async (weekday: WeekdayValue) => {
+    if (!supabase) {
+      setAutoForecastSnapshot(null);
+      return;
+    }
+
+    const selectWithMarker =
+      'date,last_filled_hour,h00,h01,h02,h03,h04,h05,h06,h07,h08,h09,h10,h11,h12,h13,h14,h15,h16,h17,h18,h19,h20,h21,h22,h23';
+    const selectWithoutMarker =
+      'date,h00,h01,h02,h03,h04,h05,h06,h07,h08,h09,h10,h11,h12,h13,h14,h15,h16,h17,h18,h19,h20,h21,h22,h23';
+
+    let res = await supabase
+      .from('volume_history')
+      .select(selectWithMarker)
+      .eq('weekday', weekday)
+      .not('last_filled_hour', 'is', null)
+      .order('date', { ascending: false })
+      .limit(1);
+
+    let row = ((res.data as VolumeHistoryUploadRow[] | null) ?? [])[0];
+    let cutoffHour =
+      row?.last_filled_hour === null || row?.last_filled_hour === undefined ? null : Number(row.last_filled_hour) + 1;
+
+    if (res.error && isMissingColumnError(res.error, 'last_filled_hour', 'volume_history')) {
+      res = await supabase
+        .from('volume_history')
+        .select(selectWithoutMarker)
+        .eq('weekday', weekday)
+        .order('date', { ascending: false })
+        .limit(1);
+      row = ((res.data as VolumeHistoryUploadRow[] | null) ?? [])[0];
+      const inferredLastFilledHour = row ? inferLastFilledHour(row as Partial<Record<HourColumnKey, number>>) : null;
+      cutoffHour = inferredLastFilledHour === null ? null : inferredLastFilledHour + 1;
+    }
+
+    if (res.error || !row || !cutoffHour || cutoffHour <= 0 || cutoffHour >= 24) {
+      setAutoForecastSnapshot(null);
+      return;
+    }
+
+    setAutoForecastSnapshot({
+      date: String(row.date ?? ''),
+      cutoffHour,
+      currentCumVolume: calculateCumulativeVolume(row as Pick<VolumeHistoryUploadRow, HourColumnKey>, cutoffHour),
+      row: row as VolumeHistoryUploadRow
+    });
+  };
+
+  const loadManualInputs = async () => {
+    if (!supabase) {
+      setManualInputsError(t('Missing Supabase configuration.', 'Missing Supabase configuration.'));
+      setManualInputRows([]);
+      return;
+    }
+
+    setManualInputsLoading(true);
+    setManualInputsError(null);
+    const res = await supabase.from(FORECAST_INPUT_TABLE).select('*').order('weekday', { ascending: true });
+    if (res.error) {
+      setManualInputsError(
+        /volume_forecast/i.test(String(res.error.message ?? ''))
+          ? t('Manual input table is unavailable. Run the SQL setup first.', 'Manual input table is unavailable. Run the SQL setup first.')
+          : String(res.error.message ?? '')
+      );
+      setManualInputRows([]);
+      setManualInputsLoading(false);
+      return;
+    }
+
+    setManualInputRows(
+      (((res.data as ForecastManualInputRow[] | null) ?? []).map((row) => ({
+        input_date: String((row as any).input_date ?? ''),
+        weekday: Number(row.weekday ?? 0) as WeekdayValue,
+        previous_day_backlog: Number(row.previous_day_backlog ?? 0),
+        current_cumulative_volume_12: Number((row as any).current_cumulative_volume_12 ?? 0),
+        full_day_capacity: Number(row.full_day_capacity ?? 0),
+        yesterday_inflow_00_14: Number(row.yesterday_inflow_00_14 ?? 0),
+        updated_at: row.updated_at ?? null,
+        updated_by: row.updated_by ?? null
+      })) as ForecastManualInputRow[])
+    );
+    setManualInputsLoading(false);
+  };
 
   const loadModel = async (mode: LookbackMode = lookbackMode) => {
     if (!supabase) {
@@ -469,32 +705,470 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   };
 
   useEffect(() => {
-    let active = true;
     const run = async () => {
-      await loadModel(lookbackMode);
+      await Promise.all([loadModel(lookbackMode), loadManualInputs()]);
     };
     void run();
-    return () => {
-      active = false;
-      void active;
-    };
   }, [lookbackMode, supabase]);
 
+  useEffect(() => {
+    void loadAutoForecastSnapshot(selectedWeekday);
+  }, [selectedWeekday, supabase]);
+
+  useEffect(() => {
+    setSelectedForecastHour((current) => {
+      if (autoForecastSnapshot?.cutoffHour) {
+        return current >= 1 && current <= autoForecastSnapshot.cutoffHour ? current : autoForecastSnapshot.cutoffHour;
+      }
+      return FIXED_FORECAST_HOUR;
+    });
+  }, [autoForecastSnapshot?.cutoffHour]);
+
+  const selectedWeekdayManualRows = useMemo(
+    () =>
+      manualInputRows
+        .filter((row) => row.weekday === selectedWeekday)
+        .sort((a, b) => b.input_date.localeCompare(a.input_date)),
+    [manualInputRows, selectedWeekday]
+  );
+  const selectedManualInput = selectedWeekdayManualRows[0] ?? null;
+  const getDefaultHistoryPasteDate = (weekDates: string[]) => {
+    const today = toDateOnly(serverTime);
+    if (weekDates.includes(today)) return today;
+    return weekDates[selectedWeekday - 1] ?? weekDates[0] ?? '';
+  };
+  const buildManualInputDraftRows = (weekOffset: number, historyRowsOverride?: VolumeHistoryUploadRow[]) => {
+    const existingByDate = new Map(manualInputRows.map((row) => [row.input_date, row]));
+    const historyRows = historyRowsOverride ?? historyWindowRows;
+    const historyByDate = new Map(historyRows.map((row) => [row.date, row]));
+    return getWeekDates(serverTime, weekOffset).map((inputDate) => {
+        const existing = existingByDate.get(inputDate);
+        const previousDate = toDateOnly(addDays(new Date(`${inputDate}T00:00:00`), -1));
+        const previousHistoryRow = historyByDate.get(previousDate);
+        const autoYesterdayInflow =
+          previousHistoryRow
+            ? YESTERDAY_INFLOW_HOUR_KEYS.reduce((sum, hourKey) => sum + Number(previousHistoryRow[hourKey] ?? 0), 0)
+            : null;
+        return {
+          input_date: inputDate,
+          previous_day_backlog: existing ? String(existing.previous_day_backlog) : '',
+          current_cumulative_volume_12: existing ? String(existing.current_cumulative_volume_12) : '',
+          full_day_capacity: existing ? String(existing.full_day_capacity) : '',
+          yesterday_inflow_00_14:
+            autoYesterdayInflow !== null ? String(autoYesterdayInflow) : existing ? String(existing.yesterday_inflow_00_14) : ''
+        };
+      });
+  };
+  const currentWeekDates = useMemo(() => getWeekDates(serverTime, manualInputWeekOffset), [serverTime, manualInputWeekOffset]);
+  const forecastAtNoonByWeekday = useMemo(
+    () =>
+      new Map(
+        WEEKDAY_OPTIONS.map((option) => [
+          option.value,
+          modelRows.find((row) => row.weekday === option.value && row.hour_of_day === FIXED_FORECAST_HOUR) ?? null
+        ])
+      ),
+    [modelRows]
+  );
+  const loadHistoryWindow = async (weekDates: string[]) => {
+    if (!supabase || weekDates.length === 0) {
+      setHistoryWindowRows([]);
+      return [] as VolumeHistoryUploadRow[];
+    }
+
+    setHistoryWindowLoading(true);
+    setHistoryWindowError(null);
+    const previousDate = toDateOnly(addDays(new Date(`${weekDates[0]}T00:00:00`), -1));
+    const res = await supabase
+      .from('volume_history')
+      .select('*')
+      .gte('date', previousDate)
+      .lte('date', weekDates[weekDates.length - 1])
+      .order('date', { ascending: true });
+    if (res.error) {
+      setHistoryWindowError(
+        /volume_history/i.test(String(res.error.message ?? ''))
+          ? t('History inflow table is unavailable. Run the SQL setup first.', 'History inflow table is unavailable. Run the SQL setup first.')
+          : String(res.error.message ?? '')
+      );
+      setHistoryWindowRows([]);
+      setHistoryWindowLoading(false);
+      return [] as VolumeHistoryUploadRow[];
+    }
+
+    const nextRows = ((res.data as VolumeHistoryUploadRow[] | null) ?? []).map((row) => ({ ...row } as VolumeHistoryUploadRow));
+    setHistoryWindowRows(nextRows);
+    setHistoryWindowLoading(false);
+    return nextRows;
+  };
+  const openManualInputDialog = async () => {
+    setManualInputWeekOffset(0);
+    setForecastDialogView('weekly');
+    const weekDates = getWeekDates(serverTime, 0);
+    const historyRows = await loadHistoryWindow(weekDates);
+    setManualInputDraftRows(buildManualInputDraftRows(0, historyRows));
+    setHistoryPasteDate(getDefaultHistoryPasteDate(weekDates));
+    setManualInputSaveError(null);
+    setManualInputSaveMessage(null);
+    setManualInputDialogOpen(true);
+  };
+  const shiftManualInputWeek = async (delta: number) => {
+    const nextOffset = manualInputWeekOffset + delta;
+    const nextWeekDates = getWeekDates(serverTime, nextOffset);
+    setManualInputWeekOffset(nextOffset);
+    const historyRows = await loadHistoryWindow(nextWeekDates);
+    setManualInputDraftRows(buildManualInputDraftRows(nextOffset, historyRows));
+    setHistoryPasteDate((current) => (nextWeekDates.includes(current) ? current : getDefaultHistoryPasteDate(nextWeekDates)));
+    setManualInputSaveError(null);
+  };
+  const closeManualInputDialog = () => {
+    if (manualInputSaving) return;
+    setManualInputDialogOpen(false);
+    setManualInputSaveError(null);
+  };
+  const parsePastedVolumeHistoryRows = (text: string, selectedDate?: string) => {
+    const rows = parseTabSeparatedRows(text);
+    if (rows.length === 0) {
+      throw new Error(t('没有检测到可粘贴的数据。', 'No paste data detected.'));
+    }
+
+    const allCells = rows.flat().filter((cell) => String(cell ?? '').trim().length > 0);
+    const hasExplicitDate = rows.some((row) => row.some((cell) => isValidDateOnly(normalizeImportedDate(cell))));
+    if (!hasExplicitDate && selectedDate && isValidDateOnly(selectedDate)) {
+      const numericValues = allCells.map(parseNumericCell);
+      if (numericValues.every((value) => value !== null) && numericValues.length > 0) {
+        let hourStart = 0;
+        if (numericValues.length >= 26) {
+          const maybeWeekday = numericValues[0] ?? null;
+          const maybeTotal = numericValues[1] ?? null;
+          const hours = numericValues.slice(2, 26) as number[];
+          const totalHours = hours.reduce((sum, value) => sum + value, 0);
+          if (maybeWeekday && maybeWeekday >= 1 && maybeWeekday <= 7 && maybeTotal !== null && Math.abs(totalHours - maybeTotal) <= 3) {
+            hourStart = 2;
+          }
+        }
+        if (hourStart === 0 && numericValues.length >= 25) {
+          const maybeTotal = numericValues[0] ?? null;
+          const hours = numericValues.slice(1, 25) as number[];
+          const totalHours = hours.reduce((sum, value) => sum + value, 0);
+          if (maybeTotal !== null && Math.abs(totalHours - maybeTotal) <= 3) {
+            hourStart = 1;
+          }
+        }
+        const hours = numericValues.slice(hourStart, hourStart + 24) as number[];
+        const nextRow = { date: selectedDate } as VolumeHistoryUploadRow;
+        nextRow.last_filled_hour = hours.length > 0 ? Math.max(0, Math.min(23, hourStart + hours.length - 1)) : null;
+        HOUR_COLUMNS.forEach((hourKey, index) => {
+          nextRow[hourKey] = Number(hours[index] ?? 0);
+        });
+        return [nextRow];
+      }
+    }
+
+    const parsedRows = new Map<string, VolumeHistoryUploadRow>();
+    for (const [rowIndex, row] of rows.entries()) {
+      const dateIndex = row.findIndex((cell) => isValidDateOnly(normalizeImportedDate(cell)));
+      if (dateIndex < 0) continue;
+      const dateValue = normalizeImportedDate(row[dateIndex]);
+      if (!isValidDateOnly(dateValue)) continue;
+
+      const trailingCells = row.slice(dateIndex + 1);
+      const numericCells = trailingCells.map(parseNumericCell);
+      if (numericCells.some((value) => value === null)) {
+        throw new Error(t(`第 ${rowIndex + 1} 行包含无效数字。`, `Row ${rowIndex + 1} contains invalid numbers.`));
+      }
+
+      let hourStart = 0;
+      if (numericCells.length >= 26) {
+        const maybeWeekday = numericCells[0] ?? null;
+        const maybeTotal = numericCells[1] ?? null;
+        const hours = numericCells.slice(2, 26) as number[];
+        const totalHours = hours.reduce((sum, value) => sum + value, 0);
+        if (maybeWeekday && maybeWeekday >= 1 && maybeWeekday <= 7 && maybeTotal !== null && Math.abs(totalHours - maybeTotal) <= 3) {
+          hourStart = 2;
+        }
+      }
+      if (hourStart === 0 && numericCells.length >= 25) {
+        const maybeTotal = numericCells[0] ?? null;
+        const hours = numericCells.slice(1, 25) as number[];
+        const totalHours = hours.reduce((sum, value) => sum + value, 0);
+        if (maybeTotal !== null && Math.abs(totalHours - maybeTotal) <= 3) {
+          hourStart = 1;
+        }
+      }
+
+      const hours = numericCells.slice(hourStart, hourStart + 24);
+      if (hours.length === 0) continue;
+      const nextRow = { date: dateValue } as VolumeHistoryUploadRow;
+      nextRow.last_filled_hour = Math.max(0, Math.min(23, hourStart + hours.length - 1));
+      HOUR_COLUMNS.forEach((hourKey, index) => {
+        nextRow[hourKey] = Number(hours[index] ?? 0);
+      });
+      parsedRows.set(dateValue, nextRow);
+    }
+
+    const output = Array.from(parsedRows.values()).sort((a, b) => a.date.localeCompare(b.date));
+    if (output.length === 0 && selectedDate && isValidDateOnly(selectedDate)) {
+      const numericValues = allCells.map(parseNumericCell);
+      if (numericValues.every((value) => value !== null) && numericValues.length > 0) {
+        let hourStart = 0;
+        if (numericValues.length >= 26) {
+          const maybeWeekday = numericValues[0] ?? null;
+          const maybeTotal = numericValues[1] ?? null;
+          const hours = numericValues.slice(2, 26) as number[];
+          const totalHours = hours.reduce((sum, value) => sum + value, 0);
+          if (maybeWeekday && maybeWeekday >= 1 && maybeWeekday <= 7 && maybeTotal !== null && Math.abs(totalHours - maybeTotal) <= 3) {
+            hourStart = 2;
+          }
+        }
+        if (hourStart === 0 && numericValues.length >= 25) {
+          const maybeTotal = numericValues[0] ?? null;
+          const hours = numericValues.slice(1, 25) as number[];
+          const totalHours = hours.reduce((sum, value) => sum + value, 0);
+          if (maybeTotal !== null && Math.abs(totalHours - maybeTotal) <= 3) {
+            hourStart = 1;
+          }
+        }
+        const hours = numericValues.slice(hourStart, hourStart + 24) as number[];
+        if (hours.length > 0) {
+          const nextRow = { date: selectedDate } as VolumeHistoryUploadRow;
+          nextRow.last_filled_hour = Math.max(0, Math.min(23, hourStart + hours.length - 1));
+          HOUR_COLUMNS.forEach((hourKey, index) => {
+            nextRow[hourKey] = Number(hours[index] ?? 0);
+          });
+          output.push(nextRow);
+        }
+      }
+    }
+    if (output.length === 0) {
+      throw new Error(
+        t('未能从粘贴内容中识别日期和小时数据。可先选择日期后仅粘贴前几个小时数字。', 'Could not detect date and hourly values. You can select a date first and paste only the first few hourly values.')
+      );
+    }
+    return output;
+  };
+  const applyPastedHistoryData = async () => {
+    if (!supabase) {
+      setUploadError(t('Missing Supabase configuration.', 'Missing Supabase configuration.'));
+      return;
+    }
+    if (!isValidDateOnly(historyPasteDate) || !currentWeekDates.includes(historyPasteDate)) {
+      setUploadError(t('请选择当前周范围内的日期。', 'Please select a date within the current week window.'));
+      return;
+    }
+
+    setUploadError(null);
+    setUploadMessage(null);
+    setHistoryWindowError(null);
+    setHistoryPasteSaving(true);
+    try {
+      const parsedRows = parsePastedVolumeHistoryRows(historyPasteValue, historyPasteDate);
+      const upsertRes = await upsertVolumeHistoryRows(parsedRows);
+      if (upsertRes.error) {
+        throw new Error(String(upsertRes.error.message ?? 'Paste apply failed.'));
+      }
+      await verifyVolumeHistoryRowsPersisted(parsedRows);
+      mergeHistoryRows(parsedRows);
+      setUploadMessage(formatHistoryPasteSuccess(parsedRows));
+      setHistoryPasteValue('');
+      await Promise.all([loadModel(lookbackMode), loadHistoryWindow(currentWeekDates), loadAutoForecastSnapshot(selectedWeekday)]);
+    } catch (err) {
+      setUploadError(String((err as any)?.message ?? err ?? 'Paste apply failed.'));
+    } finally {
+      setHistoryPasteSaving(false);
+    }
+  };
+  const upsertVolumeHistoryRows = async (rows: VolumeHistoryUploadRow[]) => {
+    let upsertRes = await supabase.from('volume_history').upsert(rows as any[], { onConflict: 'date' });
+    if (upsertRes.error && isMissingColumnError(upsertRes.error, 'last_filled_hour', 'volume_history')) {
+      const fallbackRows = rows.map(({ last_filled_hour: _omit, ...rest }) => rest);
+      upsertRes = await supabase.from('volume_history').upsert(fallbackRows as any[], { onConflict: 'date' });
+    }
+    return upsertRes;
+  };
+  const verifyVolumeHistoryRowsPersisted = async (rows: VolumeHistoryUploadRow[]) => {
+    if (!supabase || rows.length === 0) return;
+
+    const expectedByDate = new Map(rows.map((row) => [row.date, row]));
+    const expectedDates = Array.from(expectedByDate.keys());
+    const res = await supabase.from('volume_history').select('*').in('date', expectedDates);
+    if (res.error) {
+      throw new Error(String(res.error.message ?? 'Failed to verify pasted rows.'));
+    }
+
+    const actualByDate = new Map((((res.data as VolumeHistoryUploadRow[] | null) ?? [])).map((row) => [row.date, row]));
+    const missingDates = expectedDates.filter((date) => !actualByDate.has(date));
+    if (missingDates.length > 0) {
+      throw new Error(
+        t(
+          `数据库没有保存这些日期的数据：${missingDates.join(', ')}。请检查 volume_history 表是否已应用 SQL 迁移，并确认该表允许当前登录用户 insert/update。`,
+          `The database did not persist these dates: ${missingDates.join(', ')}. Check that volume_history has the required SQL migrations and that the current user can insert/update this table.`
+        )
+      );
+    }
+
+    const mismatchedDates = expectedDates.filter((date) => {
+      const expected = expectedByDate.get(date);
+      const actual = actualByDate.get(date);
+      if (!expected || !actual) return false;
+      return HOUR_COLUMNS.some((hourKey) => Number(expected[hourKey] ?? 0) !== Number(actual[hourKey] ?? 0));
+    });
+    if (mismatchedDates.length > 0) {
+      throw new Error(
+        t(
+          `数据库已返回这些日期，但小时数据不一致：${mismatchedDates.join(', ')}。这通常是表触发器、约束或写入权限导致的。`,
+          `The database returned these dates, but the hourly values do not match: ${mismatchedDates.join(', ')}. This usually means a trigger, constraint, or write-permission issue.`
+        )
+      );
+    }
+  };
+  const mergeHistoryRows = (rows: VolumeHistoryUploadRow[]) => {
+    if (rows.length === 0) return;
+    setHistoryWindowRows((prev) => {
+      const merged = new Map(prev.map((row) => [row.date, row]));
+      for (const row of rows) {
+        merged.set(row.date, { ...merged.get(row.date), ...row });
+      }
+      return Array.from(merged.values()).sort((a, b) => a.date.localeCompare(b.date));
+    });
+  };
+  const formatHistoryPasteSuccess = (rows: VolumeHistoryUploadRow[]) => {
+    if (rows.length !== 1) {
+      return t(`粘贴成功：${rows.length} 行。`, `Paste applied: ${rows.length} row(s).`);
+    }
+    const row = rows[0];
+    const filledHours = row.last_filled_hour === null || row.last_filled_hour === undefined ? inferLastFilledHour(row) : Number(row.last_filled_hour);
+    const hourCount = filledHours === null ? 0 : filledHours + 1;
+    const total = HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0);
+    return t(`已写入 ${row.date}，${hourCount} 小时，合计 ${formatNumber(total)}。`, `Saved ${row.date}, ${hourCount} hours, total ${formatNumber(total)}.`);
+  };
+  const saveManualInput = async () => {
+    if (!supabase) {
+      setManualInputSaveError(t('Missing Supabase configuration.', 'Missing Supabase configuration.'));
+      return;
+    }
+
+    const payloadRows: Array<{
+      input_date: string;
+      previous_day_backlog: number;
+      current_cumulative_volume_12: number;
+      full_day_capacity: number;
+      yesterday_inflow_00_14: number;
+    }> = [];
+    for (const draftRow of manualInputDraftRows) {
+      const inputDate = String(draftRow.input_date ?? '').trim();
+      if (!isValidDateOnly(inputDate)) {
+        setManualInputSaveError(t('Please enter valid dates in YYYY-MM-DD format.', 'Please enter valid dates in YYYY-MM-DD format.'));
+        return;
+      }
+
+      const previousDayBacklog = parseNonNegativeInt(draftRow.previous_day_backlog);
+      const currentCumulativeVolume12 = parseNonNegativeInt(draftRow.current_cumulative_volume_12);
+      const fullDayCapacity = parseNonNegativeInt(draftRow.full_day_capacity);
+      const yesterdayInflow0014 = parseNonNegativeInt(draftRow.yesterday_inflow_00_14);
+      if (
+        previousDayBacklog === null ||
+        currentCumulativeVolume12 === null ||
+        fullDayCapacity === null ||
+        yesterdayInflow0014 === null
+      ) {
+        setManualInputSaveError(t('Please enter non-negative integers for all filled fields.', 'Please enter non-negative integers for all filled fields.'));
+        return;
+      }
+
+      const hasAnyValue = [
+        draftRow.previous_day_backlog,
+        draftRow.current_cumulative_volume_12,
+        draftRow.full_day_capacity,
+        draftRow.yesterday_inflow_00_14
+      ].some((value) => String(value ?? '').trim() !== '');
+      if (!hasAnyValue) continue;
+
+      payloadRows.push({
+        input_date: inputDate,
+        previous_day_backlog: previousDayBacklog ?? 0,
+        current_cumulative_volume_12: currentCumulativeVolume12 ?? 0,
+        full_day_capacity: fullDayCapacity ?? 0,
+        yesterday_inflow_00_14: yesterdayInflow0014 ?? 0
+      });
+    }
+
+    setManualInputSaving(true);
+    setManualInputSaveError(null);
+    if (payloadRows.length === 0) {
+      setManualInputSaving(false);
+      setManualInputSaveError(t('Please fill at least one row before saving.', 'Please fill at least one row before saving.'));
+      return;
+    }
+    const res = await supabase.from(FORECAST_INPUT_TABLE).upsert(payloadRows, { onConflict: 'input_date' });
+    if (res.error) {
+      setManualInputSaveError(
+        /volume_forecast/i.test(String(res.error.message ?? ''))
+          ? t('Manual input table is unavailable. Run the SQL setup first.', 'Manual input table is unavailable. Run the SQL setup first.')
+          : String(res.error.message ?? '')
+      );
+      setManualInputSaving(false);
+      return;
+    }
+
+    await loadManualInputs();
+    setManualInputSaving(false);
+    setManualInputDialogOpen(false);
+    setManualInputSaveMessage(t(`已保存 ${payloadRows.length} 行。`, `Saved ${payloadRows.length} row(s).`));
+  };
+
+  const maxSelectableForecastHour = autoForecastSnapshot?.cutoffHour ?? FIXED_FORECAST_HOUR;
+  const forecastHourOptions = useMemo(
+    () =>
+      autoForecastSnapshot?.cutoffHour
+        ? Array.from({ length: autoForecastSnapshot.cutoffHour }, (_, index) => index + 1)
+        : [FIXED_FORECAST_HOUR],
+    [autoForecastSnapshot?.cutoffHour]
+  );
+  const effectiveForecastHour = Math.max(1, Math.min(maxSelectableForecastHour, selectedForecastHour));
   const selectedCoefficient = useMemo(
-    () => modelRows.find((row) => row.weekday === todayWeekday && row.hour_of_day === selectedHour) ?? null,
-    [modelRows, selectedHour, todayWeekday]
+    () => modelRows.find((row) => row.weekday === selectedWeekday && row.hour_of_day === effectiveForecastHour) ?? null,
+    [effectiveForecastHour, modelRows, selectedWeekday]
   );
 
-  const currentCumVolume = Math.max(0, Number(currentCumVolumeInput) || 0);
+  const hasManualInput = Boolean(selectedManualInput);
+  const hasAutoForecastSnapshot = Boolean(autoForecastSnapshot);
+  const currentCumVolume = hasAutoForecastSnapshot
+    ? Math.max(
+        0,
+        Number(
+          autoForecastSnapshot?.row
+            ? calculateCumulativeVolume(autoForecastSnapshot.row as Pick<VolumeHistoryUploadRow, HourColumnKey>, effectiveForecastHour)
+            : autoForecastSnapshot?.currentCumVolume ?? 0
+        ) || 0
+      )
+    : hasManualInput
+      ? Math.max(0, Number(selectedManualInput?.current_cumulative_volume_12 ?? 0) || 0)
+      : 0;
   const result = useMemo(
-    () => calculateForecast(currentCumVolume, selectedHour, todayWeekday, selectedCoefficient),
-    [currentCumVolume, selectedCoefficient, selectedHour, todayWeekday]
+    () =>
+      hasAutoForecastSnapshot || hasManualInput
+        ? calculateForecast(currentCumVolume, effectiveForecastHour, selectedWeekday, selectedCoefficient)
+        : {
+            forecast: null,
+            lowerBound: null,
+            upperBound: null,
+            upperUnbounded: false,
+            avgShare: Number(selectedCoefficient?.avg_share ?? 0),
+            stddevShare: Number(selectedCoefficient?.stddev_share ?? 0),
+            sampleSize: Math.max(0, Number(selectedCoefficient?.sample_size ?? 0))
+          },
+    [currentCumVolume, effectiveForecastHour, hasAutoForecastSnapshot, hasManualInput, selectedCoefficient, selectedWeekday]
   );
 
-  const todayRows = useMemo(
-    () => modelRows.filter((row) => row.weekday === todayWeekday).sort((a, b) => a.hour_of_day - b.hour_of_day),
-    [modelRows, todayWeekday]
+  const weekdayRows = useMemo(
+    () => modelRows.filter((row) => row.weekday === selectedWeekday).sort((a, b) => a.hour_of_day - b.hour_of_day),
+    [modelRows, selectedWeekday]
   );
+  const manualInputRangeLabel =
+    manualInputDraftRows.length > 0
+      ? `${manualInputDraftRows[0].input_date} - ${manualInputDraftRows[manualInputDraftRows.length - 1].input_date}`
+      : '';
 
   const downloadTemplate = async () => {
     const headers = ['date', ...TEMPLATE_HOUR_HEADERS];
@@ -568,6 +1242,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
         throw new Error(t(`Row ${rowIndex + 1} has an invalid date.`, `Row ${rowIndex + 1} has an invalid date.`));
       }
       const nextRow = { date: dateValue } as VolumeHistoryUploadRow;
+      let lastFilledHour = -1;
       for (const hourKey of HOUR_COLUMNS) {
         const idx = normalizedHeaders.findIndex((normalized) => HOUR_HEADER_ALIASES.get(normalized) === hourKey);
         const rawValue = String(idx == null ? '' : raw[idx] ?? '').trim();
@@ -575,8 +1250,10 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
         if (!Number.isFinite(num) || num < 0 || !Number.isInteger(num)) {
           throw new Error(t(`Row ${rowIndex + 1} has invalid ${hourKey}.`, `Row ${rowIndex + 1} has invalid ${hourKey}.`));
         }
+        if (rawValue !== '') lastFilledHour = Number(hourKey.slice(1));
         nextRow[hourKey] = num;
       }
+      nextRow.last_filled_hour = lastFilledHour >= 0 ? lastFilledHour : null;
       rowsByDate.set(dateValue, nextRow);
     }
 
@@ -613,12 +1290,14 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     try {
       const tableRows = await readTabularFile(file);
       const parsedRows = parseVolumeHistoryRows(tableRows);
-      const upsertRes = await supabase.from('volume_history').upsert(parsedRows as any[], { onConflict: 'date' });
+      const upsertRes = await upsertVolumeHistoryRows(parsedRows);
       if (upsertRes.error) {
         throw new Error(String(upsertRes.error.message ?? 'Upload failed.'));
       }
+      await verifyVolumeHistoryRowsPersisted(parsedRows);
+      mergeHistoryRows(parsedRows);
       setUploadMessage(t(`Upload successful: ${parsedRows.length} day rows.`, `Upload successful: ${parsedRows.length} day rows.`));
-      await loadModel(lookbackMode);
+      await Promise.all([loadModel(lookbackMode), loadHistoryWindow(currentWeekDates), loadAutoForecastSnapshot(selectedWeekday)]);
     } catch (err) {
       setUploadError(String((err as any)?.message ?? err ?? 'Upload failed.'));
     } finally {
@@ -636,14 +1315,31 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
             {t('Full-day forecast based on same-weekday cumulative shares.', 'Full-day forecast based on same-weekday cumulative shares.')}
           </p>
         </div>
-        <div
-          className={[
-            'rounded-2xl px-4 py-3 text-right shadow-sm',
-            isLight ? 'border border-slate-200 bg-white' : 'border border-white/10 bg-black/20'
-          ].join(' ')}
-        >
-          <div className={['text-[10px] uppercase tracking-[0.2em]', labelClass].join(' ')}>{t('Weekday', 'Weekday')}</div>
-          <div className={['mt-1 text-sm font-semibold', valueClass].join(' ')}>{todayWeekday}</div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {WEEKDAY_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              disabled={isLocked}
+              onClick={() => setSelectedWeekday(option.value)}
+              className={weekdayButtonClass(option.value)}
+            >
+              {t(option.zh, option.shortEn)}
+            </button>
+          ))}
+          <button
+            type="button"
+            disabled={isLocked || manualInputsLoading}
+            onClick={openManualInputDialog}
+            className={[
+              'rounded-2xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+              isLight
+                ? 'border border-slate-300 bg-slate-900 text-white hover:bg-slate-700'
+                : 'border border-neon/60 bg-neon/15 text-neon hover:bg-neon/20'
+            ].join(' ')}
+          >
+            {t('填数据', 'Fill data')}
+          </button>
         </div>
       </div>
 
@@ -680,8 +1376,26 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   {t('Download template', 'Download template')}
                 </button>
               </div>
-              {uploadError && <div className="mt-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{uploadError}</div>}
-              {uploadMessage && <div className="mt-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{uploadMessage}</div>}
+              {uploadError && (
+                <div
+                  className={[
+                    'mt-3 rounded-2xl border px-3 py-2 text-sm',
+                    isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                  ].join(' ')}
+                >
+                  {uploadError}
+                </div>
+              )}
+              {uploadMessage && (
+                <div
+                  className={[
+                    'mt-3 rounded-2xl border px-3 py-2 text-sm',
+                    isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                  ].join(' ')}
+                >
+                  {uploadMessage}
+                </div>
+              )}
             </div>
 
             <div>
@@ -700,34 +1414,89 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
               </select>
             </div>
 
-            <div>
-              <label className={['text-xs uppercase tracking-[0.2em]', labelClass].join(' ')}>{t('Cutoff hour', 'Cutoff hour')}</label>
-              <select
-                value={selectedHour}
-                disabled={isLocked}
-                onChange={(e) => setSelectedHour(Number(e.target.value) || 8)}
-                className={inputClass}
-              >
-                {FORECAST_HOURS.map((hour) => (
-                  <option key={hour} value={hour}>
-                    {hour}:00
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className={['text-xs uppercase tracking-[0.2em]', labelClass].join(' ')}>{t('Current cumulative volume', 'Current cumulative volume')}</label>
-              <input
-                type="number"
-                min="0"
-                step="1"
-                value={currentCumVolumeInput}
-                disabled={isLocked}
-                onChange={(e) => setCurrentCumVolumeInput(e.target.value)}
-                placeholder={t('Enter current cumulative volume', 'Enter current cumulative volume')}
-                className={inputClass}
-              />
+            <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
+              <div className={['flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]', labelClass].join(' ')}>
+                <span>{t('日期列表', 'Date list')}</span>
+                <span>{t(selectedWeekdayOption.zh, selectedWeekdayOption.en)}</span>
+              </div>
+              <div className={['mt-3 text-xs', helperClass].join(' ')}>
+                {t('列表按日期倒序显示，预测默认使用最新一行。', 'Rows are sorted by date desc; forecast uses the latest row.')}
+              </div>
+              <div className={['mt-3 overflow-auto rounded-2xl', tableWrapClass].join(' ')}>
+                <table className="min-w-full table-fixed text-left text-xs">
+                  <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
+                    <tr>
+                      <th className="px-3 py-2">{t('日期', 'Date')}</th>
+                      <th className="px-3 py-2">{t('积压', 'Backlog')}</th>
+                      <th className="px-3 py-2">{t('12点累计', '12:00 cum')}</th>
+                      <th className="px-3 py-2">{t('全天产能', 'Capacity')}</th>
+                      <th className="px-3 py-2">{t('昨日0-14流入', 'Yday 0-14 inflow')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedWeekdayManualRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className={['px-3 py-6 text-center', helperClass].join(' ')}>
+                          {manualInputsLoading ? t('Loading...', 'Loading...') : t('No saved rows', 'No saved rows')}
+                        </td>
+                      </tr>
+                    ) : (
+                      selectedWeekdayManualRows.map((row, index) => (
+                        <tr key={row.input_date} className={tableRowClass}>
+                          <td className={['px-3 py-2 font-semibold', index === 0 ? (isLight ? 'text-emerald-700' : 'text-emerald-300') : ''].join(' ')}>
+                            {row.input_date}
+                          </td>
+                          <td className="px-3 py-2">{formatNumber(row.previous_day_backlog)}</td>
+                          <td className="px-3 py-2">{formatNumber(row.current_cumulative_volume_12)}</td>
+                          <td className="px-3 py-2">{formatNumber(row.full_day_capacity)}</td>
+                          <td className="px-3 py-2">{formatNumber(row.yesterday_inflow_00_14)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className={['mt-3 flex items-center justify-between gap-3 text-sm', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
+                <span className={labelClass}>{t('预测截止时点', 'Forecast cutoff')}</span>
+                <div className="flex items-center gap-2">
+                  {hasAutoForecastSnapshot && <span className={['text-xs', helperClass].join(' ')}>{autoForecastSnapshot?.date}</span>}
+                  <select
+                    value={String(effectiveForecastHour)}
+                    disabled={isLocked || loading || forecastHourOptions.length <= 1}
+                    onChange={(e) => setSelectedForecastHour(Number(e.target.value))}
+                    className={[
+                      'h-10 rounded-xl px-3 text-sm font-semibold outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                      isLight ? 'border border-slate-300 bg-white text-slate-900' : 'border border-white/10 bg-black/30 text-white'
+                    ].join(' ')}
+                  >
+                    {forecastHourOptions.map((hour) => (
+                      <option key={hour} value={hour}>
+                        {`${String(hour).padStart(2, '0')}:00`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              {manualInputsError && (
+                <div
+                  className={[
+                    'mt-3 rounded-2xl border px-3 py-2 text-sm',
+                    isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                  ].join(' ')}
+                >
+                  {manualInputsError}
+                </div>
+              )}
+              {manualInputSaveMessage && (
+                <div
+                  className={[
+                    'mt-3 rounded-2xl border px-3 py-2 text-sm',
+                    isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                  ].join(' ')}
+                >
+                  {manualInputSaveMessage}
+                </div>
+              )}
             </div>
 
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
@@ -748,7 +1517,16 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
               </div>
             </div>
 
-            {error && <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{error}</div>}
+            {error && (
+              <div
+                className={[
+                  'rounded-2xl border px-4 py-3 text-sm',
+                  isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                ].join(' ')}
+              >
+                {error}
+              </div>
+            )}
           </div>
         </div>
 
@@ -788,7 +1566,9 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
 
           <div className={['rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
             <div className="mb-3 flex items-center justify-between gap-3">
-              <div className={['text-sm font-semibold', valueClass].join(' ')}>{t('Today model snapshot', 'Today model snapshot')}</div>
+              <div className={['text-sm font-semibold', valueClass].join(' ')}>
+                {t(`${selectedWeekdayOption.zh}模型快照`, `${selectedWeekdayOption.en} model snapshot`)}
+              </div>
               <div className={['text-xs', helperClass].join(' ')}>
                 {selectedCoefficient?.lookback_start && selectedCoefficient?.lookback_end
                   ? `${selectedCoefficient.lookback_start} - ${selectedCoefficient.lookback_end}`
@@ -806,14 +1586,14 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   </tr>
                 </thead>
                 <tbody>
-                  {todayRows.length === 0 ? (
+                  {weekdayRows.length === 0 ? (
                     <tr>
                       <td colSpan={4} className={['px-3 py-6 text-center', helperClass].join(' ')}>
                         {loading ? t('Loading...', 'Loading...') : t('No model data', 'No model data')}
                       </td>
                     </tr>
                   ) : (
-                    todayRows.map((row) => (
+                    weekdayRows.map((row) => (
                       <tr key={`${row.weekday}-${row.hour_of_day}`} className={tableRowClass}>
                         <td className="px-3 py-2">{row.hour_of_day}:00</td>
                         <td className="px-3 py-2">{formatPercent(row.avg_share)}</td>
@@ -828,6 +1608,350 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           </div>
         </div>
       </div>
+
+      {manualInputDialogOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className={['fixed inset-0 z-[120] flex items-center justify-center px-4 py-6', isLight ? 'bg-slate-900/35' : 'bg-black/65'].join(' ')}
+          >
+            <div
+              className={[
+                'w-full max-w-[1200px] min-h-[78vh] rounded-3xl border p-5 shadow-2xl max-h-[92vh] overflow-y-auto',
+                isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950/95 backdrop-blur'
+              ].join(' ')}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className={['text-xl font-semibold', valueClass].join(' ')}>
+                    {forecastDialogView === 'weekly' ? t('本周数据', 'Weekly data') : t('历史流入数据', 'Historical inflow data')}
+                  </div>
+                  {manualInputRangeLabel && <div className={['mt-2 text-xs', helperClass].join(' ')}>{manualInputRangeLabel}</div>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={manualInputSaving}
+                    onClick={() => setForecastDialogView((current) => (current === 'weekly' ? 'history' : 'weekly'))}
+                    className={secondaryButtonClass}
+                  >
+                    {forecastDialogView === 'weekly' ? t('历史流入', 'History inflow') : t('本周数据', 'Weekly data')}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={manualInputSaving}
+                    onClick={() => shiftManualInputWeek(1)}
+                    className={secondaryButtonClass}
+                  >
+                    {t('上一周', 'Prev week')}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={manualInputSaving || manualInputWeekOffset === 0}
+                    onClick={() => shiftManualInputWeek(-1)}
+                    className={secondaryButtonClass}
+                  >
+                    {t('下一周', 'Next week')}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={manualInputSaving || manualInputWeekOffset === 0}
+                    onClick={async () => {
+                      const weekDates = getWeekDates(serverTime, 0);
+                      const historyRows = await loadHistoryWindow(weekDates);
+                      setManualInputWeekOffset(0);
+                      setManualInputDraftRows(buildManualInputDraftRows(0, historyRows));
+                      setHistoryPasteDate(getDefaultHistoryPasteDate(weekDates));
+                      setManualInputSaveError(null);
+                    }}
+                    className={secondaryButtonClass}
+                  >
+                    {t('本周', 'This week')}
+                  </button>
+                  <button type="button" disabled={manualInputSaving} onClick={closeManualInputDialog} className={secondaryButtonClass}>
+                    {t('关闭', 'Close')}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-5">
+                {forecastDialogView === 'weekly' ? (
+                  <div className={['overflow-auto rounded-2xl', tableWrapClass].join(' ')}>
+                    <table className="min-w-full table-fixed text-left text-xs">
+                      <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
+                        <tr>
+                          <th className="px-3 py-2">{t('日期', 'Date')}</th>
+                          <th className="px-3 py-2">{t('星期', 'Weekday')}</th>
+                          <th className="px-3 py-2">{t('前一日积压（全天待拣货）', 'Previous day backlog (full-day pending picks)')}</th>
+                          <th className="px-3 py-2">{t('12点累计件量', '12:00 cumulative volume')}</th>
+                          <th className="px-3 py-2">{t('全天产能', 'Full-day capacity')}</th>
+                          <th className="px-3 py-2">{t('昨日00:00-14:00流入量', 'Yesterday 00:00-14:00 inflow')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {manualInputDraftRows.map((draftRow, index) => (
+                          <tr key={draftRow.input_date} className={tableRowClass}>
+                            <td className="px-3 py-3 align-top">
+                              <input
+                                type="date"
+                                value={draftRow.input_date}
+                                disabled
+                                className={[
+                                  'h-10 w-full rounded-xl px-3 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-100',
+                                  isLight ? 'border border-slate-300 bg-slate-50 text-slate-900' : 'border border-white/10 bg-black/20 text-white'
+                                ].join(' ')}
+                              />
+                            </td>
+                            <td className="px-3 py-3 align-middle">
+                              <div className={['text-sm font-semibold', valueClass].join(' ')}>
+                                {t(
+                                  WEEKDAY_OPTIONS[(getWeekdayFromDateOnly(draftRow.input_date) ?? 1) - 1]?.zh ?? '周一',
+                                  WEEKDAY_OPTIONS[(getWeekdayFromDateOnly(draftRow.input_date) ?? 1) - 1]?.shortEn ?? 'Mon'
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-3 py-3 align-top">
+                              <input
+                                value={draftRow.previous_day_backlog}
+                                onChange={(e) =>
+                                  setManualInputDraftRows((prev) =>
+                                    prev.map((row, rowIndex) => (rowIndex === index ? { ...row, previous_day_backlog: e.target.value } : row))
+                                  )
+                                }
+                                disabled={manualInputSaving}
+                                inputMode="numeric"
+                                className={[
+                                  'h-10 w-full rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                                  isLight
+                                    ? 'border border-slate-300 bg-white text-slate-900 focus:border-neon/60'
+                                    : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                                ].join(' ')}
+                              />
+                            </td>
+                            <td className="px-3 py-3 align-top">
+                              <input
+                                value={draftRow.current_cumulative_volume_12}
+                                onChange={(e) =>
+                                  setManualInputDraftRows((prev) =>
+                                    prev.map((row, rowIndex) => (rowIndex === index ? { ...row, current_cumulative_volume_12: e.target.value } : row))
+                                  )
+                                }
+                                disabled={manualInputSaving}
+                                inputMode="numeric"
+                                className={[
+                                  'h-10 w-full rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                                  isLight
+                                    ? 'border border-slate-300 bg-white text-slate-900 focus:border-neon/60'
+                                    : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                                ].join(' ')}
+                              />
+                            </td>
+                            <td className="px-3 py-3 align-top">
+                              <input
+                                value={draftRow.full_day_capacity}
+                                onChange={(e) =>
+                                  setManualInputDraftRows((prev) =>
+                                    prev.map((row, rowIndex) => (rowIndex === index ? { ...row, full_day_capacity: e.target.value } : row))
+                                  )
+                                }
+                                disabled={manualInputSaving}
+                                inputMode="numeric"
+                                className={[
+                                  'h-10 w-full rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                                  isLight
+                                    ? 'border border-slate-300 bg-white text-slate-900 focus:border-neon/60'
+                                    : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                                ].join(' ')}
+                              />
+                            </td>
+                            <td className="px-3 py-3 align-top">
+                              <input
+                                value={draftRow.yesterday_inflow_00_14}
+                                readOnly
+                                disabled
+                                inputMode="numeric"
+                                className={[
+                                  'h-10 w-full rounded-xl px-3 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-100',
+                                  isLight
+                                    ? 'border border-slate-300 bg-slate-50 text-slate-900'
+                                    : 'border border-white/10 bg-black/20 text-white'
+                                ].join(' ')}
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="mb-4">
+                      <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
+                        <div className="flex items-center justify-between gap-3">
+                          <input
+                            type="date"
+                            value={historyPasteDate}
+                            onChange={(e) => setHistoryPasteDate(e.target.value)}
+                            disabled={isLocked || uploading || historyPasteSaving}
+                            className={[
+                              'h-10 w-full max-w-[220px] rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                              isLight
+                                ? 'border border-slate-300 bg-white text-slate-900 focus:border-neon/60'
+                                : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                            ].join(' ')}
+                          />
+                          <button
+                            type="button"
+                            disabled={isLocked || uploading || historyPasteSaving || !historyPasteValue.trim()}
+                            onClick={() => void applyPastedHistoryData()}
+                            className={[
+                              'rounded-2xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                              isLight ? 'bg-slate-900 text-white hover:bg-slate-700' : 'bg-neon text-slate-950 hover:shadow-glow'
+                            ].join(' ')}
+                          >
+                            {historyPasteSaving ? t('处理中...', 'Applying...') : t('应用粘贴数据', 'Apply paste')}
+                          </button>
+                        </div>
+                        <textarea
+                          value={historyPasteValue}
+                          onChange={(e) => setHistoryPasteValue(e.target.value)}
+                          placeholder=""
+                          rows={4}
+                          disabled={isLocked || uploading || historyPasteSaving}
+                          className={[
+                            'mt-3 w-full rounded-2xl px-4 py-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                            isLight
+                              ? 'border border-slate-300 bg-white text-slate-900 focus:border-neon/60'
+                              : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                          ].join(' ')}
+                        />
+                      </div>
+                    </div>
+                    {uploadError && (
+                      <div
+                        className={[
+                          'mb-3 rounded-2xl border px-4 py-3 text-sm',
+                          isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                        ].join(' ')}
+                      >
+                        {uploadError}
+                      </div>
+                    )}
+                    {uploadMessage && (
+                      <div
+                        className={[
+                          'mb-3 rounded-2xl border px-4 py-3 text-sm',
+                          isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                        ].join(' ')}
+                      >
+                        {uploadMessage}
+                      </div>
+                    )}
+                    {historyWindowError && (
+                      <div
+                        className={[
+                          'mb-3 rounded-2xl border px-4 py-3 text-sm',
+                          isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                        ].join(' ')}
+                      >
+                        {historyWindowError}
+                      </div>
+                    )}
+                    <div className={['overflow-auto rounded-2xl', tableWrapClass].join(' ')}>
+                      <table className="min-w-[2100px] table-fixed text-left text-xs">
+                        <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
+                          <tr>
+                            <th className="px-3 py-2">{t('日期', 'Date')}</th>
+                            <th className="px-3 py-2">{t('星期', 'Weekday')}</th>
+                            <th className="px-3 py-2">{t('截止12点预测', '12:00 forecast')}</th>
+                            <th className="px-3 py-2">{t('实际差异', 'Actual variance')}</th>
+                            <th className="px-3 py-2">{t('当日总流入', 'Daily total')}</th>
+                            {HOUR_COLUMNS.map((hourKey, index) => (
+                              <th key={hourKey} className="px-3 py-2">{`${String(index).padStart(2, '0')}:00`}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {currentWeekDates.map((date) => {
+                            const row = historyWindowRows.find((item) => item.date === date);
+                            const weekday = getWeekdayFromDateOnly(date) ?? 1;
+                            const noonCoefficient = forecastAtNoonByWeekday.get(weekday) ?? null;
+                            const noonCumulative = row ? calculateCumulativeVolume(row as Pick<VolumeHistoryUploadRow, HourColumnKey>, FIXED_FORECAST_HOUR) : null;
+                            const noonForecastResult =
+                              row && noonCumulative !== null ? calculateForecast(noonCumulative, FIXED_FORECAST_HOUR, weekday, noonCoefficient) : null;
+                            const noonForecast = noonForecastResult?.forecast ?? null;
+                            const dailyTotal = row
+                              ? HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0)
+                              : null;
+                            const actualVariance =
+                              dailyTotal !== null && noonForecast !== null && noonForecast > 0
+                                ? (dailyTotal - noonForecast) / noonForecast
+                                : null;
+                            return (
+                              <tr key={date} className={tableRowClass}>
+                                <td className="px-3 py-2 font-semibold">{date}</td>
+                                <td className="px-3 py-2">
+                                  {t(WEEKDAY_OPTIONS[weekday - 1]?.zh ?? '周一', WEEKDAY_OPTIONS[weekday - 1]?.shortEn ?? 'Mon')}
+                                </td>
+                                <td className="px-3 py-2">{formatNumber(noonForecast)}</td>
+                                <td className="px-3 py-2">{actualVariance === null ? '-' : formatPercent(actualVariance)}</td>
+                                <td className="px-3 py-2">{formatNumber(dailyTotal)}</td>
+                                {HOUR_COLUMNS.map((hourKey) => (
+                                  <td key={`${date}-${hourKey}`} className="px-3 py-2">
+                                    {row ? formatNumber(Number(row[hourKey] ?? 0)) : '-'}
+                                  </td>
+                                ))}
+                              </tr>
+                            );
+                          })}
+                          {historyWindowLoading && (
+                            <tr>
+                              <td colSpan={HOUR_COLUMNS.length + 5} className={['px-3 py-6 text-center', helperClass].join(' ')}>
+                                {t('Loading...', 'Loading...')}
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {manualInputSaveError && (
+                <div
+                  className={[
+                    'mt-4 rounded-2xl border px-4 py-3 text-sm',
+                    isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                  ].join(' ')}
+                >
+                  {manualInputSaveError}
+                </div>
+              )}
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button type="button" disabled={manualInputSaving} onClick={closeManualInputDialog} className={secondaryButtonClass}>
+                  {forecastDialogView === 'weekly' ? t('取消', 'Cancel') : t('关闭', 'Close')}
+                </button>
+                {forecastDialogView === 'weekly' && (
+                  <button
+                    type="button"
+                    disabled={manualInputSaving}
+                    onClick={() => void saveManualInput()}
+                    className={[
+                      'rounded-2xl px-5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                      isLight ? 'bg-slate-900 text-white hover:bg-slate-700' : 'bg-neon text-slate-950 hover:shadow-glow'
+                    ].join(' ')}
+                  >
+                    {manualInputSaving ? t('保存中...', 'Saving...') : t('保存', 'Save')}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </section>
   );
 }
