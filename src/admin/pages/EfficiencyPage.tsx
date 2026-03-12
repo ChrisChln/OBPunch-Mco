@@ -664,16 +664,23 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
   };
 
   return (
-    <section className="glass reveal rounded-3xl px-6 py-8">
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
-        <div>
-          <div className={['text-xs uppercase tracking-[0.32em]', labelClass].join(' ')}>{t('人效模板工作台', 'Efficiency template workbench')}</div>
-          <h2 className={['mt-3 font-display text-3xl tracking-[0.06em]', isLight ? 'text-slate-900' : 'text-white'].join(' ')}>
+    <section className="glass reveal rounded-3xl px-6 py-6">
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
+        <div className="grid gap-4">
+          <h2 className={['font-display text-3xl tracking-[0.06em]', isLight ? 'text-slate-900' : 'text-white'].join(' ')}>
             {t('人效', 'Efficiency')}
           </h2>
-          <p className={['mt-3 max-w-3xl text-sm leading-7', isLight ? 'text-slate-600' : 'text-slate-300'].join(' ')}>
-            {t('先把 ToC Excel 模板参数维护成可编辑版本，再逐步接入件量预测，最终反推出第二天各区域需要的人数。', 'Maintain the ToC template as an editable model first, then wire forecast volume into next-day staffing decisions.')}
-          </p>
+          <div className="grid gap-4 md:grid-cols-2">
+            {[
+              { title: t('白班预测', 'Day shift forecast'), value: summary.dsPieces, tone: isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200' },
+              { title: t('夜班预测', 'Night shift forecast'), value: summary.nsPieces, tone: isLight ? 'border-cyan-200 bg-cyan-50 text-cyan-900' : 'border-cyan-400/20 bg-cyan-500/10 text-cyan-200' }
+            ].map((card) => (
+              <div key={card.title} className={['rounded-[26px] border px-5 py-4 shadow-[0_12px_30px_rgba(0,0,0,0.12)]', card.tone].join(' ')}>
+                <div className="text-[11px] uppercase tracking-[0.24em] opacity-80">{card.title}</div>
+                <div className="mt-3 text-3xl font-semibold tracking-[0.04em]">{card.value}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className={['rounded-[28px] border p-5 shadow-[0_18px_40px_rgba(0,0,0,0.12)]', isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-[linear-gradient(180deg,rgba(10,18,36,0.95),rgba(4,9,20,0.92))]'].join(' ')}>
@@ -731,19 +738,6 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
 
       {error ? <div className={['mt-5 rounded-2xl border px-4 py-3 text-sm', isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'].join(' ')}>{error}</div> : null}
       {message ? <div className={['mt-5 rounded-2xl border px-4 py-3 text-sm', isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'].join(' ')}>{message}</div> : null}
-
-      <div className="mt-6 grid gap-4 md:grid-cols-2">
-        {[
-          { title: t('白班预测', 'Day shift forecast'), value: summary.dsPieces, tone: isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200' },
-          { title: t('夜班预测', 'Night shift forecast'), value: summary.nsPieces, tone: isLight ? 'border-cyan-200 bg-cyan-50 text-cyan-900' : 'border-cyan-400/20 bg-cyan-500/10 text-cyan-200' },
-          { title: t('推荐总人力', 'Recommended labor'), value: String(recommendedLabor.totalDs + recommendedLabor.totalNs), tone: isLight ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-amber-400/20 bg-amber-500/10 text-amber-200' }
-        ].slice(0, 2).map((card) => (
-          <div key={card.title} className={['rounded-[26px] border px-5 py-4 shadow-[0_12px_30px_rgba(0,0,0,0.12)]', card.tone].join(' ')}>
-            <div className="text-[11px] uppercase tracking-[0.24em] opacity-80">{card.title}</div>
-            <div className="mt-3 text-3xl font-semibold tracking-[0.04em]">{card.value}</div>
-          </div>
-        ))}
-      </div>
 
       <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="grid gap-4">
