@@ -31,6 +31,7 @@ import HomeDashboardPage from './pages/HomeDashboardPage';
 import AuditPage from './pages/AuditPage';
 import PunchesPage from './pages/PunchesPage';
 import ForecastPage from './pages/ForecastPage';
+import EfficiencyPage from './pages/EfficiencyPage';
 import AppDialog from '../components/AppDialog';
 import {
   activatePlannedScheduleNote,
@@ -11193,6 +11194,7 @@ ${rowsToHtml(late)}
             {page === 'forecast' && (
               <ForecastPage t={t} isLocked={isLocked} serverTime={serverTime} supabase={supabase} themeMode={themeMode} />
             )}
+            {page === 'efficiency' && <EfficiencyPage t={t} isLocked={isLocked} supabase={supabase} themeMode={themeMode} serverTime={serverTime} />}
             {page === 'punches' && (
               <PunchesPage
                 t={t}

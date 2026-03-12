@@ -553,7 +553,17 @@ function WeekVolumeLineChart({
   const innerWidth = width - paddingLeft - paddingRight;
   const innerHeight = height - paddingTop - paddingBottom;
   const allValues = series.flatMap((item) => item.values).filter((value): value is number => value !== null && Number.isFinite(value));
-  const maxValue = Math.max(1, ...allValues);
+  const rawMaxValue = Math.max(1, ...allValues);
+  const getNiceAxisMax = (value: number) => {
+    const paddedValue = value * 1.18;
+    if (paddedValue <= 10) return 10;
+    const magnitude = 10 ** Math.floor(Math.log10(paddedValue));
+    const normalized = paddedValue / magnitude;
+    const niceSteps = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+    const niceNormalized = niceSteps.find((step) => normalized <= step) ?? 10;
+    return niceNormalized * magnitude;
+  };
+  const maxValue = getNiceAxisMax(rawMaxValue);
   const stepX = labels.length > 1 ? innerWidth / (labels.length - 1) : innerWidth;
   const scaleX = (index: number) => paddingLeft + stepX * index;
   const scaleY = (value: number) => paddingTop + innerHeight - (Math.max(0, value) / maxValue) * innerHeight;
@@ -779,6 +789,18 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
           : 'border border-white/10 bg-black/20 text-slate-300 hover:bg-white/10'
     ].join(' ');
+  const primaryActionButtonClass = [
+    'rounded-xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+    isLight
+      ? 'border border-slate-900 bg-slate-900 text-white shadow-sm hover:bg-slate-700'
+      : 'border border-cyan-400/30 bg-cyan-400/12 text-cyan-200 hover:border-cyan-300/50 hover:bg-cyan-400/18'
+  ].join(' ');
+  const secondaryActionButtonClass = [
+    'rounded-xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+    isLight
+      ? 'border border-slate-300 bg-white text-slate-800 hover:bg-slate-100'
+      : 'border border-amber-400/30 bg-amber-400/10 text-amber-200 hover:border-amber-300/50 hover:bg-amber-400/16'
+  ].join(' ');
   const selectedWeekdayOption = WEEKDAY_OPTIONS.find((option) => option.value === selectedWeekday) ?? WEEKDAY_OPTIONS[0];
 
   const loadAutoForecastSnapshot = async (weekday: WeekdayValue) => {
@@ -1077,6 +1099,10 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     const existingByDate = new Map(manualInputRows.map((row) => [row.input_date, row]));
     const historyRows = historyRowsOverride ?? historyWindowRows;
     const historyByDate = new Map(historyRows.map((row) => [row.date, row]));
+    const displayDraftNumber = (value: number | null | undefined) => {
+      const numeric = Number(value ?? 0);
+      return numeric > 0 ? String(numeric) : '';
+    };
     return getWeekDates(serverTime, weekOffset).map((inputDate) => {
         const existing = existingByDate.get(inputDate);
         const previousDate = toDateOnly(addDays(new Date(`${inputDate}T00:00:00`), -1));
@@ -1089,13 +1115,15 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
         const predictedFullDayVolume12 = calculateNoonPredictedFullDayVolume(inputDate, currentHistoryRow);
         return {
           input_date: inputDate,
-          previous_day_backlog: existing ? String(existing.previous_day_backlog) : '',
+          previous_day_backlog: displayDraftNumber(existing?.previous_day_backlog),
           predicted_full_day_volume_12: predictedFullDayVolume12 === null ? '' : String(predictedFullDayVolume12),
-          inventory_level: existing ? String(existing.inventory_level) : '',
+          inventory_level: displayDraftNumber(existing?.inventory_level),
           severe_weather: existing ? Boolean(existing.severe_weather) : false,
-          full_day_capacity: existing ? String(existing.full_day_capacity) : '',
+          full_day_capacity: displayDraftNumber(existing?.full_day_capacity),
           yesterday_inflow_00_14:
-            autoYesterdayInflow !== null ? String(autoYesterdayInflow) : existing ? String(existing.yesterday_inflow_00_14) : ''
+            autoYesterdayInflow !== null
+              ? displayDraftNumber(autoYesterdayInflow)
+              : displayDraftNumber(existing?.yesterday_inflow_00_14)
         };
       });
   };
@@ -1699,12 +1727,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
             type="button"
             disabled={isLocked || manualInputsLoading}
             onClick={openManualInputDialog}
-            className={[
-              'rounded-2xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-              isLight
-                ? 'border border-slate-300 bg-slate-900 text-white hover:bg-slate-700'
-                : 'border border-neon/60 bg-neon/15 text-neon hover:bg-neon/20'
-            ].join(' ')}
+            className={primaryActionButtonClass}
           >
             {t('填数据', 'Fill data')}
           </button>
@@ -1712,14 +1735,9 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
             type="button"
             disabled={isLocked || manualInputsLoading}
             onClick={openHistoryInflowDialog}
-            className={[
-              'rounded-2xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-              isLight
-                ? 'border border-slate-300 bg-white text-slate-800 hover:bg-slate-100'
-                : 'border border-white/10 bg-black/20 text-slate-200 hover:bg-white/10'
-            ].join(' ')}
+            className={secondaryActionButtonClass}
           >
-            {t('临时流入', 'Temp inflow')}
+            {t('历史流入', 'History inflow')}
           </button>
         </div>
       </div>
