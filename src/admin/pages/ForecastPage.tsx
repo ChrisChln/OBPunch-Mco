@@ -341,7 +341,7 @@ function ForecastRangeChart({
   const paddingX = 28;
   const topY = 32;
   const axisY = 118;
-  const upperLabelY = 78;
+  const upperLabelY = 86;
   const lowerLabelY = 158;
   const finiteUpperBound = Number.isFinite(upperBound ?? 0) ? (upperBound as number) : null;
   const minValue = 0;
@@ -356,7 +356,7 @@ function ForecastRangeChart({
   const lowerLabelX = lowerBound !== null ? clampTextX(lowerX) : paddingX;
   const upperLabelX = finiteUpperBound !== null ? clampTextX(upperX) : width - paddingX - 8;
   const forecastLabelX = forecast !== null ? clampTextX(forecastX) : paddingX;
-  const currentValueY = upperLabelY - 14;
+  const currentValueY = upperLabelY - 20;
   const annotationSpacing = 86;
   const annotationLaneYs = [lowerLabelY - 6, lowerLabelY + 22, lowerLabelY + 50];
   const annotations: Annotation[] = [];
@@ -526,6 +526,201 @@ function ForecastRangeChart({
   );
 }
 
+function WeekVolumeLineChart({
+  themeMode,
+  labels,
+  series
+}: {
+  themeMode: 'light' | 'dark';
+  labels: string[];
+  series: Array<{ key: string; label: string; color: string; values: Array<number | null> }>;
+}) {
+  const isLight = themeMode === 'light';
+  const [hoveredPoint, setHoveredPoint] = useState<{
+    seriesKey: string;
+    seriesLabel: string;
+    color: string;
+    value: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const width = 760;
+  const height = 240;
+  const paddingLeft = 48;
+  const paddingRight = 16;
+  const paddingTop = 22;
+  const paddingBottom = 34;
+  const innerWidth = width - paddingLeft - paddingRight;
+  const innerHeight = height - paddingTop - paddingBottom;
+  const allValues = series.flatMap((item) => item.values).filter((value): value is number => value !== null && Number.isFinite(value));
+  const maxValue = Math.max(1, ...allValues);
+  const stepX = labels.length > 1 ? innerWidth / (labels.length - 1) : innerWidth;
+  const scaleX = (index: number) => paddingLeft + stepX * index;
+  const scaleY = (value: number) => paddingTop + innerHeight - (Math.max(0, value) / maxValue) * innerHeight;
+  const gridValues = Array.from({ length: 5 }, (_, index) => (maxValue / 4) * index);
+  const pointOffsets: Record<string, { x: number; y: number }> = {
+    forecast: { x: 0, y: -4 },
+    current_week: { x: -4, y: 4 },
+    last_week: { x: 4, y: 0 }
+  };
+  const legendStrokeStyles: Record<string, string | undefined> = {
+    forecast: '6 4'
+  };
+  const getOffsetPoint = (key: string, index: number, value: number) => {
+    const offset = pointOffsets[key] ?? { x: 0, y: 0 };
+    return {
+      x: scaleX(index) + offset.x,
+      y: scaleY(value) + offset.y
+    };
+  };
+
+  const buildSeriesPath = (key: string, values: Array<number | null>) =>
+    values
+      .map((value, index) => {
+        if (value === null) return null;
+        const point = getOffsetPoint(key, index, value);
+        return `${index === 0 || values[index - 1] === null ? 'M' : 'L'} ${point.x} ${point.y}`;
+      })
+      .filter(Boolean)
+      .join(' ');
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="h-[240px] w-full overflow-visible">
+      {gridValues.map((gridValue) => (
+        <g key={gridValue}>
+          <line
+            x1={paddingLeft}
+            y1={scaleY(gridValue)}
+            x2={width - paddingRight}
+            y2={scaleY(gridValue)}
+            stroke={isLight ? 'rgba(148,163,184,0.22)' : 'rgba(148,163,184,0.18)'}
+            strokeWidth="1"
+          />
+          <text
+            x={paddingLeft - 8}
+            y={scaleY(gridValue) + 4}
+            textAnchor="end"
+            fill={isLight ? 'rgba(100,116,139,0.88)' : 'rgba(148,163,184,0.76)'}
+            fontSize="11"
+          >
+            {formatNumber(gridValue)}
+          </text>
+        </g>
+      ))}
+
+      {labels.map((label, index) => (
+        <text
+          key={label}
+          x={scaleX(index)}
+          y={height - 10}
+          textAnchor="middle"
+          fill={isLight ? 'rgba(51,65,85,0.9)' : 'rgba(203,213,225,0.85)'}
+          fontSize="11"
+        >
+          {label}
+        </text>
+      ))}
+
+      {series.map((item) => {
+        const path = buildSeriesPath(item.key, item.values);
+        return (
+          <g key={item.key}>
+            {path && (
+              <path
+                d={path}
+                fill="none"
+                stroke={item.color}
+                strokeWidth={item.key === 'forecast' ? '3.5' : '3'}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                strokeOpacity={item.key === 'forecast' ? '0.95' : '0.68'}
+                strokeDasharray={item.key === 'forecast' ? '6 4' : undefined}
+              />
+            )}
+            {item.values.map((value, index) =>
+              value === null ? null : (
+                <g key={`${item.key}-${labels[index]}`}>
+                  <circle
+                    cx={getOffsetPoint(item.key, index, value).x}
+                    cy={getOffsetPoint(item.key, index, value).y}
+                    r="4"
+                    fill={item.color}
+                    fillOpacity={item.key === 'forecast' ? '1' : '0.88'}
+                  />
+                  <circle
+                    cx={getOffsetPoint(item.key, index, value).x}
+                    cy={getOffsetPoint(item.key, index, value).y}
+                    r="12"
+                    fill="transparent"
+                    className="cursor-pointer"
+                    onMouseEnter={() =>
+                      setHoveredPoint({
+                        seriesKey: item.key,
+                        seriesLabel: item.label,
+                        color: item.color,
+                        value,
+                        x: getOffsetPoint(item.key, index, value).x,
+                        y: getOffsetPoint(item.key, index, value).y
+                      })
+                    }
+                    onMouseLeave={() => setHoveredPoint((current) => (current?.seriesKey === item.key ? null : current))}
+                  />
+                </g>
+              )
+            )}
+          </g>
+        );
+      })}
+
+      {hoveredPoint ? (
+        <g pointerEvents="none">
+          <rect
+            x={Math.max(8, Math.min(width - 120, hoveredPoint.x - 54))}
+            y={Math.max(8, hoveredPoint.y - 38)}
+            width="120"
+            height="28"
+            rx="10"
+            fill={isLight ? 'rgba(255,255,255,0.96)' : 'rgba(15,23,42,0.96)'}
+            stroke={hoveredPoint.color}
+            strokeWidth="1"
+          />
+          <text
+            x={Math.max(20, Math.min(width - 60, hoveredPoint.x + 6))}
+            y={Math.max(26, hoveredPoint.y - 20)}
+            textAnchor="middle"
+            fill={isLight ? 'rgba(15,23,42,0.96)' : 'rgba(241,245,249,0.96)'}
+            fontSize="11"
+            fontWeight="700"
+          >
+            {`${hoveredPoint.seriesLabel} ${formatNumber(hoveredPoint.value)}`}
+          </text>
+        </g>
+      ) : null}
+
+      <g transform={`translate(${width - paddingRight + 40}, ${paddingTop + 18})`}>
+        {series.map((item, index) => (
+          <g key={item.key} transform={`translate(0, ${index * 22})`}>
+            <line
+              x1="0"
+              y1="0"
+              x2="18"
+              y2="0"
+              stroke={item.color}
+              strokeWidth={item.key === 'forecast' ? '3.5' : '3'}
+              strokeLinecap="round"
+              strokeOpacity={item.key === 'forecast' ? '0.95' : '0.68'}
+              strokeDasharray={legendStrokeStyles[item.key]}
+            />
+            <text x="24" y="4" fill={isLight ? 'rgba(15,23,42,0.9)' : 'rgba(226,232,240,0.9)'} fontSize="12">
+              {item.label}
+            </text>
+          </g>
+        ))}
+      </g>
+    </svg>
+  );
+}
+
 export default function ForecastPage({ t, isLocked, serverTime, supabase, themeMode }: ForecastPageProps) {
   const isLight = themeMode === 'light';
   const initialWeekday = getIsoWeekday(serverTime) as WeekdayValue;
@@ -541,6 +736,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const [manualInputWeekOffset, setManualInputWeekOffset] = useState(0);
   const [forecastDialogView, setForecastDialogView] = useState<ForecastDialogView>('weekly');
   const [historyWindowRows, setHistoryWindowRows] = useState<VolumeHistoryUploadRow[]>([]);
+  const [comparisonHistoryRows, setComparisonHistoryRows] = useState<VolumeHistoryUploadRow[]>([]);
   const [historyWindowLoading, setHistoryWindowLoading] = useState(false);
   const [historyWindowError, setHistoryWindowError] = useState<string | null>(null);
   const [historyPasteValue, setHistoryPasteValue] = useState('');
@@ -675,6 +871,26 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     setManualInputsLoading(false);
   };
 
+  const loadComparisonHistory = async () => {
+    if (!supabase) {
+      setComparisonHistoryRows([]);
+      return;
+    }
+    const currentWeek = getWeekDates(serverTime, 0);
+    const previousWeek = getWeekDates(serverTime, 1);
+    const res = await supabase
+      .from('volume_history')
+      .select('*')
+      .gte('date', previousWeek[0])
+      .lte('date', currentWeek[currentWeek.length - 1])
+      .order('date', { ascending: true });
+    if (res.error) {
+      setComparisonHistoryRows([]);
+      return;
+    }
+    setComparisonHistoryRows(((res.data as VolumeHistoryUploadRow[] | null) ?? []).map((row) => ({ ...row } as VolumeHistoryUploadRow)));
+  };
+
   const loadAllHistoryModel = async () => {
     if (!supabase) {
       setAllHistoryModelRows([]);
@@ -746,7 +962,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
 
   useEffect(() => {
     const run = async () => {
-      await Promise.all([loadModel(lookbackMode), loadManualInputs(), loadAllHistoryModel()]);
+      await Promise.all([loadModel(lookbackMode), loadManualInputs(), loadAllHistoryModel(), loadComparisonHistory()]);
     };
     void run();
   }, [lookbackMode, supabase]);
@@ -793,8 +1009,25 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       ),
     [allHistoryModelRows]
   );
+  const hasReachedNoonForecastCutoff = (historyRow?: VolumeHistoryUploadRow | null) => {
+    if (!historyRow) return false;
+    const rawLastFilledHour = historyRow.last_filled_hour === null || historyRow.last_filled_hour === undefined
+      ? inferLastFilledHour(historyRow)
+      : Number(historyRow.last_filled_hour);
+    if (rawLastFilledHour === null || rawLastFilledHour === undefined) return false;
+    return Number.isFinite(rawLastFilledHour) && rawLastFilledHour >= FIXED_FORECAST_HOUR - 1;
+  };
+  const isCompleteHistoryDay = (historyRow?: VolumeHistoryUploadRow | null) => {
+    if (!historyRow) return false;
+    const rawLastFilledHour = historyRow.last_filled_hour === null || historyRow.last_filled_hour === undefined
+      ? inferLastFilledHour(historyRow)
+      : Number(historyRow.last_filled_hour);
+    if (rawLastFilledHour === null || rawLastFilledHour === undefined) return false;
+    return Number.isFinite(rawLastFilledHour) && rawLastFilledHour >= 23;
+  };
   const calculateNoonPredictedFullDayVolume = (date: string, historyRow?: VolumeHistoryUploadRow | null) => {
     if (!historyRow) return null;
+    if (!hasReachedNoonForecastCutoff(historyRow)) return null;
     const weekday = getWeekdayFromDateOnly(date);
     if (!weekday) return null;
     const coefficient = noonAllHistoryCoefficientByWeekday.get(weekday) ?? null;
@@ -813,6 +1046,33 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       predicted_full_day_volume_12: predictedFullDayVolume12
     };
   }, [calculateNoonPredictedFullDayVolume, historyWindowRows, selectedWeekdayManualRows]);
+  const weekVolumeTrendSeries = useMemo(() => {
+    const currentWeekDates = getWeekDates(serverTime, 0);
+    const previousWeekDates = getWeekDates(serverTime, 1);
+    const byDate = new Map(comparisonHistoryRows.map((row) => [row.date, row]));
+    const labels = WEEKDAY_OPTIONS.map((option) => option.zh);
+    const forecastValues = currentWeekDates.map((date) => {
+      const historyRow = byDate.get(date) ?? null;
+      return calculateNoonPredictedFullDayVolume(date, historyRow);
+    });
+    const thisWeekValues = currentWeekDates.map((date) => {
+      const row = byDate.get(date);
+      if (!row || !isCompleteHistoryDay(row)) return null;
+      return HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0);
+    });
+    const lastWeekValues = previousWeekDates.map((date) => {
+      const row = byDate.get(date);
+      return row ? HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0) : null;
+    });
+    return {
+      labels,
+      series: [
+        { key: 'forecast', label: t('预测', 'Forecast'), color: 'rgba(132,204,22,1)', values: forecastValues },
+        { key: 'this-week', label: t('本周', 'This week'), color: 'rgba(14,165,233,1)', values: thisWeekValues },
+        { key: 'last-week', label: t('上周', 'Last week'), color: 'rgba(225,29,72,1)', values: lastWeekValues }
+      ]
+    };
+  }, [calculateNoonPredictedFullDayVolume, comparisonHistoryRows, serverTime, t]);
   const buildManualInputDraftRows = (weekOffset: number, historyRowsOverride?: VolumeHistoryUploadRow[]) => {
     const existingByDate = new Map(manualInputRows.map((row) => [row.input_date, row]));
     const historyRows = historyRowsOverride ?? historyWindowRows;
@@ -840,6 +1100,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       });
   };
   const currentWeekDates = useMemo(() => getWeekDates(serverTime, manualInputWeekOffset), [serverTime, manualInputWeekOffset]);
+  const pageWeekDates = useMemo(() => getWeekDates(serverTime, 0), [serverTime]);
   const forecastAtNoonByWeekday = useMemo(
     () =>
       new Map(
@@ -884,6 +1145,17 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const openManualInputDialog = async () => {
     setManualInputWeekOffset(0);
     setForecastDialogView('weekly');
+    const weekDates = getWeekDates(serverTime, 0);
+    const historyRows = await loadHistoryWindow(weekDates);
+    setManualInputDraftRows(buildManualInputDraftRows(0, historyRows));
+    setHistoryPasteDate(getDefaultHistoryPasteDate(weekDates));
+    setManualInputSaveError(null);
+    setManualInputSaveMessage(null);
+    setManualInputDialogOpen(true);
+  };
+  const openHistoryInflowDialog = async () => {
+    setManualInputWeekOffset(0);
+    setForecastDialogView('history');
     const weekDates = getWeekDates(serverTime, 0);
     const historyRows = await loadHistoryWindow(weekDates);
     setManualInputDraftRows(buildManualInputDraftRows(0, historyRows));
@@ -1245,6 +1517,20 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           },
     [currentCumVolume, effectiveForecastHour, hasAutoForecastSnapshot, hasManualInput, selectedCoefficient, selectedWeekday]
   );
+  const dayShiftForecast = useMemo(() => {
+    const currentInputDate = latestSelectedWeekdayCardRow?.input_date ?? null;
+    if (!currentInputDate) return null;
+    const previousDate = toDateOnly(addDays(new Date(`${currentInputDate}T00:00:00`), -1));
+    const previousDayRow = manualInputByDate.get(previousDate);
+    if (!previousDayRow) return null;
+
+    const previousDayBacklog = Number(previousDayRow.previous_day_backlog ?? 0);
+    const todayForecast = Number(result.forecast ?? 0);
+    const previousDayCapacity = Number(previousDayRow.full_day_capacity ?? 0);
+    const previousDayInflow0014 = Number(previousDayRow.yesterday_inflow_00_14 ?? 0);
+
+    return Math.round(previousDayBacklog + todayForecast - previousDayCapacity + previousDayInflow0014 - 2000);
+  }, [latestSelectedWeekdayCardRow, manualInputByDate, result.forecast]);
 
   const weekdayRows = useMemo(
     () => modelRows.filter((row) => row.weekday === selectedWeekday).sort((a, b) => a.hour_of_day - b.hour_of_day),
@@ -1421,6 +1707,19 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
             ].join(' ')}
           >
             {t('填数据', 'Fill data')}
+          </button>
+          <button
+            type="button"
+            disabled={isLocked || manualInputsLoading}
+            onClick={openHistoryInflowDialog}
+            className={[
+              'rounded-2xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+              isLight
+                ? 'border border-slate-300 bg-white text-slate-800 hover:bg-slate-100'
+                : 'border border-white/10 bg-black/20 text-slate-200 hover:bg-white/10'
+            ].join(' ')}
+          >
+            {t('临时流入', 'Temp inflow')}
           </button>
         </div>
       </div>
@@ -1629,9 +1928,9 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           </div>
         </div>
 
-        <div className="grid gap-4">
-          <div className={['rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
-            <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid min-w-0 gap-4">
+          <div className={['min-w-0 rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
+            <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
               <div className={['rounded-2xl border p-4', isLight ? 'border-teal-200 bg-teal-50' : 'border-teal-400/20 bg-teal-500/10'].join(' ')}>
                 <div className={['text-[10px] uppercase tracking-[0.18em]', isLight ? 'text-teal-700/80' : 'text-teal-200/70'].join(' ')}>{t('预测范围下限', 'Lower')}</div>
                 <div className={['mt-3 font-display text-4xl tracking-[0.06em]', isLight ? 'text-teal-900' : 'text-teal-200'].join(' ')}>
@@ -1650,6 +1949,12 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   {formatNumber(result.upperBound)}
                 </div>
               </div>
+              <div className={['rounded-2xl border p-4', isLight ? 'border-amber-200 bg-amber-50' : 'border-amber-400/20 bg-amber-500/10'].join(' ')}>
+                <div className={['text-[10px] uppercase tracking-[0.18em]', isLight ? 'text-amber-700/80' : 'text-amber-200/70'].join(' ')}>{t('明日白班预测', 'Next day shift forecast')}</div>
+                <div className={['mt-3 font-display text-4xl tracking-[0.06em]', isLight ? 'text-amber-900' : 'text-amber-200'].join(' ')}>
+                  {formatNumber(dayShiftForecast)}
+                </div>
+              </div>
             </div>
 
             <div className={['mt-5 rounded-2xl p-4', chartWrapClass].join(' ')}>
@@ -1663,7 +1968,93 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
             </div>
           </div>
 
-          <div className={['rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
+          <div className={['min-w-0 rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className={['text-sm font-semibold', valueClass].join(' ')}>{t('单量趋势', 'Volume trend')}</div>
+              <div className={['text-xs', helperClass].join(' ')}>{t('预测 / 本周 / 上周', 'Forecast / This week / Last week')}</div>
+            </div>
+            <div className={['rounded-2xl p-4', chartWrapClass].join(' ')}>
+              <WeekVolumeLineChart themeMode={themeMode} labels={weekVolumeTrendSeries.labels} series={weekVolumeTrendSeries.series} />
+            </div>
+          </div>
+
+          <div className={['min-w-0 rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className={['text-sm font-semibold', valueClass].join(' ')}>{t('历史流入', 'Historical inflow')}</div>
+              <div className={['text-xs', helperClass].join(' ')}>{`${pageWeekDates[0]} - ${pageWeekDates[pageWeekDates.length - 1]}`}</div>
+            </div>
+            <div className="min-w-0 overflow-x-auto overflow-y-hidden">
+              <div className={['min-w-0 rounded-2xl', tableWrapClass].join(' ')}>
+              <table className="min-w-[2100px] table-fixed text-left text-xs">
+                <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
+                  <tr>
+                    <th className="px-3 py-2">{t('日期', 'Date')}</th>
+                    <th className="px-3 py-2">{t('星期', 'Weekday')}</th>
+                    <th className="px-3 py-2">{t('截止12点预测', '12:00 forecast')}</th>
+                    <th className="px-3 py-2">{t('实际差异', 'Actual variance')}</th>
+                    <th className="px-3 py-2">{t('当日总流入', 'Daily total')}</th>
+                    <th className="px-3 py-2">{t('库存转换率', 'ITR')}</th>
+                    <th className="px-3 py-2">{t('恶劣天气', 'Severe weather')}</th>
+                    {HOUR_COLUMNS.map((hourKey, index) => (
+                      <th key={`page-${hourKey}`} className="px-3 py-2">{`${String(index).padStart(2, '0')}:00`}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageWeekDates.map((date) => {
+                    const row = comparisonHistoryRows.find((item) => item.date === date);
+                    const weekday = getWeekdayFromDateOnly(date) ?? 1;
+                    const noonCoefficient = forecastAtNoonByWeekday.get(weekday) ?? null;
+                    const lastFilledHour = row ? Number(row.last_filled_hour ?? inferLastFilledHour(row)) : null;
+                    const hasReachedNoonCutoff = lastFilledHour !== null && lastFilledHour >= FIXED_FORECAST_HOUR - 1;
+                    const noonCumulative =
+                      row && hasReachedNoonCutoff ? calculateCumulativeVolume(row as Pick<VolumeHistoryUploadRow, HourColumnKey>, FIXED_FORECAST_HOUR) : null;
+                    const noonForecastResult =
+                      row && noonCumulative !== null ? calculateForecast(noonCumulative, FIXED_FORECAST_HOUR, weekday, noonCoefficient) : null;
+                    const noonForecast = noonForecastResult?.forecast ?? null;
+                    const dailyTotal = row ? HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0) : null;
+                    const manualInputRow = manualInputByDate.get(date);
+                    const inventoryLevel = Number(manualInputRow?.inventory_level ?? 0);
+                    const severeWeather = Boolean(manualInputRow?.severe_weather ?? false);
+                    const isCompleteDay = lastFilledHour !== null && lastFilledHour >= 23;
+                    const actualVariance =
+                      isCompleteDay && dailyTotal !== null && noonForecast !== null && noonForecast > 0
+                        ? (dailyTotal - noonForecast) / noonForecast
+                        : null;
+                    const itr = dailyTotal !== null && inventoryLevel > 0 ? dailyTotal / inventoryLevel : null;
+                    return (
+                      <tr key={`page-history-${date}`} className={tableRowClass}>
+                        <td className="px-3 py-2 font-semibold">{date}</td>
+                        <td className="px-3 py-2">
+                          {t(WEEKDAY_OPTIONS[weekday - 1]?.zh ?? '周一', WEEKDAY_OPTIONS[weekday - 1]?.shortEn ?? 'Mon')}
+                        </td>
+                        <td className="px-3 py-2">{formatNumber(noonForecast)}</td>
+                        <td className="px-3 py-2">{actualVariance === null ? '-' : formatPercent(actualVariance, 2)}</td>
+                        <td className="px-3 py-2">{formatNumber(dailyTotal)}</td>
+                        <td className="px-3 py-2">{itr === null ? '-' : formatPercent(itr, 2)}</td>
+                        <td className="px-3 py-2">{severeWeather ? t('是', 'Yes') : t('否', 'No')}</td>
+                        {HOUR_COLUMNS.map((hourKey) => (
+                          <td key={`page-${date}-${hourKey}`} className="px-3 py-2">
+                            {row ? formatNumber(Number(row[hourKey] ?? 0)) : '-'}
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                  {loading && comparisonHistoryRows.length === 0 && (
+                    <tr>
+                      <td colSpan={HOUR_COLUMNS.length + 7} className={['px-3 py-6 text-center', helperClass].join(' ')}>
+                        {t('Loading...', 'Loading...')}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              </div>
+            </div>
+          </div>
+
+          <div className={['min-w-0 rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className={['text-sm font-semibold', valueClass].join(' ')}>
                 {t(`${selectedWeekdayOption.zh}模型快照`, `${selectedWeekdayOption.en} model snapshot`)}
@@ -2009,6 +2400,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                             <th className="px-3 py-2">{t('实际差异', 'Actual variance')}</th>
                             <th className="px-3 py-2">{t('当日总流入', 'Daily total')}</th>
                             <th className="px-3 py-2">{t('库存转换率', 'ITR')}</th>
+                            <th className="px-3 py-2">{t('恶劣天气', 'Severe weather')}</th>
                             {HOUR_COLUMNS.map((hourKey, index) => (
                               <th key={hourKey} className="px-3 py-2">{`${String(index).padStart(2, '0')}:00`}</th>
                             ))}
@@ -2019,15 +2411,20 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                             const row = historyWindowRows.find((item) => item.date === date);
                             const weekday = getWeekdayFromDateOnly(date) ?? 1;
                             const noonCoefficient = forecastAtNoonByWeekday.get(weekday) ?? null;
-                            const noonCumulative = row ? calculateCumulativeVolume(row as Pick<VolumeHistoryUploadRow, HourColumnKey>, FIXED_FORECAST_HOUR) : null;
+                            const lastFilledHour = row ? Number(row.last_filled_hour ?? inferLastFilledHour(row)) : null;
+                            const hasReachedNoonCutoff = lastFilledHour !== null && lastFilledHour >= FIXED_FORECAST_HOUR - 1;
+                            const noonCumulative =
+                              row && hasReachedNoonCutoff ? calculateCumulativeVolume(row as Pick<VolumeHistoryUploadRow, HourColumnKey>, FIXED_FORECAST_HOUR) : null;
                             const noonForecastResult =
                               row && noonCumulative !== null ? calculateForecast(noonCumulative, FIXED_FORECAST_HOUR, weekday, noonCoefficient) : null;
                             const noonForecast = noonForecastResult?.forecast ?? null;
                             const dailyTotal = row
                               ? HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0)
                               : null;
-                            const inventoryLevel = Number(manualInputByDate.get(date)?.inventory_level ?? 0);
-                            const isCompleteHistoryDay = row ? Number(row.last_filled_hour ?? inferLastFilledHour(row)) >= 23 : false;
+                            const manualInputRow = manualInputByDate.get(date);
+                            const inventoryLevel = Number(manualInputRow?.inventory_level ?? 0);
+                            const severeWeather = Boolean(manualInputRow?.severe_weather ?? false);
+                            const isCompleteHistoryDay = lastFilledHour !== null && lastFilledHour >= 23;
                             const actualVariance =
                               isCompleteHistoryDay && dailyTotal !== null && noonForecast !== null && noonForecast > 0
                                 ? (dailyTotal - noonForecast) / noonForecast
@@ -2043,6 +2440,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                 <td className="px-3 py-2">{actualVariance === null ? '-' : formatPercent(actualVariance, 2)}</td>
                                 <td className="px-3 py-2">{formatNumber(dailyTotal)}</td>
                                 <td className="px-3 py-2">{itr === null ? '-' : formatPercent(itr, 2)}</td>
+                                <td className="px-3 py-2">{severeWeather ? t('是', 'Yes') : t('否', 'No')}</td>
                                 {HOUR_COLUMNS.map((hourKey) => (
                                   <td key={`${date}-${hourKey}`} className="px-3 py-2">
                                     {row ? formatNumber(Number(row[hourKey] ?? 0)) : '-'}
@@ -2053,7 +2451,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                           })}
                           {historyWindowLoading && (
                             <tr>
-                              <td colSpan={HOUR_COLUMNS.length + 6} className={['px-3 py-6 text-center', helperClass].join(' ')}>
+                              <td colSpan={HOUR_COLUMNS.length + 7} className={['px-3 py-6 text-center', helperClass].join(' ')}>
                                 {t('Loading...', 'Loading...')}
                               </td>
                             </tr>
