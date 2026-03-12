@@ -685,8 +685,8 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
           </h2>
           <div className="grid gap-4 md:grid-cols-2">
             {[
-              { title: t('次日白班预测', 'Next-day day shift forecast'), value: summary.dsPieces, tone: isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200' },
-              { title: t('次日夜班预测', 'Next-day night shift forecast'), value: summary.nsPieces, tone: isLight ? 'border-cyan-200 bg-cyan-50 text-cyan-900' : 'border-cyan-400/20 bg-cyan-500/10 text-cyan-200' }
+              { title: t('白班预测', 'Day shift forecast'), value: summary.dsPieces, tone: isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200' },
+              { title: t('夜班预测', 'Night shift forecast'), value: summary.nsPieces, tone: isLight ? 'border-cyan-200 bg-cyan-50 text-cyan-900' : 'border-cyan-400/20 bg-cyan-500/10 text-cyan-200' }
             ].map((card) => (
               <div key={card.title} className={['rounded-[26px] border px-5 py-4 shadow-[0_12px_30px_rgba(0,0,0,0.12)]', card.tone].join(' ')}>
                 <div className="text-[11px] uppercase tracking-[0.24em] opacity-80">{card.title}</div>
