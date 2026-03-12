@@ -32,6 +32,8 @@ import AuditPage from './pages/AuditPage';
 import PunchesPage from './pages/PunchesPage';
 import ForecastPage from './pages/ForecastPage';
 import EfficiencyPage from './pages/EfficiencyPage';
+import type { ForecastModelRow } from './forecast';
+import { calculateForecast, getIsoWeekday } from './forecast';
 import AppDialog from '../components/AppDialog';
 import {
   activatePlannedScheduleNote,
@@ -128,6 +130,53 @@ const SCHEDULE_PLANNED_LEAVE_NOTE = '__planned_leave__';
 const SCHEDULE_PLANNED_TEMP_REST_NOTE = '__planned_temp_rest__';
 const STALE_TIMECARD_REQUEST = '__stale_timecard_request__';
 const DEVICE_TYPES = ['PDA', 'CART'] as const;
+const EFFICIENCY_TEMPLATE_TABLE = 'efficiency_templates';
+const EFFICIENCY_FORECAST_INPUT_TABLE = 'volume_forecast_daily_inputs';
+const EFFICIENCY_HISTORY_TABLE = 'volume_history';
+const EFF_HOUR_COLUMNS = [
+  'h00', 'h01', 'h02', 'h03', 'h04', 'h05', 'h06', 'h07', 'h08', 'h09', 'h10', 'h11',
+  'h12', 'h13', 'h14', 'h15', 'h16', 'h17', 'h18', 'h19', 'h20', 'h21', 'h22', 'h23'
+] as const;
+
+type EffInboundKey =
+  | 'oi_pieces'
+  | 'oi_packages'
+  | 'single_ratio_pcs'
+  | 'multi_ratio_pcs'
+  | 'single_ratio_pkgs'
+  | 'multi_ratio_pkgs'
+  | 'multi_pcs_per_pkg'
+  | 'single_pkgs'
+  | 'single_piece'
+  | 'multi_pkgs'
+  | 'multi_piece';
+type EffProcKey = 'pick' | 'consolidation' | 'rebin' | 'waterspider' | 'multi_pack' | 'single_pack' | 'pre_ship';
+type EffInboundMap = Record<EffInboundKey, string>;
+type EffProcRowLite = { uph: string; goal: string; ewh: string; people: string; lead: string };
+type EffProcMap = Record<EffProcKey, EffProcRowLite>;
+type EffPayloadLite = {
+  orderInboundDs: EffInboundMap;
+  orderInboundNs: EffInboundMap;
+  areaEfficiencyDs: EffProcMap;
+  areaEfficiencyNs: EffProcMap;
+};
+type EffForecastInputRow = {
+  input_date: string;
+  previous_day_backlog: number;
+  full_day_capacity: number;
+  yesterday_inflow_00_14: number;
+};
+type EffVolumeHistoryRow = {
+  date: string;
+  last_filled_hour?: number | null;
+} & Record<(typeof EFF_HOUR_COLUMNS)[number], number | null>;
+type ScheduleRecommendedPosition = {
+  key: 'Pick' | 'Rebin' | 'Pack' | 'Preship';
+  total: number;
+  ds: number;
+  ns: number;
+};
+type ScheduleRecommendedByDate = Record<string, ScheduleRecommendedPosition[]>;
 
 const getScheduleBaseStateFromNote = (note: unknown): ScheduleBaseState => {
   const value = String(note ?? '').trim();
@@ -255,6 +304,147 @@ const addDays = (value: Date, days: number) => {
   d.setDate(d.getDate() + days);
   return d;
 };
+
+const effToNum = (value: string | number | null | undefined) => {
+  const n = Number(String(value ?? '').replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : 0;
+};
+const effToPercent = (value: string | number | null | undefined) => {
+  const text = String(value ?? '').trim().replace('%', '');
+  const n = Number(text);
+  if (!Number.isFinite(n)) return 0;
+  return n > 1 ? n / 100 : n;
+};
+const effRoundRule = (value: number, mode: 'ceil' | 'floor' | 'round') => {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  if (mode === 'ceil') return Math.ceil(value);
+  if (mode === 'floor') return Math.floor(value);
+  return Math.round(value);
+};
+const effDefaultInbound = (values: Partial<EffInboundMap>): EffInboundMap => ({
+  oi_pieces: '',
+  oi_packages: '',
+  single_ratio_pcs: '',
+  multi_ratio_pcs: '',
+  single_ratio_pkgs: '',
+  multi_ratio_pkgs: '',
+  multi_pcs_per_pkg: '',
+  single_pkgs: '',
+  single_piece: '',
+  multi_pkgs: '',
+  multi_piece: '',
+  ...values
+});
+const effDefaultProc = (values: Partial<EffProcMap>): EffProcMap => ({
+  pick: { uph: '', goal: '', ewh: '', people: '', lead: '' },
+  consolidation: { uph: '', goal: '', ewh: '', people: '', lead: '' },
+  rebin: { uph: '', goal: '', ewh: '', people: '', lead: '' },
+  waterspider: { uph: '', goal: '', ewh: '', people: '', lead: '' },
+  multi_pack: { uph: '', goal: '', ewh: '', people: '', lead: '' },
+  single_pack: { uph: '', goal: '', ewh: '', people: '', lead: '' },
+  pre_ship: { uph: '', goal: '', ewh: '', people: '', lead: '' },
+  ...values
+});
+const effDefaultPayload = (): EffPayloadLite => ({
+  orderInboundDs: effDefaultInbound({ oi_pieces: '30000', oi_packages: '23855', single_ratio_pcs: '64%', multi_ratio_pcs: '36%', single_ratio_pkgs: '81%', multi_ratio_pkgs: '19%', multi_pcs_per_pkg: '2.32', single_pkgs: '19200', single_piece: '19200', multi_pkgs: '4655', multi_piece: '10800' }),
+  orderInboundNs: effDefaultInbound({ oi_pieces: '10000', oi_packages: '7952', single_ratio_pcs: '64%', multi_ratio_pcs: '36%', single_ratio_pkgs: '81%', multi_ratio_pkgs: '19%', multi_pcs_per_pkg: '2.32', single_pkgs: '6400', single_piece: '6400', multi_pkgs: '1552', multi_piece: '3600' }),
+  areaEfficiencyDs: effDefaultProc({
+    pick: { uph: '120', goal: '120', ewh: '7.5', people: '34', lead: '4' },
+    consolidation: { uph: '1000', goal: 'N/A', ewh: '7.5', people: '1', lead: '0' },
+    rebin: { uph: '400', goal: '400', ewh: '6.5', people: '5', lead: '1' },
+    waterspider: { uph: '700', goal: 'N/A', ewh: '7.5', people: '4', lead: '0' },
+    multi_pack: { uph: '200', goal: '170', ewh: '6.5', people: '8', lead: '1' },
+    single_pack: { uph: '140', goal: '115', ewh: '7.5', people: '18', lead: '2' },
+    pre_ship: { uph: '400', goal: '500', ewh: '8', people: '7', lead: '1' }
+  }),
+  areaEfficiencyNs: effDefaultProc({
+    pick: { uph: '120', goal: '113', ewh: '7.5', people: '12', lead: '2' },
+    consolidation: { uph: '1000', goal: '938', ewh: '7.5', people: '1', lead: '1' },
+    rebin: { uph: '450', goal: '366', ewh: '6.5', people: '2', lead: '1' },
+    waterspider: { uph: '700', goal: '656', ewh: '7.5', people: '1', lead: '0' },
+    multi_pack: { uph: '200', goal: '163', ewh: '6.5', people: '3', lead: '1' },
+    single_pack: { uph: '130', goal: '122', ewh: '7.5', people: '7', lead: '1' },
+    pre_ship: { uph: '400', goal: '400', ewh: '8', people: '2', lead: '1' }
+  })
+});
+const effNormalizePayload = (payload: any): EffPayloadLite => {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  const inboundMap = (rows: any[]) =>
+    effDefaultInbound(Object.fromEntries((Array.isArray(rows) ? rows : []).map((row) => [String(row?.key ?? ''), String(row?.value ?? '')])) as Partial<EffInboundMap>);
+  const procMap = (rows: any[]) =>
+    effDefaultProc(Object.fromEntries((Array.isArray(rows) ? rows : []).map((row) => [String(row?.key ?? ''), { uph: String(row?.uph ?? ''), goal: String(row?.goal ?? ''), ewh: String(row?.ewh ?? ''), people: String(row?.people ?? ''), lead: String(row?.lead ?? '') }])) as Partial<EffProcMap>);
+  return {
+    orderInboundDs: inboundMap(source.orderInboundDs),
+    orderInboundNs: inboundMap(source.orderInboundNs),
+    areaEfficiencyDs: procMap(source.areaEfficiencyDs),
+    areaEfficiencyNs: procMap(source.areaEfficiencyNs)
+  };
+};
+const effGetInbound = (rows: EffInboundMap, key: EffInboundKey) => rows[key] ?? '';
+const effWithInboundPieces = (rows: EffInboundMap, nextPieces: number | null): EffInboundMap => {
+  if (!Number.isFinite(nextPieces ?? NaN) || nextPieces === null) return rows;
+  const totalPieces = Math.max(0, Math.round(nextPieces));
+  const basePieces = effToNum(effGetInbound(rows, 'oi_pieces'));
+  const basePackages = effToNum(effGetInbound(rows, 'oi_packages'));
+  const singleRatioPcs = effToPercent(effGetInbound(rows, 'single_ratio_pcs'));
+  const multiRatioPcs = effToPercent(effGetInbound(rows, 'multi_ratio_pcs'));
+  const singleRatioPkgs = effToPercent(effGetInbound(rows, 'single_ratio_pkgs'));
+  const multiRatioPkgs = effToPercent(effGetInbound(rows, 'multi_ratio_pkgs'));
+  const multiPcsPerPkg = effToNum(effGetInbound(rows, 'multi_pcs_per_pkg'));
+  const packagePerPiece = basePieces > 0 && basePackages > 0 ? basePackages / basePieces : 0;
+  const totalPackages = packagePerPiece > 0 ? Math.max(0, Math.round(totalPieces * packagePerPiece)) : basePackages;
+  const singlePiece = Math.max(0, Math.round(totalPieces * singleRatioPcs));
+  const multiPiece = Math.max(0, Math.round(totalPieces * (multiRatioPcs > 0 ? multiRatioPcs : 1 - singleRatioPcs)));
+  const singlePkgs = singleRatioPkgs > 0 ? Math.max(0, Math.round(totalPackages * singleRatioPkgs)) : effToNum(effGetInbound(rows, 'single_pkgs'));
+  const multiPkgs = multiPcsPerPkg > 0
+    ? Math.max(0, Math.round(multiPiece / multiPcsPerPkg))
+    : multiRatioPkgs > 0
+      ? Math.max(0, Math.round(totalPackages * multiRatioPkgs))
+      : effToNum(effGetInbound(rows, 'multi_pkgs'));
+  return {
+    ...rows,
+    oi_pieces: String(totalPieces),
+    oi_packages: totalPackages > 0 ? String(totalPackages) : '',
+    single_piece: singlePiece > 0 ? String(singlePiece) : '',
+    multi_piece: multiPiece > 0 ? String(multiPiece) : '',
+    single_pkgs: singlePkgs > 0 ? String(singlePkgs) : '',
+    multi_pkgs: multiPkgs > 0 ? String(multiPkgs) : ''
+  };
+};
+const effDeriveInboundVolume = (rows: EffInboundMap) => {
+  const totalPieces = effToNum(effGetInbound(rows, 'oi_pieces'));
+  const totalPackages = effToNum(effGetInbound(rows, 'oi_packages'));
+  const singleRatioPcs = effToPercent(effGetInbound(rows, 'single_ratio_pcs'));
+  const multiRatioPcs = effToPercent(effGetInbound(rows, 'multi_ratio_pcs'));
+  const singleRatioPkgs = effToPercent(effGetInbound(rows, 'single_ratio_pkgs'));
+  const multiRatioPkgs = effToPercent(effGetInbound(rows, 'multi_ratio_pkgs'));
+  const multiPcsPerPkg = effToNum(effGetInbound(rows, 'multi_pcs_per_pkg'));
+  const singlePiece = effToNum(effGetInbound(rows, 'single_piece')) || Math.round(totalPieces * singleRatioPcs);
+  const multiPiece = effToNum(effGetInbound(rows, 'multi_piece')) || Math.round(totalPieces * multiRatioPcs);
+  const singlePkgs = effToNum(effGetInbound(rows, 'single_pkgs')) || Math.round(totalPackages * singleRatioPkgs);
+  const multiPkgs =
+    effToNum(effGetInbound(rows, 'multi_pkgs')) ||
+    Math.round(totalPackages * multiRatioPkgs) ||
+    (multiPcsPerPkg > 0 ? Math.round(multiPiece / multiPcsPerPkg) : 0);
+  return { totalPieces, totalPackages, singlePiece, multiPiece, singlePkgs, multiPkgs };
+};
+const effCalcRequirement = (workload: number, proc: EffProcRowLite | undefined, mode: 'ceil' | 'floor' | 'round') => {
+  if (!proc) return 0;
+  const uph = effToNum(proc.uph);
+  const ewh = effToNum(proc.ewh);
+  const lead = effToNum(proc.lead);
+  if (!uph || !ewh || workload <= 0) return lead;
+  return effRoundRule(workload / (uph * ewh), mode) + lead;
+};
+const effInferLastFilledHour = (row: Partial<Record<(typeof EFF_HOUR_COLUMNS)[number], number | null | undefined>>) => {
+  for (let index = EFF_HOUR_COLUMNS.length - 1; index >= 0; index -= 1) {
+    const key = EFF_HOUR_COLUMNS[index];
+    if (Number(row[key] ?? 0) > 0) return index;
+  }
+  return null;
+};
+const effCalculateCumulativeVolume = (row: Pick<EffVolumeHistoryRow, (typeof EFF_HOUR_COLUMNS)[number]>, cutoffHour: number) =>
+  EFF_HOUR_COLUMNS.slice(0, Math.max(0, Math.min(24, Math.floor(cutoffHour)))).reduce((sum, key) => sum + Number(row[key] ?? 0), 0);
 
 const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
 const getTemplateDateByDayIndex = (dayIndex: number, weekOffset = 0) =>
@@ -927,6 +1117,7 @@ export default function AdminApp() {
   const [scheduleRenderCount, setScheduleRenderCount] = useState(120);
   const [schedulePublishTomorrow, setSchedulePublishTomorrow] = useState(false);
   const [schedulePublishForDate, setSchedulePublishForDate] = useState<string>('');
+  const [scheduleRecommendedByDate, setScheduleRecommendedByDate] = useState<ScheduleRecommendedByDate>({});
   const [schedulePicker, setSchedulePicker] = useState<SchedulePickerState>({
     open: false,
     cellKey: '',
@@ -963,6 +1154,174 @@ export default function AdminApp() {
   const deferredSchedulePosition = useDeferredValue(schedulePosition);
   const deferredScheduleShift = useDeferredValue(scheduleShift);
   const deferredScheduleLabels = useDeferredValue(scheduleLabels);
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    if (!supabase) {
+      setScheduleRecommendedByDate({});
+      return;
+    }
+    let cancelled = false;
+    const loadScheduleRecommendedPositions = async () => {
+      const planningDates = Array.from({ length: 7 }, (_, index) =>
+        toDateOnly(addDays(addDays(startOfWeekMonday(serverTime), scheduleWeekOffset * 7), index))
+      );
+      if (planningDates.length === 0) {
+        if (!cancelled) setScheduleRecommendedByDate({});
+        return;
+      }
+
+      const latestTemplateRes = await supabase
+        .from(EFFICIENCY_TEMPLATE_TABLE)
+        .select('payload, updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestTemplateRes.error && !isMissingTableError(latestTemplateRes.error.message, EFFICIENCY_TEMPLATE_TABLE)) {
+        if (!cancelled) setScheduleRecommendedByDate({});
+        return;
+      }
+
+      const payload = effNormalizePayload(latestTemplateRes.data?.payload ?? effDefaultPayload());
+      const previousDates = planningDates.map((date) => toDateOnly(addDays(new Date(`${date}T00:00:00`), -1)));
+      const datePool = Array.from(new Set([...planningDates, ...previousDates]));
+      const historyRes = await supabase
+        .from(EFFICIENCY_HISTORY_TABLE)
+        .select(`date,last_filled_hour,${EFF_HOUR_COLUMNS.join(',')}`)
+        .in('date', planningDates);
+
+      if (historyRes.error && !isMissingTableError(historyRes.error.message, EFFICIENCY_HISTORY_TABLE)) {
+        if (!cancelled) setScheduleRecommendedByDate({});
+        return;
+      }
+
+      const historyRows = (((historyRes.data as EffVolumeHistoryRow[] | null) ?? []) as EffVolumeHistoryRow[]).map((row) => ({
+        ...row,
+        date: String((row as any).date ?? '')
+      }));
+      const historyByDate = new Map(historyRows.map((row) => [row.date, row] as const));
+
+      const modelRes = await supabase.rpc('get_forecasting_model', { p_lookback_days: null });
+      if (modelRes.error) {
+        if (!cancelled) setScheduleRecommendedByDate({});
+        return;
+      }
+
+      const modelRows = (((modelRes.data as ForecastModelRow[] | null) ?? []) as ForecastModelRow[]).map((row) => ({
+        ...row,
+        weekday: Number(row.weekday ?? 0),
+        hour_of_day: Number(row.hour_of_day ?? 0),
+        avg_share: Number(row.avg_share ?? 0),
+        stddev_share: Number(row.stddev_share ?? 0),
+        sample_size: Number(row.sample_size ?? 0)
+      }));
+      const inputRes = await supabase
+        .from(EFFICIENCY_FORECAST_INPUT_TABLE)
+        .select('input_date,previous_day_backlog,full_day_capacity,yesterday_inflow_00_14')
+        .in('input_date', datePool);
+      if (inputRes.error && !isMissingTableError(inputRes.error.message, EFFICIENCY_FORECAST_INPUT_TABLE)) {
+        if (!cancelled) setScheduleRecommendedByDate({});
+        return;
+      }
+
+      const inputRows = (((inputRes.data as EffForecastInputRow[] | null) ?? []) as EffForecastInputRow[]).map((row) => ({
+        input_date: String((row as any).input_date ?? ''),
+        previous_day_backlog: Number((row as any).previous_day_backlog ?? 0),
+        full_day_capacity: Number((row as any).full_day_capacity ?? 0),
+        yesterday_inflow_00_14: Number((row as any).yesterday_inflow_00_14 ?? 0)
+      }));
+      const inputByDate = new Map(inputRows.map((row) => [row.input_date, row] as const));
+      const nextByDate: ScheduleRecommendedByDate = {};
+
+      for (const planningDate of planningDates) {
+        const historyRow = historyByDate.get(planningDate) ?? null;
+        if (!historyRow) {
+          nextByDate[planningDate] = [];
+          continue;
+        }
+
+        const lastFilledHour =
+          historyRow.last_filled_hour === null || historyRow.last_filled_hour === undefined
+            ? effInferLastFilledHour(historyRow)
+            : Number(historyRow.last_filled_hour);
+        const cutoffHour = lastFilledHour === null || lastFilledHour < 0 ? null : lastFilledHour >= 23 ? 23 : lastFilledHour + 1;
+        if (!cutoffHour || cutoffHour <= 0) {
+          nextByDate[planningDate] = [];
+          continue;
+        }
+
+        const weekday = getIsoWeekday(new Date(`${planningDate}T00:00:00`));
+        const coefficient = modelRows.find((row) => row.weekday === weekday && row.hour_of_day === cutoffHour) ?? null;
+        const currentCumVolume = effCalculateCumulativeVolume(
+          historyRow as Pick<EffVolumeHistoryRow, (typeof EFF_HOUR_COLUMNS)[number]>,
+          cutoffHour
+        );
+        const fullDayForecastRaw = calculateForecast(currentCumVolume, cutoffHour, weekday, coefficient).forecast;
+        const fullDayForecast = fullDayForecastRaw === null ? null : Math.round(fullDayForecastRaw);
+
+        const previousDate = toDateOnly(addDays(new Date(`${planningDate}T00:00:00`), -1));
+        const previousDayRow = inputByDate.get(previousDate) ?? null;
+        const dsOiPieces =
+          previousDayRow && fullDayForecast !== null
+            ? Math.round(
+                previousDayRow.previous_day_backlog +
+                  fullDayForecast -
+                  previousDayRow.full_day_capacity +
+                  previousDayRow.yesterday_inflow_00_14 -
+                  2000
+              )
+            : null;
+        const nsOiPieces = fullDayForecast !== null && dsOiPieces !== null ? Math.max(0, fullDayForecast - dsOiPieces) : null;
+        if (dsOiPieces === null || nsOiPieces === null) {
+          nextByDate[planningDate] = [];
+          continue;
+        }
+
+        const inboundDs = effWithInboundPieces(payload.orderInboundDs, dsOiPieces);
+        const inboundNs = effWithInboundPieces(payload.orderInboundNs, nsOiPieces);
+        const derivedDs = effDeriveInboundVolume(inboundDs);
+        const derivedNs = effDeriveInboundVolume(inboundNs);
+
+        const dsValues = {
+          pick: effCalcRequirement(derivedDs.totalPieces, payload.areaEfficiencyDs.pick, 'ceil'),
+          rebin: effCalcRequirement(derivedDs.multiPiece, payload.areaEfficiencyDs.rebin, 'ceil'),
+          con: Math.max(1, effCalcRequirement(derivedDs.multiPkgs, payload.areaEfficiencyDs.consolidation, 'ceil')),
+          pack:
+            effCalcRequirement(derivedDs.singlePiece, payload.areaEfficiencyDs.single_pack, 'round') +
+            effCalcRequirement(derivedDs.multiPiece, payload.areaEfficiencyDs.multi_pack, 'round'),
+          preship: effCalcRequirement(derivedDs.totalPackages, payload.areaEfficiencyDs.pre_ship, 'round')
+        };
+        const nsValues = {
+          pick: effCalcRequirement(derivedNs.totalPieces, payload.areaEfficiencyNs.pick, 'ceil'),
+          rebin: effCalcRequirement(derivedNs.multiPiece, payload.areaEfficiencyNs.rebin, 'ceil'),
+          con: Math.max(1, effCalcRequirement(derivedNs.multiPkgs, payload.areaEfficiencyNs.consolidation, 'ceil')),
+          pack:
+            effCalcRequirement(derivedNs.singlePiece, payload.areaEfficiencyNs.single_pack, 'round') +
+            effCalcRequirement(derivedNs.multiPiece, payload.areaEfficiencyNs.multi_pack, 'round'),
+          preship: effCalcRequirement(derivedNs.totalPackages, payload.areaEfficiencyNs.pre_ship, 'round')
+        };
+
+        nextByDate[planningDate] = [
+          { key: 'Pick', ds: dsValues.pick, ns: nsValues.pick, total: dsValues.pick + nsValues.pick },
+          {
+            key: 'Rebin',
+            ds: dsValues.rebin + dsValues.con,
+            ns: nsValues.rebin + nsValues.con,
+            total: dsValues.rebin + dsValues.con + nsValues.rebin + nsValues.con
+          },
+          { key: 'Pack', ds: dsValues.pack, ns: nsValues.pack, total: dsValues.pack + nsValues.pack },
+          { key: 'Preship', ds: dsValues.preship, ns: nsValues.preship, total: dsValues.preship + nsValues.preship }
+        ];
+      }
+
+      if (!cancelled) setScheduleRecommendedByDate(nextByDate);
+    };
+
+    void loadScheduleRecommendedPositions();
+    return () => {
+      cancelled = true;
+    };
+  }, [page, scheduleWeekOffset, serverTime]);
   const canonicalDeviceRows = useMemo(() => {
     return devices.map((row) => {
       const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
@@ -992,6 +1351,32 @@ export default function AdminApp() {
       } as DeviceLoanRow & { action: 'borrow' | 'return' };
     });
   }, [deviceLoans]);
+  const scheduleRecommendedTotalsByDate = useMemo(() => {
+    const next: Record<string, number | null> = {};
+    for (const [date, rows] of Object.entries(scheduleRecommendedByDate)) {
+      let filteredRows = rows;
+      if (deferredSchedulePosition === 'Pick') filteredRows = rows.filter((item) => item.key === 'Pick');
+      else if (deferredSchedulePosition === 'Rebin') filteredRows = rows.filter((item) => item.key === 'Rebin');
+      else if (deferredSchedulePosition === 'Pack') filteredRows = rows.filter((item) => item.key === 'Pack');
+      else if (deferredSchedulePosition === 'Preship') filteredRows = rows.filter((item) => item.key === 'Preship');
+      else if (deferredSchedulePosition === 'Transfer') {
+        next[date] = null;
+        continue;
+      }
+
+      if (filteredRows.length === 0) {
+        next[date] = null;
+        continue;
+      }
+
+      next[date] = filteredRows.reduce((sum, item) => {
+        if (deferredScheduleShift === 'early') return sum + item.ds;
+        if (deferredScheduleShift === 'late') return sum + item.ns;
+        return sum + item.total;
+      }, 0);
+    }
+    return next;
+  }, [scheduleRecommendedByDate, deferredSchedulePosition, deferredScheduleShift]);
   const employeeNameByStaffId = useMemo(() => {
     const map = new Map<string, string>();
     for (const [staffRaw, profile] of Object.entries(employeeByStaffId)) {
@@ -11570,12 +11955,22 @@ ${rowsToHtml(late)}
                           {scheduleDays.map((day, idx) => (
                             <th key={toDateOnly(day)} className="sticky top-0 z-20 w-[92px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
                               <div className="flex flex-col items-center leading-tight">
+                                <span className="text-[10px] font-semibold text-emerald-300">
+                                  {(() => {
+                                    const recommended = scheduleRecommendedTotalsByDate[toDateOnly(day)];
+                                    return recommended === null || recommended === undefined
+                                      ? t('推荐 -', 'Recommended -')
+                                      : lang === 'en'
+                                        ? `Recommended ${recommended}`
+                                        : `推荐 ${recommended}人`;
+                                  })()}
+                                </span>
                                 <button
                                   type="button"
                                   disabled={isLocked}
                                   onClick={() => setScheduleWorkDayFilter((prev) => (prev === idx ? null : idx))}
                                   className={[
-                                    'rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition',
+                                    'mt-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition',
                                     scheduleWorkDayFilter === idx
                                       ? 'bg-neon/20 text-neon'
                                       : 'text-neon hover:bg-white/10',
@@ -11585,7 +11980,7 @@ ${rowsToHtml(late)}
                                 >
                                   {lang === 'en' ? `Work ${scheduleWorkingCountByDayIndex[idx]}` : `工作 ${scheduleWorkingCountByDayIndex[idx]}人`}
                                 </button>
-                                <span>{`${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][idx]} ${toDateOnly(day).slice(5)}`}</span>
+                                <span className="mt-1">{`${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][idx]} ${toDateOnly(day).slice(5)}`}</span>
                               </div>
                             </th>
                           ))}
