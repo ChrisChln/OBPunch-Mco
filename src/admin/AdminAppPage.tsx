@@ -1188,7 +1188,7 @@ export default function AdminApp() {
       const historyRes = await supabase
         .from(EFFICIENCY_HISTORY_TABLE)
         .select(`date,last_filled_hour,${EFF_HOUR_COLUMNS.join(',')}`)
-        .in('date', planningDates);
+        .in('date', previousDates);
 
       if (historyRes.error && !isMissingTableError(historyRes.error.message, EFFICIENCY_HISTORY_TABLE)) {
         if (!cancelled) setScheduleRecommendedByDate({});
@@ -1234,7 +1234,8 @@ export default function AdminApp() {
       const nextByDate: ScheduleRecommendedByDate = {};
 
       for (const planningDate of planningDates) {
-        const historyRow = historyByDate.get(planningDate) ?? null;
+        const previousDate = toDateOnly(addDays(new Date(`${planningDate}T00:00:00`), -1));
+        const historyRow = historyByDate.get(previousDate) ?? null;
         if (!historyRow) {
           nextByDate[planningDate] = [];
           continue;
@@ -1259,7 +1260,6 @@ export default function AdminApp() {
         const fullDayForecastRaw = calculateForecast(currentCumVolume, cutoffHour, weekday, coefficient).forecast;
         const fullDayForecast = fullDayForecastRaw === null ? null : Math.round(fullDayForecastRaw);
 
-        const previousDate = toDateOnly(addDays(new Date(`${planningDate}T00:00:00`), -1));
         const previousDayRow = inputByDate.get(previousDate) ?? null;
         const dsOiPieces =
           previousDayRow && fullDayForecast !== null

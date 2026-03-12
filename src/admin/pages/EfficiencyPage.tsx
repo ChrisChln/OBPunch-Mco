@@ -185,6 +185,17 @@ const addDays = (date: Date, days: number) => {
   next.setDate(next.getDate() + days);
   return next;
 };
+const formatPlanningDateLabel = (dateText: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateText)) return dateText;
+  const date = new Date(`${dateText}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return dateText;
+  return date.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric'
+  });
+};
 const toNum = (value: string) => {
   const n = Number(String(value ?? '').replace(/,/g, '').trim());
   return Number.isFinite(n) ? n : 0;
@@ -359,7 +370,8 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
   const [message, setMessage] = useState<string | null>(null);
   const [parameterDialogOpen, setParameterDialogOpen] = useState(false);
   const [forecastBridge, setForecastBridge] = useState<ForecastBridge | null>(null);
-  const [selectedPlanningDate, setSelectedPlanningDate] = useState(() => toDateOnly(serverTime));
+  const [selectedPlanningDate, setSelectedPlanningDate] = useState(() => toDateOnly(addDays(serverTime, 1)));
+  const planningDateLabel = useMemo(() => formatPlanningDateLabel(selectedPlanningDate), [selectedPlanningDate]);
 
   const loadTemplates = async () => {
     if (!supabase) {
@@ -415,12 +427,13 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       }
 
       const planningDate = selectedPlanningDate;
+      const forecastSourceDate = toDateOnly(addDays(new Date(`${planningDate}T00:00:00`), -1));
       const weekday = getIsoWeekday(new Date(`${planningDate}T00:00:00`)) as WeekdayValue;
       const selectColumns = ['date', 'last_filled_hour', ...HOUR_COLUMNS].join(',');
       let historyRes = await supabase
         .from('volume_history')
         .select(selectColumns)
-        .eq('date', planningDate)
+        .eq('date', forecastSourceDate)
         .limit(1);
 
       let latestHistoryRow = (((historyRes.data as VolumeHistoryUploadRow[] | null) ?? [])[0] ?? null) as VolumeHistoryUploadRow | null;
@@ -429,7 +442,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
         historyRes = await supabase
           .from('volume_history')
           .select(fallbackColumns)
-          .eq('date', planningDate)
+          .eq('date', forecastSourceDate)
           .limit(1);
         latestHistoryRow = (((historyRes.data as VolumeHistoryUploadRow[] | null) ?? [])[0] ?? null) as VolumeHistoryUploadRow | null;
       }
@@ -468,7 +481,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       const fullDayForecastRaw = calculateForecast(currentCumVolume, cutoffHour, weekday, coefficient).forecast;
       const fullDayForecast = fullDayForecastRaw === null ? null : Math.round(fullDayForecastRaw);
 
-      const previousDate = toDateOnly(addDays(new Date(`${planningDate}T00:00:00`), -1));
+      const previousDate = forecastSourceDate;
       const inputRes = await supabase
         .from(FORECAST_INPUT_TABLE)
         .select('input_date,weekday,previous_day_backlog,full_day_capacity,yesterday_inflow_00_14')
@@ -672,8 +685,8 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
           </h2>
           <div className="grid gap-4 md:grid-cols-2">
             {[
-              { title: t('白班预测', 'Day shift forecast'), value: summary.dsPieces, tone: isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200' },
-              { title: t('夜班预测', 'Night shift forecast'), value: summary.nsPieces, tone: isLight ? 'border-cyan-200 bg-cyan-50 text-cyan-900' : 'border-cyan-400/20 bg-cyan-500/10 text-cyan-200' }
+              { title: t('次日白班预测', 'Next-day day shift forecast'), value: summary.dsPieces, tone: isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200' },
+              { title: t('次日夜班预测', 'Next-day night shift forecast'), value: summary.nsPieces, tone: isLight ? 'border-cyan-200 bg-cyan-50 text-cyan-900' : 'border-cyan-400/20 bg-cyan-500/10 text-cyan-200' }
             ].map((card) => (
               <div key={card.title} className={['rounded-[26px] border px-5 py-4 shadow-[0_12px_30px_rgba(0,0,0,0.12)]', card.tone].join(' ')}>
                 <div className="text-[11px] uppercase tracking-[0.24em] opacity-80">{card.title}</div>
@@ -767,7 +780,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
         </div>
 
         <div className="grid gap-4 xl:sticky xl:top-4 xl:self-start">
-          <SectionCard title={t('ToC Labor', 'ToC Labor')} themeMode={themeMode}>
+          <SectionCard title={t('ToC Labor', 'ToC Labor')} subtitle={planningDateLabel} themeMode={themeMode}>
             <div className="overflow-x-auto rounded-2xl border border-white/5">
               <table className={['min-w-full text-left text-sm', shellClass].join(' ')}>
                 <thead className={headClass}>
