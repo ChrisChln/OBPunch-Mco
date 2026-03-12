@@ -428,7 +428,8 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
 
       const planningDate = selectedPlanningDate;
       const forecastSourceDate = toDateOnly(addDays(new Date(`${planningDate}T00:00:00`), -1));
-      const weekday = getIsoWeekday(new Date(`${planningDate}T00:00:00`)) as WeekdayValue;
+      const previousDate = toDateOnly(addDays(new Date(`${forecastSourceDate}T00:00:00`), -1));
+      const weekday = getIsoWeekday(new Date(`${forecastSourceDate}T00:00:00`)) as WeekdayValue;
       const selectColumns = ['date', 'last_filled_hour', ...HOUR_COLUMNS].join(',');
       let historyRes = await supabase
         .from('volume_history')
@@ -456,8 +457,8 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
         latestHistoryRow.last_filled_hour === null || latestHistoryRow.last_filled_hour === undefined
           ? inferLastFilledHour(latestHistoryRow)
           : Number(latestHistoryRow.last_filled_hour);
-      const cutoffHour = rawLastFilledHour === null || rawLastFilledHour < 0 ? null : rawLastFilledHour >= 23 ? 23 : rawLastFilledHour + 1;
-      if (!cutoffHour || cutoffHour <= 0) {
+      const cutoffHour = rawLastFilledHour !== null && rawLastFilledHour >= 11 ? 12 : null;
+      if (!cutoffHour) {
         setForecastBridge(null);
         return;
       }
@@ -481,11 +482,10 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       const fullDayForecastRaw = calculateForecast(currentCumVolume, cutoffHour, weekday, coefficient).forecast;
       const fullDayForecast = fullDayForecastRaw === null ? null : Math.round(fullDayForecastRaw);
 
-      const previousDate = forecastSourceDate;
       const inputRes = await supabase
         .from(FORECAST_INPUT_TABLE)
         .select('input_date,weekday,previous_day_backlog,full_day_capacity,yesterday_inflow_00_14')
-        .in('input_date', [planningDate, previousDate]);
+        .in('input_date', [forecastSourceDate, previousDate]);
       if (inputRes.error) {
         setForecastBridge({
           inputDate: planningDate,

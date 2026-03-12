@@ -1183,12 +1183,13 @@ export default function AdminApp() {
       }
 
       const payload = effNormalizePayload(latestTemplateRes.data?.payload ?? effDefaultPayload());
-      const previousDates = planningDates.map((date) => toDateOnly(addDays(new Date(`${date}T00:00:00`), -1)));
-      const datePool = Array.from(new Set([...planningDates, ...previousDates]));
+      const sourceDates = planningDates.map((date) => toDateOnly(addDays(new Date(`${date}T00:00:00`), -1)));
+      const previousDates = sourceDates.map((date) => toDateOnly(addDays(new Date(`${date}T00:00:00`), -1)));
+      const datePool = Array.from(new Set([...sourceDates, ...previousDates]));
       const historyRes = await supabase
         .from(EFFICIENCY_HISTORY_TABLE)
         .select(`date,last_filled_hour,${EFF_HOUR_COLUMNS.join(',')}`)
-        .in('date', previousDates);
+        .in('date', sourceDates);
 
       if (historyRes.error && !isMissingTableError(historyRes.error.message, EFFICIENCY_HISTORY_TABLE)) {
         if (!cancelled) setScheduleRecommendedByDate({});
@@ -1234,8 +1235,9 @@ export default function AdminApp() {
       const nextByDate: ScheduleRecommendedByDate = {};
 
       for (const planningDate of planningDates) {
-        const previousDate = toDateOnly(addDays(new Date(`${planningDate}T00:00:00`), -1));
-        const historyRow = historyByDate.get(previousDate) ?? null;
+        const sourceDate = toDateOnly(addDays(new Date(`${planningDate}T00:00:00`), -1));
+        const previousDate = toDateOnly(addDays(new Date(`${sourceDate}T00:00:00`), -1));
+        const historyRow = historyByDate.get(sourceDate) ?? null;
         if (!historyRow) {
           nextByDate[planningDate] = [];
           continue;
@@ -1245,13 +1247,13 @@ export default function AdminApp() {
           historyRow.last_filled_hour === null || historyRow.last_filled_hour === undefined
             ? effInferLastFilledHour(historyRow)
             : Number(historyRow.last_filled_hour);
-        const cutoffHour = lastFilledHour === null || lastFilledHour < 0 ? null : lastFilledHour >= 23 ? 23 : lastFilledHour + 1;
-        if (!cutoffHour || cutoffHour <= 0) {
+        const cutoffHour = lastFilledHour !== null && lastFilledHour >= 11 ? 12 : null;
+        if (!cutoffHour) {
           nextByDate[planningDate] = [];
           continue;
         }
 
-        const weekday = getIsoWeekday(new Date(`${planningDate}T00:00:00`));
+        const weekday = getIsoWeekday(new Date(`${sourceDate}T00:00:00`));
         const coefficient = modelRows.find((row) => row.weekday === weekday && row.hour_of_day === cutoffHour) ?? null;
         const currentCumVolume = effCalculateCumulativeVolume(
           historyRow as Pick<EffVolumeHistoryRow, (typeof EFF_HOUR_COLUMNS)[number]>,
