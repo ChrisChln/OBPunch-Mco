@@ -7,6 +7,8 @@ create table if not exists public.volume_forecast_daily_inputs (
   severe_weather boolean not null default false,
   full_day_capacity int not null default 0,
   yesterday_inflow_00_14 int not null default 0,
+  actual_day_shift_plan int null,
+  actual_night_shift_plan int null,
   updated_by text null,
   updated_at timestamptz not null default now(),
   constraint volume_forecast_daily_inputs_weekday_chk check (weekday between 1 and 7),
@@ -14,7 +16,9 @@ create table if not exists public.volume_forecast_daily_inputs (
   constraint volume_forecast_daily_inputs_current_cumulative_volume_12_chk check (current_cumulative_volume_12 >= 0),
   constraint volume_forecast_daily_inputs_inventory_level_chk check (inventory_level >= 0),
   constraint volume_forecast_daily_inputs_full_day_capacity_chk check (full_day_capacity >= 0),
-  constraint volume_forecast_daily_inputs_yesterday_inflow_00_14_chk check (yesterday_inflow_00_14 >= 0)
+  constraint volume_forecast_daily_inputs_yesterday_inflow_00_14_chk check (yesterday_inflow_00_14 >= 0),
+  constraint volume_forecast_daily_inputs_actual_day_shift_plan_chk check (actual_day_shift_plan is null or actual_day_shift_plan >= 0),
+  constraint volume_forecast_daily_inputs_actual_night_shift_plan_chk check (actual_night_shift_plan is null or actual_night_shift_plan >= 0)
 );
 
 create index if not exists volume_forecast_daily_inputs_weekday_date_idx

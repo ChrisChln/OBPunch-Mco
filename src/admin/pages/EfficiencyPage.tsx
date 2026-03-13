@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createPortal } from 'react-dom';
@@ -57,6 +57,8 @@ type ForecastManualInputRow = {
   previous_day_backlog: number;
   full_day_capacity: number;
   yesterday_inflow_00_14: number;
+  actual_day_shift_plan?: number | null;
+  actual_night_shift_plan?: number | null;
 };
 type ForecastBridge = {
   inputDate: string;
@@ -66,6 +68,7 @@ type ForecastBridge = {
   dsOiPieces: number | null;
   nsOiPieces: number | null;
 };
+type ArrangementInput = { ds: string; ns: string };
 
 const TABLE = 'efficiency_templates';
 const FORECAST_INPUT_TABLE = 'volume_forecast_daily_inputs';
@@ -185,20 +188,15 @@ const addDays = (date: Date, days: number) => {
   next.setDate(next.getDate() + days);
   return next;
 };
-const formatPlanningDateLabel = (dateText: string) => {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateText)) return dateText;
-  const date = new Date(`${dateText}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return dateText;
-  return date.toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: '2-digit',
-    day: '2-digit',
-    year: 'numeric'
-  });
-};
 const toNum = (value: string) => {
   const n = Number(String(value ?? '').replace(/,/g, '').trim());
   return Number.isFinite(n) ? n : 0;
+};
+const toOptionalNum = (value: string) => {
+  const text = String(value ?? '').replace(/,/g, '').trim();
+  if (!text) return null;
+  const n = Number(text);
+  return Number.isFinite(n) ? n : null;
 };
 const toPercent = (value: string) => {
   const text = String(value ?? '').trim().replace('%', '');
@@ -371,7 +369,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
   const [parameterDialogOpen, setParameterDialogOpen] = useState(false);
   const [forecastBridge, setForecastBridge] = useState<ForecastBridge | null>(null);
   const [selectedPlanningDate, setSelectedPlanningDate] = useState(() => toDateOnly(addDays(serverTime, 1)));
-  const planningDateLabel = useMemo(() => formatPlanningDateLabel(selectedPlanningDate), [selectedPlanningDate]);
+  const [arrangementInput, setArrangementInput] = useState<ArrangementInput>({ ds: '', ns: '' });
 
   const loadTemplates = async () => {
     if (!supabase) {
@@ -484,8 +482,8 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
 
       const inputRes = await supabase
         .from(FORECAST_INPUT_TABLE)
-        .select('input_date,weekday,previous_day_backlog,full_day_capacity,yesterday_inflow_00_14')
-        .in('input_date', [forecastSourceDate, previousDate]);
+        .select('input_date,weekday,previous_day_backlog,full_day_capacity,yesterday_inflow_00_14,actual_day_shift_plan,actual_night_shift_plan')
+        .in('input_date', [planningDate, forecastSourceDate, previousDate]);
       if (inputRes.error) {
         setForecastBridge({
           inputDate: planningDate,
@@ -495,6 +493,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
           dsOiPieces: null,
           nsOiPieces: null
         });
+        setArrangementInput({ ds: '', ns: '' });
         return;
       }
 
@@ -503,9 +502,12 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
         weekday: Number((row as any).weekday ?? 0) as WeekdayValue,
         previous_day_backlog: Number((row as any).previous_day_backlog ?? 0),
         full_day_capacity: Number((row as any).full_day_capacity ?? 0),
-        yesterday_inflow_00_14: Number((row as any).yesterday_inflow_00_14 ?? 0)
+        yesterday_inflow_00_14: Number((row as any).yesterday_inflow_00_14 ?? 0),
+        actual_day_shift_plan: (row as any).actual_day_shift_plan == null ? null : Number((row as any).actual_day_shift_plan),
+        actual_night_shift_plan: (row as any).actual_night_shift_plan == null ? null : Number((row as any).actual_night_shift_plan)
       }));
       const previousDayRow = inputRows.find((row) => row.input_date === previousDate) ?? null;
+      const planningRow = inputRows.find((row) => row.input_date === planningDate) ?? null;
       const nextDayShiftForecast =
         previousDayRow && fullDayForecast !== null
           ? Math.round(
@@ -527,6 +529,20 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
         dsOiPieces,
         nsOiPieces
       });
+      setArrangementInput({
+        ds:
+          planningRow?.actual_day_shift_plan != null
+            ? String(planningRow.actual_day_shift_plan)
+            : dsOiPieces != null
+              ? String(dsOiPieces)
+              : '',
+        ns:
+          planningRow?.actual_night_shift_plan != null
+            ? String(planningRow.actual_night_shift_plan)
+            : nsOiPieces != null
+              ? String(nsOiPieces)
+              : ''
+      });
     };
 
     void loadForecastBridge();
@@ -539,6 +555,14 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
   const effectiveOrderInboundNs = useMemo(
     () => withInboundPieces(draftPayload.orderInboundNs, forecastBridge?.nsOiPieces ?? null),
     [draftPayload.orderInboundNs, forecastBridge?.nsOiPieces]
+  );
+  const arrangedOrderInboundDs = useMemo(
+    () => withInboundPieces(draftPayload.orderInboundDs, toOptionalNum(arrangementInput.ds)),
+    [draftPayload.orderInboundDs, arrangementInput.ds]
+  );
+  const arrangedOrderInboundNs = useMemo(
+    () => withInboundPieces(draftPayload.orderInboundNs, toOptionalNum(arrangementInput.ns)),
+    [draftPayload.orderInboundNs, arrangementInput.ns]
   );
 
   const recommendedLabor = useMemo(() => {
@@ -584,15 +608,58 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
     };
   }, [draftPayload, effectiveOrderInboundDs, effectiveOrderInboundNs]);
 
+  const finalLabor = useMemo(() => {
+    const buildSide = (inboundRows: InboundMetric[], procRows: ProcRow[]) => {
+      const inbound = deriveInboundVolume(inboundRows);
+      const pick = getProcRow(procRows, 'pick');
+      const consolidation = getProcRow(procRows, 'consolidation');
+      const rebin = getProcRow(procRows, 'rebin');
+      const waterspider = getProcRow(procRows, 'waterspider');
+      const multiPack = getProcRow(procRows, 'multi_pack');
+      const singlePack = getProcRow(procRows, 'single_pack');
+      const preship = getProcRow(procRows, 'pre_ship');
+
+      const values: Record<LaborKey, number> = {
+        picking_group: pick ? calculateRequirement(inbound.totalPieces, pick.uph, pick.ewh, pick.lead, 'ceil') : 0,
+        rebin_group: rebin ? calculateRequirement(inbound.multiPiece, rebin.uph, rebin.ewh, rebin.lead, 'ceil') : 0,
+        con_group: consolidation ? Math.max(1, calculateRequirement(inbound.multiPkgs, consolidation.uph, consolidation.ewh, consolidation.lead, 'ceil')) : 0,
+        packing_group:
+          (singlePack ? calculateRequirement(inbound.singlePiece, singlePack.uph, singlePack.ewh, singlePack.lead, 'round') : 0) +
+          (multiPack ? calculateRequirement(inbound.multiPiece, multiPack.uph, multiPack.ewh, multiPack.lead, 'round') : 0),
+        waterspider_group: waterspider ? calculateRequirement(inbound.totalPackages, waterspider.uph, waterspider.ewh, waterspider.lead, 'floor') : 0,
+        preship: preship ? calculateRequirement(inbound.totalPackages, preship.uph, preship.ewh, preship.lead, 'round') : 0
+      };
+
+      return { values };
+    };
+
+    const ds = buildSide(arrangedOrderInboundDs, draftPayload.areaEfficiencyDs);
+    const ns = buildSide(arrangedOrderInboundNs, draftPayload.areaEfficiencyNs);
+    const rows = LABOR_META.map(([key, labelZh, labelEn]) => ({
+      key,
+      labelZh,
+      labelEn,
+      ds: ds.values[key],
+      ns: ns.values[key],
+      total: ds.values[key] + ns.values[key]
+    }));
+
+    return {
+      rows,
+      totalDs: rows.reduce((sum, row) => sum + row.ds, 0),
+      totalNs: rows.reduce((sum, row) => sum + row.ns, 0)
+    };
+  }, [draftPayload, arrangedOrderInboundDs, arrangedOrderInboundNs]);
+
   const summary = useMemo(() => {
     const getVal = (rows: InboundMetric[], key: InboundKey) => rows.find((item) => item.key === key)?.value ?? '';
     return {
       dsPieces: getVal(effectiveOrderInboundDs, 'oi_pieces') || '-',
       nsPieces: getVal(effectiveOrderInboundNs, 'oi_pieces') || '-',
-      dsPackages: getVal(effectiveOrderInboundDs, 'oi_packages') || '-',
-      nsPackages: getVal(effectiveOrderInboundNs, 'oi_packages') || '-'
+      arrangedDsPieces: arrangementInput.ds || '-',
+      arrangedNsPieces: arrangementInput.ns || '-'
     };
-  }, [effectiveOrderInboundDs, effectiveOrderInboundNs]);
+  }, [effectiveOrderInboundDs, effectiveOrderInboundNs, arrangementInput.ds, arrangementInput.ns]);
 
   const inboundSections: Array<{
     title: string;
@@ -637,6 +704,25 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
     value: string
   ) =>
     setDraftPayload((prev) => ({ ...prev, [section]: prev[section].map((item) => (item.key === key ? { ...item, [field]: value } : item)) }));
+
+  const persistArrangementInput = async (nextValue: ArrangementInput) => {
+    if (!supabase || isLocked) return;
+    const ds = toOptionalNum(nextValue.ds);
+    const ns = toOptionalNum(nextValue.ns);
+    const res = await supabase.from(FORECAST_INPUT_TABLE).upsert(
+      {
+        input_date: selectedPlanningDate,
+        actual_day_shift_plan: ds,
+        actual_night_shift_plan: ns
+      },
+      { onConflict: 'input_date' }
+    );
+    if (res.error) {
+      setError(String(res.error.message ?? 'Save failed.'));
+      return;
+    }
+    setMessage(t('实际产能安排已保存。', 'Actual staffing plan saved.'));
+  };
 
   const saveTemplate = async (mode: 'update' | 'create') => {
     if (!supabase) {
@@ -691,6 +777,51 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
               <div key={card.title} className={['rounded-[26px] border px-5 py-4 shadow-[0_12px_30px_rgba(0,0,0,0.12)]', card.tone].join(' ')}>
                 <div className="text-[11px] uppercase tracking-[0.24em] opacity-80">{card.title}</div>
                 <div className="mt-3 text-3xl font-semibold tracking-[0.04em]">{card.value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            {[
+              {
+                key: 'ds',
+                title: t('实际白班安排', 'Actual day shift plan'),
+                value: arrangementInput.ds,
+                tone: isLight ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-amber-400/20 bg-amber-500/10 text-amber-200'
+              },
+              {
+                key: 'ns',
+                title: t('实际夜班安排', 'Actual night shift plan'),
+                value: arrangementInput.ns,
+                tone: isLight ? 'border-violet-200 bg-violet-50 text-violet-900' : 'border-violet-400/20 bg-violet-500/10 text-violet-200'
+              }
+            ].map((card) => (
+              <div key={card.key} className={['rounded-[26px] border px-5 py-4 shadow-[0_12px_30px_rgba(0,0,0,0.12)]', card.tone].join(' ')}>
+                <div className="text-[11px] uppercase tracking-[0.24em] opacity-80">{card.title}</div>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={card.value}
+                  onChange={(e) =>
+                    setArrangementInput((prev) => ({
+                      ...prev,
+                      [card.key]: e.target.value.replace(/[^\d]/g, '')
+                    }))
+                  }
+                  onBlur={() => void persistArrangementInput(arrangementInput)}
+                  disabled={isLocked}
+                  style={{
+                    backgroundColor: 'transparent',
+                    boxShadow: 'none',
+                    WebkitAppearance: 'none',
+                    appearance: 'none'
+                  }}
+                  className={[
+                    'arrangement-input-plain mt-3 h-12 w-full appearance-none rounded-none border-0 !bg-transparent px-0 text-2xl font-semibold tracking-[0.04em] !shadow-none outline-none transition',
+                    isLight
+                      ? 'text-slate-900 focus:ring-0'
+                      : 'text-white focus:ring-0'
+                  ].join(' ')}
+                />
               </div>
             ))}
           </div>
@@ -752,13 +883,13 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       {error ? <div className={['mt-5 rounded-2xl border px-4 py-3 text-sm', isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'].join(' ')}>{error}</div> : null}
       {message ? <div className={['mt-5 rounded-2xl border px-4 py-3 text-sm', isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'].join(' ')}>{message}</div> : null}
 
-      <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px_380px]">
         <div className="grid gap-4">
           <SectionCard title={t('参数概览', 'Parameter snapshot')} themeMode={themeMode}>
             <div className="grid gap-4 md:grid-cols-2">
               {[
-                { title: 'ToC Order Inbound DS', lines: effectiveOrderInboundDs.slice(0, 4) },
-                { title: 'ToC Order Inbound NS', lines: effectiveOrderInboundNs.slice(0, 4) },
+                { title: 'ToC Order Inbound DS', lines: arrangedOrderInboundDs.slice(0, 4) },
+                { title: 'ToC Order Inbound NS', lines: arrangedOrderInboundNs.slice(0, 4) },
                 { title: 'ToC Area Efficiency DS', lines: draftPayload.areaEfficiencyDs.slice(0, 4).map((row) => ({ labelZh: row.labelZh, labelEn: row.labelEn, value: `${row.uph}/${row.people}` })) },
                 { title: 'ToC Area Efficiency NS', lines: draftPayload.areaEfficiencyNs.slice(0, 4).map((row) => ({ labelZh: row.labelZh, labelEn: row.labelEn, value: `${row.uph}/${row.people}` })) }
               ].map((group) => (
@@ -776,11 +907,10 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
               ))}
             </div>
           </SectionCard>
-
         </div>
 
-        <div className="grid gap-4 xl:sticky xl:top-4 xl:self-start">
-          <SectionCard title={t('ToC Labor', 'ToC Labor')} subtitle={planningDateLabel} themeMode={themeMode}>
+        <div className="grid gap-4 xl:self-start">
+          <SectionCard title={t('推荐 ToC Labor', 'Recommended ToC Labor')} subtitle={t('基于白班预测和夜班预测', 'Based on day and night forecasts')} themeMode={themeMode}>
             <div className="overflow-x-auto rounded-2xl border border-white/5">
               <table className={['min-w-full text-left text-sm', shellClass].join(' ')}>
                 <thead className={headClass}>
@@ -793,7 +923,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
                 </thead>
                 <tbody>
                   {recommendedLabor.rows.map((row) => (
-                    <tr key={row.key} className={rowClass}>
+                    <tr key={`recommended-${row.key}`} className={rowClass}>
                       <td className="px-3 py-3 font-medium">{t(row.labelZh, row.labelEn)}</td>
                       <td className="px-3 py-3 text-base font-semibold">{row.total}</td>
                       <td className="px-3 py-3 font-semibold">{row.ds}</td>
@@ -805,6 +935,39 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
                     <td className="px-3 py-3 text-base font-semibold">{recommendedLabor.totalDs + recommendedLabor.totalNs}</td>
                     <td className="px-3 py-3 font-semibold">{recommendedLabor.totalDs}</td>
                     <td className="px-3 py-3 font-semibold">{recommendedLabor.totalNs}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </SectionCard>
+        </div>
+
+        <div className="grid gap-4 xl:sticky xl:top-4 xl:self-start">
+          <SectionCard title={t('ToC Labor', 'ToC Labor')} subtitle={t('基于实际安排', 'Based on actual plan')} themeMode={themeMode}>
+            <div className="overflow-x-auto rounded-2xl border border-white/5">
+              <table className={['min-w-full text-left text-sm', shellClass].join(' ')}>
+                <thead className={headClass}>
+                  <tr>
+                    <th className="px-3 py-3">{t('Area', 'Area')}</th>
+                    <th className="px-3 py-3">{t('Total', 'Total')}</th>
+                    <th className="px-3 py-3">DS</th>
+                    <th className="px-3 py-3">NS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {finalLabor.rows.map((row) => (
+                    <tr key={row.key} className={rowClass}>
+                      <td className="px-3 py-3 font-medium">{t(row.labelZh, row.labelEn)}</td>
+                      <td className="px-3 py-3 text-base font-semibold">{row.total}</td>
+                      <td className="px-3 py-3 font-semibold">{row.ds}</td>
+                      <td className="px-3 py-3 font-semibold">{row.ns}</td>
+                    </tr>
+                  ))}
+                  <tr className={rowClass}>
+                    <td className="px-3 py-3 font-semibold">{t('# of Total', '# of Total')}</td>
+                    <td className="px-3 py-3 text-base font-semibold">{finalLabor.totalDs + finalLabor.totalNs}</td>
+                    <td className="px-3 py-3 font-semibold">{finalLabor.totalDs}</td>
+                    <td className="px-3 py-3 font-semibold">{finalLabor.totalNs}</td>
                   </tr>
                 </tbody>
               </table>

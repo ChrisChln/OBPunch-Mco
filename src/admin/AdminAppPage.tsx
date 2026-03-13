@@ -32,8 +32,6 @@ import AuditPage from './pages/AuditPage';
 import PunchesPage from './pages/PunchesPage';
 import ForecastPage from './pages/ForecastPage';
 import EfficiencyPage from './pages/EfficiencyPage';
-import type { ForecastModelRow } from './forecast';
-import { calculateForecast, getIsoWeekday } from './forecast';
 import AppDialog from '../components/AppDialog';
 import {
   activatePlannedScheduleNote,
@@ -165,6 +163,8 @@ type EffForecastInputRow = {
   previous_day_backlog: number;
   full_day_capacity: number;
   yesterday_inflow_00_14: number;
+  actual_day_shift_plan?: number | null;
+  actual_night_shift_plan?: number | null;
 };
 type EffVolumeHistoryRow = {
   date: string;
@@ -436,15 +436,6 @@ const effCalcRequirement = (workload: number, proc: EffProcRowLite | undefined, 
   if (!uph || !ewh || workload <= 0) return lead;
   return effRoundRule(workload / (uph * ewh), mode) + lead;
 };
-const effInferLastFilledHour = (row: Partial<Record<(typeof EFF_HOUR_COLUMNS)[number], number | null | undefined>>) => {
-  for (let index = EFF_HOUR_COLUMNS.length - 1; index >= 0; index -= 1) {
-    const key = EFF_HOUR_COLUMNS[index];
-    if (Number(row[key] ?? 0) > 0) return index;
-  }
-  return null;
-};
-const effCalculateCumulativeVolume = (row: Pick<EffVolumeHistoryRow, (typeof EFF_HOUR_COLUMNS)[number]>, cutoffHour: number) =>
-  EFF_HOUR_COLUMNS.slice(0, Math.max(0, Math.min(24, Math.floor(cutoffHour)))).reduce((sum, key) => sum + Number(row[key] ?? 0), 0);
 
 const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
 const getTemplateDateByDayIndex = (dayIndex: number, weekOffset = 0) =>
@@ -1185,7 +1176,7 @@ export default function AdminApp() {
       const payload = effNormalizePayload(latestTemplateRes.data?.payload ?? effDefaultPayload());
       const sourceDates = planningDates.map((date) => toDateOnly(addDays(new Date(`${date}T00:00:00`), -1)));
       const previousDates = sourceDates.map((date) => toDateOnly(addDays(new Date(`${date}T00:00:00`), -1)));
-      const datePool = Array.from(new Set([...sourceDates, ...previousDates]));
+      const datePool = Array.from(new Set([...planningDates, ...sourceDates, ...previousDates]));
       const historyRes = await supabase
         .from(EFFICIENCY_HISTORY_TABLE)
         .select(`date,last_filled_hour,${EFF_HOUR_COLUMNS.join(',')}`)
@@ -1200,7 +1191,7 @@ export default function AdminApp() {
         ...row,
         date: String((row as any).date ?? '')
       }));
-      const historyByDate = new Map(historyRows.map((row) => [row.date, row] as const));
+      void historyRows;
 
       const modelRes = await supabase.rpc('get_forecasting_model', { p_lookback_days: null });
       if (modelRes.error) {
@@ -1208,17 +1199,10 @@ export default function AdminApp() {
         return;
       }
 
-      const modelRows = (((modelRes.data as ForecastModelRow[] | null) ?? []) as ForecastModelRow[]).map((row) => ({
-        ...row,
-        weekday: Number(row.weekday ?? 0),
-        hour_of_day: Number(row.hour_of_day ?? 0),
-        avg_share: Number(row.avg_share ?? 0),
-        stddev_share: Number(row.stddev_share ?? 0),
-        sample_size: Number(row.sample_size ?? 0)
-      }));
+      void modelRes.data;
       const inputRes = await supabase
         .from(EFFICIENCY_FORECAST_INPUT_TABLE)
-        .select('input_date,previous_day_backlog,full_day_capacity,yesterday_inflow_00_14')
+        .select('input_date,previous_day_backlog,full_day_capacity,yesterday_inflow_00_14,actual_day_shift_plan,actual_night_shift_plan')
         .in('input_date', datePool);
       if (inputRes.error && !isMissingTableError(inputRes.error.message, EFFICIENCY_FORECAST_INPUT_TABLE)) {
         if (!cancelled) setScheduleRecommendedByDate({});
@@ -1229,55 +1213,24 @@ export default function AdminApp() {
         input_date: String((row as any).input_date ?? ''),
         previous_day_backlog: Number((row as any).previous_day_backlog ?? 0),
         full_day_capacity: Number((row as any).full_day_capacity ?? 0),
-        yesterday_inflow_00_14: Number((row as any).yesterday_inflow_00_14 ?? 0)
+        yesterday_inflow_00_14: Number((row as any).yesterday_inflow_00_14 ?? 0),
+        actual_day_shift_plan: (row as any).actual_day_shift_plan == null ? null : Number((row as any).actual_day_shift_plan),
+        actual_night_shift_plan: (row as any).actual_night_shift_plan == null ? null : Number((row as any).actual_night_shift_plan)
       }));
       const inputByDate = new Map(inputRows.map((row) => [row.input_date, row] as const));
       const nextByDate: ScheduleRecommendedByDate = {};
 
       for (const planningDate of planningDates) {
-        const sourceDate = toDateOnly(addDays(new Date(`${planningDate}T00:00:00`), -1));
-        const previousDate = toDateOnly(addDays(new Date(`${sourceDate}T00:00:00`), -1));
-        const historyRow = historyByDate.get(sourceDate) ?? null;
-        if (!historyRow) {
-          nextByDate[planningDate] = [];
-          continue;
-        }
-
-        const lastFilledHour =
-          historyRow.last_filled_hour === null || historyRow.last_filled_hour === undefined
-            ? effInferLastFilledHour(historyRow)
-            : Number(historyRow.last_filled_hour);
-        const cutoffHour = lastFilledHour !== null && lastFilledHour >= 11 ? 12 : null;
-        if (!cutoffHour) {
-          nextByDate[planningDate] = [];
-          continue;
-        }
-
-        const weekday = getIsoWeekday(new Date(`${sourceDate}T00:00:00`));
-        const coefficient = modelRows.find((row) => row.weekday === weekday && row.hour_of_day === cutoffHour) ?? null;
-        const currentCumVolume = effCalculateCumulativeVolume(
-          historyRow as Pick<EffVolumeHistoryRow, (typeof EFF_HOUR_COLUMNS)[number]>,
-          cutoffHour
-        );
-        const fullDayForecastRaw = calculateForecast(currentCumVolume, cutoffHour, weekday, coefficient).forecast;
-        const fullDayForecast = fullDayForecastRaw === null ? null : Math.round(fullDayForecastRaw);
-
-        const previousDayRow = inputByDate.get(previousDate) ?? null;
-        const dsOiPieces =
-          previousDayRow && fullDayForecast !== null
-            ? Math.round(
-                previousDayRow.previous_day_backlog +
-                  fullDayForecast -
-                  previousDayRow.full_day_capacity +
-                  previousDayRow.yesterday_inflow_00_14 -
-                  2000
-              )
-            : null;
-        const nsOiPieces = fullDayForecast !== null && dsOiPieces !== null ? Math.max(0, fullDayForecast - dsOiPieces) : null;
+        const planningRow = inputByDate.get(planningDate) ?? null;
+        const dsOiPieces = planningRow?.actual_day_shift_plan ?? null;
+        const nsOiPieces = planningRow?.actual_night_shift_plan ?? null;
         if (dsOiPieces === null || nsOiPieces === null) {
           nextByDate[planningDate] = [];
           continue;
         }
+
+        const sourceDate = toDateOnly(addDays(new Date(`${planningDate}T00:00:00`), -1));
+        void sourceDate;
 
         const inboundDs = effWithInboundPieces(payload.orderInboundDs, dsOiPieces);
         const inboundNs = effWithInboundPieces(payload.orderInboundNs, nsOiPieces);

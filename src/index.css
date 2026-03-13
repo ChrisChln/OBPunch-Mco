@@ -178,6 +178,14 @@ body[data-theme='light'] .roster-all-active,
   border-color: #d5dbe7 !important;
 }
 
+.admin-theme-light input.arrangement-input-plain,
+.admin-theme-dark input.arrangement-input-plain {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
 .admin-theme-light details > summary {
   background-color: #ffffff !important;
   color: #111827 !important;
