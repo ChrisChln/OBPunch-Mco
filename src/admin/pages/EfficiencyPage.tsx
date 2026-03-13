@@ -102,12 +102,12 @@ const PROC_META: Array<[ProcKey, string, string]> = [
 ];
 
 const LABOR_META: Array<[LaborKey, string, string]> = [
-  ['picking_group', '# of Picking Group', '# of Picking Group'],
-  ['rebin_group', '# of Rebin Group', '# of Rebin Group'],
-  ['con_group', '# of Con Group', '# of Con Group'],
-  ['packing_group', '# of Packing Group', '# of Packing Group'],
-  ['waterspider_group', '# of Waterspider Group', '# of Waterspider Group'],
-  ['preship', '# of Preship', '# of Preship']
+  ['picking_group', 'Pick', 'Pick'],
+  ['rebin_group', 'Rebin', 'Rebin'],
+  ['con_group', 'Con', 'Con'],
+  ['packing_group', 'Pack', 'Pack'],
+  ['waterspider_group', 'Waterspider', 'Waterspider'],
+  ['preship', 'Preship', 'Preship']
 ];
 
 const buildInbound = (values: Partial<Record<InboundKey, string>> = {}): InboundMetric[] =>
@@ -764,8 +764,8 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
 
   return (
     <section className="glass reveal rounded-3xl px-6 py-6">
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
-        <div className="grid gap-4">
+      <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
+        <div className="grid h-full gap-4">
           <h2 className={['font-display text-3xl tracking-[0.06em]', isLight ? 'text-slate-900' : 'text-white'].join(' ')}>
             {t('人效', 'Efficiency')}
           </h2>
@@ -827,8 +827,8 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
           </div>
         </div>
 
-        <div className={['rounded-[28px] border p-5 shadow-[0_18px_40px_rgba(0,0,0,0.12)]', isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-[linear-gradient(180deg,rgba(10,18,36,0.95),rgba(4,9,20,0.92))]'].join(' ')}>
-          <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className={['flex h-full flex-col rounded-[28px] border p-5 shadow-[0_18px_40px_rgba(0,0,0,0.12)]', isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-[linear-gradient(180deg,rgba(10,18,36,0.95),rgba(4,9,20,0.92))]'].join(' ')}>
+          <div className="flex h-full flex-col justify-between gap-6">
             <div className="flex-1 min-w-[280px]">
               <div className={['text-xs uppercase tracking-[0.2em]', labelClass].join(' ')}>{t('当前模板', 'Current template')}</div>
               <div className={['mt-2 text-xl font-semibold', isLight ? 'text-slate-900' : 'text-white'].join(' ')}>
@@ -837,7 +837,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
               <div className={['mt-2 text-sm', labelClass].join(' ')}>
                 {templates.length > 0 ? t(`已保存 ${templates.length} 个模板`, `${templates.length} templates saved`) : t('当前还是未保存草稿', 'Currently an unsaved draft')}
               </div>
-              <div className="mt-4 flex flex-wrap items-end gap-3">
+              <div className="mt-6 flex flex-wrap items-end gap-3">
                 <div className="min-w-[220px]">
                   <div className={['mb-2 text-xs uppercase tracking-[0.2em]', labelClass].join(' ')}>
                     {t('计划日期', 'Planning date')}
@@ -868,14 +868,16 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
                 </button>
               </div>
             </div>
-            <button
-              type="button"
-              disabled={isLocked || loading}
-              onClick={() => setParameterDialogOpen(true)}
-              className={[primaryBtn, 'min-w-[168px]'].join(' ')}
-            >
-              {t('调整参数', 'Adjust parameters')}
-            </button>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                disabled={isLocked || loading}
+                onClick={() => setParameterDialogOpen(true)}
+                className={[primaryBtn, 'min-w-[168px]'].join(' ')}
+              >
+                {t('调整参数', 'Adjust parameters')}
+              </button>
+            </div>
           </div>
         </div>
       </div>
