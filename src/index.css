@@ -93,7 +93,8 @@ body[data-theme='light'] .roster-all-active,
 }
 
 .admin-theme-light thead {
-  background-color: rgba(109, 121, 132, 0.08) !important;
+  background:
+    linear-gradient(180deg, rgba(236, 232, 224, 0.92) 0%, rgba(228, 223, 214, 0.9) 100%) !important;
 }
 
 .admin-theme-light tbody tr {

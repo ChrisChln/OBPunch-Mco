@@ -9086,7 +9086,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
   const tabClass = (active: boolean) =>
     [
-      'rounded-full border px-4 py-2 text-sm font-medium transition',
+      'inline-flex h-11 min-w-[88px] items-center justify-center rounded-full border px-4 text-sm font-medium transition',
       active
         ? 'border-stone-200/90 bg-stone-100 text-stone-900 shadow-[0_10px_30px_rgba(0,0,0,0.18)]'
         : 'border-white/10 bg-white/[0.04] text-stone-200 hover:border-white/15 hover:bg-white/[0.07]',
@@ -9700,6 +9700,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const timecardRowsFiltered = useMemo(() => {
     if (page !== 'timecard') return [];
     const filtered = timecardRows.filter((r) => {
+      const weeklyPunchCount = Array.isArray(r.punchCountByDay)
+        ? r.punchCountByDay.reduce((sum, value) => sum + Number(value ?? 0), 0)
+        : 0;
+      const weeklyHours = Array.isArray(r.hoursByDay)
+        ? r.hoursByDay.reduce((sum, value) => sum + Number(value ?? 0), 0)
+        : 0;
+      const hasWeeklyPunchActivity = weeklyPunchCount > 0 || weeklyHours > 0 || Boolean(r.inProgressWeek);
+      if (!hasWeeklyPunchActivity) return false;
       if (timecardShift && r.shift !== timecardShift) return false;
       if (timecardInProgressOnly && !r.inProgressWeek) return false;
       if (timecardPresentDayFilter !== null && timecardPresentDayFilter >= 0 && timecardPresentDayFilter <= 6) {
@@ -11863,19 +11871,18 @@ ${rowsToHtml(late)}
                   </div>
                 </div>
 
-                <div className="mt-4 text-xs text-slate-400">
-                  {t('已加载', 'Loaded')}: {scheduleEmployeesFiltered.length} / {employees.length}
-                  {scheduleWorkDayFilter !== null && (
+                {scheduleWorkDayFilter !== null && (
+                  <div className="mt-4 text-xs text-slate-400">
                     <button
                       type="button"
                       disabled={isLocked}
                       onClick={() => setScheduleWorkDayFilter(null)}
-                      className="ml-3 rounded-md bg-white/10 px-2 py-0.5 text-[11px] text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="rounded-md bg-white/10 px-2 py-0.5 text-[11px] text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {t('日期筛选', 'Day filter')}: {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][scheduleWorkDayFilter]} ({t('清空', 'Clear')})
                     </button>
-                  )}
-                </div>
+                  </div>
+                )}
 
                 {scheduleError && <p className="mt-3 text-sm text-ember">{t('加载失败', 'Load failed')}: {scheduleError}</p>}
                 {!scheduleError && scheduleEmployeesFiltered.length === 0 && (
@@ -11890,7 +11897,7 @@ ${rowsToHtml(late)}
                     <table className="w-full table-fixed text-left text-xs leading-tight">
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
-                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('工号', 'ID')}</th>
+                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 pl-4 pr-1 py-2 backdrop-blur">{t('工号', 'ID')}</th>
                           <th className="sticky top-0 z-20 w-[124px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('姓名', 'Name')}</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">{t('工作天数', 'Work Days')}</th>
                           <th className="sticky top-0 z-20 w-[82px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('中介', 'Agency')}</th>
@@ -11918,14 +11925,14 @@ ${rowsToHtml(late)}
                           {scheduleDays.map((day, idx) => (
                             <th key={toDateOnly(day)} className="sticky top-0 z-20 w-[72px] bg-slate-950/95 px-0.5 py-2 text-center backdrop-blur">
                               <div className="flex flex-col items-center leading-tight">
-                                <span className="text-[9px] font-semibold text-emerald-300">
+                                <span className="text-[10px] font-semibold text-emerald-300">
                                   {(() => {
                                     const recommended = scheduleRecommendedTotalsByDate[toDateOnly(day)];
                                     return recommended === null || recommended === undefined
-                                      ? t('推荐 -', 'R -')
+                                      ? t('推荐 -', 'Recommended -')
                                       : lang === 'en'
-                                        ? `R ${recommended}`
-                                        : `推荐 ${recommended}`;
+                                        ? `Recommended ${recommended}`
+                                        : `推荐 ${recommended}人`;
                                   })()}
                                 </span>
                                 <button
@@ -11933,7 +11940,7 @@ ${rowsToHtml(late)}
                                   disabled={isLocked}
                                   onClick={() => setScheduleWorkDayFilter((prev) => (prev === idx ? null : idx))}
                                   className={[
-                                    'mt-1 rounded-md px-1 py-0.5 text-[9px] font-semibold transition',
+                                    'mt-1 rounded-md px-1 py-0.5 text-[10px] font-semibold transition',
                                     scheduleWorkDayFilter === idx
                                       ? 'bg-neon/20 text-neon'
                                       : 'text-neon hover:bg-white/10',
@@ -11941,9 +11948,9 @@ ${rowsToHtml(late)}
                                   ].join(' ')}
                                   title="Filter employees working this day"
                                 >
-                                  {lang === 'en' ? `W ${scheduleWorkingCountByDayIndex[idx]}` : `工 ${scheduleWorkingCountByDayIndex[idx]}`}
+                                  {lang === 'en' ? `Work ${scheduleWorkingCountByDayIndex[idx]}` : `工作 ${scheduleWorkingCountByDayIndex[idx]}人`}
                                 </button>
-                                <span className="mt-1 text-[9px]">{`${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][idx]} ${toDateOnly(day).slice(5)}`}</span>
+                                <span className="mt-1">{`${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][idx]} ${toDateOnly(day).slice(5)}`}</span>
                               </div>
                             </th>
                           ))}
@@ -12017,7 +12024,7 @@ ${rowsToHtml(late)}
 
                           return (
                             <tr className="border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-0" key={staff}>
-                              <td className="px-1 py-2 font-mono text-slate-200">{staff}</td>
+                              <td className="pl-4 pr-1 py-2 font-mono text-slate-200">{staff}</td>
                               <td className="px-1 py-2 text-slate-200 truncate">{name || '-'}</td>
                               <td className="px-1.5 py-2 text-center">
                                 <span className={['inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold', workDaysClass].join(' ')}>
@@ -12233,8 +12240,8 @@ ${rowsToHtml(late)}
                                           className={[
                                             'pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border p-2 text-[11px] opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100',
                                             themeMode === 'light'
-                                              ? 'border-slate-300/80 bg-[rgba(250,247,242,0.98)] text-slate-800 shadow-[0_18px_40px_rgba(55,65,81,0.18)]'
-                                              : 'border-white/15 bg-slate-950/95 text-slate-200'
+                                              ? 'border-slate-300 bg-stone-50 text-slate-900 shadow-[0_18px_40px_rgba(55,65,81,0.16)]'
+                                              : 'border-slate-700 bg-[#16181c] text-slate-100'
                                           ].join(' ')}
                                         >
                                           <div
@@ -12253,7 +12260,7 @@ ${rowsToHtml(late)}
                                                   key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)}
                                                   className={[
                                                     'rounded-md px-1.5 py-1',
-                                                    themeMode === 'light' ? 'bg-slate-900/[0.05]' : 'bg-white/5'
+                                                    themeMode === 'light' ? 'bg-stone-100' : 'bg-slate-800'
                                                   ].join(' ')}
                                                 >
                                                   <div className={['text-[10px]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>

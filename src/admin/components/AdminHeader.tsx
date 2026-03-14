@@ -37,6 +37,11 @@ export default function AdminHeader({
   onBack,
   onLogout
 }: AdminHeaderProps) {
+  const utilityButtonClass =
+    'inline-flex h-10 min-w-[72px] items-center justify-center rounded-full border px-3 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
+  const actionButtonClass =
+    'inline-flex h-10 min-w-[96px] items-center justify-center rounded-full border px-5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60';
+
   return (
     <header className="glass reveal rounded-[36px] border border-white/10 px-6 py-6 shadow-[0_30px_90px_rgba(0,0,0,0.28)] md:px-8 md:py-7">
       <div className="flex flex-wrap items-start justify-between gap-6">
@@ -56,7 +61,7 @@ export default function AdminHeader({
               disabled={isLocked}
               onClick={() => setThemeMode((prev) => (prev === 'dark' ? 'light' : 'dark'))}
               className={[
-                'rounded-full border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                utilityButtonClass,
                 themeMode === 'light'
                   ? 'border-stone-200/90 bg-stone-100 text-stone-900'
                   : 'border-white/10 bg-white/[0.04] text-stone-200 hover:border-white/15 hover:bg-white/[0.07]'
@@ -70,7 +75,7 @@ export default function AdminHeader({
               disabled={isLocked}
               onClick={() => setLang('zh')}
               className={[
-                'rounded-full border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                utilityButtonClass,
                 lang === 'zh'
                   ? 'border-stone-200/90 bg-stone-100 text-stone-900'
                   : 'border-white/10 bg-white/[0.04] text-stone-200 hover:border-white/15 hover:bg-white/[0.07]'
@@ -84,7 +89,7 @@ export default function AdminHeader({
               disabled={isLocked}
               onClick={() => setLang('en')}
               className={[
-                'rounded-full border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                utilityButtonClass,
                 lang === 'en'
                   ? 'border-stone-200/90 bg-stone-100 text-stone-900'
                   : 'border-white/10 bg-white/[0.04] text-stone-200 hover:border-white/15 hover:bg-white/[0.07]'
@@ -116,7 +121,7 @@ export default function AdminHeader({
             type="button"
             disabled={isLocked}
             onClick={onBack}
-            className="rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm font-medium text-stone-200 transition hover:border-white/15 hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-60"
+            className={[actionButtonClass, 'border-white/10 bg-white/[0.04] text-stone-200 hover:border-white/15 hover:bg-white/[0.07]'].join(' ')}
           >
             {t('返回', 'Back')}
           </button>
@@ -125,7 +130,7 @@ export default function AdminHeader({
               type="button"
               disabled={isLocked}
               onClick={() => void onLogout()}
-              className="rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm font-medium text-stone-200 transition hover:border-white/15 hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-60"
+              className={[actionButtonClass, 'border-white/10 bg-white/[0.04] text-stone-200 hover:border-white/15 hover:bg-white/[0.07]'].join(' ')}
             >
               {t('退出登录', 'Logout')}
             </button>
