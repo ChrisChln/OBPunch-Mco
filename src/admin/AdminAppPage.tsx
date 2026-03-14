@@ -3597,12 +3597,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const schedulePickerOptions = useMemo(() => {
     const base = [
       { key: 'work', labelZh: '工作', labelEn: 'Work', cls: themeMode === 'light' ? 'bg-neon text-slate-950' : 'bg-neon text-white', mode: 'all' },
-      { key: 'temp_work', labelZh: '临时工作', labelEn: 'Temporary Work', cls: 'bg-emerald-700 text-white', mode: 'current' },
-      { key: 'planned_temp_work', labelZh: '计划临时工作', labelEn: 'Planned Temporary Work', cls: 'bg-emerald-500 text-white', mode: 'future' },
+      { key: 'temp_work', labelZh: '临时工作', labelEn: 'Tem Work', cls: 'bg-emerald-700 text-white', mode: 'current' },
+      { key: 'planned_temp_work', labelZh: '计划临时工作', labelEn: 'Planned Tem Work', cls: 'bg-emerald-500 text-white', mode: 'future' },
       { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white', mode: 'current' },
       { key: 'planned_leave', labelZh: '计划请假', labelEn: 'Planned Leave', cls: 'bg-fuchsia-600 text-white', mode: 'future' },
-      { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Temporary Off', cls: 'bg-red-800 text-red-100', mode: 'current' },
-      { key: 'planned_temp_rest', labelZh: '计划临时排休', labelEn: 'Planned Temporary Off', cls: 'bg-rose-600 text-white', mode: 'future' },
+      { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Tem Off', cls: 'bg-red-800 text-red-100', mode: 'current' },
+      { key: 'planned_temp_rest', labelZh: '计划临时排休', labelEn: 'Planned Tem Off', cls: 'bg-rose-600 text-white', mode: 'future' },
       { key: 'rest', labelZh: '休息', labelEn: 'Off', cls: 'bg-ember text-white', mode: 'all' }
     ] as Array<{ key: ScheduleBaseState; labelZh: string; labelEn: string; cls: string; mode: 'all' | 'current' | 'future' }>;
 
@@ -12214,9 +12214,9 @@ ${rowsToHtml(late)}
                                           {state === 'work'
                                             ? t('工作', 'Work')
                                             : state === 'temp_work'
-                                              ? t('临时工作', 'Temporary Work')
+                                              ? t('临时工作', 'Tem Work')
                                             : state === 'planned_temp_work'
-                                              ? t('计划临时工作', 'Planned Temporary Work')
+                                              ? t('计划临时工作', 'Planned Tem Work')
                                             : state === 'leave'
                                               ? t('请假', 'Excuse')
                                             : state === 'planned_leave'
@@ -12226,9 +12226,9 @@ ${rowsToHtml(late)}
                                             : state === 'absent'
                                               ? t('缺勤', 'Absent')
                                             : state === 'temp_rest'
-                                                ? t('临时排休', 'Temporary Off')
+                                                ? t('临时排休', 'Tem Off')
                                               : state === 'planned_temp_rest'
-                                                ? t('计划临时排休', 'Planned Temporary Off')
+                                                ? t('计划临时排休', 'Planned Tem Off')
                                               : t('休息', 'Off')}
                                         </button>
                                         {scheduleCellAudit.length > 0 && (
@@ -12245,9 +12245,14 @@ ${rowsToHtml(late)}
                                       </span>
                                       {scheduleCellAudit.length > 0 && (
                                         <div
-                                          className="pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-2 text-[11px] text-slate-900 opacity-0 shadow-[0_18px_40px_rgba(55,65,81,0.16)] transition group-hover:visible group-hover:opacity-100"
+                                          className={[
+                                            'pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border p-2 text-[11px] opacity-0 transition group-hover:visible group-hover:opacity-100',
+                                            themeMode === 'light'
+                                              ? 'border-slate-200 bg-white text-slate-900 shadow-[0_18px_40px_rgba(55,65,81,0.16)]'
+                                              : 'border-slate-700 bg-[#16181c] text-slate-100 shadow-[0_18px_40px_rgba(0,0,0,0.45)]'
+                                          ].join(' ')}
                                         >
-                                          <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                                          <div className={['mb-1 text-[10px] uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                                             {t('最近操作', 'Recent changes')}
                                           </div>
                                           <div className="space-y-1">
@@ -12256,18 +12261,18 @@ ${rowsToHtml(late)}
                                               return (
                                                 <div
                                                   key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)}
-                                                  className="rounded-md bg-slate-100 px-1.5 py-1"
+                                                  className={['rounded-md px-1.5 py-1', themeMode === 'light' ? 'bg-slate-100' : 'bg-slate-800'].join(' ')}
                                                 >
-                                                  <div className="text-[10px] text-slate-500">
+                                                  <div className={['text-[10px]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                                                     {formatCellAuditTime(item.created_at)} · {normalizeAuditActor((item as any).actor) || '-'}
                                                   </div>
-                                                  <div className="text-slate-800">{renderAuditSummary(detail.summary)}</div>
+                                                  <div className={themeMode === 'light' ? 'text-slate-800' : 'text-slate-100'}>{renderAuditSummary(detail.summary)}</div>
                                                   {detail.details.slice(0, 2).map((d, idx2) => (
                                                     <div
                                                       key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`}
-                                                      className="mt-0.5 text-[10px] text-slate-600"
+                                                      className={['mt-0.5 text-[10px]', themeMode === 'light' ? 'text-slate-600' : 'text-slate-300'].join(' ')}
                                                     >
-                                                      <span className="text-slate-500">{d.label}: </span>
+                                                      <span className={themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'}>{d.label}: </span>
                                                       <span className="whitespace-normal break-words">{d.value}</span>
                                                     </div>
                                                   ))}
@@ -12344,7 +12349,7 @@ ${rowsToHtml(late)}
                           {schedulePicker.currentState === item.key ? (
                             <span className="text-[10px] uppercase tracking-[0.18em]">Now</span>
                           ) : item.mode !== 'all' && item.mode === schedulePickerMode ? (
-                            <span className="text-[10px] uppercase tracking-[0.18em]">{t('推荐', 'Recommended')}</span>
+                            <span className="text-[10px] uppercase tracking-[0.18em]">{t('推', 'Rec')}</span>
                           ) : null}
                         </button>
                       ))}
