@@ -3596,7 +3596,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
   const schedulePickerOptions = useMemo(() => {
     const base = [
-      { key: 'work', labelZh: '工作', labelEn: 'Work', cls: themeMode === 'light' ? 'bg-neon text-slate-950' : 'bg-neon text-white', mode: 'all' },
+      { key: 'work', labelZh: '工作', labelEn: 'Work', cls: 'bg-neon text-white', mode: 'all' },
       { key: 'temp_work', labelZh: '临时工作', labelEn: 'Tem Work', cls: 'bg-emerald-700 text-white', mode: 'current' },
       { key: 'planned_temp_work', labelZh: '计划临时工作', labelEn: 'Planned Tem Work', cls: 'bg-emerald-500 text-white', mode: 'future' },
       { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white', mode: 'current' },
@@ -4363,7 +4363,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const exec = async () => {
       setEmployeesError(null);
 
-      const pageSize = 200;
+      const firstPageSize = 60;
+      const nextPageSize = 200;
 
       const build = (_mode: EmployeeColumnMode, from: number, to: number) => {
         // Use wildcard select to tolerate mixed legacy schemas:
@@ -4378,9 +4379,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       };
 
       const all: EmployeeRow[] = [];
+      const activeLoaded: EmployeeRow[] = [];
       let from = 0;
       let done = false;
+      const maxPages = 500;
+      let pageCount = 0;
+      let previousPageSignature = '';
       while (!done) {
+        if (pageCount >= maxPages) {
+          setEmployeesError('Employee list paging exceeded safety limit. Please refine filters and retry.');
+          break;
+        }
+        const pageSize = pageCount === 0 ? firstPageSize : nextPageSize;
         const to = from + pageSize - 1;
         let attempt = await run(mode, from, to);
         if (attempt.error) {
@@ -4397,26 +4407,42 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         }
 
         const rows = (attempt.data as EmployeeRow[] | null) ?? [];
+        const pageSignature =
+          rows.length > 0
+            ? `${rows.length}|${String(rows[0]?.staff_id ?? rows[0]?.id ?? '')}|${String(rows[rows.length - 1]?.staff_id ?? rows[rows.length - 1]?.id ?? '')}`
+            : '0';
+        if (rows.length === pageSize && pageSignature === previousPageSignature) {
+          setEmployeesError('Employee list paging loop detected. Please refresh and retry.');
+          break;
+        }
+        previousPageSignature = pageSignature;
         all.push(...rows);
+        const loadedChunk = rows
+          .map((row) => {
+            const workAccount = String((row as any)?.work_account ?? (row as any)?.WorkAccount ?? '').trim();
+            const workPassword = String((row as any)?.work_password ?? (row as any)?.WorkPassword ?? '').trim();
+            return {
+              ...row,
+              work_password: resolveDefaultWorkPassword(workAccount, workPassword)
+            } as EmployeeRow;
+          })
+          .filter((row) => isEmployeeActive(row));
+        activeLoaded.push(...loadedChunk);
+        setEmployees([...activeLoaded]);
+        pageCount += 1;
         if (rows.length < pageSize) {
           done = true;
         } else {
           from += pageSize;
+          await new Promise<void>((resolve) => {
+            window.setTimeout(() => resolve(), 0);
+          });
         }
       }
 
-      setEmployees(
-        all.map((row) => {
-          const workAccount = String((row as any)?.work_account ?? (row as any)?.WorkAccount ?? '').trim();
-          const workPassword = String((row as any)?.work_password ?? (row as any)?.WorkPassword ?? '').trim();
-          return {
-            ...row,
-            work_password: resolveDefaultWorkPassword(workAccount, workPassword)
-          } as EmployeeRow;
-        }).filter((row) => isEmployeeActive(row))
-      );
+      setEmployees([...activeLoaded]);
       setEmployeesHasMore(false);
-      fetchedEmployees = all.filter((row) => isEmployeeActive(row));
+      fetchedEmployees = [...activeLoaded];
 
       const staffIdsRaw = all.map((e) => String(e.staff_id ?? '').trim()).filter(Boolean);
       const staffIds = Array.from(new Set(staffIdsRaw.map((id) => normalizeStaffId(id)).filter(Boolean)));

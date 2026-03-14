@@ -147,40 +147,40 @@ export default function EmployeesTableSection({
         className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30"
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
       >
-        <table className="min-w-[1360px] w-full text-left text-sm">
+        <table className="min-w-[1600px] w-full text-left text-sm">
           <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-xs uppercase tracking-[0.2em] text-slate-400 backdrop-blur">
             <tr>
-              <th className="px-4 py-3">Employee ID</th>
-              <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">Agency</th>
-              <th className="px-4 py-3">Position</th>
-              <th className="px-4 py-3">{t('标签', 'Label')}</th>
-              <th className="px-4 py-3">{t('工作账号', 'Work account')}</th>
-              <th className="px-4 py-3">{t('工作密码', 'Work password')}</th>
-              <th className="px-4 py-3">
+              <th className="w-[150px] px-4 py-3 whitespace-nowrap">Employee ID</th>
+              <th className="w-[240px] px-4 py-3">Name</th>
+              <th className="w-[130px] px-4 py-3 whitespace-nowrap">Agency</th>
+              <th className="w-[120px] px-4 py-3 whitespace-nowrap">Position</th>
+              <th className="w-[130px] px-4 py-3 whitespace-nowrap">{t('标签', 'Label')}</th>
+              <th className="w-[150px] px-4 py-3 whitespace-nowrap">{t('账号', 'Account')}</th>
+              <th className="w-[150px] px-4 py-3 whitespace-nowrap">{t('密码', 'Password')}</th>
+              <th className="w-[130px] px-4 py-3 whitespace-nowrap">
                 <button
                   type="button"
                   onClick={onToggleHireDateSort}
-                  className="inline-flex items-center gap-1 text-xs uppercase tracking-[0.2em] text-slate-400 transition hover:text-slate-200"
+                  className="inline-flex items-center gap-1 whitespace-nowrap text-xs uppercase tracking-[0.2em] text-slate-400 transition hover:text-slate-200"
                   title={t('按入职日期从新到旧排序', 'Sort by hire date newest to oldest')}
                 >
                   {t('入职日期', 'Hire date')}
                   {employeeSortByHireDateDesc ? ' ↓' : ''}
                 </button>
               </th>
-              <th className="px-4 py-3">{t('班次', 'Shift')}</th>
-              <th className="px-4 py-3">
+              <th className="w-[100px] px-4 py-3 whitespace-nowrap">{t('班次', 'Shift')}</th>
+              <th className="w-[130px] px-4 py-3 whitespace-nowrap">
                 <button
                   type="button"
                   onClick={onToggleSort}
-                  className="inline-flex items-center gap-1 text-xs uppercase tracking-[0.2em] text-slate-400 transition hover:text-slate-200"
+                  className="inline-flex items-center gap-1 whitespace-nowrap text-xs uppercase tracking-[0.2em] text-slate-400 transition hover:text-slate-200"
                   title={t('按天数从高到低排序', 'Sort by days high to low')}
                 >
                   {t('最后打卡', 'Last punch')}
                   {employeeSortByLastPunchDesc ? ' ↓' : ''}
                 </button>
               </th>
-              <th className="px-4 py-3 text-right">{t('操作', 'Actions')}</th>
+              <th className="w-[240px] px-4 py-3 text-right whitespace-nowrap">{t('操作', 'Actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -271,10 +271,12 @@ export default function EmployeesTableSection({
                     isSelected ? '' : 'hover:bg-white/5'
                   ].join(' ')}
                 >
-                  <td className="px-4 py-3 font-mono text-slate-200">{displayStaffId(staff)}</td>
-                  <td className="px-4 py-3 text-slate-200">{name}</td>
-                  <td className="px-4 py-3 text-slate-200">{agency}</td>
-                  <td className="px-4 py-3 text-slate-200">
+                  <td className="w-[150px] px-4 py-3 font-mono text-slate-200 whitespace-nowrap">{displayStaffId(staff)}</td>
+                  <td className="w-[240px] max-w-[240px] px-4 py-3 text-slate-200">
+                    <span className="block truncate" title={name || '-'}>{name || '-'}</span>
+                  </td>
+                  <td className="w-[130px] px-4 py-3 text-slate-200 whitespace-nowrap">{agency || '-'}</td>
+                  <td className="w-[120px] px-4 py-3 text-slate-200 whitespace-nowrap">
                     <span
                       className={[
                         'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
@@ -284,7 +286,7 @@ export default function EmployeesTableSection({
                       {position || '-'}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-slate-200">
+                  <td className="w-[130px] px-4 py-3 text-slate-200">
                     {label ? (
                       <span
                         className={[
@@ -298,10 +300,10 @@ export default function EmployeesTableSection({
                       '-'
                     )}
                   </td>
-                  <td className="px-4 py-3 text-slate-200">{workAccount || '-'}</td>
-                  <td className="px-4 py-3 text-slate-200">{workPassword || '-'}</td>
-                  <td className="px-4 py-3 text-slate-200">{hireDate}</td>
-                  <td className="px-4 py-3 text-slate-200">
+                  <td className="w-[150px] px-4 py-3 text-slate-200 whitespace-nowrap">{workAccount || '-'}</td>
+                  <td className="w-[150px] px-4 py-3 text-slate-200 whitespace-nowrap">{workPassword || '-'}</td>
+                  <td className="w-[130px] px-4 py-3 text-slate-200 whitespace-nowrap">{hireDate}</td>
+                  <td className="w-[100px] px-4 py-3 text-slate-200 whitespace-nowrap">
                     <span
                       title={shiftTitle}
                       className={[
@@ -312,8 +314,8 @@ export default function EmployeesTableSection({
                       {shiftLabel}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-slate-200">{lastPunchDaysText}</td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="w-[130px] px-4 py-3 text-slate-200 whitespace-nowrap">{lastPunchDaysText}</td>
+                  <td className="w-[240px] px-4 py-3 text-right whitespace-nowrap">
                     <button
                       type="button"
                       disabled={isLocked}
