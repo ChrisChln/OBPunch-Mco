@@ -11,8 +11,8 @@ export default {
         mint: '#16db65'
       },
       fontFamily: {
-        display: ['"Bebas Neue"', 'sans-serif'],
-        body: ['"Space Grotesk"', 'sans-serif']
+        display: ['"Cormorant Garamond"', 'serif'],
+        body: ['"Manrope"', 'sans-serif']
       },
       boxShadow: {
         glow: '0 0 0 1px rgba(158, 255, 0, 0.5), 0 10px 30px rgba(158, 255, 0, 0.2)'

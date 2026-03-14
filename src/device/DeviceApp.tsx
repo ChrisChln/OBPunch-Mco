@@ -90,6 +90,24 @@ const playDeviceSound = (kind: 'successIn' | 'successOut' | 'error') => {
   }
 };
 
+const getDevicePositionToneClass = (value: string) => {
+  const pos = String(value ?? '').trim().toLowerCase();
+  if (pos === 'pick') return 'border-sky-300/22 bg-gradient-to-br from-sky-400/[0.14] via-sky-300/[0.05] to-transparent';
+  if (pos === 'pack') return 'border-rose-300/22 bg-gradient-to-br from-rose-400/[0.14] via-rose-300/[0.05] to-transparent';
+  if (pos === 'rebin') return 'border-emerald-300/22 bg-gradient-to-br from-emerald-400/[0.14] via-emerald-300/[0.05] to-transparent';
+  if (pos === 'preship') return 'border-amber-300/22 bg-gradient-to-br from-amber-400/[0.14] via-amber-300/[0.05] to-transparent';
+  if (pos === 'transfer') return 'border-violet-300/22 bg-gradient-to-br from-violet-400/[0.14] via-violet-300/[0.05] to-transparent';
+  return 'border-white/12 bg-white/[0.03]';
+};
+
+const getDeviceStatusCardClass = (statusTone: 'available' | 'counting' | 'overdue' | 'borrowed', position: string) => {
+  const positionTone = getDevicePositionToneClass(position);
+  if (statusTone === 'available') return positionTone;
+  if (statusTone === 'counting') return 'border-sky-300/25 bg-gradient-to-br from-sky-400/[0.16] via-sky-300/[0.06] to-transparent';
+  if (statusTone === 'overdue') return 'border-rose-300/25 bg-gradient-to-br from-rose-400/[0.16] via-rose-300/[0.06] to-transparent';
+  return 'border-amber-300/25 bg-gradient-to-br from-amber-400/[0.16] via-amber-300/[0.06] to-transparent';
+};
+
 export default function DeviceApp() {
   type SavedFilters = {
     search: string;
@@ -626,18 +644,25 @@ export default function DeviceApp() {
     }
     return count;
   }, [statusRows, nowMs, currentBorrowBySn, lastLoanAtBySn]);
-
   return (
     <div className="min-h-screen bg-ink text-paper">
-      <main className="w-full px-4 py-6 md:px-6 xl:px-8">
-        <header className="glass rounded-3xl p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h1 className="font-display text-2xl tracking-[0.08em]">Device Borrow/Return</h1>
-            <div className="flex items-center gap-2">
+      <main className="w-full px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
+        <section className="glass mx-auto w-full max-w-[1580px] rounded-[32px] px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
+          <header className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(420px,0.8fr)]">
+            <div className="space-y-3">
+              <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-stone-300">
+                Device Operations
+              </div>
+              <div className="space-y-2">
+                <h1 className="font-display text-4xl leading-none tracking-[0.03em] text-stone-50 sm:text-5xl">Device Desk</h1>
+                <p className={['max-w-2xl text-sm leading-6 sm:text-[15px]', toneClass].join(' ')}>{message.text}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-start justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setCountingOpen(true)}
-                className="rounded-xl border border-sky-400/50 bg-sky-500/15 px-3 py-2 text-sm font-semibold text-sky-200 transition hover:bg-sky-500/25"
+                className="inline-flex items-center rounded-full border border-sky-300/25 bg-sky-400/[0.10] px-4 py-2 text-sm font-medium text-sky-100 transition hover:bg-sky-400/[0.14]"
               >
                 Counting{needCountingCount > 0 ? ` (${needCountingCount})` : ''}
               </button>
@@ -646,7 +671,7 @@ export default function DeviceApp() {
                 onClick={() => {
                   window.location.href = '/';
                 }}
-                className="rounded-xl bg-white/10 px-3 py-2 text-sm text-slate-200 transition hover:bg-white/15"
+                className="rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm text-stone-200 transition hover:bg-white/[0.08]"
               >
                 Punch
               </button>
@@ -654,26 +679,30 @@ export default function DeviceApp() {
                 type="button"
                 onClick={() => void fetchAll()}
                 disabled={loading}
-                className="rounded-xl bg-white/10 px-3 py-2 text-sm text-slate-200 transition hover:bg-white/15 disabled:opacity-50"
+                className="rounded-full border border-[#d9cfbf]/40 bg-[#e8dfcf] px-4 py-2 text-sm font-semibold text-[#181614] transition hover:bg-[#f0e9dc] disabled:opacity-50"
               >
                 Refresh
               </button>
             </div>
-          </div>
-          <p className={['mt-2 text-sm', toneClass].join(' ')}>{message.text}</p>
-        </header>
+          </header>
 
-        <section className="mt-4 grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-          <div className="glass rounded-3xl p-4">
-            <div className="mb-3 grid grid-cols-2 gap-2">
+          <section className="mt-6 grid gap-4 xl:grid-cols-[390px_minmax(0,1fr)]">
+            <div className="rounded-[28px] border border-white/10 bg-black/20 p-4 sm:p-5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">Device Actions</div>
+                  <div className="mt-1 text-sm text-stone-300">Borrow and return flow with live operation log.</div>
+                </div>
+              </div>
+              <div className="mb-4 grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => setScanMode('borrow')}
                 className={[
-                  'h-12 w-full rounded-2xl px-3 text-base font-bold transition',
+                  'h-12 w-full rounded-[20px] px-3 text-sm font-semibold transition',
                   scanMode === 'borrow'
-                    ? 'bg-neon text-ink shadow-glow'
-                    : 'border border-white/15 bg-white/10 text-slate-200 hover:bg-white/15'
+                    ? 'border border-emerald-300/25 bg-emerald-400/[0.12] text-emerald-100'
+                    : 'border border-white/15 bg-white/[0.04] text-stone-200 hover:bg-white/[0.08]'
                 ].join(' ')}
               >
                 Borrow
@@ -682,19 +711,19 @@ export default function DeviceApp() {
                 type="button"
                 onClick={() => setScanMode('return')}
                 className={[
-                  'h-12 w-full rounded-2xl px-3 text-base font-bold transition',
+                  'h-12 w-full rounded-[20px] px-3 text-sm font-semibold transition',
                   scanMode === 'return'
-                    ? 'bg-neon text-ink shadow-glow'
-                    : 'border border-white/15 bg-white/10 text-slate-200 hover:bg-white/15'
+                    ? 'border border-rose-300/25 bg-rose-400/[0.12] text-rose-100'
+                    : 'border border-white/15 bg-white/[0.04] text-stone-200 hover:bg-white/[0.08]'
                 ].join(' ')}
               >
                 Return
               </button>
             </div>
-            <div className="min-h-[152px]">
+            <div className="min-h-[188px] rounded-[24px] border border-white/10 bg-white/[0.03] p-4">
               <label
                 className={[
-                  'text-xs uppercase tracking-[0.18em] text-slate-400 transition-opacity',
+                  'text-xs uppercase tracking-[0.18em] text-stone-400 transition-opacity',
                   scanMode === 'borrow' ? 'opacity-100' : 'opacity-0'
                 ].join(' ')}
               >
@@ -713,11 +742,11 @@ export default function DeviceApp() {
                 placeholder="Scan staff ID first"
                 disabled={scanMode !== 'borrow'}
                 className={[
-                  'mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow',
+                  'mt-2 h-12 w-full rounded-[18px] border border-white/10 bg-white/[0.04] px-4 text-base text-stone-100 outline-none transition focus:border-white/20',
                   scanMode === 'borrow' ? 'opacity-100' : 'pointer-events-none opacity-0'
                 ].join(' ')}
               />
-              <label className="mt-3 block text-xs uppercase tracking-[0.18em] text-slate-400">SN</label>
+              <label className="mt-3 block text-xs uppercase tracking-[0.18em] text-stone-400">SN</label>
               <input
                 ref={snRef}
                 value={snInput}
@@ -729,18 +758,18 @@ export default function DeviceApp() {
                   }
                 }}
                 placeholder="Then scan device SN"
-                className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow"
+                className="mt-2 h-12 w-full rounded-[18px] border border-white/10 bg-white/[0.04] px-4 text-base text-stone-100 outline-none transition focus:border-white/20"
               />
             </div>
-            <div className="mt-3 h-[420px] rounded-2xl border border-white/10 bg-black/25 p-3">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Latest Result</div>
+            <div className="mt-4 h-[420px] rounded-[24px] border border-white/10 bg-white/[0.03] p-4">
+              <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">Latest Result</div>
               <div className="h-[calc(100%-1.5rem)] space-y-2 overflow-auto pr-1">
                 {opLogs.map((row) => (
                   <div
                     key={row.id}
                     className={[
-                      'rounded-xl border bg-white/5 px-2.5 py-1.5',
-                      row.tone === 'success' ? 'border-emerald-400/55' : 'border-rose-400/55'
+                      'rounded-[18px] border bg-white/[0.04] px-3 py-2',
+                      row.tone === 'success' ? 'border-emerald-300/25' : 'border-rose-300/25'
                     ].join(' ')}
                   >
                     {(() => {
@@ -750,49 +779,52 @@ export default function DeviceApp() {
                       const detailTextRaw = actionLabel ? row.text.slice(actionLabel.length).trimStart() : row.text;
                       const detailText = detailTextRaw.replace(/\s*\/\s*/g, ' · ');
                       const actionClass = isBorrow
-                        ? 'bg-[#121a24] text-[#00f28a]'
+                        ? 'border border-emerald-300/25 bg-emerald-400/[0.10] text-emerald-100'
                         : isReturn
-                          ? 'bg-[#121a24] text-[#ff3b3b]'
+                          ? 'border border-rose-300/25 bg-rose-400/[0.10] text-rose-100'
                           : row.tone === 'success'
-                            ? 'bg-[#121a24] text-[#00f28a]'
-                            : 'bg-[#121a24] text-[#ff3b3b]';
-                      const detailClass = row.tone === 'success' ? 'text-emerald-200' : 'text-rose-200';
+                            ? 'border border-emerald-300/25 bg-emerald-400/[0.10] text-emerald-100'
+                            : 'border border-rose-300/25 bg-rose-400/[0.10] text-rose-100';
+                      const detailClass = 'text-stone-100';
                       return (
                         <div className="flex items-center gap-2">
                           {actionLabel && (
-                            <span className={['inline-flex h-5 min-w-[58px] items-center justify-center rounded-lg px-2 text-[10px] font-bold leading-none tracking-[0.06em]', actionClass].join(' ')}>
+                            <span className={['inline-flex h-6 min-w-[64px] items-center justify-center rounded-full px-2 text-[10px] font-semibold leading-none tracking-[0.12em]', actionClass].join(' ')}>
                               {actionLabel}
                             </span>
                           )}
                           <span className={['min-w-0 flex-1 truncate text-xs font-semibold leading-none', detailClass].join(' ')} title={detailText}>
                             {detailText}
                           </span>
-                          <span className="shrink-0 text-[11px] text-slate-400">{new Date(row.at).toLocaleTimeString('en-US', { hour12: false })}</span>
+                          <span className="shrink-0 text-[11px] text-stone-500">{new Date(row.at).toLocaleTimeString('en-US', { hour12: false })}</span>
                         </div>
                       );
                     })()}
                   </div>
                 ))}
-                {opLogs.length === 0 && <div className="pt-10 text-center text-xs text-slate-500">No records yet</div>}
+                {opLogs.length === 0 && <div className="pt-10 text-center text-xs text-stone-500">No records yet</div>}
               </div>
             </div>
           </div>
 
-          <div className="glass rounded-3xl p-4">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="font-display text-xl tracking-[0.06em]">Device Status</h2>
+          <div className="rounded-[28px] border border-white/10 bg-black/20 p-4 sm:p-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">Device Status</div>
+                <div className="mt-1 text-sm text-stone-300">Live availability, borrowing state, and last known holder.</div>
+              </div>
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search SN / holder / position"
-                className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon md:w-64"
+                className="h-11 w-full rounded-[18px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-100 outline-none transition focus:border-white/20 md:w-72"
               />
             </div>
-            <div className="mb-3 grid gap-2 sm:grid-cols-3">
+            <div className="mb-4 grid gap-2 sm:grid-cols-3">
               <select
                 value={positionFilter}
                 onChange={(e) => setPositionFilter((e.target.value as AllowedPosition | '') ?? '')}
-                className="h-10 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon"
+                className="h-11 rounded-[18px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-100 outline-none transition focus:border-white/20"
               >
                 <option value="">All positions</option>
                 {ALLOWED_POSITIONS.map((pos) => (
@@ -804,23 +836,23 @@ export default function DeviceApp() {
               <select
                 value={typeFilter}
                 onChange={(e) => setTypeFilter((e.target.value as DeviceType | '') ?? '')}
-                className="h-10 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon"
+                className="h-11 rounded-[18px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-100 outline-none transition focus:border-white/20"
               >
                 <option value="">All types</option>
                 <option value="PDA">PDA</option>
                 <option value="CART">CART</option>
               </select>
-              <label className="flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-200">
+              <label className="flex h-11 items-center gap-2 rounded-[18px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-200">
                 <input
                   type="checkbox"
                   checked={borrowedOnly}
                   onChange={(e) => setBorrowedOnly(e.target.checked)}
-                  className="h-4 w-4 accent-lime-400"
+                  className="h-4 w-4 accent-[#e8dfcf]"
                 />
                 Borrowed only
               </label>
             </div>
-            <div className="grid max-h-[70vh] grid-cols-5 gap-2 overflow-auto pr-1 md:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8">
+            <div className="grid max-h-[70vh] grid-cols-2 gap-3 overflow-auto pr-1 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
               {statusRows.map((row) => {
                 const sn = row.device_sn!;
                 const borrowed = currentBorrowBySn.get(sn);
@@ -836,47 +868,43 @@ export default function DeviceApp() {
                   : borrowAgeMs >= BORROW_OVERDUE_MS
                     ? 'overdue'
                     : 'borrowed';
-                const cardClass =
-                  statusTone === 'available'
-                    ? 'border-emerald-400/45 bg-emerald-500/10'
-                    : statusTone === 'counting'
-                      ? 'border-sky-400/55 bg-sky-500/12'
-                    : statusTone === 'overdue'
-                      ? 'border-rose-400/55 bg-rose-500/10'
-                      : 'border-amber-400/55 bg-amber-500/10';
+                const cardClass = getDeviceStatusCardClass(statusTone, String(row.position ?? ''));
                 const statusTextClass =
                   statusTone === 'available'
-                    ? 'text-emerald-300'
+                    ? 'text-stone-100'
                     : statusTone === 'counting'
-                      ? 'text-sky-300'
+                      ? 'text-sky-100'
                     : statusTone === 'overdue'
-                      ? 'text-rose-300'
-                      : 'text-amber-300';
+                      ? 'text-rose-100'
+                      : 'text-amber-100';
                 return (
-                  <div key={sn} className={['aspect-square rounded-xl border px-3 py-3 transition-colors', cardClass].join(' ')}>
+                  <div
+                    key={sn}
+                    className={['min-h-[210px] rounded-[24px] border px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] transition-colors', cardClass].join(' ')}
+                  >
                     <div className="flex h-full flex-col justify-between">
                       <div>
-                        <div className="text-sm font-semibold text-slate-100">{row.device_name || '-'}</div>
-                        <div className="mt-1 text-xs text-slate-400">
+                        <div className="text-sm font-semibold text-stone-100">{row.device_name || '-'}</div>
+                        <div className="mt-1 text-xs text-stone-400">
                           {row.device_type} · {row.position || 'No position'}
                         </div>
                       </div>
-                      <div className="border-t border-white/10 pt-2 text-right">
+                      <div className="border-t border-white/10 pt-3">
                         {borrowed ? (
                           <>
-                            <div className={['text-xs font-semibold', statusTextClass].join(' ')}>
+                            <div className={['text-xs font-semibold uppercase tracking-[0.12em]', statusTextClass].join(' ')}>
                               {statusTone === 'overdue' ? 'Borrowed >8h' : 'Borrowed'}
                             </div>
-                            <div className="text-xs text-slate-200">{holderName}</div>
-                            <div className="text-[11px] text-slate-400">Duration: {formatBorrowDuration(borrowed.createdAt)}</div>
-                            <div className="mt-0.5 text-[11px] text-slate-400">Last user: {lastUserName}</div>
+                            <div className="mt-2 text-sm text-stone-100">{holderName}</div>
+                            <div className="mt-1 text-[11px] text-stone-400">Duration: {formatBorrowDuration(borrowed.createdAt)}</div>
+                            <div className="mt-0.5 text-[11px] text-stone-400">Last user: {lastUserName}</div>
                           </>
                         ) : (
                           <>
-                            <div className={['text-xs font-semibold', statusTextClass].join(' ')}>
+                            <div className={['text-xs font-semibold uppercase tracking-[0.12em]', statusTextClass].join(' ')}>
                               {statusTone === 'counting' ? 'Need Counting' : 'Available'}
                             </div>
-                            <div className="mt-0.5 text-[11px] text-slate-400">Last user: {lastUserName}</div>
+                            <div className="mt-2 text-[11px] text-stone-400">Last user: {lastUserName}</div>
                           </>
                         )}
                       </div>
@@ -884,25 +912,26 @@ export default function DeviceApp() {
                   </div>
                 );
               })}
-              {statusRows.length === 0 && <div className="col-span-full py-6 text-sm text-slate-400">No device data.</div>}
+              {statusRows.length === 0 && <div className="col-span-full py-6 text-sm text-stone-400">No device data.</div>}
             </div>
           </div>
         </section>
+        </section>
       </main>
       {countingOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-sky-400/40 bg-[#071022] p-4 shadow-[0_20px_80px_rgba(56,189,248,0.2)]">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="font-display text-lg tracking-[0.08em] text-sky-200">Counting</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b0c0e]/70 p-4">
+          <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#17191c] p-5 shadow-[0_28px_80px_rgba(0,0,0,0.45)]">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-stone-100">Counting</h3>
               <button
                 type="button"
                 onClick={() => setCountingOpen(false)}
-                className="rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15"
+                className="rounded-full border border-white/10 bg-white/[0.05] px-3.5 py-1.5 text-xs font-medium text-stone-200 transition hover:bg-white/[0.08]"
               >
                 Close
               </button>
             </div>
-            <p className="mb-2 text-xs text-slate-400">Scan device SN to clear Need Counting status.</p>
+            <p className="mb-3 text-xs text-stone-400">Scan device SN to clear Need Counting status.</p>
             <input
               ref={countingSnRef}
               value={countingSnInput}
@@ -914,12 +943,12 @@ export default function DeviceApp() {
                 }
               }}
               placeholder="Scan device SN"
-              className="h-11 w-full rounded-xl border border-sky-400/30 bg-black/40 px-3 text-sm text-white outline-none transition focus:border-sky-300 focus:shadow-[0_0_0_1px_rgba(125,211,252,0.35)]"
+              className="h-11 w-full rounded-[18px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-100 outline-none transition focus:border-white/20"
             />
             <button
               type="button"
               onClick={() => void handleCountingSubmit()}
-              className="mt-3 h-10 w-full rounded-xl bg-sky-500/90 text-sm font-bold text-[#061423] transition hover:bg-sky-400"
+              className="mt-3 h-11 w-full rounded-[18px] border border-sky-300/25 bg-sky-400/[0.12] text-sm font-semibold text-sky-100 transition hover:bg-sky-400/[0.16]"
             >
               Confirm Counting
             </button>

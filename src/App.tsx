@@ -498,7 +498,9 @@ export default function App() {
   const normalizedId = useMemo(() => normalizeStaffId(staffId), [staffId]);
   const isValidId = useMemo(() => isValidStaffId(normalizedId), [normalizedId]);
 
-  const [uiStatus, setUiStatus] = useState<Status>({ tone: 'idle', message: 'Enter US ID to start punch' });
+  const defaultUiStatusMessage = 'Enter US ID to start punch';
+  const [uiStatus, setUiStatus] = useState<Status>({ tone: 'idle', message: defaultUiStatusMessage });
+  const [statusToast, setStatusToast] = useState<Status | null>(null);
   const [punchSuccessOverlay, setPunchSuccessOverlay] = useState<{ title: string; name: string; at: number } | null>(null);
 
   const getSoundSourceCandidates = (kind: SoundKind) => {
@@ -2382,6 +2384,17 @@ const fetchPunchBoardUph = async (
     return () => window.clearTimeout(timer);
   }, [punchSuccessOverlay]);
 
+  useEffect(() => {
+    if (!uiStatus.message || uiStatus.message === defaultUiStatusMessage) return;
+    setStatusToast(uiStatus);
+    const timer = window.setTimeout(() => {
+      setStatusToast((current) =>
+        current?.message === uiStatus.message && current.tone === uiStatus.tone ? null : current
+      );
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [defaultUiStatusMessage, uiStatus]);
+
   const submitPunch = async (
     action: PunchAction,
     options?: { latestAction?: PunchAction | null; skipLatestFetch?: boolean; clearInput?: boolean }
@@ -2538,27 +2551,24 @@ const fetchPunchBoardUph = async (
         placeholder="Scan your barcode"
         className="mt-3 w-full rounded-2xl border border-white/10 bg-black/30 px-5 py-4 text-2xl text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
       />
-      <div className="mt-3 text-xs text-slate-400">
-        {!isValidId && 'Waiting for USID'}
-        {isValidId && (
-          <>
-            Current: {normalizedId}
-            {lastPunchActionLoading && <span className="ml-2 text-slate-500">(Checking...)</span>}
-            {!lastPunchActionLoading && lastPunchActionError && (
-              <span className="ml-2 text-ember">(Failed: {lastPunchActionError})</span>
-            )}
-            {!lastPunchActionLoading && !lastPunchActionError && (
-              <span className="ml-2 text-slate-500">
-                {lastPunchAction === null
-                  ? '(No record: auto IN)'
-                  : lastPunchAction === 'IN'
-                    ? '(Last is IN: auto OUT)'
-                    : '(Last is OUT: auto IN)'}
-              </span>
-            )}
-          </>
-        )}
-      </div>
+      {isValidId && (
+        <div className="mt-3 text-xs text-slate-400">
+          Current: {normalizedId}
+          {lastPunchActionLoading && <span className="ml-2 text-slate-500">(Checking...)</span>}
+          {!lastPunchActionLoading && lastPunchActionError && (
+            <span className="ml-2 text-ember">(Failed: {lastPunchActionError})</span>
+          )}
+          {!lastPunchActionLoading && !lastPunchActionError && (
+            <span className="ml-2 text-slate-500">
+              {lastPunchAction === null
+                ? '(No record: auto IN)'
+                : lastPunchAction === 'IN'
+                  ? '(Last is IN: auto OUT)'
+                  : '(Last is OUT: auto IN)'}
+            </span>
+          )}
+        </div>
+      )}
     </section>
   );
 
@@ -2829,11 +2839,11 @@ const fetchPunchBoardUph = async (
     }
   }, [page]);
 
-  const toneColor: Record<StatusTone, string> = {
-    idle: 'text-slate-200',
-    pending: 'text-neon',
-    success: 'text-mint',
-    error: 'text-ember'
+  const statusToastClass: Record<StatusTone, string> = {
+    idle: 'border-white/12 bg-[#1a1b20]/92 text-stone-100',
+    pending: 'border-sky-400/35 bg-sky-500/10 text-sky-100',
+    success: 'border-emerald-400/35 bg-emerald-500/10 text-emerald-100',
+    error: 'border-rose-400/40 bg-rose-500/12 text-rose-100'
   };
 
   const tabClass = (active: boolean) =>
@@ -2891,6 +2901,19 @@ const fetchPunchBoardUph = async (
           })()}
         </div>
       )}
+      {statusToast && (
+        <div className="pointer-events-none fixed inset-x-0 top-6 z-[110] flex justify-center px-4">
+          <div
+            key={`${statusToast.tone}:${statusToast.message}`}
+            className={[
+              'max-w-[min(92vw,720px)] rounded-[22px] border px-5 py-3 text-sm font-medium shadow-[0_20px_60px_rgba(0,0,0,0.4)] backdrop-blur-xl',
+              statusToastClass[statusToast.tone]
+            ].join(' ')}
+          >
+            {statusToast.message}
+          </div>
+        </div>
+      )}
       <div className="flex w-full flex-col gap-6">
         {page === 'punch' ? (
           <section
@@ -2912,15 +2935,13 @@ const fetchPunchBoardUph = async (
                     <div className="mt-2 font-display text-3xl tracking-[0.08em] text-neon">{formatTime(serverTime)}</div>
                   </div>
                 </div>
-
-                <div className={['mt-4 text-sm', toneColor[uiStatus.tone]].join(' ')}>{uiStatus.message}</div>
               </header>
 
               {staffIdPanel}
 
-              <div className="glass reveal relative z-40 overflow-visible rounded-3xl px-4 py-4">
-                <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Attendance</div>
-                <div className="space-y-2 overflow-visible">
+              <div className="glass reveal relative z-40 overflow-visible rounded-[28px] px-5 py-5">
+                <div className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">Attendance</div>
+                <div className="space-y-3 overflow-visible">
                   {ALLOWED_POSITIONS.map((position) => {
                     const positionFrameClass = getAppPositionFrameClass(position);
                     const early = arrivalMetricByKey[`${position}:early`] ?? {
@@ -2958,23 +2979,23 @@ const fetchPunchBoardUph = async (
                     const lateRestWorkedStaffFiltered = filterStaffBySearch(late.restWorkedStaff, lateSearch);
                     const lateMissingStaffFiltered = filterStaffBySearch(late.scheduledNotClockInStaff, lateSearch);
                     return (
-                      <div key={position} className="grid gap-2 overflow-visible md:grid-cols-2">
-                        <div className={['rounded-xl border px-3 py-2', positionFrameClass].join(' ')}>
+                      <div key={position} className="grid gap-2.5 overflow-visible md:grid-cols-2">
+                        <div className={['rounded-[22px] border px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]', positionFrameClass].join(' ')}>
                           <div className="flex items-center justify-between gap-3">
                             <div>
-                              <div className="text-xs font-semibold text-slate-100">
+                              <div className="text-[13px] font-semibold text-stone-100">
                                 {formatShiftLabel(early.shift)} {position}
                               </div>
-                              <div className="mt-1 text-[11px] text-slate-400">
+                              <div className="mt-1.5 text-[11px] text-stone-400">
                                 {early.present}/{early.expected}
                                 <span
                                   className={[
-                                    'ml-3 font-bold',
+                                    'ml-2 font-semibold',
                                     early.expected > 0 && (early.present / early.expected) * 100 < 80
-                                      ? 'text-rose-400'
+                                      ? 'text-rose-300'
                                       : early.expected > 0 && (early.present / early.expected) * 100 >= 90
-                                        ? 'text-emerald-400'
-                                        : 'text-slate-300'
+                                        ? 'text-stone-100'
+                                        : 'text-stone-300'
                                   ].join(' ')}
                                 >
                                   {early.expected > 0 ? `${((early.present / early.expected) * 100).toFixed(1)}%` : '0.0%'}
@@ -2982,12 +3003,12 @@ const fetchPunchBoardUph = async (
                               </div>
                             </div>
                             <div
-                              className={['group relative z-10 min-w-[84px] rounded-md px-3 py-1.5 text-center hover:z-50', getAppOnClockPanelClass(position)].join(' ')}
+                              className={['group relative z-10 min-w-[82px] rounded-[18px] px-2.5 py-1.5 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] hover:z-50', getAppOnClockPanelClass(position)].join(' ')}
                             >
-                              <div className="whitespace-nowrap text-[10px] font-semibold tracking-[0.08em] text-slate-300">On Clock</div>
+                              <div className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">On Clock</div>
                               <div
                                 className={[
-                                  'mt-0.5 text-2xl font-bold leading-none',
+                                  'mt-1 text-[2rem] font-semibold leading-none',
                                   getAppOnClockValueClass(position)
                                 ].join(' ')}
                               >
@@ -3002,11 +3023,11 @@ const fetchPunchBoardUph = async (
                                       setAttendanceHoverSearchByKey((prev) => ({ ...prev, [earlyHoverKey]: event.target.value }))
                                     }
                                     placeholder="Search name / USID"
-                                    className="w-full rounded-lg border border-white/15 bg-slate-950/95 px-2.5 py-1.5 text-xs text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon"
+                                    className="w-full rounded-[14px] border border-white/15 bg-slate-950/95 px-3 py-2 text-xs text-stone-100 outline-none transition placeholder:text-stone-500 focus:border-white/20"
                                   />
                                 </div>
-                                <div className="min-w-0 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Attendance Staff</div>
+                                <div className="min-w-0 rounded-[16px] border border-white/15 bg-slate-950/95 p-3 text-left shadow-2xl">
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-stone-400">Attendance Staff</div>
                                   {earlyOnClockStaffFiltered.length === 0 ? (
                                     <div className="text-xs text-slate-300">{earlySearch ? 'No matches' : 'No one on clock'}</div>
                                   ) : (
@@ -3019,8 +3040,8 @@ const fetchPunchBoardUph = async (
                                     </div>
                                   )}
                                 </div>
-                                <div className="min-w-0 rounded-lg border border-sky-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Off Worked Staff</div>
+                                <div className="min-w-0 rounded-[16px] border border-sky-300/30 bg-slate-950/95 p-3 text-left shadow-2xl">
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-stone-400">Off Worked Staff</div>
                                   {earlyRestWorkedStaffFiltered.length === 0 ? (
                                     <div className="text-xs text-slate-300">{earlySearch ? 'No matches' : 'No rest-worked staff'}</div>
                                   ) : (
@@ -3033,8 +3054,8 @@ const fetchPunchBoardUph = async (
                                     </div>
                                   )}
                                 </div>
-                                <div className="min-w-0 rounded-lg border border-amber-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                                <div className="min-w-0 rounded-[16px] border border-amber-300/30 bg-slate-950/95 p-3 text-left shadow-2xl">
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-stone-400">
                                     Scheduled Not Clock In
                                   </div>
                                   {earlyMissingStaffFiltered.length === 0 ? (
@@ -3053,22 +3074,22 @@ const fetchPunchBoardUph = async (
                             </div>
                           </div>
                         </div>
-                        <div className={['rounded-xl border px-3 py-2', positionFrameClass].join(' ')}>
+                        <div className={['rounded-[22px] border px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]', positionFrameClass].join(' ')}>
                           <div className="flex items-center justify-between gap-3">
                             <div>
-                              <div className="text-xs font-semibold text-slate-100">
+                              <div className="text-[13px] font-semibold text-stone-100">
                                 {formatShiftLabel(late.shift)} {position}
                               </div>
-                              <div className="mt-1 text-[11px] text-slate-400">
+                              <div className="mt-1.5 text-[11px] text-stone-400">
                                 {late.present}/{late.expected}
                                 <span
                                   className={[
-                                    'ml-3 font-bold',
+                                    'ml-2 font-semibold',
                                     late.expected > 0 && (late.present / late.expected) * 100 < 80
-                                      ? 'text-rose-400'
+                                      ? 'text-rose-300'
                                       : late.expected > 0 && (late.present / late.expected) * 100 >= 90
-                                        ? 'text-emerald-400'
-                                        : 'text-slate-300'
+                                        ? 'text-stone-100'
+                                        : 'text-stone-300'
                                   ].join(' ')}
                                 >
                                   {late.expected > 0 ? `${((late.present / late.expected) * 100).toFixed(1)}%` : '0.0%'}
@@ -3076,12 +3097,12 @@ const fetchPunchBoardUph = async (
                               </div>
                             </div>
                             <div
-                              className={['group relative z-10 min-w-[84px] rounded-md px-3 py-1.5 text-center hover:z-50', getAppOnClockPanelClass(position)].join(' ')}
+                              className={['group relative z-10 min-w-[82px] rounded-[18px] px-2.5 py-1.5 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] hover:z-50', getAppOnClockPanelClass(position)].join(' ')}
                             >
-                              <div className="whitespace-nowrap text-[10px] font-semibold tracking-[0.08em] text-slate-300">On Clock</div>
+                              <div className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">On Clock</div>
                               <div
                                 className={[
-                                  'mt-0.5 text-2xl font-bold leading-none',
+                                  'mt-1 text-[2rem] font-semibold leading-none',
                                   getAppOnClockValueClass(position)
                                 ].join(' ')}
                               >
@@ -3096,11 +3117,11 @@ const fetchPunchBoardUph = async (
                                       setAttendanceHoverSearchByKey((prev) => ({ ...prev, [lateHoverKey]: event.target.value }))
                                     }
                                     placeholder="Search name / USID"
-                                    className="w-full rounded-lg border border-white/15 bg-slate-950/95 px-2.5 py-1.5 text-xs text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon"
+                                    className="w-full rounded-[14px] border border-white/15 bg-slate-950/95 px-3 py-2 text-xs text-stone-100 outline-none transition placeholder:text-stone-500 focus:border-white/20"
                                   />
                                 </div>
-                                <div className="min-w-0 rounded-lg border border-white/15 bg-slate-950/95 p-2 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Attendance Staff</div>
+                                <div className="min-w-0 rounded-[16px] border border-white/15 bg-slate-950/95 p-3 text-left shadow-2xl">
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-stone-400">Attendance Staff</div>
                                   {lateOnClockStaffFiltered.length === 0 ? (
                                     <div className="text-xs text-slate-300">{lateSearch ? 'No matches' : 'No one on clock'}</div>
                                   ) : (
@@ -3113,8 +3134,8 @@ const fetchPunchBoardUph = async (
                                     </div>
                                   )}
                                 </div>
-                                <div className="min-w-0 rounded-lg border border-sky-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">Off Worked Staff</div>
+                                <div className="min-w-0 rounded-[16px] border border-sky-300/30 bg-slate-950/95 p-3 text-left shadow-2xl">
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-stone-400">Off Worked Staff</div>
                                   {lateRestWorkedStaffFiltered.length === 0 ? (
                                     <div className="text-xs text-slate-300">{lateSearch ? 'No matches' : 'No rest-worked staff'}</div>
                                   ) : (
@@ -3127,8 +3148,8 @@ const fetchPunchBoardUph = async (
                                     </div>
                                   )}
                                 </div>
-                                <div className="min-w-0 rounded-lg border border-amber-300/30 bg-slate-950/95 p-2 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                                <div className="min-w-0 rounded-[16px] border border-amber-300/30 bg-slate-950/95 p-3 text-left shadow-2xl">
+                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-stone-400">
                                     Scheduled Not Clock In
                                   </div>
                                   {lateMissingStaffFiltered.length === 0 ? (
@@ -3340,8 +3361,6 @@ const fetchPunchBoardUph = async (
                   4 Edit Request
                 </button>
               </nav>
-
-              <div className={['mt-4 text-sm', toneColor[uiStatus.tone]].join(' ')}>{uiStatus.message}</div>
             </header>
 
             {staffIdPanel}

@@ -12,7 +12,7 @@ type AdminNavProps = {
 
 export default function AdminNav({ page, isLocked, onSetPage, tabClass, t }: AdminNavProps) {
   return (
-    <nav className="glass reveal flex flex-wrap gap-2 rounded-3xl p-3">
+    <nav className="glass reveal flex flex-wrap gap-2 rounded-[30px] border border-white/10 p-3.5">
       <button type="button" disabled={isLocked} onClick={() => onSetPage('home')} className={tabClass(page === 'home')}>
         {t('首页', 'Home')}
       </button>

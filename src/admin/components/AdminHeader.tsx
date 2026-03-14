@@ -38,34 +38,42 @@ export default function AdminHeader({
   onLogout
 }: AdminHeaderProps) {
   return (
-    <header className="glass reveal rounded-3xl px-6 py-6 shadow-glow">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <header className="glass reveal rounded-[36px] border border-white/10 px-6 py-6 shadow-[0_30px_90px_rgba(0,0,0,0.28)] md:px-8 md:py-7">
+      <div className="flex flex-wrap items-start justify-between gap-6">
         <div className="min-w-[220px]">
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">ObPunch</p>
-          <h1 className="font-display text-4xl tracking-[0.08em]">{t('后台系统', 'Admin Console')}</h1>
+          <div className="inline-flex rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-stone-300">
+            ObPunch Admin
+          </div>
+          <h1 className="mt-4 font-display text-4xl tracking-[0.03em] text-stone-50 md:text-5xl">
+            {t('后台系统', 'Admin Console')}
+          </h1>
         </div>
 
-        <div className="min-w-[260px] text-right">
+        <div className="min-w-[280px] text-right">
           <div className="flex items-center justify-end gap-2">
             <button
               type="button"
               disabled={isLocked}
               onClick={() => setThemeMode((prev) => (prev === 'dark' ? 'light' : 'dark'))}
               className={[
-                'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                themeMode === 'light' ? 'bg-neon text-white shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                'rounded-full border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                themeMode === 'light'
+                  ? 'border-stone-200/90 bg-stone-100 text-stone-900'
+                  : 'border-white/10 bg-white/[0.04] text-stone-200 hover:border-white/15 hover:bg-white/[0.07]'
               ].join(' ')}
               title={themeMode === 'dark' ? t('切换到白色主题', 'Switch to light mode') : t('切换到夜间主题', 'Switch to dark mode')}
             >
-              {themeMode === 'dark' ? '☀' : '☾'}
+              {themeMode === 'dark' ? 'Light' : 'Dark'}
             </button>
             <button
               type="button"
               disabled={isLocked}
               onClick={() => setLang('zh')}
               className={[
-                'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                lang === 'zh' ? 'bg-neon text-white shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                'rounded-full border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                lang === 'zh'
+                  ? 'border-stone-200/90 bg-stone-100 text-stone-900'
+                  : 'border-white/10 bg-white/[0.04] text-stone-200 hover:border-white/15 hover:bg-white/[0.07]'
               ].join(' ')}
               title="中文"
             >
@@ -76,8 +84,10 @@ export default function AdminHeader({
               disabled={isLocked}
               onClick={() => setLang('en')}
               className={[
-                'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                lang === 'en' ? 'bg-neon text-white shadow-glow' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                'rounded-full border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                lang === 'en'
+                  ? 'border-stone-200/90 bg-stone-100 text-stone-900'
+                  : 'border-white/10 bg-white/[0.04] text-stone-200 hover:border-white/15 hover:bg-white/[0.07]'
               ].join(' ')}
               title="English"
             >
@@ -85,23 +95,28 @@ export default function AdminHeader({
             </button>
           </div>
 
-          <div className="mt-3 text-xs uppercase tracking-[0.25em] text-slate-400">{t('服务器时间', 'Server Time')}</div>
-          <div className="mt-2 font-display text-2xl tracking-[0.08em] text-neon">{serverTimeText}</div>
-          <div className="mt-2 text-xs text-slate-400">
+          <div className="mt-6 text-[11px] uppercase tracking-[0.24em] text-stone-400">{t('服务器时间', 'Server Time')}</div>
+          <div className="mt-2 font-display text-3xl tracking-[0.04em] text-stone-50">{serverTimeText}</div>
+          <div className="mt-3 text-sm text-stone-400">
             {user ? (userDisplayName.trim() || user.email || '-') : t('未登录', 'Signed out')}
           </div>
-          {attendanceError && <div className="mt-2 text-xs text-ember">{t('考勤卡片加载失败：', 'Attendance cards failed: ')}{attendanceError}</div>}
+          {attendanceError && (
+            <div className="mt-2 text-xs text-rose-200">
+              {t('考勤卡片加载失败：', 'Attendance cards failed: ')}
+              {attendanceError}
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-4 border-t border-white/8 pt-5">
         <div className={['text-sm', toneColor[status.tone]].join(' ')}>{status.message}</div>
         <div className="flex items-center gap-2">
           <button
             type="button"
             disabled={isLocked}
             onClick={onBack}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm font-medium text-stone-200 transition hover:border-white/15 hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('返回', 'Back')}
           </button>
@@ -110,7 +125,7 @@ export default function AdminHeader({
               type="button"
               disabled={isLocked}
               onClick={() => void onLogout()}
-              className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm font-medium text-stone-200 transition hover:border-white/15 hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {t('退出登录', 'Logout')}
             </button>

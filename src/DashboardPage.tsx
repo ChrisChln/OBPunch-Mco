@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import { createSupabaseClient } from './lib/supabase';
@@ -59,6 +59,63 @@ type MistakeDetailRow = {
   operational_date: string;
   created_at: string;
 };
+
+type IconProps = {
+  className?: string;
+};
+
+const iconStrokeClass = 'h-4 w-4 shrink-0';
+
+const SearchIcon = ({ className = iconStrokeClass }: IconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="M16 16l5 5" strokeLinecap="round" />
+  </svg>
+);
+
+const RefreshIcon = ({ className = iconStrokeClass }: IconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+    <path d="M20 6v5h-5" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M20 11a8 8 0 10-2.34 5.66L20 14" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+const ArrowLeftIcon = ({ className = iconStrokeClass }: IconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+    <path d="M19 12H5" strokeLinecap="round" />
+    <path d="M11 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+const DocumentIcon = ({ className = iconStrokeClass }: IconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+    <path d="M7 3.5h7l4.5 4.5V20a1.5 1.5 0 01-1.5 1.5h-10A1.5 1.5 0 015.5 20V5A1.5 1.5 0 017 3.5z" />
+    <path d="M14 3.5V8h4.5" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+const GridIcon = ({ className = iconStrokeClass }: IconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+    <rect x="4" y="4" width="6" height="6" rx="1.25" />
+    <rect x="14" y="4" width="6" height="6" rx="1.25" />
+    <rect x="4" y="14" width="6" height="6" rx="1.25" />
+    <rect x="14" y="14" width="6" height="6" rx="1.25" />
+  </svg>
+);
+
+const ChevronDownIcon = ({ className = iconStrokeClass }: IconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+    <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+const WarningIcon = ({ className = iconStrokeClass }: IconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+    <path d="M12 4l8 14H4l8-14z" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M12 9v4.5" strokeLinecap="round" />
+    <circle cx="12" cy="16.75" r=".75" fill="currentColor" stroke="none" />
+  </svg>
+);
 
 const getAutoMistakeReasonText = (attendance: DashboardRow['attendance']) => {
   if (attendance === 'Absent') return 'Absent';
@@ -176,53 +233,53 @@ const formatShiftLabel = (value: string) => {
 const normalizeShiftValue = (value: unknown): '' | 'early' | 'late' => {
   const v = String(value ?? '').trim().toLowerCase();
   if (!v) return '';
-  if (v === 'early' || v === 'morning' || v === 'day' || v === 'am' || v === '鐧界彮' || v === '鏃╃彮') return 'early';
-  if (v === 'late' || v === 'night' || v === 'pm' || v === '鏅氱彮') return 'late';
+  if (v === 'early' || v === 'morning' || v === 'day' || v === 'am') return 'early';
+  if (v === 'late' || v === 'night' || v === 'pm') return 'late';
   return '';
 };
 const normalizePositionKey = (value: string): '' | 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer' => {
   const v = String(value ?? '').trim().toLowerCase();
   if (!v) return '';
-  if (v === 'pick' || v.includes('pick') || v.includes('鎷ｈ揣')) return 'Pick';
-  if (v === 'pack' || v.includes('pack') || v.includes('鎵撳寘')) return 'Pack';
-  if (v === 'rebin' || v.includes('rebin') || v.includes('涓婃灦') || v.includes('鍥炰粨')) return 'Rebin';
-  if (v === 'preship' || v.includes('preship') || v.includes('鍙戣揣')) return 'Preship';
-  if (v === 'transfer' || v.includes('transfer') || v.includes('杞繍')) return 'Transfer';
+  if (v === 'pick' || v.includes('pick')) return 'Pick';
+  if (v === 'pack' || v.includes('pack')) return 'Pack';
+  if (v === 'rebin' || v.includes('rebin')) return 'Rebin';
+  if (v === 'preship' || v.includes('preship')) return 'Preship';
+  if (v === 'transfer' || v.includes('transfer')) return 'Transfer';
   return '';
 };
 const getPositionBadgeClass = (value: string) => {
   const pos = normalizePositionKey(value);
-  if (pos === 'Pick') return 'border-sky-400/60 text-sky-200 bg-sky-500/10';
-  if (pos === 'Pack') return 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10';
-  if (pos === 'Rebin') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
-  if (pos === 'Preship') return 'border-rose-400/60 text-rose-200 bg-rose-500/10';
-  if (pos === 'Transfer') return 'border-violet-400/60 text-violet-200 bg-violet-500/10';
-  return 'border-white/20 text-slate-200 bg-white/5';
+  if (pos === 'Pick') return 'border-sky-300/35 text-sky-100 bg-sky-400/[0.14]';
+  if (pos === 'Pack') return 'border-rose-300/35 text-rose-100 bg-rose-400/[0.14]';
+  if (pos === 'Rebin') return 'border-emerald-300/35 text-emerald-100 bg-emerald-400/[0.14]';
+  if (pos === 'Preship') return 'border-amber-300/35 text-amber-100 bg-amber-400/[0.14]';
+  if (pos === 'Transfer') return 'border-violet-300/35 text-violet-100 bg-violet-400/[0.14]';
+  return 'border-white/15 text-stone-100 bg-white/[0.04]';
 };
 const getShiftBadgeClass = (value: string) => {
   const v = String(value ?? '').trim().toLowerCase();
-  if (v === 'early') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
-  if (v === 'late') return 'border-indigo-400/60 text-indigo-200 bg-indigo-500/10';
-  return 'border-white/20 text-slate-200 bg-white/5';
+  if (v === 'early') return 'border-stone-300/25 text-stone-100 bg-stone-200/[0.08]';
+  if (v === 'late') return 'border-stone-500/25 text-stone-200 bg-stone-400/[0.08]';
+  return 'border-white/15 text-stone-100 bg-white/[0.04]';
 };
 const DEFAULT_CARD_POSITIONS: string[] = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'];
 const getAttendanceCardClass = (position: string) => {
   const pos = normalizePositionKey(position);
-  if (pos === 'Pick') return 'border-sky-400/35 bg-sky-500/[0.04]';
-  if (pos === 'Pack') return 'border-emerald-400/35 bg-emerald-500/[0.04]';
-  if (pos === 'Rebin') return 'border-amber-400/35 bg-amber-500/[0.04]';
-  if (pos === 'Preship') return 'border-rose-400/35 bg-rose-500/[0.04]';
-  if (pos === 'Transfer') return 'border-violet-400/35 bg-violet-500/[0.04]';
-  return 'border-white/15 bg-white/[0.03]';
+  if (pos === 'Pick') return 'border-sky-300/20 bg-gradient-to-br from-sky-400/[0.14] via-sky-300/[0.06] to-transparent';
+  if (pos === 'Pack') return 'border-emerald-300/20 bg-gradient-to-br from-emerald-400/[0.14] via-emerald-300/[0.06] to-transparent';
+  if (pos === 'Rebin') return 'border-amber-300/20 bg-gradient-to-br from-amber-400/[0.16] via-amber-300/[0.07] to-transparent';
+  if (pos === 'Preship') return 'border-rose-300/20 bg-gradient-to-br from-rose-400/[0.14] via-rose-300/[0.06] to-transparent';
+  if (pos === 'Transfer') return 'border-violet-300/20 bg-gradient-to-br from-violet-400/[0.14] via-violet-300/[0.06] to-transparent';
+  return 'border-white/12 bg-white/[0.03]';
 };
 const getAttendanceCardValueClass = (position: string) => {
   const pos = normalizePositionKey(position);
-  if (pos === 'Pick') return 'text-sky-300';
-  if (pos === 'Pack') return 'text-emerald-300';
-  if (pos === 'Rebin') return 'text-amber-300';
-  if (pos === 'Preship') return 'text-rose-300';
-  if (pos === 'Transfer') return 'text-violet-300';
-  return 'text-slate-200';
+  if (pos === 'Pick') return 'text-sky-100';
+  if (pos === 'Pack') return 'text-emerald-100';
+  if (pos === 'Rebin') return 'text-amber-100';
+  if (pos === 'Preship') return 'text-rose-100';
+  if (pos === 'Transfer') return 'text-violet-100';
+  return 'text-stone-100';
 };
 
 const chunkArray = <T,>(list: T[], size: number): T[][] => {
@@ -1221,6 +1278,41 @@ export default function DashboardPage() {
       return { shift, expected, present };
     });
   }, [cardPositions, cardStatsByKey]);
+  const summaryStats = useMemo(() => {
+    const onClock = rows.filter((row) => row.punches[row.punches.length - 1]?.action === 'IN').length;
+    const absent = rows.filter((row) => row.attendance === 'Absent').length;
+    const offWorked = rows.filter((row) => row.attendance === 'Off Worked').length;
+    return [
+      {
+        label: 'Scheduled',
+        value: rows.length,
+        detail: `${filteredRows.length} in view`,
+        cardClass: 'border-sky-300/18 bg-gradient-to-br from-sky-400/[0.14] via-sky-300/[0.05] to-transparent',
+        valueClass: 'text-sky-50'
+      },
+      {
+        label: 'On Clock',
+        value: onClock,
+        detail: 'Active right now',
+        cardClass: 'border-emerald-300/18 bg-gradient-to-br from-emerald-400/[0.14] via-emerald-300/[0.05] to-transparent',
+        valueClass: 'text-emerald-50'
+      },
+      {
+        label: 'Absent',
+        value: absent,
+        detail: 'Needs attention',
+        cardClass: 'border-rose-300/18 bg-gradient-to-br from-rose-400/[0.14] via-rose-300/[0.05] to-transparent',
+        valueClass: 'text-rose-50'
+      },
+      {
+        label: 'Off Worked',
+        value: offWorked,
+        detail: 'Worked on rest day',
+        cardClass: 'border-amber-300/18 bg-gradient-to-br from-amber-400/[0.14] via-amber-300/[0.05] to-transparent',
+        valueClass: 'text-amber-50'
+      }
+    ];
+  }, [rows, filteredRows.length]);
 
   const presentRows = useMemo(
     () => rows.filter((row) => row.attendance !== 'Absent' && !isNewHirePlaceholderStaffId(String(row.staff_id ?? '').trim())),
@@ -1758,51 +1850,82 @@ export default function DashboardPage() {
   };
 
   return (
-    <main className="min-h-screen px-6 py-6 text-paper">
-      <section className="glass rounded-3xl px-5 py-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="font-display text-3xl tracking-[0.08em]">Dashboard</h1>
-            <p className="mt-1 text-xs text-slate-400">
-              Schedule date: <span className="text-slate-200">{operationalDate || '-'}</span>
-            </p>
+    <main className="min-h-screen px-4 py-4 text-paper sm:px-6 sm:py-6 lg:px-8 lg:py-8">
+      <section className="glass mx-auto w-full max-w-[1580px] rounded-[32px] px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(420px,0.8fr)]">
+          <div className="space-y-3">
+            <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-stone-300">
+              Operational Dashboard
+            </div>
+            <div className="space-y-2">
+              <h1 className="font-display text-4xl leading-none tracking-[0.03em] text-stone-50 sm:text-5xl">
+                Dashboard
+              </h1>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setMistakeReportOpen(true)}
-              className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-slate-200 transition hover:bg-white/15"
-            >
-              Mistake Report
-            </button>
-            <button
-              type="button"
-              onClick={() => setAccountUsageOpen(true)}
-              className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-slate-200 transition hover:bg-white/15"
-            >
-              Account usage
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                window.location.href = '/';
-              }}
-              className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-slate-200 transition hover:bg-white/15"
-            >
-              Back
-            </button>
-            <button
-              type="button"
-              onClick={() => void fetchData()}
-              className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5"
-            >
-              Refresh
-            </button>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {summaryStats.map((item) => (
+              <div
+                key={item.label}
+                className={[
+                  'rounded-[24px] border px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
+                  item.cardClass
+                ].join(' ')}
+              >
+                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">{item.label}</div>
+                <div className={['mt-3 text-3xl font-semibold tracking-[-0.03em]', item.valueClass].join(' ')}>{item.value}</div>
+                <div className="mt-1 text-xs text-stone-400">{item.detail}</div>
+              </div>
+            ))}
           </div>
         </div>
 
-        <div className="mt-4 grid gap-2 md:grid-cols-5">
-          <div className="md:col-span-5 grid gap-2 md:grid-cols-2">
+        <div className="mt-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-black/20 p-4 sm:p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div className="space-y-1">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">Schedule Date</div>
+              <div className="text-xl font-semibold tracking-[-0.02em] text-stone-50">{operationalDate || '-'}</div>
+              <div className="text-sm text-stone-400">Updated {lastUpdatedAt || '-'}</div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setMistakeReportOpen(true)}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-medium text-stone-100 transition hover:bg-white/[0.08]"
+              >
+                <DocumentIcon />
+                Mistake Report
+              </button>
+              <button
+                type="button"
+                onClick={() => setAccountUsageOpen(true)}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-medium text-stone-100 transition hover:bg-white/[0.08]"
+              >
+                <GridIcon />
+                Account Usage
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = '/';
+                }}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-medium text-stone-100 transition hover:bg-white/[0.08]"
+              >
+                <ArrowLeftIcon />
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={() => void fetchData()}
+                className="inline-flex items-center gap-2 rounded-full border border-[#d9cfbf]/40 bg-[#e8dfcf] px-4 py-2.5 text-sm font-semibold text-[#181614] transition hover:bg-[#f0e9dc]"
+              >
+                <RefreshIcon />
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-2">
             {outboundShiftCards.map((card) => {
               const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
               const isMorning = card.shift === 'early';
@@ -1810,28 +1933,28 @@ export default function DashboardPage() {
                 <div
                   key={`outbound:${card.shift}`}
                   className={[
-                    'rounded-xl border px-4 py-3',
+                    'rounded-[24px] border px-5 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
                     getAttendanceCardClass(isMorning ? 'Pick' : 'Transfer')
                   ].join(' ')}
                 >
-                  <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-end justify-between gap-4">
                     <div>
-                      <div className="text-lg font-bold text-slate-100">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">
                         {isMorning ? 'Outbound Morning' : 'Outbound Night'}
                       </div>
-                      <div className="mt-1.5 text-base text-slate-200">
-                        <span className="text-xl font-bold text-slate-100">{card.present}/{card.expected}</span>
+                      <div className="mt-3 flex items-end gap-3">
+                        <span className="text-3xl font-semibold tracking-[-0.03em] text-stone-50">{card.present}/{card.expected}</span>
                         <span
                           className={[
-                            'ml-2 text-lg font-bold',
+                            'pb-1 text-sm font-semibold',
                             ratio < 80
-                              ? 'text-rose-400'
+                              ? 'text-rose-300'
                               : ratio >= 90
                                 ? getAttendanceCardValueClass(isMorning ? 'Pick' : 'Transfer')
-                                : 'text-slate-300'
+                                : 'text-stone-300'
                           ].join(' ')}
                         >
-                          {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
+                          {card.expected > 0 ? `${ratio.toFixed(1)}% coverage` : '0.0% coverage'}
                         </span>
                       </div>
                     </div>
@@ -1840,155 +1963,177 @@ export default function DashboardPage() {
               );
             })}
           </div>
-          {attendanceCards.map((card) => {
-            const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
-            return (
-              <div key={`${card.position}:${card.shift}`} className={['rounded-xl border px-3 py-2', getAttendanceCardClass(card.position)].join(' ')}>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-100">
-                      {card.shift === 'early' ? 'Morning shift' : 'Night shift'} {card.position}
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            {attendanceCards.map((card) => {
+              const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
+              return (
+                <div key={`${card.position}:${card.shift}`} className={['rounded-[24px] border px-4 py-4', getAttendanceCardClass(card.position)].join(' ')}>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="text-sm font-semibold text-stone-100">
+                        {card.shift === 'early' ? 'Morning' : 'Night'} {card.position}
+                      </div>
+                      <div className="mt-2 text-xs text-stone-400">
+                        {card.present}/{card.expected}
+                        <span
+                          className={[
+                            'ml-2 font-semibold',
+                            ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'
+                          ].join(' ')}
+                        >
+                          {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
+                        </span>
+                      </div>
+                      {card.offWorked > 0 && <div className="mt-2 text-xs font-medium text-stone-300">+{card.offWorked} off worked</div>}
                     </div>
-                    <div className="mt-1 text-xs text-slate-400">
-                      {card.present}/{card.expected}
-                      <span
-                        className={[
-                          'ml-2 font-bold',
-                          ratio < 80 ? 'text-rose-400' : ratio >= 90 ? 'text-emerald-400' : 'text-slate-300'
-                        ].join(' ')}
-                      >
-                        {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
-                      </span>
-                      {card.offWorked > 0 && <span className="ml-2 font-semibold text-sky-300">+{card.offWorked} Off Worked</span>}
-                    </div>
-                  </div>
-                  <div className="min-w-[86px] rounded-lg border border-white/15 bg-black/20 px-3 py-1.5 text-center">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-300">On Clock</div>
-                    <div className={['mt-0.5 text-3xl font-bold leading-none', getAttendanceCardValueClass(card.position)].join(' ')}>
-                      {card.onClock}
+                    <div
+                      className={[
+                        'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
+                        card.position === 'Pick'
+                          ? 'border-sky-300/20 bg-sky-400/[0.10]'
+                          : card.position === 'Pack'
+                            ? 'border-emerald-300/20 bg-emerald-400/[0.10]'
+                            : card.position === 'Rebin'
+                              ? 'border-amber-300/20 bg-amber-400/[0.10]'
+                              : card.position === 'Preship'
+                                ? 'border-rose-300/20 bg-rose-400/[0.10]'
+                                : card.position === 'Transfer'
+                                  ? 'border-violet-300/20 bg-violet-400/[0.10]'
+                                  : 'border-white/10 bg-white/[0.04]'
+                      ].join(' ')}
+                    >
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">On Clock</div>
+                      <div className={['mt-1 text-3xl font-semibold leading-none', getAttendanceCardValueClass(card.position)].join(' ')}>
+                        {card.onClock}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.5fr)_220px_220px_repeat(3,minmax(0,160px))]">
+            <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4">
+              <SearchIcon className="h-4 w-4 text-stone-400" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by staff ID, name, or account"
+                className="h-full w-full bg-transparent text-sm text-stone-100 outline-none placeholder:text-stone-500"
+              />
+            </label>
+            <div className="relative">
+              <select
+                value={positionFilter}
+                onChange={(e) => setPositionFilter(e.target.value)}
+                className="h-12 w-full appearance-none rounded-[20px] border border-white/10 bg-white/[0.04] px-4 pr-10 text-sm text-stone-100 outline-none transition focus:border-white/20"
+              >
+                <option value="">All positions</option>
+                {positionOptions.map((position) => (
+                  <option key={position} value={position}>
+                    {position}
+                  </option>
+                ))}
+              </select>
+              <ChevronDownIcon className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+            </div>
+            <div className="relative">
+              <select
+                value={shiftFilter}
+                onChange={(e) => setShiftFilter(e.target.value)}
+                className="h-12 w-full appearance-none rounded-[20px] border border-white/10 bg-white/[0.04] px-4 pr-10 text-sm text-stone-100 outline-none transition focus:border-white/20"
+              >
+                <option value="">All shifts</option>
+                {shiftOptions.map((shift) => (
+                  <option key={shift} value={shift}>
+                    {formatShiftLabel(shift)}
+                  </option>
+                ))}
+              </select>
+              <ChevronDownIcon className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+            </div>
+            <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-200">
+              <input
+                type="checkbox"
+                checked={absentOnly}
+                onChange={(e) => setAbsentOnly(e.target.checked)}
+                className="h-4 w-4 rounded border-white/20 bg-transparent accent-[#e8dfcf]"
+              />
+              Absent
+            </label>
+            <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-200">
+              <input
+                type="checkbox"
+                checked={onClockOnly}
+                onChange={(e) => setOnClockOnly(e.target.checked)}
+                className="h-4 w-4 rounded border-white/20 bg-transparent accent-[#e8dfcf]"
+              />
+              On Clock
+            </label>
+            <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-200">
+              <input
+                type="checkbox"
+                checked={offWorkOnly}
+                onChange={(e) => setOffWorkOnly(e.target.checked)}
+                className="h-4 w-4 rounded border-white/20 bg-transparent accent-[#e8dfcf]"
+              />
+              Off Work
+            </label>
+          </div>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_180px_170px_170px_170px_auto_auto]">
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by staff id / name / account"
-            className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon"
-          />
-          <select
-            value={positionFilter}
-            onChange={(e) => setPositionFilter(e.target.value)}
-            className="h-11 rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon"
-          >
-            <option value="">All positions</option>
-            {positionOptions.map((position) => (
-              <option key={position} value={position}>
-                {position}
-              </option>
-            ))}
-          </select>
-          <select
-            value={shiftFilter}
-            onChange={(e) => setShiftFilter(e.target.value)}
-            className="h-11 rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon"
-          >
-            <option value="">All shifts</option>
-            {shiftOptions.map((shift) => (
-              <option key={shift} value={shift}>
-                {formatShiftLabel(shift)}
-              </option>
-            ))}
-          </select>
-          <label className="flex h-11 items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-slate-200">
-            <input
-              type="checkbox"
-              checked={absentOnly}
-              onChange={(e) => setAbsentOnly(e.target.checked)}
-              className="h-4 w-4 rounded border-white/30 bg-transparent accent-rose-500"
-            />
-            Absent only
-          </label>
-          <label className="flex h-11 items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-slate-200">
-            <input
-              type="checkbox"
-              checked={onClockOnly}
-              onChange={(e) => setOnClockOnly(e.target.checked)}
-              className="h-4 w-4 rounded border-white/30 bg-transparent accent-emerald-500"
-            />
-            On Clock
-          </label>
-          <label className="flex h-11 items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-slate-200">
-            <input
-              type="checkbox"
-              checked={offWorkOnly}
-              onChange={(e) => setOffWorkOnly(e.target.checked)}
-              className="h-4 w-4 rounded border-white/30 bg-transparent accent-sky-500"
-            />
-            Off Work
-          </label>
-          <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-2 text-xs text-slate-300">
-            Rows: <span className="text-slate-100">{renderedRows.length}</span> / {filteredRows.length}
-          </div>
-          <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-2 text-xs text-slate-300">
-            Updated: <span className="text-slate-100">{lastUpdatedAt || '-'}</span>
-          </div>
-        </div>
-
-        {error && <p className="mt-3 text-sm text-rose-300">Load failed: {error}</p>}
+        {error && <p className="mt-4 text-sm text-rose-300">Load failed: {error}</p>}
 
         {!error && (
-          <div className="mt-4 overflow-auto rounded-2xl border border-white/10">
-            <table className="min-w-full border-collapse text-sm">
-              <thead className="sticky top-0 z-10 bg-slate-950/95 text-xs uppercase tracking-[0.16em] text-slate-400">
-                <tr>
-                  <th className="px-3 py-2 text-left">SN</th>
-                  <th className="px-3 py-2 text-left">Staff ID</th>
-                  <th className="px-3 py-2 text-left">Name</th>
-                  <th className="px-3 py-2 text-left">Position</th>
-                  <th className="px-3 py-2 text-left">Label</th>
-                  <th className="px-3 py-2 text-left">Device</th>
-                  <th className="px-3 py-2 text-left">Account</th>
-                  <th className="px-3 py-2 text-left">Shift</th>
-                  <th className="px-3 py-2 text-left">Mistake</th>
-                  <th className="px-3 py-2 text-left">Punch Logs</th>
-                </tr>
-              </thead>
+          <div className="mt-6 overflow-hidden rounded-[28px] border border-white/10 bg-black/20">
+            <div className="overflow-auto">
+              <table className="min-w-[1100px] w-full border-collapse text-sm">
+                <thead className="sticky top-0 z-10 bg-[#17191c]/95 text-xs uppercase tracking-[0.16em] text-stone-400 backdrop-blur">
+                  <tr>
+                    <th className="px-3 py-3 text-left">SN</th>
+                    <th className="px-3 py-3 text-left">Staff ID</th>
+                    <th className="px-3 py-3 text-left">Name</th>
+                    <th className="px-3 py-3 text-left">Position</th>
+                    <th className="px-3 py-3 text-left">Label</th>
+                    <th className="px-3 py-3 text-left">Device</th>
+                    <th className="px-3 py-3 text-left">Account</th>
+                    <th className="px-3 py-3 text-left">Shift</th>
+                    <th className="px-3 py-3 text-left">Mistake</th>
+                    <th className="px-3 py-3 text-left">Punch Logs</th>
+                  </tr>
+                </thead>
               <tbody>
                 {renderedRows.map((row, idx) => {
                   const rowToneClass =
                     row.attendance === 'Absent'
-                      ? 'bg-rose-500/10'
+                      ? 'bg-rose-950/30'
                       : row.attendance === 'Off Worked'
-                        ? 'bg-sky-500/10'
-                        : 'odd:bg-white/[0.03]';
+                        ? 'bg-stone-200/[0.03]'
+                        : 'odd:bg-white/[0.02]';
                   const hasOverPunch = row.punches.length > 4;
                   const visiblePunches = row.punches.slice(0, 4);
                   const shortGapPunchIndices = getShortGapPunchIndices(visiblePunches, 10);
 
                   const displayStaffId = isNewHirePlaceholderStaffId(row.staff_id) ? '' : row.staff_id;
                   return (
-                    <tr key={row.staff_id} className={['border-t border-white/5 transition-colors hover:bg-white/5', rowToneClass].join(' ')}>
+                    <tr key={row.staff_id} className={['border-t border-white/5 transition-colors hover:bg-white/[0.05]', rowToneClass].join(' ')}>
                       <td
                         className={[
-                          'whitespace-nowrap px-3 py-2 font-mono text-slate-400',
+                          'whitespace-nowrap px-3 py-3 font-mono text-stone-500',
                           hasOverPunch ? 'border-y border-l border-rose-500/90' : ''
                         ].join(' ')}
                       >
                         {idx + 1}
                       </td>
-                      <td className={['whitespace-nowrap px-3 py-2 font-mono text-slate-200', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                      <td className={['whitespace-nowrap px-3 py-3 font-mono text-stone-100', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
                         {displayStaffId ? (
                           <button
                             type="button"
                             disabled={badgePrintingStaffId === row.staff_id}
                             onClick={() => void printTempBadge(row)}
-                            className="underline decoration-dotted underline-offset-2 transition hover:text-neon disabled:cursor-not-allowed disabled:opacity-60"
+                            className="underline decoration-dotted underline-offset-4 transition hover:text-[#e8dfcf] disabled:cursor-not-allowed disabled:opacity-60"
                             title="Print temp badge"
                           >
                             {badgePrintingStaffId === row.staff_id ? 'Printing...' : displayStaffId}
@@ -1997,48 +2142,48 @@ export default function DashboardPage() {
                           ''
                         )}
                       </td>
-                      <td className={['whitespace-nowrap px-3 py-2 text-slate-200', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                      <td className={['whitespace-nowrap px-3 py-3 text-stone-100', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
                         {row.name || '-'}
                       </td>
-                      <td className={['whitespace-nowrap px-3 py-2 text-slate-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                      <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
                         <span
                           className={[
-                            'inline-flex items-center rounded-md border px-2 py-0.5',
+                            'inline-flex items-center rounded-full border px-2.5 py-1',
                             getPositionBadgeClass(row.position)
                           ].join(' ')}
                         >
                           {row.position || '-'}
                         </span>
                       </td>
-                      <td className={['whitespace-nowrap px-3 py-2 text-slate-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                      <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
                         <span
                           className={[
-                            'inline-flex items-center rounded-md border px-2 py-0.5',
+                            'inline-flex items-center rounded-full border px-2.5 py-1',
                             getLabelToneClass(row.label || '', labelToneMap)
                           ].join(' ')}
                         >
                           {row.label || '-'}
                         </span>
                       </td>
-                      <td className={['whitespace-nowrap px-3 py-2 text-slate-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                      <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
                         <span
                           className={[
-                            'inline-flex items-center rounded-md border px-2 py-0.5',
+                            'inline-flex items-center rounded-full border px-2.5 py-1',
                             row.borrowed_device
-                              ? 'border-amber-400/60 bg-amber-500/15 text-amber-200'
-                              : 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                              ? 'border-stone-200/25 bg-stone-100/[0.08] text-stone-100'
+                              : 'border-white/12 bg-white/[0.04] text-stone-300'
                           ].join(' ')}
                         >
                           {row.borrowed_device || 'No borrowed device'}
                         </span>
                       </td>
-                      <td className={['whitespace-nowrap px-3 py-2 text-slate-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                      <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
                         {normalizeWorkAccountValue(row.work_account) ? (
                           <button
                             type="button"
                             disabled={!resolveDefaultPassword(normalizeWorkAccountValue(row.work_account), String(row.work_password ?? '').trim()) || accountPrintingStaffId === row.staff_id}
                             onClick={() => void printAccountCard(row)}
-                            className="underline decoration-dotted underline-offset-2 transition hover:text-neon disabled:cursor-not-allowed disabled:opacity-60"
+                            className="underline decoration-dotted underline-offset-4 transition hover:text-[#e8dfcf] disabled:cursor-not-allowed disabled:opacity-60"
                             title={resolveDefaultPassword(normalizeWorkAccountValue(row.work_account), String(row.work_password ?? '').trim()) ? 'Print account card' : 'Missing password'}
                           >
                             {accountPrintingStaffId === row.staff_id
@@ -2053,38 +2198,38 @@ export default function DashboardPage() {
                               const ok = await assignTempAccountToRow(row);
                               if (!ok) return;
                             }}
-                            className="underline decoration-dotted underline-offset-2 transition hover:text-neon disabled:cursor-not-allowed disabled:opacity-60"
+                            className="underline decoration-dotted underline-offset-4 transition hover:text-[#e8dfcf] disabled:cursor-not-allowed disabled:opacity-60"
                             title="Assign temp account"
                           >
                             {accountAssigningStaffId === row.staff_id ? 'Assigning...' : 'Assign account'}
                           </button>
                         )}
                       </td>
-                      <td className={['whitespace-nowrap px-3 py-2 text-slate-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                      <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
                         <span
                           className={[
-                            'inline-flex items-center rounded-md border px-2 py-0.5',
+                            'inline-flex items-center rounded-full border px-2.5 py-1',
                             getShiftBadgeClass(row.shift)
                           ].join(' ')}
                         >
                           {formatShiftLabel(row.display_shift || row.shift)}
                         </span>
                       </td>
-                      <td className={['whitespace-nowrap px-3 py-2', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
+                      <td className={['whitespace-nowrap px-3 py-3', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
                         {(() => {
                           const count = Number(row.mistake_count_7d ?? 0);
                           const toneClass =
                             count <= 0
-                              ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
+                              ? 'border-white/12 bg-white/[0.04] text-stone-200'
                               : count <= 2
-                                ? 'border-amber-400/60 bg-amber-500/15 text-amber-200'
-                                : 'border-rose-400/60 bg-rose-500/15 text-rose-200';
+                                ? 'border-stone-300/25 bg-stone-200/[0.08] text-stone-50'
+                                : 'border-rose-400/50 bg-rose-500/15 text-rose-100';
                           return (
                             <button
                               type="button"
                               onClick={() => void openMistakeDetails(row)}
                               className={[
-                                'inline-flex min-w-[48px] items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold transition hover:brightness-110',
+                                'inline-flex min-w-[48px] items-center justify-center rounded-full border px-2.5 py-1 text-xs font-semibold transition hover:brightness-110',
                                 toneClass
                               ].join(' ')}
                               title="View mistake report details"
@@ -2096,21 +2241,21 @@ export default function DashboardPage() {
                       </td>
                       <td
                         className={[
-                          'whitespace-nowrap px-3 py-2',
+                          'whitespace-nowrap px-3 py-3',
                           hasOverPunch ? 'border-y border-r border-rose-500/90' : ''
                         ].join(' ')}
                       >
                         {row.punches.length === 0 ? (
                           <span className="font-semibold text-rose-300">Absent</span>
                         ) : (
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5">
                             {Array.from({ length: 4 }).map((_, idx) => {
                               const punch = visiblePunches[idx];
                               if (!punch) {
                                 return (
                                   <span
                                     key={`${row.staff_id}-p-empty-${idx}`}
-                                    className="inline-flex min-w-[86px] items-center justify-center rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 text-xs text-slate-500"
+                                    className="inline-flex min-w-[72px] items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-stone-500"
                                   >
                                     -
                                   </span>
@@ -2121,12 +2266,12 @@ export default function DashboardPage() {
                                 <span
                                   key={punch.id || `${row.staff_id}-p-${idx}`}
                                   className={[
-                                    'inline-flex min-w-[86px] items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold',
+                                    'inline-flex min-w-[72px] items-center justify-center rounded-full border px-2 py-1 text-[11px] font-semibold',
                                     isShortGapPunch
                                       ? 'border-rose-400 bg-rose-600/40 text-rose-100 shadow-[0_0_0_1px_rgba(251,113,133,0.45)]'
                                       : punch.action === 'IN'
-                                        ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
-                                        : 'border-sky-400/60 bg-sky-500/15 text-sky-200'
+                                        ? 'border-stone-200/20 bg-stone-100/[0.08] text-stone-50'
+                                        : 'border-white/12 bg-white/[0.04] text-stone-300'
                                   ].join(' ')}
                                   title={formatDateTime(punch.created_at)}
                                 >
@@ -2138,11 +2283,11 @@ export default function DashboardPage() {
                               <button
                                 type="button"
                                 onClick={() => openPunchDetails(row)}
-                                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-amber-400/80 bg-amber-500/20 text-sm font-bold text-amber-200 transition hover:bg-amber-500/30 hover:text-amber-100"
+                                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-stone-200/25 bg-stone-100/[0.08] text-stone-100 transition hover:bg-stone-100/[0.12]"
                                 title="View all punches for today"
                                 aria-label="View all punches for today"
                               >
-                                !
+                                <WarningIcon className="h-4 w-4" />
                               </button>
                             )}
                           </div>
@@ -2153,7 +2298,7 @@ export default function DashboardPage() {
                 })}
                 {!loading && renderedRows.length === 0 && (
                   <tr>
-                    <td className="px-3 py-6 text-center text-slate-500" colSpan={10}>
+                    <td className="px-3 py-8 text-center text-stone-500" colSpan={10}>
                       No scheduled work rows for this operational date.
                     </td>
                   </tr>
@@ -2161,13 +2306,14 @@ export default function DashboardPage() {
               </tbody>
             </table>
           </div>
+          </div>
         )}
         {!error && !loading && renderedRows.length < filteredRows.length && (
-          <div className="mt-3 flex justify-center">
+          <div className="mt-4 flex justify-center">
             <button
               type="button"
               onClick={() => setRenderCount((prev) => Math.min(prev + 120, filteredRows.length))}
-              className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-slate-200 transition hover:bg-white/15"
+              className="rounded-full border border-white/10 bg-white/[0.05] px-5 py-2.5 text-sm text-stone-100 transition hover:bg-white/[0.08]"
             >
               Load more
             </button>
@@ -2176,33 +2322,33 @@ export default function DashboardPage() {
 
         {mistakeReportOpen && (
           <div
-            className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 p-4 pt-12"
+            className="fixed inset-0 z-50 flex items-start justify-center bg-[#0b0c0e]/70 p-4 pt-8 sm:pt-12"
             onClick={() => {
               if (mistakeReportSubmitting) return;
               closeMistakeReportDialog();
             }}
           >
             <div
-              className="w-full max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-slate-950 shadow-2xl"
+              className="w-full max-w-2xl overflow-hidden rounded-[28px] border border-white/10 bg-[#17191c] shadow-[0_28px_80px_rgba(0,0,0,0.45)]"
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
                 <div>
-                  <div className="text-lg font-semibold text-slate-100">Mistake Report</div>
-                  <div className="text-xs text-slate-400">Create a daily mistake report</div>
+                  <div className="text-lg font-semibold text-stone-100">Mistake Report</div>
+                  <div className="text-xs text-stone-400">Create a daily mistake report</div>
                 </div>
                 <button
                   type="button"
                   disabled={mistakeReportSubmitting}
                   onClick={closeMistakeReportDialog}
-                  className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-full border border-white/10 bg-white/[0.05] px-3.5 py-1.5 text-xs text-stone-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Close
                 </button>
               </div>
-              <div className="grid gap-4 px-4 py-4">
+              <div className="grid gap-4 px-5 py-5">
                 <div>
-                  <label className="mb-1 block text-xs uppercase tracking-[0.14em] text-slate-400">Position</label>
+                  <label className="mb-1.5 block text-xs uppercase tracking-[0.14em] text-stone-400">Position</label>
                   <select
                     value={mistakeReportPosition}
                     onChange={(e) => {
@@ -2212,7 +2358,7 @@ export default function DashboardPage() {
                       setMistakeReportEmployeeDropdownOpen(false);
                     }}
                     disabled={mistakeReportSubmitting}
-                    className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                    className="h-11 w-full rounded-[18px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-100 outline-none transition focus:border-white/20 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <option value="">Select position</option>
                     {mistakeReportPositionOptions.map((position) => (
@@ -2224,12 +2370,12 @@ export default function DashboardPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs uppercase tracking-[0.14em] text-slate-400">Employee (USID)</label>
+                  <label className="mb-1.5 block text-xs uppercase tracking-[0.14em] text-stone-400">Employee (USID)</label>
                   <div ref={mistakeEmployeePickerRef} className="relative">
                     <div
                       className={[
-                        'flex h-10 w-full items-center rounded-xl border bg-black/30 px-3 text-sm text-slate-100 transition',
-                        mistakeReportSubmitting || !mistakeReportPosition ? 'border-white/10 opacity-60' : 'border-white/10 focus-within:border-neon'
+                        'flex h-11 w-full items-center rounded-[18px] border bg-white/[0.04] px-4 text-sm text-stone-100 transition',
+                        mistakeReportSubmitting || !mistakeReportPosition ? 'border-white/10 opacity-60' : 'border-white/10 focus-within:border-white/20'
                       ].join(' ')}
                     >
                       <input
@@ -2263,22 +2409,22 @@ export default function DashboardPage() {
                         }}
                         disabled={mistakeReportSubmitting || !mistakeReportPosition}
                         placeholder={mistakeReportPosition ? 'Type to search employee USID / name' : 'Select position first'}
-                        className="h-full flex-1 bg-transparent text-slate-100 outline-none placeholder:text-slate-500 disabled:cursor-not-allowed"
+                        className="h-full flex-1 bg-transparent text-stone-100 outline-none placeholder:text-stone-500 disabled:cursor-not-allowed"
                       />
                       <button
                         type="button"
                         disabled={mistakeReportSubmitting || !mistakeReportPosition}
                         onClick={() => setMistakeReportEmployeeDropdownOpen((prev) => !prev)}
-                        className="ml-2 text-slate-400 transition hover:text-slate-200 disabled:cursor-not-allowed"
+                        className="ml-2 text-stone-400 transition hover:text-stone-200 disabled:cursor-not-allowed"
                       >
-                        ▾
+                        <ChevronDownIcon />
                       </button>
                     </div>
                     {mistakeReportEmployeeDropdownOpen && mistakeReportPosition && (
-                      <div className="absolute z-30 mt-1 w-full overflow-hidden rounded-xl border border-white/10 bg-slate-950 shadow-2xl">
+                      <div className="absolute z-30 mt-2 w-full overflow-hidden rounded-[20px] border border-white/10 bg-[#17191c] shadow-[0_24px_60px_rgba(0,0,0,0.4)]">
                         <div className="max-h-56 overflow-auto py-1">
                           {mistakeReportEmployeeFilteredOptions.length === 0 ? (
-                            <div className="px-3 py-2 text-sm text-slate-500">No matched employee</div>
+                            <div className="px-4 py-3 text-sm text-stone-500">No matched employee</div>
                           ) : (
                             mistakeReportEmployeeFilteredOptions.map((row) => {
                               const staff = String(row.staff_id ?? '');
@@ -2294,8 +2440,8 @@ export default function DashboardPage() {
                                     setMistakeReportEmployeeDropdownOpen(false);
                                   }}
                                   className={[
-                                    'flex w-full items-center px-3 py-2 text-left text-sm transition',
-                                    selected ? 'bg-neon/15 text-neon' : 'text-slate-200 hover:bg-white/10'
+                                    'flex w-full items-center px-4 py-3 text-left text-sm transition',
+                                    selected ? 'bg-white/[0.08] text-stone-50' : 'text-stone-200 hover:bg-white/[0.05]'
                                   ].join(' ')}
                                 >
                                   {label}
@@ -2310,19 +2456,19 @@ export default function DashboardPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs uppercase tracking-[0.14em] text-slate-400">Mistake Reason</label>
+                  <label className="mb-1.5 block text-xs uppercase tracking-[0.14em] text-stone-400">Mistake Reason</label>
                   <textarea
                     value={mistakeReportReason}
                     onChange={(e) => setMistakeReportReason(e.target.value)}
                     disabled={mistakeReportSubmitting}
                     rows={4}
                     placeholder="Describe the mistake"
-                    className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                    className="w-full rounded-[18px] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-stone-100 outline-none transition placeholder:text-stone-500 focus:border-white/20 disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs uppercase tracking-[0.14em] text-slate-400">Reporter (USID)</label>
+                  <label className="mb-1.5 block text-xs uppercase tracking-[0.14em] text-stone-400">Reporter (USID)</label>
                   <input
                     value={mistakeReportReporterStaffId}
                     onChange={(e) => setMistakeReportReporterStaffId(normalizeStaffId(e.target.value))}
@@ -2332,16 +2478,16 @@ export default function DashboardPage() {
                     }}
                     disabled={mistakeReportSubmitting}
                     placeholder="Scan or enter reporter USID"
-                    className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                    className="h-11 w-full rounded-[18px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-100 outline-none transition focus:border-white/20 disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </div>
               </div>
-              <div className="flex items-center justify-end gap-2 border-t border-white/10 px-4 py-3">
+              <div className="flex items-center justify-end gap-2 border-t border-white/10 px-5 py-4">
                 <button
                   type="button"
                   disabled={mistakeReportSubmitting}
                   onClick={closeMistakeReportDialog}
-                  className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-xs font-medium text-stone-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Cancel
                 </button>
@@ -2349,7 +2495,7 @@ export default function DashboardPage() {
                   type="button"
                   disabled={mistakeReportSubmitting}
                   onClick={() => void submitMistakeReport()}
-                  className="rounded-xl bg-neon px-4 py-1.5 text-xs font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-full border border-[#d9cfbf]/40 bg-[#e8dfcf] px-4 py-2 text-xs font-semibold text-[#181614] transition hover:bg-[#f0e9dc] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {mistakeReportSubmitting ? 'Submitting...' : 'Submit'}
                 </button>
@@ -2362,20 +2508,20 @@ export default function DashboardPage() {
           typeof document !== 'undefined' &&
           createPortal(
             <div
-              className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
+              className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b0c0e]/70 p-4"
               onClick={() => {
                 if (mistakeDetailLoading) return;
                 setMistakeDetailOpen(false);
               }}
             >
               <div
-                className="flex h-[78vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-950 shadow-2xl"
+                className="flex h-[78vh] w-full max-w-7xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#17191c] shadow-[0_28px_80px_rgba(0,0,0,0.45)]"
                 onClick={(event) => event.stopPropagation()}
               >
-                <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
                   <div>
-                    <div className="text-lg font-semibold text-slate-100">Mistake Details</div>
-                    <div className="text-xs text-slate-400">
+                    <div className="text-lg font-semibold text-stone-100">Mistake Details</div>
+                    <div className="text-xs text-stone-400">
                       {mistakeDetailStaffId
                         ? `Employee: ${mistakeDetailStaffId}${mistakeDetailStaffName ? ` - ${mistakeDetailStaffName}` : ''}`
                         : 'Employee details'}
@@ -2385,14 +2531,14 @@ export default function DashboardPage() {
                     type="button"
                     onClick={() => setMistakeDetailOpen(false)}
                     disabled={mistakeDetailLoading}
-                    className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="rounded-full border border-white/10 bg-white/[0.05] px-3.5 py-1.5 text-xs text-stone-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     Close
                   </button>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
                   <table className="min-w-full table-fixed border-collapse text-sm">
-                    <thead className="sticky top-0 z-10 bg-slate-950/95 text-xs uppercase tracking-[0.16em] text-slate-400">
+                    <thead className="sticky top-0 z-10 bg-[#17191c]/95 text-xs uppercase tracking-[0.16em] text-stone-400">
                       <tr>
                         <th className="w-[120px] px-3 py-2 text-left">Date</th>
                         <th className="w-[140px] px-3 py-2 text-left">Position</th>
@@ -2418,16 +2564,11 @@ export default function DashboardPage() {
                       )}
                       {!mistakeDetailLoading && !mistakeDetailError && mistakeDetailRows.map((item) => (
                         <tr key={item.id || `${item.employee_staff_id}-${item.created_at}-${item.reason}`} className="border-t border-white/5 odd:bg-white/[0.03]">
-                          <td className="whitespace-nowrap px-3 py-2 align-top text-slate-300">{item.operational_date || '-'}</td>
-                          <td className="whitespace-nowrap px-3 py-2 align-top text-slate-200">{item.position || '-'}</td>
-                          <td className="px-3 py-2 align-top text-slate-200 whitespace-pre-wrap break-words">{item.reason || '-'}</td>
-                          <td className="px-3 py-2 align-top text-slate-200">
-                            <div>{item.reporter_name || item.reporter_staff_id || '-'}</div>
-                            {item.reporter_staff_id && item.reporter_name && item.reporter_name !== item.reporter_staff_id && (
-                              <div className="font-mono text-xs text-slate-500">{item.reporter_staff_id}</div>
-                            )}
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-2 align-top text-slate-300">{item.created_at ? formatDateTime(item.created_at) : '-'}</td>
+                          <td className="whitespace-nowrap px-3 py-2 align-top text-stone-300">{item.operational_date || '-'}</td>
+                          <td className="whitespace-nowrap px-3 py-2 align-top text-stone-100">{item.position || '-'}</td>
+                          <td className="px-3 py-2 align-top text-stone-100 whitespace-pre-wrap break-words">{item.reason || '-'}</td>
+                          <td className="px-3 py-2 align-top text-stone-100">{item.reporter_name || item.reporter_staff_id || '-'}</td>
+                          <td className="whitespace-nowrap px-3 py-2 align-top text-stone-300">{item.created_at ? formatDateTime(item.created_at) : '-'}</td>
                         </tr>
                       ))}
                       {!mistakeDetailLoading && !mistakeDetailError && mistakeDetailRows.length === 0 && (
@@ -2448,15 +2589,15 @@ export default function DashboardPage() {
         {punchDetailOpen &&
           typeof document !== 'undefined' &&
           createPortal(
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" onClick={() => setPunchDetailOpen(false)}>
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b0c0e]/70 p-4" onClick={() => setPunchDetailOpen(false)}>
               <div
-                className="flex max-h-[78vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-950 shadow-2xl"
+                className="flex max-h-[78vh] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#17191c] shadow-[0_28px_80px_rgba(0,0,0,0.45)]"
                 onClick={(event) => event.stopPropagation()}
               >
-                <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
                   <div>
-                    <div className="text-lg font-semibold text-slate-100">Punch Details</div>
-                    <div className="text-xs text-slate-400">
+                    <div className="text-lg font-semibold text-stone-100">Punch Details</div>
+                    <div className="text-xs text-stone-400">
                       {punchDetailStaffId
                         ? `Employee: ${punchDetailStaffId}${punchDetailStaffName ? ` - ${punchDetailStaffName}` : ''}`
                         : 'Today punch details'}
@@ -2465,14 +2606,14 @@ export default function DashboardPage() {
                   <button
                     type="button"
                     onClick={() => setPunchDetailOpen(false)}
-                    className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15"
+                    className="rounded-full border border-white/10 bg-white/[0.05] px-3.5 py-1.5 text-xs text-stone-200 transition hover:bg-white/[0.08]"
                   >
                     Close
                   </button>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
                   <table className="min-w-full table-fixed border-collapse text-sm">
-                    <thead className="sticky top-0 z-10 bg-slate-950/95 text-xs uppercase tracking-[0.16em] text-slate-400">
+                    <thead className="sticky top-0 z-10 bg-[#17191c]/95 text-xs uppercase tracking-[0.16em] text-stone-400">
                       <tr>
                         <th className="w-[120px] px-3 py-2 text-left">Action</th>
                         <th className="w-[120px] px-3 py-2 text-left">Time</th>
@@ -2487,15 +2628,15 @@ export default function DashboardPage() {
                               className={[
                                 'inline-flex min-w-[72px] items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold',
                                 punch.action === 'IN'
-                                  ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
-                                  : 'border-sky-400/60 bg-sky-500/15 text-sky-200'
+                                  ? 'border-stone-200/20 bg-stone-100/[0.08] text-stone-50'
+                                  : 'border-white/12 bg-white/[0.04] text-stone-300'
                               ].join(' ')}
                             >
                               {punch.action}
                             </span>
                           </td>
-                          <td className="whitespace-nowrap px-3 py-2 align-top text-slate-200">{formatTimeOnly(punch.created_at)}</td>
-                          <td className="whitespace-nowrap px-3 py-2 align-top text-slate-300">{formatDateTime(punch.created_at)}</td>
+                          <td className="whitespace-nowrap px-3 py-2 align-top text-stone-100">{formatTimeOnly(punch.created_at)}</td>
+                          <td className="whitespace-nowrap px-3 py-2 align-top text-stone-300">{formatDateTime(punch.created_at)}</td>
                         </tr>
                       ))}
                       {punchDetailRows.length === 0 && (
@@ -2515,51 +2656,57 @@ export default function DashboardPage() {
 
         {accountUsageOpen && (
           <div
-            className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 p-4 pt-12"
+            className="fixed inset-0 z-50 flex items-start justify-center bg-[#0b0c0e]/70 p-4 pt-8 sm:pt-12"
             onClick={() => setAccountUsageOpen(false)}
           >
             <div
-              className="w-full max-w-6xl overflow-hidden rounded-2xl border border-white/10 bg-slate-950 shadow-2xl"
+              className="w-full max-w-6xl overflow-hidden rounded-[28px] border border-white/10 bg-[#17191c] shadow-[0_28px_80px_rgba(0,0,0,0.45)]"
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
                 <div>
-                  <div className="text-lg font-semibold text-slate-100">Account usage</div>
-                  <div className="text-xs text-slate-400">Who is using which temporary account</div>
+                  <div className="text-lg font-semibold text-stone-100">Account usage</div>
+                  <div className="text-xs text-stone-400">Who is using which temporary account</div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setAccountUsageOpen(false)}
-                  className="rounded-xl bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/15"
+                  className="rounded-full border border-white/10 bg-white/[0.05] px-3.5 py-1.5 text-xs text-stone-200 transition hover:bg-white/[0.08]"
                 >
                   Close
                 </button>
               </div>
-              <div className="border-b border-white/10 px-4 py-3">
+              <div className="border-b border-white/10 px-5 py-4">
                 <div className="grid gap-3 md:grid-cols-[1fr_220px]">
-                  <input
-                    value={accountUsageSearch}
-                    onChange={(e) => setAccountUsageSearch(e.target.value)}
-                    placeholder="Search by account name / account / user name"
-                    className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-neon"
-                  />
-                  <select
-                    value={accountUsagePositionFilter}
-                    onChange={(e) => setAccountUsagePositionFilter(e.target.value)}
-                    className="h-10 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none transition focus:border-neon"
-                  >
-                    <option value="">All positions</option>
-                    {accountUsagePositionOptions.map((position) => (
-                      <option key={position} value={position}>
-                        {position}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="flex h-11 items-center gap-3 rounded-[18px] border border-white/10 bg-white/[0.04] px-4">
+                    <SearchIcon className="h-4 w-4 text-stone-400" />
+                    <input
+                      value={accountUsageSearch}
+                      onChange={(e) => setAccountUsageSearch(e.target.value)}
+                      placeholder="Search by account, alias, or user"
+                      className="h-full w-full bg-transparent text-sm text-stone-100 outline-none placeholder:text-stone-500"
+                    />
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={accountUsagePositionFilter}
+                      onChange={(e) => setAccountUsagePositionFilter(e.target.value)}
+                      className="h-11 w-full appearance-none rounded-[18px] border border-white/10 bg-white/[0.04] px-4 pr-10 text-sm text-stone-100 outline-none transition focus:border-white/20"
+                    >
+                      <option value="">All positions</option>
+                      {accountUsagePositionOptions.map((position) => (
+                        <option key={position} value={position}>
+                          {position}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDownIcon className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+                  </div>
                 </div>
               </div>
               <div className="max-h-[65vh] overflow-auto">
                 <table className="min-w-full border-collapse text-sm">
-                  <thead className="sticky top-0 z-10 bg-slate-950/95 text-xs uppercase tracking-[0.16em] text-slate-400">
+                  <thead className="sticky top-0 z-10 bg-[#17191c]/95 text-xs uppercase tracking-[0.16em] text-stone-400">
                     <tr>
                       <th className="px-3 py-2 text-left">Staff ID</th>
                       <th className="px-3 py-2 text-left">Name</th>
@@ -2573,24 +2720,24 @@ export default function DashboardPage() {
                   <tbody>
                     {filteredAccountUsageRows.map((item) => (
                       <tr key={item.id || `${item.staff_id}-${item.work_account}-${item.created_at}`} className="border-t border-white/5 odd:bg-white/[0.03]">
-                        <td className="whitespace-nowrap px-3 py-2 font-mono text-slate-200">{item.staff_id || '-'}</td>
-                        <td className="whitespace-nowrap px-3 py-2 text-slate-200">{item.name || '-'}</td>
-                        <td className="whitespace-nowrap px-3 py-2 text-slate-300">{item.position || '-'}</td>
-                        <td className="whitespace-nowrap px-3 py-2 text-slate-200">{item.account_name || '-'}</td>
-                        <td className="whitespace-nowrap px-3 py-2 font-mono text-slate-100">{item.work_account || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 font-mono text-stone-100">{item.staff_id || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-stone-100">{item.name || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-stone-300">{item.position || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-stone-100">{item.account_name || '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 font-mono text-stone-100">{item.work_account || '-'}</td>
                         <td className="whitespace-nowrap px-3 py-2">
                           <span
                             className={[
                               'inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold',
                               item.status === 'Active'
-                                ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
-                                : 'border-slate-400/50 bg-slate-500/10 text-slate-300'
+                                ? 'border-stone-200/25 bg-stone-100/[0.08] text-stone-50'
+                                : 'border-white/12 bg-white/[0.04] text-stone-300'
                             ].join(' ')}
                           >
                             {item.status}
                           </span>
                         </td>
-                        <td className="whitespace-nowrap px-3 py-2 text-slate-300">{item.created_at ? formatDateTime(item.created_at) : '-'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-stone-300">{item.created_at ? formatDateTime(item.created_at) : '-'}</td>
                       </tr>
                     ))}
                     {filteredAccountUsageRows.length === 0 && (

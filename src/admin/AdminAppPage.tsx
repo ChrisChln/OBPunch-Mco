@@ -812,6 +812,7 @@ export default function AdminApp() {
   const schedulePositionToneLastSavedJsonRef = useRef('');
   const schedulePositionToneReadyRef = useRef(false);
   const scheduleRenderFilterKeyRef = useRef('');
+  const scheduleTableScrollRef = useRef<HTMLDivElement | null>(null);
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
@@ -9077,16 +9078,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   };
 
   const toneColor: Record<StatusTone, string> = {
-    idle: 'text-slate-300',
-    pending: 'text-neon',
-    success: 'text-mint',
-    error: 'text-ember'
+    idle: 'text-stone-300',
+    pending: 'text-sky-200',
+    success: 'text-emerald-200',
+    error: 'text-rose-200'
   };
 
   const tabClass = (active: boolean) =>
     [
-      'rounded-2xl px-4 py-2 text-sm font-medium transition',
-      active ? 'bg-neon text-white shadow-glow' : 'bg-white/5 text-slate-200 hover:bg-white/10',
+      'rounded-full border px-4 py-2 text-sm font-medium transition',
+      active
+        ? 'border-stone-200/90 bg-stone-100 text-stone-900 shadow-[0_10px_30px_rgba(0,0,0,0.18)]'
+        : 'border-white/10 bg-white/[0.04] text-stone-200 hover:border-white/15 hover:bg-white/[0.07]',
       isLocked ? 'cursor-not-allowed opacity-60' : ''
     ].join(' ');
 
@@ -10409,7 +10412,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   useEffect(() => {
     if (page !== 'schedule') return;
     const total = scheduleEmployeesFiltered.length;
-    setScheduleRenderCount(Math.min(60, total));
+    setScheduleRenderCount(Math.min(24, total));
   }, [page]);
 
   useEffect(() => {
@@ -10425,7 +10428,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const filterChanged = scheduleRenderFilterKeyRef.current !== filterKey;
     scheduleRenderFilterKeyRef.current = filterKey;
     setScheduleRenderCount((prev) => {
-      if (filterChanged || prev <= 0) return Math.min(60, total);
+      if (filterChanged || prev <= 0) return Math.min(24, total);
       if (prev > total) return total;
       return prev;
     });
@@ -10442,18 +10445,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   useEffect(() => {
     if (page !== 'schedule') return;
     if (scheduleRenderCount >= scheduleEmployeesFiltered.length) return;
+    const container = scheduleTableScrollRef.current;
+    if (!container) return;
     const onScroll = () => {
-      const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
-      const viewport = window.innerHeight || document.documentElement.clientHeight || 0;
-      const fullHeight = document.documentElement.scrollHeight || document.body.scrollHeight || 0;
-      if (scrollTop + viewport < fullHeight - 240) return;
+      const scrollTop = container.scrollTop;
+      const viewport = container.clientHeight;
+      const fullHeight = container.scrollHeight;
+      if (scrollTop + viewport < fullHeight - 180) return;
       setScheduleRenderCount((prev) => {
         if (prev >= scheduleEmployeesFiltered.length) return prev;
-        return Math.min(prev + 60, scheduleEmployeesFiltered.length);
+        return Math.min(prev + 24, scheduleEmployeesFiltered.length);
       });
     };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => container.removeEventListener('scroll', onScroll);
   }, [page, scheduleRenderCount, scheduleEmployeesFiltered]);
 
   const scheduleWorkingCountByDayIndex = useMemo(() => {
@@ -11438,7 +11443,7 @@ ${rowsToHtml(late)}
         themeMode === 'light' ? 'admin-theme-light' : 'admin-theme-dark'
       ].join(' ')}
     >
-      <div className="mx-auto flex w-full max-w-none flex-col gap-6">
+      <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-6">
         <AdminHeader
           t={t}
           isLocked={isLocked}
@@ -11878,18 +11883,21 @@ ${rowsToHtml(late)}
                 )}
 
                 {!scheduleError && scheduleEmployeesFiltered.length > 0 && (
-                  <div className="no-scrollbar mt-4 min-h-[320px] max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30">
-                    <table className="min-w-[1788px] w-full table-fixed text-left text-xs leading-tight">
+                  <div
+                    ref={scheduleTableScrollRef}
+                    className="mt-4 min-h-[320px] max-h-[68vh] overflow-x-hidden overflow-y-auto rounded-2xl border border-white/10 bg-black/30 pr-3 pb-2"
+                  >
+                    <table className="w-full table-fixed text-left text-xs leading-tight">
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
-                          <th className="sticky top-0 z-20 w-[100px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('工号', 'ID')}</th>
-                          <th className="sticky top-0 z-20 w-[155px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('姓名', 'Name')}</th>
-                          <th className="sticky top-0 z-20 w-[96px] bg-slate-950/95 px-2 py-2 text-center backdrop-blur">{t('工作天数', 'Work Days')}</th>
-                          <th className="sticky top-0 z-20 w-[108px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('中介', 'Agency')}</th>
-                          <th className="sticky top-0 z-20 w-[86px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('岗位', 'Position')}</th>
-                          <th className="sticky top-0 z-20 w-[110px] bg-slate-950/95 px-1.5 py-2 backdrop-blur">{t('标签', 'Label')}</th>
-                          <th className="sticky top-0 z-20 w-[76px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">{t('班次', 'Shift')}</th>
-                          <th className="sticky top-0 z-20 w-[72px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">
+                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('工号', 'ID')}</th>
+                          <th className="sticky top-0 z-20 w-[124px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('姓名', 'Name')}</th>
+                          <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">{t('工作天数', 'Work Days')}</th>
+                          <th className="sticky top-0 z-20 w-[82px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('中介', 'Agency')}</th>
+                          <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('岗位', 'Position')}</th>
+                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('标签', 'Label')}</th>
+                          <th className="sticky top-0 z-20 w-[64px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('班次', 'Shift')}</th>
+                          <th className="sticky top-0 z-20 w-[56px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
                             <button
                               type="button"
                               disabled={isLocked}
@@ -11904,20 +11912,20 @@ ${rowsToHtml(late)}
                               UPH{scheduleSortByUphDesc ? ' ↓' : ''}
                             </button>
                           </th>
-                          <th className="sticky top-0 z-20 w-[78px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">
+                          <th className="sticky top-0 z-20 w-[58px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
                             Mistake
                           </th>
                           {scheduleDays.map((day, idx) => (
-                            <th key={toDateOnly(day)} className="sticky top-0 z-20 w-[92px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
+                            <th key={toDateOnly(day)} className="sticky top-0 z-20 w-[72px] bg-slate-950/95 px-0.5 py-2 text-center backdrop-blur">
                               <div className="flex flex-col items-center leading-tight">
-                                <span className="text-[10px] font-semibold text-emerald-300">
+                                <span className="text-[9px] font-semibold text-emerald-300">
                                   {(() => {
                                     const recommended = scheduleRecommendedTotalsByDate[toDateOnly(day)];
                                     return recommended === null || recommended === undefined
-                                      ? t('推荐 -', 'Recommended -')
+                                      ? t('推荐 -', 'R -')
                                       : lang === 'en'
-                                        ? `Recommended ${recommended}`
-                                        : `推荐 ${recommended}人`;
+                                        ? `R ${recommended}`
+                                        : `推荐 ${recommended}`;
                                   })()}
                                 </span>
                                 <button
@@ -11925,7 +11933,7 @@ ${rowsToHtml(late)}
                                   disabled={isLocked}
                                   onClick={() => setScheduleWorkDayFilter((prev) => (prev === idx ? null : idx))}
                                   className={[
-                                    'mt-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition',
+                                    'mt-1 rounded-md px-1 py-0.5 text-[9px] font-semibold transition',
                                     scheduleWorkDayFilter === idx
                                       ? 'bg-neon/20 text-neon'
                                       : 'text-neon hover:bg-white/10',
@@ -11933,13 +11941,13 @@ ${rowsToHtml(late)}
                                   ].join(' ')}
                                   title="Filter employees working this day"
                                 >
-                                  {lang === 'en' ? `Work ${scheduleWorkingCountByDayIndex[idx]}` : `工作 ${scheduleWorkingCountByDayIndex[idx]}人`}
+                                  {lang === 'en' ? `W ${scheduleWorkingCountByDayIndex[idx]}` : `工 ${scheduleWorkingCountByDayIndex[idx]}`}
                                 </button>
-                                <span className="mt-1">{`${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][idx]} ${toDateOnly(day).slice(5)}`}</span>
+                                <span className="mt-1 text-[9px]">{`${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][idx]} ${toDateOnly(day).slice(5)}`}</span>
                               </div>
                             </th>
                           ))}
-                          <th className="sticky top-0 z-20 w-[82px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
+                          <th className="sticky top-0 z-20 w-[52px] bg-slate-950/95 px-0.5 py-2 text-center backdrop-blur">
                             {t('离职', 'Depart')}
                           </th>
                         </tr>
@@ -12009,24 +12017,24 @@ ${rowsToHtml(late)}
 
                           return (
                             <tr className="border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-0" key={staff}>
-                              <td className="px-1.5 py-2 font-mono text-slate-200">{staff}</td>
-                              <td className="px-1.5 py-2 text-slate-200 truncate">{name || '-'}</td>
-                              <td className="px-2 py-2 text-center">
-                                <span className={['inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold', workDaysClass].join(' ')}>
+                              <td className="px-1 py-2 font-mono text-slate-200">{staff}</td>
+                              <td className="px-1 py-2 text-slate-200 truncate">{name || '-'}</td>
+                              <td className="px-1.5 py-2 text-center">
+                                <span className={['inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold', workDaysClass].join(' ')}>
                                   {effectiveWorkDays}
                                 </span>
                               </td>
-                              <td className="px-1.5 py-2 text-slate-200 truncate">{agency || '-'}</td>
-                              <td className="px-1.5 py-2 text-slate-200">
-                                <span className={['inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]', getSchedulePositionBadgeClass(position)].join(' ')}>
+                              <td className="px-1 py-2 text-slate-200 truncate">{agency || '-'}</td>
+                              <td className="px-1 py-2 text-slate-200">
+                                <span className={['inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]', getSchedulePositionBadgeClass(position)].join(' ')}>
                                   {position || '-'}
                                 </span>
                               </td>
-                              <td className="px-1.5 py-2 text-slate-200">
+                              <td className="px-1 py-2 text-slate-200">
                                 {label ? (
                                   <span
                                     className={[
-                                      'inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+                                      'inline-flex max-w-full items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold',
                                       getScheduleLabelToneClass(label)
                                     ].join(' ')}
                                   >
@@ -12036,17 +12044,17 @@ ${rowsToHtml(late)}
                                   '-'
                                 )}
                               </td>
-                              <td className="px-2 py-2 text-center text-slate-200">
+                              <td className="px-1 py-2 text-center text-slate-200">
                                 {(() => {
                                   const dbShift = normalizeShiftValue(String(employee.shift ?? '').trim());
                                   const shift = dbShift || '';
                                   const shiftLabel = shift === 'early' ? t('早班', 'Morning') : shift === 'late' ? t('晚班', 'Night') : '-';
                                   const shiftClass = getShiftBadgeClass(shift);
-                                  return <span className={['inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold tracking-[0.08em]', shiftClass].join(' ')}>{shiftLabel}</span>;
+                                  return <span className={['inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.06em]', shiftClass].join(' ')}>{shiftLabel}</span>;
                                 })()}
                               </td>
-                              <td className="px-1.5 py-2 text-center font-mono text-slate-200">{formatUph(scheduleUphByStaffId[staff])}</td>
-                              <td className="px-1.5 py-2 text-center">
+                              <td className="px-1 py-2 text-center font-mono text-slate-200">{formatUph(scheduleUphByStaffId[staff])}</td>
+                              <td className="px-1 py-2 text-center">
                                 {(() => {
                                   const manualCount = Number(scheduleMistakeByStaffId[staff] ?? 0);
                                   const autoCount = Number(scheduleAutoMistakeByStaffId[staff] ?? 0);
@@ -12071,7 +12079,7 @@ ${rowsToHtml(late)}
                                           openScheduleMistakeCreate(employee);
                                         }}
                                         className={[
-                                          'inline-flex min-w-[46px] items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold transition hover:brightness-110 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.18)] disabled:cursor-not-allowed disabled:opacity-60',
+                                          'inline-flex min-w-[38px] items-center justify-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition hover:brightness-110 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.18)] disabled:cursor-not-allowed disabled:opacity-60',
                                           toneClass
                                         ].join(' ')}
                                         title="Add mistake for this employee"
@@ -12144,7 +12152,7 @@ ${rowsToHtml(late)}
                                 const scheduleCellAudit = scheduleAuditByStaffDate.get(scheduleAuditKey) ?? [];
 
                                 return (
-                                  <td key={key} className="px-1 py-1.5 align-middle">
+                                  <td key={key} className="px-0.5 py-1.5 align-middle">
                                     <div className="group relative flex items-center justify-center">
                                       <span className="relative inline-flex">
                                         <button
@@ -12164,7 +12172,7 @@ ${rowsToHtml(late)}
                                             );
                                           }}
                                           className={[
-                                            'h-7 min-w-[42px] rounded-md px-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55',
+                                            'h-7 min-w-[36px] rounded-md px-0.5 text-[9px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55',
                                             state === 'work'
                                               ? 'bg-neon text-white shadow-glow'
                                               : state === 'temp_work'
@@ -12221,22 +12229,43 @@ ${rowsToHtml(late)}
                                         )}
                                       </span>
                                       {scheduleCellAudit.length > 0 && (
-                                        <div className="pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-white/15 bg-slate-950/95 p-2 text-[11px] text-slate-200 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100">
-                                          <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-neon">
+                                        <div
+                                          className={[
+                                            'pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border p-2 text-[11px] opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100',
+                                            themeMode === 'light'
+                                              ? 'border-slate-300/80 bg-[rgba(250,247,242,0.98)] text-slate-800 shadow-[0_18px_40px_rgba(55,65,81,0.18)]'
+                                              : 'border-white/15 bg-slate-950/95 text-slate-200'
+                                          ].join(' ')}
+                                        >
+                                          <div
+                                            className={[
+                                              'mb-1 text-[10px] uppercase tracking-[0.14em]',
+                                              themeMode === 'light' ? 'text-slate-500' : 'text-neon'
+                                            ].join(' ')}
+                                          >
                                             {t('最近操作', 'Recent changes')}
                                           </div>
                                           <div className="space-y-1">
                                             {scheduleCellAudit.slice(0, 3).map((item) => {
                                               const detail = formatAuditDetail(item);
                                               return (
-                                                <div key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)} className="rounded-md bg-white/5 px-1.5 py-1">
-                                                  <div className="text-[10px] text-slate-400">
+                                                <div
+                                                  key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)}
+                                                  className={[
+                                                    'rounded-md px-1.5 py-1',
+                                                    themeMode === 'light' ? 'bg-slate-900/[0.05]' : 'bg-white/5'
+                                                  ].join(' ')}
+                                                >
+                                                  <div className={['text-[10px]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                                                     {formatCellAuditTime(item.created_at)} · {normalizeAuditActor((item as any).actor) || '-'}
                                                   </div>
-                                                  <div>{renderAuditSummary(detail.summary)}</div>
+                                                  <div className={themeMode === 'light' ? 'text-slate-800' : ''}>{renderAuditSummary(detail.summary)}</div>
                                                   {detail.details.slice(0, 2).map((d, idx2) => (
-                                                    <div key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`} className="mt-0.5 text-[10px] text-slate-300">
-                                                      <span className="text-slate-400">{d.label}: </span>
+                                                    <div
+                                                      key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`}
+                                                      className={['mt-0.5 text-[10px]', themeMode === 'light' ? 'text-slate-600' : 'text-slate-300'].join(' ')}
+                                                    >
+                                                      <span className={themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'}>{d.label}: </span>
                                                       <span className="whitespace-normal break-words">{d.value}</span>
                                                     </div>
                                                   ))}
@@ -12250,14 +12279,14 @@ ${rowsToHtml(late)}
                                   </td>
                                 );
                               })}
-                              <td className="px-1 py-1.5 text-center">
+                              <td className="px-0.5 py-1.5 text-center">
                                 <button
                                   type="button"
                                   disabled={isLocked}
                                   onClick={() => {
                                     void deleteEmployeeRow(staff);
                                   }}
-                                  className="rounded-md bg-ember px-2 py-1 text-[10px] font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                                  className="rounded-md bg-ember px-1.5 py-1 text-[9px] font-semibold leading-none text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                   {t('离职', 'Depart')}
                                 </button>
