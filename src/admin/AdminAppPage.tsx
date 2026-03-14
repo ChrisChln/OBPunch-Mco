@@ -11937,10 +11937,10 @@ ${rowsToHtml(late)}
                                   {(() => {
                                     const recommended = scheduleRecommendedTotalsByDate[toDateOnly(day)];
                                     return recommended === null || recommended === undefined
-                                      ? t('推荐 -', 'Recommended -')
+                                      ? t('推 -', 'Rec -')
                                       : lang === 'en'
-                                        ? `Recommended ${recommended}`
-                                        : `推荐 ${recommended}人`;
+                                        ? `Rec ${recommended}`
+                                        : `推 ${recommended}`;
                                   })()}
                                 </span>
                                 <button
