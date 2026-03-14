@@ -321,7 +321,7 @@ const effRoundRule = (value: number, mode: 'ceil' | 'floor' | 'round') => {
   if (mode === 'floor') return Math.floor(value);
   return Math.round(value);
 };
-const effDefaultInbound = (values: Partial<EffInboundMap>): EffInboundMap => ({
+const effDefaultInbound = (values: Partial<EffInboundMap> = {}): EffInboundMap => ({
   oi_pieces: '',
   oi_packages: '',
   single_ratio_pcs: '',
@@ -346,8 +346,8 @@ const effDefaultProc = (values: Partial<EffProcMap>): EffProcMap => ({
   ...values
 });
 const effDefaultPayload = (): EffPayloadLite => ({
-  orderInboundDs: effDefaultInbound({ oi_pieces: '30000', oi_packages: '23855', single_ratio_pcs: '64%', multi_ratio_pcs: '36%', single_ratio_pkgs: '81%', multi_ratio_pkgs: '19%', multi_pcs_per_pkg: '2.32', single_pkgs: '19200', single_piece: '19200', multi_pkgs: '4655', multi_piece: '10800' }),
-  orderInboundNs: effDefaultInbound({ oi_pieces: '10000', oi_packages: '7952', single_ratio_pcs: '64%', multi_ratio_pcs: '36%', single_ratio_pkgs: '81%', multi_ratio_pkgs: '19%', multi_pcs_per_pkg: '2.32', single_pkgs: '6400', single_piece: '6400', multi_pkgs: '1552', multi_piece: '3600' }),
+  orderInboundDs: effDefaultInbound(),
+  orderInboundNs: effDefaultInbound(),
   areaEfficiencyDs: effDefaultProc({
     pick: { uph: '120', goal: '120', ewh: '7.5', people: '34', lead: '4' },
     consolidation: { uph: '1000', goal: 'N/A', ewh: '7.5', people: '1', lead: '0' },

@@ -129,8 +129,8 @@ const buildLabor = (values: Partial<Record<LaborKey, Pick<LaborRow, 'ds' | 'ns'>
   LABOR_META.map(([key, labelZh, labelEn]) => ({ key, labelZh, labelEn, ds: values[key]?.ds ?? '', ns: values[key]?.ns ?? '' }));
 
 const defaultPayload = (): Payload => ({
-  orderInboundDs: buildInbound({ oi_pieces: '30000', oi_packages: '23855', single_ratio_pcs: '64%', multi_ratio_pcs: '36%', single_ratio_pkgs: '81%', multi_ratio_pkgs: '19%', multi_pcs_per_pkg: '2.32', single_pkgs: '19200', single_piece: '19200', multi_pkgs: '4655', multi_piece: '10800' }),
-  orderInboundNs: buildInbound({ oi_pieces: '10000', oi_packages: '7952', single_ratio_pcs: '64%', multi_ratio_pcs: '36%', single_ratio_pkgs: '81%', multi_ratio_pkgs: '19%', multi_pcs_per_pkg: '2.32', single_pkgs: '6400', single_piece: '6400', multi_pkgs: '1552', multi_piece: '3600' }),
+  orderInboundDs: buildInbound(),
+  orderInboundNs: buildInbound(),
   areaEfficiencyDs: buildProc({
     pick: { uph: '120', goal: '120', ewh: '7.5', people: '34', lead: '4' },
     consolidation: { uph: '1000', goal: 'N/A', ewh: '7.5', people: '1', lead: '0' },
