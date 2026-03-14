@@ -795,7 +795,7 @@ const TEMP_ACCOUNT_KEY_ALIASES: Record<string, string> = {
   '备注': 'note'
 };
 
-export default function AdminApp() {
+export default function AdminAppPage() {
   const busyRef = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const isLocked = Boolean(busy);
@@ -10193,9 +10193,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       ALLOWED_POSITIONS.map((position) => {
         const early = tomorrowAttendanceCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
         const late = tomorrowAttendanceCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
-        return { position, early, late, total: early + late };
+        const recommendedRows = scheduleRecommendedByDate[tomorrowDailyList.targetDate] ?? [];
+        const recommended = recommendedRows.find((item) => item.key === position);
+        const earlyRecommended = recommended ? recommended.ds : null;
+        const lateRecommended = recommended ? recommended.ns : null;
+        const totalRecommended =
+          earlyRecommended === null && lateRecommended === null
+            ? null
+            : Number(earlyRecommended ?? 0) + Number(lateRecommended ?? 0);
+        return { position, early, late, earlyRecommended, lateRecommended, totalRecommended, total: early + late };
     }),
-    [tomorrowAttendanceCards]
+    [tomorrowAttendanceCards, scheduleRecommendedByDate, tomorrowDailyList.targetDate]
   );
   const selectedDailyFilterPositions = useMemo(
     () => ALLOWED_POSITIONS.filter((position) => Boolean(dailyListFilterPositions[position])),
@@ -12383,8 +12391,8 @@ ${rowsToHtml(late)}
                               />
                             </div>
                           </div>
-                          <div className="min-w-[520px] flex-1">
-                            <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                          <div className="min-w-0 flex-1 overflow-x-auto">
+                            <div className="grid min-w-[760px] grid-cols-5 gap-2">
                               {tomorrowPositionSummaryCards.map((card) => (
                                 <button
                                   type="button"
@@ -12404,28 +12412,49 @@ ${rowsToHtml(late)}
                                   <div className="text-[10px] font-semibold uppercase tracking-[0.12em]">
                                     {card.position}
                                   </div>
-                                  <div className="mt-1 text-[11px] leading-tight opacity-90">
-                                    {t('早', 'M')} {card.early} · {t('晚', 'N')} {card.late}
+                                  <div className="mt-1 whitespace-nowrap text-[11px] leading-tight opacity-90 tabular-nums">
+                                    <span className="inline-flex items-center gap-1">
+                                      <svg
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="1.8"
+                                        className={[
+                                          'h-3.5 w-3.5',
+                                          themeMode === 'light' ? 'text-amber-600' : 'text-amber-300'
+                                        ].join(' ')}
+                                        aria-hidden="true"
+                                      >
+                                        <circle cx="12" cy="12" r="4" />
+                                        <path d="M12 2.5v2.2M12 19.3v2.2M4.7 4.7l1.6 1.6M17.7 17.7l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.7 19.3l1.6-1.6M17.7 6.3l1.6-1.6" strokeLinecap="round" />
+                                      </svg>
+                                      <span>{card.early}/{card.earlyRecommended ?? '-'}</span>
+                                    </span>
+                                    <span className="ml-3 inline-flex items-center gap-1">
+                                      <svg
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="1.8"
+                                        className={[
+                                          'h-3.5 w-3.5',
+                                          themeMode === 'light' ? 'text-indigo-600' : 'text-indigo-300'
+                                        ].join(' ')}
+                                        aria-hidden="true"
+                                      >
+                                        <path d="M20 14.2A8.5 8.5 0 119.8 4a7.1 7.1 0 0010.2 10.2z" strokeLinecap="round" strokeLinejoin="round" />
+                                      </svg>
+                                      <span>{card.late}/{card.lateRecommended ?? '-'}</span>
+                                    </span>
                                   </div>
-                                  <div className="mt-1 text-xl font-bold leading-none">{card.total}</div>
+                                  <div className="mt-1 whitespace-nowrap text-[11px] font-semibold leading-tight opacity-95">
+                                    {t('推荐', 'Rec')}: {card.totalRecommended ?? '-'}<span className="ml-3">{t('排班', 'Sch')}: {card.total}</span>
+                                  </div>
                                 </button>
                               ))}
                             </div>
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              disabled={isLocked}
-                              onClick={() => setDailyListNewHireOpen(true)}
-                              className={[
-                                'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
-                                themeMode === 'light'
-                                  ? 'border border-slate-300 bg-white text-slate-900 hover:bg-slate-100'
-                                  : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                              ].join(' ')}
-                            >
-                              {t('新人需求', 'New Request')}
-                            </button>
                             <button
                               type="button"
                               disabled={!canCopyDailyListAll}
@@ -12511,16 +12540,31 @@ ${rowsToHtml(late)}
                           <div className="md:col-span-2">
                             <div
                               className={[
-                                'rounded-xl border px-3 py-2 text-sm font-medium',
+                                'flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 text-sm font-medium',
                                 themeMode === 'light'
                                   ? 'border-slate-200 bg-slate-50 text-slate-700'
                                   : 'border-white/10 bg-white/5 text-slate-200'
                               ].join(' ')}
                             >
-                              {lang === 'en' ? `${dailyListDateDisplay} Outbound Request:` : `${dailyListDateDisplay} 出库需求:`}
-                              {' '}
-                              <span className={themeMode === 'light' ? 'text-slate-900' : 'text-white'}>{dailyListTotalDemandCount}</span>
-                              {lang === 'en' ? ' people' : t('人', '')}
+                              <div>
+                                {lang === 'en' ? `${dailyListDateDisplay} Outbound Request:` : `${dailyListDateDisplay} 出库需求:`}
+                                {' '}
+                                <span className={themeMode === 'light' ? 'text-slate-900' : 'text-white'}>{dailyListTotalDemandCount}</span>
+                                {lang === 'en' ? ' people' : t('人', '')}
+                              </div>
+                              <button
+                                type="button"
+                                disabled={isLocked}
+                                onClick={() => setDailyListNewHireOpen(true)}
+                                className={[
+                                  'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50',
+                                  themeMode === 'light'
+                                    ? 'border border-slate-300 bg-white text-slate-900 hover:bg-slate-100'
+                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                ].join(' ')}
+                              >
+                                {t('新人需求', 'New Request')}
+                              </button>
                             </div>
                           </div>
                           <div className={['rounded-2xl border p-4', themeMode === 'light' ? 'border-emerald-200 bg-emerald-50/50' : 'border-emerald-400/30 bg-emerald-500/[0.04]'].join(' ')}>
