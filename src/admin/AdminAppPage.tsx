@@ -12237,19 +12237,9 @@ ${rowsToHtml(late)}
                                       </span>
                                       {scheduleCellAudit.length > 0 && (
                                         <div
-                                          className={[
-                                            'pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border p-2 text-[11px] opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100',
-                                            themeMode === 'light'
-                                              ? 'border-slate-300 bg-stone-50 text-slate-900 shadow-[0_18px_40px_rgba(55,65,81,0.16)]'
-                                              : 'border-slate-700 bg-[#16181c] text-slate-100'
-                                          ].join(' ')}
+                                          className="pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-2 text-[11px] text-slate-900 opacity-0 shadow-[0_18px_40px_rgba(55,65,81,0.16)] transition group-hover:visible group-hover:opacity-100"
                                         >
-                                          <div
-                                            className={[
-                                              'mb-1 text-[10px] uppercase tracking-[0.14em]',
-                                              themeMode === 'light' ? 'text-slate-500' : 'text-neon'
-                                            ].join(' ')}
-                                          >
+                                          <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
                                             {t('最近操作', 'Recent changes')}
                                           </div>
                                           <div className="space-y-1">
@@ -12258,21 +12248,18 @@ ${rowsToHtml(late)}
                                               return (
                                                 <div
                                                   key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)}
-                                                  className={[
-                                                    'rounded-md px-1.5 py-1',
-                                                    themeMode === 'light' ? 'bg-stone-100' : 'bg-slate-800'
-                                                  ].join(' ')}
+                                                  className="rounded-md bg-slate-100 px-1.5 py-1"
                                                 >
-                                                  <div className={['text-[10px]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                                  <div className="text-[10px] text-slate-500">
                                                     {formatCellAuditTime(item.created_at)} · {normalizeAuditActor((item as any).actor) || '-'}
                                                   </div>
-                                                  <div className={themeMode === 'light' ? 'text-slate-800' : ''}>{renderAuditSummary(detail.summary)}</div>
+                                                  <div className="text-slate-800">{renderAuditSummary(detail.summary)}</div>
                                                   {detail.details.slice(0, 2).map((d, idx2) => (
                                                     <div
                                                       key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`}
-                                                      className={['mt-0.5 text-[10px]', themeMode === 'light' ? 'text-slate-600' : 'text-slate-300'].join(' ')}
+                                                      className="mt-0.5 text-[10px] text-slate-600"
                                                     >
-                                                      <span className={themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'}>{d.label}: </span>
+                                                      <span className="text-slate-500">{d.label}: </span>
                                                       <span className="whitespace-normal break-words">{d.value}</span>
                                                     </div>
                                                   ))}

@@ -204,6 +204,13 @@ const toPercent = (value: string) => {
   if (!Number.isFinite(n)) return 0;
   return n > 1 ? n / 100 : n;
 };
+const calculateCapacity = (uph: string, ewh: string, people: number, lead: string) => {
+  const uphValue = toNum(uph);
+  const ewhValue = toNum(ewh);
+  const leadCount = toNum(lead);
+  const operators = Math.max(0, people - leadCount);
+  return Math.max(0, Math.round(uphValue * ewhValue * operators));
+};
 const roundRule = (value: number, mode: 'ceil' | 'floor' | 'round') => {
   if (!Number.isFinite(value) || value <= 0) return 0;
   if (mode === 'ceil') return Math.ceil(value);
@@ -576,18 +583,35 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       const singlePack = getProcRow(procRows, 'single_pack');
       const preship = getProcRow(procRows, 'pre_ship');
 
+      const pickCount = pick ? calculateRequirement(inbound.totalPieces, pick.uph, pick.ewh, pick.lead, 'ceil') : 0;
+      const rebinCount = rebin ? calculateRequirement(inbound.multiPiece, rebin.uph, rebin.ewh, rebin.lead, 'ceil') : 0;
+      const consolidationCount = consolidation ? Math.max(1, calculateRequirement(inbound.multiPkgs, consolidation.uph, consolidation.ewh, consolidation.lead, 'ceil')) : 0;
+      const singlePackCount = singlePack ? calculateRequirement(inbound.singlePiece, singlePack.uph, singlePack.ewh, singlePack.lead, 'round') : 0;
+      const multiPackCount = multiPack ? calculateRequirement(inbound.multiPiece, multiPack.uph, multiPack.ewh, multiPack.lead, 'round') : 0;
+      const waterspiderCount = waterspider ? calculateRequirement(inbound.totalPackages, waterspider.uph, waterspider.ewh, waterspider.lead, 'floor') : 0;
+      const preshipCount = preship ? calculateRequirement(inbound.totalPackages, preship.uph, preship.ewh, preship.lead, 'round') : 0;
+
       const values: Record<LaborKey, number> = {
-        picking_group: pick ? calculateRequirement(inbound.totalPieces, pick.uph, pick.ewh, pick.lead, 'ceil') : 0,
-        rebin_group: rebin ? calculateRequirement(inbound.multiPiece, rebin.uph, rebin.ewh, rebin.lead, 'ceil') : 0,
-        con_group: consolidation ? Math.max(1, calculateRequirement(inbound.multiPkgs, consolidation.uph, consolidation.ewh, consolidation.lead, 'ceil')) : 0,
-        packing_group:
-          (singlePack ? calculateRequirement(inbound.singlePiece, singlePack.uph, singlePack.ewh, singlePack.lead, 'round') : 0) +
-          (multiPack ? calculateRequirement(inbound.multiPiece, multiPack.uph, multiPack.ewh, multiPack.lead, 'round') : 0),
-        waterspider_group: waterspider ? calculateRequirement(inbound.totalPackages, waterspider.uph, waterspider.ewh, waterspider.lead, 'floor') : 0,
-        preship: preship ? calculateRequirement(inbound.totalPackages, preship.uph, preship.ewh, preship.lead, 'round') : 0
+        picking_group: pickCount,
+        rebin_group: rebinCount,
+        con_group: consolidationCount,
+        packing_group: singlePackCount + multiPackCount,
+        waterspider_group: waterspiderCount,
+        preship: preshipCount
       };
 
-      return { inbound, values };
+      const capacity: Record<LaborKey, number> = {
+        picking_group: pick ? calculateCapacity(pick.uph, pick.ewh, pickCount, pick.lead) : 0,
+        rebin_group: rebin ? calculateCapacity(rebin.uph, rebin.ewh, rebinCount, rebin.lead) : 0,
+        con_group: consolidation ? calculateCapacity(consolidation.uph, consolidation.ewh, consolidationCount, consolidation.lead) : 0,
+        packing_group:
+          (singlePack ? calculateCapacity(singlePack.uph, singlePack.ewh, singlePackCount, singlePack.lead) : 0) +
+          (multiPack ? calculateCapacity(multiPack.uph, multiPack.ewh, multiPackCount, multiPack.lead) : 0),
+        waterspider_group: waterspider ? calculateCapacity(waterspider.uph, waterspider.ewh, waterspiderCount, waterspider.lead) : 0,
+        preship: preship ? calculateCapacity(preship.uph, preship.ewh, preshipCount, preship.lead) : 0
+      };
+
+      return { inbound, values, capacity };
     };
 
     const ds = buildSide(effectiveOrderInboundDs, draftPayload.areaEfficiencyDs);
@@ -598,13 +622,17 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       labelEn,
       ds: ds.values[key],
       ns: ns.values[key],
+      dsCapacity: ds.capacity[key],
+      nsCapacity: ns.capacity[key],
       total: ds.values[key] + ns.values[key]
     }));
 
     return {
       rows,
       totalDs: rows.reduce((sum, row) => sum + row.ds, 0),
-      totalNs: rows.reduce((sum, row) => sum + row.ns, 0)
+      totalNs: rows.reduce((sum, row) => sum + row.ns, 0),
+      totalDsCapacity: rows.reduce((sum, row) => sum + row.dsCapacity, 0),
+      totalNsCapacity: rows.reduce((sum, row) => sum + row.nsCapacity, 0)
     };
   }, [draftPayload, effectiveOrderInboundDs, effectiveOrderInboundNs]);
 
@@ -619,18 +647,35 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       const singlePack = getProcRow(procRows, 'single_pack');
       const preship = getProcRow(procRows, 'pre_ship');
 
+      const pickCount = pick ? calculateRequirement(inbound.totalPieces, pick.uph, pick.ewh, pick.lead, 'ceil') : 0;
+      const rebinCount = rebin ? calculateRequirement(inbound.multiPiece, rebin.uph, rebin.ewh, rebin.lead, 'ceil') : 0;
+      const consolidationCount = consolidation ? Math.max(1, calculateRequirement(inbound.multiPkgs, consolidation.uph, consolidation.ewh, consolidation.lead, 'ceil')) : 0;
+      const singlePackCount = singlePack ? calculateRequirement(inbound.singlePiece, singlePack.uph, singlePack.ewh, singlePack.lead, 'round') : 0;
+      const multiPackCount = multiPack ? calculateRequirement(inbound.multiPiece, multiPack.uph, multiPack.ewh, multiPack.lead, 'round') : 0;
+      const waterspiderCount = waterspider ? calculateRequirement(inbound.totalPackages, waterspider.uph, waterspider.ewh, waterspider.lead, 'floor') : 0;
+      const preshipCount = preship ? calculateRequirement(inbound.totalPackages, preship.uph, preship.ewh, preship.lead, 'round') : 0;
+
       const values: Record<LaborKey, number> = {
-        picking_group: pick ? calculateRequirement(inbound.totalPieces, pick.uph, pick.ewh, pick.lead, 'ceil') : 0,
-        rebin_group: rebin ? calculateRequirement(inbound.multiPiece, rebin.uph, rebin.ewh, rebin.lead, 'ceil') : 0,
-        con_group: consolidation ? Math.max(1, calculateRequirement(inbound.multiPkgs, consolidation.uph, consolidation.ewh, consolidation.lead, 'ceil')) : 0,
-        packing_group:
-          (singlePack ? calculateRequirement(inbound.singlePiece, singlePack.uph, singlePack.ewh, singlePack.lead, 'round') : 0) +
-          (multiPack ? calculateRequirement(inbound.multiPiece, multiPack.uph, multiPack.ewh, multiPack.lead, 'round') : 0),
-        waterspider_group: waterspider ? calculateRequirement(inbound.totalPackages, waterspider.uph, waterspider.ewh, waterspider.lead, 'floor') : 0,
-        preship: preship ? calculateRequirement(inbound.totalPackages, preship.uph, preship.ewh, preship.lead, 'round') : 0
+        picking_group: pickCount,
+        rebin_group: rebinCount,
+        con_group: consolidationCount,
+        packing_group: singlePackCount + multiPackCount,
+        waterspider_group: waterspiderCount,
+        preship: preshipCount
       };
 
-      return { values };
+      const capacity: Record<LaborKey, number> = {
+        picking_group: pick ? calculateCapacity(pick.uph, pick.ewh, pickCount, pick.lead) : 0,
+        rebin_group: rebin ? calculateCapacity(rebin.uph, rebin.ewh, rebinCount, rebin.lead) : 0,
+        con_group: consolidation ? calculateCapacity(consolidation.uph, consolidation.ewh, consolidationCount, consolidation.lead) : 0,
+        packing_group:
+          (singlePack ? calculateCapacity(singlePack.uph, singlePack.ewh, singlePackCount, singlePack.lead) : 0) +
+          (multiPack ? calculateCapacity(multiPack.uph, multiPack.ewh, multiPackCount, multiPack.lead) : 0),
+        waterspider_group: waterspider ? calculateCapacity(waterspider.uph, waterspider.ewh, waterspiderCount, waterspider.lead) : 0,
+        preship: preship ? calculateCapacity(preship.uph, preship.ewh, preshipCount, preship.lead) : 0
+      };
+
+      return { values, capacity };
     };
 
     const ds = buildSide(arrangedOrderInboundDs, draftPayload.areaEfficiencyDs);
@@ -641,13 +686,17 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       labelEn,
       ds: ds.values[key],
       ns: ns.values[key],
+      dsCapacity: ds.capacity[key],
+      nsCapacity: ns.capacity[key],
       total: ds.values[key] + ns.values[key]
     }));
 
     return {
       rows,
       totalDs: rows.reduce((sum, row) => sum + row.ds, 0),
-      totalNs: rows.reduce((sum, row) => sum + row.ns, 0)
+      totalNs: rows.reduce((sum, row) => sum + row.ns, 0),
+      totalDsCapacity: rows.reduce((sum, row) => sum + row.dsCapacity, 0),
+      totalNsCapacity: rows.reduce((sum, row) => sum + row.nsCapacity, 0)
     };
   }, [draftPayload, arrangedOrderInboundDs, arrangedOrderInboundNs]);
 
@@ -885,23 +934,23 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       {error ? <div className={['mt-5 rounded-2xl border px-4 py-3 text-sm', isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'].join(' ')}>{error}</div> : null}
       {message ? <div className={['mt-5 rounded-2xl border px-4 py-3 text-sm', isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'].join(' ')}>{message}</div> : null}
 
-      <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px_380px]">
+      <div className="mt-6 grid gap-4 xl:gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="grid gap-4">
           <SectionCard title={t('参数概览', 'Parameter snapshot')} themeMode={themeMode}>
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-2">
               {[
                 { title: 'ToC Order Inbound DS', lines: arrangedOrderInboundDs.slice(0, 4) },
                 { title: 'ToC Order Inbound NS', lines: arrangedOrderInboundNs.slice(0, 4) },
                 { title: 'ToC Area Efficiency DS', lines: draftPayload.areaEfficiencyDs.slice(0, 4).map((row) => ({ labelZh: row.labelZh, labelEn: row.labelEn, value: `${row.uph}/${row.people}` })) },
                 { title: 'ToC Area Efficiency NS', lines: draftPayload.areaEfficiencyNs.slice(0, 4).map((row) => ({ labelZh: row.labelZh, labelEn: row.labelEn, value: `${row.uph}/${row.people}` })) }
               ].map((group) => (
-                <div key={group.title} className={['rounded-2xl border p-4', isLight ? 'border-slate-200 bg-slate-50/80' : 'border-white/10 bg-white/[0.03]'].join(' ')}>
+                <div key={group.title} className={['rounded-2xl border p-3', isLight ? 'border-slate-200 bg-slate-50/80' : 'border-white/10 bg-white/[0.03]'].join(' ')}>
                   <div className={['text-sm font-semibold', isLight ? 'text-slate-900' : 'text-white'].join(' ')}>{group.title}</div>
-                  <div className="mt-3 space-y-2">
+                  <div className="mt-2.5 space-y-1.5">
                     {group.lines.map((item: any) => (
-                      <div key={item.labelEn} className="flex items-center justify-between gap-3 text-sm">
+                      <div key={item.labelEn} className="flex items-center gap-2 text-[13px]">
                         <span className={labelClass}>{t(item.labelZh, item.labelEn)}</span>
-                        <span className={isLight ? 'text-slate-900' : 'text-slate-100'}>{item.value}</span>
+                        <span className={['tabular-nums', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>{item.value}</span>
                       </div>
                     ))}
                   </div>
@@ -911,70 +960,84 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
           </SectionCard>
         </div>
 
-        <div className="grid gap-4 xl:self-start">
-          <SectionCard title={t('推荐 ToC Labor', 'Recommended ToC Labor')} subtitle={t('基于白班预测和夜班预测', 'Based on day and night forecasts')} themeMode={themeMode}>
-            <div className="overflow-x-auto rounded-2xl border border-white/5">
-              <table className={['min-w-full text-left text-sm', shellClass].join(' ')}>
-                <thead className={headClass}>
-                  <tr>
-                    <th className="px-3 py-3">{t('Area', 'Area')}</th>
-                    <th className="px-3 py-3">{t('Total', 'Total')}</th>
-                    <th className="px-3 py-3">DS</th>
-                    <th className="px-3 py-3">NS</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recommendedLabor.rows.map((row) => (
-                    <tr key={`recommended-${row.key}`} className={rowClass}>
-                      <td className="px-3 py-3 font-medium">{t(row.labelZh, row.labelEn)}</td>
-                      <td className="px-3 py-3 text-base font-semibold">{row.total}</td>
-                      <td className="px-3 py-3 font-semibold">{row.ds}</td>
-                      <td className="px-3 py-3 font-semibold">{row.ns}</td>
+        <div className="grid gap-3 xl:grid-cols-[max-content_max-content] xl:justify-start xl:self-start">
+          <div className="grid gap-4">
+            <SectionCard title={t('推荐 ToC Labor', 'Recommended ToC Labor')} themeMode={themeMode} className="w-fit max-w-full p-4">
+              <div className="overflow-x-auto rounded-2xl border border-white/5 px-2">
+                <table className={['w-max text-left text-xs', shellClass].join(' ')}>
+                  <thead className={headClass}>
+                    <tr>
+                      <th className="whitespace-nowrap px-1.5 py-2.5">{t('Area', 'Area')}</th>
+                      <th className="whitespace-nowrap px-1.5 py-2.5 text-right">{t('Total', 'Total')}</th>
+                      <th className="whitespace-nowrap px-1.5 py-2.5 text-right">DS</th>
+                      <th className="whitespace-nowrap px-1.5 py-2.5 text-right">NS</th>
+                      <th className="whitespace-nowrap px-1.5 py-2.5 text-right">{t('白班预计产能', 'DS Capacity')}</th>
+                      <th className="whitespace-nowrap px-1.5 py-2.5 text-right">{t('夜班预计产能', 'NS Capacity')}</th>
                     </tr>
-                  ))}
-                  <tr className={rowClass}>
-                    <td className="px-3 py-3 font-semibold">{t('# of Total', '# of Total')}</td>
-                    <td className="px-3 py-3 text-base font-semibold">{recommendedLabor.totalDs + recommendedLabor.totalNs}</td>
-                    <td className="px-3 py-3 font-semibold">{recommendedLabor.totalDs}</td>
-                    <td className="px-3 py-3 font-semibold">{recommendedLabor.totalNs}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </SectionCard>
-        </div>
+                  </thead>
+                  <tbody>
+                    {recommendedLabor.rows.map((row) => (
+                      <tr key={`recommended-${row.key}`} className={rowClass}>
+                        <td className="whitespace-nowrap px-1.5 py-2.5 font-medium" title={t(row.labelZh, row.labelEn)}>{t(row.labelZh, row.labelEn)}</td>
+                        <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{row.total}</td>
+                        <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{row.ds}</td>
+                        <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{row.ns}</td>
+                        <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{row.dsCapacity}</td>
+                        <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{row.nsCapacity}</td>
+                      </tr>
+                    ))}
+                    <tr className={rowClass}>
+                      <td className="whitespace-nowrap px-1.5 py-2.5 font-semibold">{t('Total', 'Total')}</td>
+                      <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{recommendedLabor.totalDs + recommendedLabor.totalNs}</td>
+                      <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{recommendedLabor.totalDs}</td>
+                      <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{recommendedLabor.totalNs}</td>
+                      <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{recommendedLabor.totalDsCapacity}</td>
+                      <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{recommendedLabor.totalNsCapacity}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </SectionCard>
+          </div>
 
-        <div className="grid gap-4 xl:sticky xl:top-4 xl:self-start">
-          <SectionCard title={t('ToC Labor', 'ToC Labor')} subtitle={t('基于实际安排', 'Based on actual plan')} themeMode={themeMode}>
-            <div className="overflow-x-auto rounded-2xl border border-white/5">
-              <table className={['min-w-full text-left text-sm', shellClass].join(' ')}>
-                <thead className={headClass}>
-                  <tr>
-                    <th className="px-3 py-3">{t('Area', 'Area')}</th>
-                    <th className="px-3 py-3">{t('Total', 'Total')}</th>
-                    <th className="px-3 py-3">DS</th>
-                    <th className="px-3 py-3">NS</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {finalLabor.rows.map((row) => (
-                    <tr key={row.key} className={rowClass}>
-                      <td className="px-3 py-3 font-medium">{t(row.labelZh, row.labelEn)}</td>
-                      <td className="px-3 py-3 text-base font-semibold">{row.total}</td>
-                      <td className="px-3 py-3 font-semibold">{row.ds}</td>
-                      <td className="px-3 py-3 font-semibold">{row.ns}</td>
+          <div className="grid gap-4">
+            <SectionCard title={t('ToC Labor', 'ToC Labor')} themeMode={themeMode} className="w-fit max-w-full p-4">
+              <div className="overflow-x-auto rounded-2xl border border-white/5 px-2">
+                <table className={['w-max text-left text-xs', shellClass].join(' ')}>
+                  <thead className={headClass}>
+                    <tr>
+                      <th className="whitespace-nowrap px-1.5 py-2.5">{t('Area', 'Area')}</th>
+                      <th className="whitespace-nowrap px-1.5 py-2.5 text-right">{t('Total', 'Total')}</th>
+                      <th className="whitespace-nowrap px-1.5 py-2.5 text-right">DS</th>
+                      <th className="whitespace-nowrap px-1.5 py-2.5 text-right">NS</th>
+                      <th className="whitespace-nowrap px-1.5 py-2.5 text-right">{t('白班预计产能', 'DS Capacity')}</th>
+                      <th className="whitespace-nowrap px-1.5 py-2.5 text-right">{t('夜班预计产能', 'NS Capacity')}</th>
                     </tr>
-                  ))}
-                  <tr className={rowClass}>
-                    <td className="px-3 py-3 font-semibold">{t('# of Total', '# of Total')}</td>
-                    <td className="px-3 py-3 text-base font-semibold">{finalLabor.totalDs + finalLabor.totalNs}</td>
-                    <td className="px-3 py-3 font-semibold">{finalLabor.totalDs}</td>
-                    <td className="px-3 py-3 font-semibold">{finalLabor.totalNs}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </SectionCard>
+                  </thead>
+                  <tbody>
+                    {finalLabor.rows.map((row) => (
+                      <tr key={row.key} className={rowClass}>
+                        <td className="whitespace-nowrap px-1.5 py-2.5 font-medium" title={t(row.labelZh, row.labelEn)}>{t(row.labelZh, row.labelEn)}</td>
+                        <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{row.total}</td>
+                        <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{row.ds}</td>
+                        <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{row.ns}</td>
+                        <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{row.dsCapacity}</td>
+                        <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{row.nsCapacity}</td>
+                      </tr>
+                    ))}
+                    <tr className={rowClass}>
+                      <td className="whitespace-nowrap px-1.5 py-2.5 font-semibold">{t('Total', 'Total')}</td>
+                      <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{finalLabor.totalDs + finalLabor.totalNs}</td>
+                      <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{finalLabor.totalDs}</td>
+                      <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{finalLabor.totalNs}</td>
+                      <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{finalLabor.totalDsCapacity}</td>
+                      <td className="whitespace-nowrap px-1.5 py-2.5 text-right font-semibold">{finalLabor.totalNsCapacity}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </SectionCard>
+          </div>
         </div>
       </div>
 
