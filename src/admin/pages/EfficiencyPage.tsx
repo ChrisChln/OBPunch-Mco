@@ -1,6 +1,5 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useRef } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createPortal } from 'react-dom';
 import type { ForecastModelRow } from '../forecast';
