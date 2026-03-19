@@ -75,6 +75,7 @@ type ForecastManualInputDraftRow = {
   full_day_capacity: string;
   yesterday_inflow_00_14: string;
 };
+type LineChartSeries = { key: string; label: string; color: string; values: Array<number | null> };
 
 const HOUR_COLUMNS = Array.from({ length: 24 }, (_, idx) => `h${String(idx).padStart(2, '0')}`) as HourColumnKey[];
 const TEMPLATE_HOUR_HEADERS = Array.from({ length: 24 }, (_, idx) => {
@@ -529,11 +530,19 @@ function ForecastRangeChart({
 function WeekVolumeLineChart({
   themeMode,
   labels,
-  series
+  series,
+  valueFormatter = (value: number) => formatNumber(value),
+  yAxisFormatter = (value: number) => formatNumber(value),
+  labelStride,
+  maxValueOverride
 }: {
   themeMode: 'light' | 'dark';
   labels: string[];
-  series: Array<{ key: string; label: string; color: string; values: Array<number | null> }>;
+  series: LineChartSeries[];
+  valueFormatter?: (value: number) => string;
+  yAxisFormatter?: (value: number) => string;
+  labelStride?: number;
+  maxValueOverride?: number;
 }) {
   const isLight = themeMode === 'light';
   const [hoveredPoint, setHoveredPoint] = useState<{
@@ -563,11 +572,12 @@ function WeekVolumeLineChart({
     const niceNormalized = niceSteps.find((step) => normalized <= step) ?? 10;
     return niceNormalized * magnitude;
   };
-  const maxValue = getNiceAxisMax(rawMaxValue);
+  const maxValue = maxValueOverride && maxValueOverride > 0 ? maxValueOverride : getNiceAxisMax(rawMaxValue);
   const stepX = labels.length > 1 ? innerWidth / (labels.length - 1) : innerWidth;
   const scaleX = (index: number) => paddingLeft + stepX * index;
   const scaleY = (value: number) => paddingTop + innerHeight - (Math.max(0, value) / maxValue) * innerHeight;
   const gridValues = Array.from({ length: 5 }, (_, index) => (maxValue / 4) * index);
+  const effectiveLabelStride = labelStride ?? (labels.length > 14 ? Math.ceil(labels.length / 10) : 1);
   const pointOffsets: Record<string, { x: number; y: number }> = {
     forecast: { x: 0, y: -4 },
     current_week: { x: -4, y: 4 },
@@ -613,7 +623,7 @@ function WeekVolumeLineChart({
             fill={isLight ? 'rgba(100,116,139,0.88)' : 'rgba(148,163,184,0.76)'}
             fontSize="11"
           >
-            {formatNumber(gridValue)}
+            {yAxisFormatter(gridValue)}
           </text>
         </g>
       ))}
@@ -626,6 +636,7 @@ function WeekVolumeLineChart({
           textAnchor="middle"
           fill={isLight ? 'rgba(51,65,85,0.9)' : 'rgba(203,213,225,0.85)'}
           fontSize="11"
+          opacity={index % effectiveLabelStride === 0 || index === labels.length - 1 ? 1 : 0}
         >
           {label}
         </text>
@@ -702,7 +713,7 @@ function WeekVolumeLineChart({
             fontSize="11"
             fontWeight="700"
           >
-            {`${hoveredPoint.seriesLabel} ${formatNumber(hoveredPoint.value)}`}
+            {`${hoveredPoint.seriesLabel} ${valueFormatter(hoveredPoint.value)}`}
           </text>
         </g>
       ) : null}
@@ -760,6 +771,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [allHistoryModelRows, setAllHistoryModelRows] = useState<ForecastModelRow[]>([]);
+  const [recentInventoryTrendRows, setRecentInventoryTrendRows] = useState<VolumeHistoryUploadRow[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
@@ -913,6 +925,26 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     setComparisonHistoryRows(((res.data as VolumeHistoryUploadRow[] | null) ?? []).map((row) => ({ ...row } as VolumeHistoryUploadRow)));
   };
 
+  const loadRecentInventoryTrendHistory = async () => {
+    if (!supabase) {
+      setRecentInventoryTrendRows([]);
+      return;
+    }
+    const endDate = toDateOnly(serverTime);
+    const startDate = toDateOnly(addDays(serverTime, -29));
+    const res = await supabase
+      .from('volume_history')
+      .select('*')
+      .gte('date', startDate)
+      .lte('date', endDate)
+      .order('date', { ascending: true });
+    if (res.error) {
+      setRecentInventoryTrendRows([]);
+      return;
+    }
+    setRecentInventoryTrendRows(((res.data as VolumeHistoryUploadRow[] | null) ?? []).map((row) => ({ ...row } as VolumeHistoryUploadRow)));
+  };
+
   const loadAllHistoryModel = async () => {
     if (!supabase) {
       setAllHistoryModelRows([]);
@@ -984,10 +1016,10 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
 
   useEffect(() => {
     const run = async () => {
-      await Promise.all([loadModel(lookbackMode), loadManualInputs(), loadAllHistoryModel(), loadComparisonHistory()]);
+      await Promise.all([loadModel(lookbackMode), loadManualInputs(), loadAllHistoryModel(), loadComparisonHistory(), loadRecentInventoryTrendHistory()]);
     };
     void run();
-  }, [lookbackMode, supabase]);
+  }, [lookbackMode, serverTime, supabase]);
 
   useEffect(() => {
     void loadAutoForecastSnapshot(selectedWeekday);
@@ -1095,6 +1127,28 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       ]
     };
   }, [calculateNoonPredictedFullDayVolume, comparisonHistoryRows, serverTime, t]);
+  const inventoryConversionTrendSeries = useMemo(() => {
+    const dateLabels = Array.from({ length: 30 }, (_, index) => toDateOnly(addDays(serverTime, index - 29)));
+    const historyByDate = new Map(recentInventoryTrendRows.map((row) => [row.date, row]));
+    return {
+      dateRange: `${dateLabels[0]} - ${dateLabels[dateLabels.length - 1]}`,
+      labels: dateLabels.map((date) => date.slice(5)),
+      series: [
+        {
+          key: 'itr-30d',
+          label: t('库存转换率', 'ITR'),
+          color: 'rgba(245,158,11,1)',
+          values: dateLabels.map((date) => {
+            const row = historyByDate.get(date);
+            const inventoryLevel = Number(manualInputByDate.get(date)?.inventory_level ?? 0);
+            if (!row || !isCompleteHistoryDay(row) || inventoryLevel <= 0) return null;
+            const dailyTotal = HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0);
+            return dailyTotal / inventoryLevel;
+          })
+        }
+      ] as LineChartSeries[]
+    };
+  }, [manualInputByDate, recentInventoryTrendRows, serverTime, t]);
   const buildManualInputDraftRows = (weekOffset: number, historyRowsOverride?: VolumeHistoryUploadRow[]) => {
     const existingByDate = new Map(manualInputRows.map((row) => [row.input_date, row]));
     const historyRows = historyRowsOverride ?? historyWindowRows;
@@ -1993,6 +2047,31 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
             </div>
             <div className={['rounded-2xl p-4', chartWrapClass].join(' ')}>
               <WeekVolumeLineChart themeMode={themeMode} labels={weekVolumeTrendSeries.labels} series={weekVolumeTrendSeries.series} />
+            </div>
+          </div>
+
+          <div className={['min-w-0 rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className={['text-sm font-semibold', valueClass].join(' ')}>
+                {t('最近30天库存转换率变化', '30-day inventory turnover trend')}
+              </div>
+              <div className={['text-xs', helperClass].join(' ')}>
+                {inventoryConversionTrendSeries.dateRange}
+              </div>
+            </div>
+            <div className={['mb-3 text-xs', helperClass].join(' ')}>
+              {t('仅统计完整日，按当日总流入除以库存计算。', 'Complete days only, calculated as daily total inflow divided by inventory.')}
+            </div>
+            <div className={['rounded-2xl p-4', chartWrapClass].join(' ')}>
+              <WeekVolumeLineChart
+                themeMode={themeMode}
+                labels={inventoryConversionTrendSeries.labels}
+                series={inventoryConversionTrendSeries.series}
+                valueFormatter={(value) => formatPercent(value, 2)}
+                yAxisFormatter={(value) => formatPercent(value, 0)}
+                labelStride={3}
+                maxValueOverride={0.01}
+              />
             </div>
           </div>
 
