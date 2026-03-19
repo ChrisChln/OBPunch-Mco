@@ -575,28 +575,37 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
     void loadForecastBridge();
   }, [selectedPlanningDate, supabase]);
 
+  const saveRequestIdRef = useRef(0);
+
   useEffect(() => {
     if (!supabase || isLocked || forecastLoading) return;
     const nextKey = `${selectedPlanningDate}__${arrangementInput.ds}__${arrangementInput.ns}`;
     if (nextKey === arrangementLoadedKeyRef.current) return;
-    const timer = window.setTimeout(async () => {
+    const requestId = ++saveRequestIdRef.current;
+    const timer = window.setTimeout(() => {
       const ds = toOptionalNum(arrangementInput.ds);
       const ns = toOptionalNum(arrangementInput.ns);
-      const res = await supabase.from(FORECAST_INPUT_TABLE).upsert(
-        {
-          input_date: selectedPlanningDate,
-          actual_day_shift_plan: ds,
-          actual_night_shift_plan: ns
-        },
-        { onConflict: 'input_date' }
-      );
-      if (res.error) {
-        setError(String(res.error.message ?? 'Save failed.'));
-        return;
-      }
-      arrangementLoadedKeyRef.current = nextKey;
-      setError(null);
-      setMessage(t('实际排班安排已保存。', 'Actual shift plan saved.'));
+      (async () => {
+        const res = await supabase.from(FORECAST_INPUT_TABLE).upsert(
+          {
+            input_date: selectedPlanningDate,
+            actual_day_shift_plan: ds,
+            actual_night_shift_plan: ns
+          },
+          { onConflict: 'input_date' }
+        );
+        // Ignore stale responses from older save requests
+        if (requestId !== saveRequestIdRef.current) {
+          return;
+        }
+        if (res.error) {
+          setError(String(res.error.message ?? 'Save failed.'));
+          return;
+        }
+        arrangementLoadedKeyRef.current = nextKey;
+        setError(null);
+        setMessage(t('实际排班安排已保存。', 'Actual shift plan saved.'));
+      })();
     }, 500);
     return () => window.clearTimeout(timer);
   }, [arrangementInput, forecastLoading, isLocked, selectedPlanningDate, supabase, t]);
