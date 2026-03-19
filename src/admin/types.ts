@@ -9,6 +9,7 @@ export type AdminPage =
   | 'schedule'
   | 'devices'
   | 'forecast'
+  | 'prediction_model'
   | 'efficiency';
 
 export type StatusTone = 'idle' | 'pending' | 'success' | 'error';

@@ -40,6 +40,9 @@ export default function AdminNav({ page, isLocked, onSetPage, tabClass, t }: Adm
       <button type="button" disabled={isLocked} onClick={() => onSetPage('forecast')} className={tabClass(page === 'forecast')}>
         {t('件量预测', 'Forecast')}
       </button>
+      <button type="button" disabled={isLocked} onClick={() => onSetPage('prediction_model')} className={tabClass(page === 'prediction_model')}>
+        {t('预测模型', 'Prediction Model')}
+      </button>
       <button type="button" disabled={isLocked} onClick={() => onSetPage('efficiency')} className={tabClass(page === 'efficiency')}>
         {t('人效', 'Efficiency')}
       </button>

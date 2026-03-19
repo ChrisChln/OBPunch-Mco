@@ -1,3 +1,5 @@
+import StyledDateInput from './StyledDateInput';
+
 type TranslateFn = (zh: string, en: string) => string;
 
 type ScheduleToolbarProps = {
@@ -133,12 +135,11 @@ export default function ScheduleToolbar({
           {t('每日名单', 'Daily list')}
         </button>
 
-        <input
-          type="date"
+        <StyledDateInput
+          themeMode="dark"
           value={schedulePrintDate}
           disabled={isLocked}
-          onChange={(e) => setSchedulePrintDate(e.target.value)}
-          className="h-10 w-[156px] rounded-2xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+          onChange={setSchedulePrintDate}
           title={t('打印签到表日期', 'Sign-in print date')}
         />
 
