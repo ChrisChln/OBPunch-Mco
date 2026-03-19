@@ -2365,9 +2365,9 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                 {t('月维度流入', 'Monthly inflow')}
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <StyledDateInput value={monthlyTableRangeStart} onChange={setMonthlyTableRangeStart} themeMode={themeMode} max={monthlyTableRangeEnd} />
+                <StyledDateInput value={monthlyTableRangeStart} onChange={setMonthlyTableRangeStart} themeMode={themeMode} max={monthlyTableRangeEnd} disabled={isLocked} />
                 <span className={helperClass}>to</span>
-                <StyledDateInput value={monthlyTableRangeEnd} onChange={setMonthlyTableRangeEnd} themeMode={themeMode} min={monthlyTableRangeStart} />
+                <StyledDateInput value={monthlyTableRangeEnd} onChange={setMonthlyTableRangeEnd} themeMode={themeMode} min={monthlyTableRangeStart} disabled={isLocked} />
               </div>
             </div>
             <div className="min-w-0 overflow-x-auto overflow-y-hidden">
