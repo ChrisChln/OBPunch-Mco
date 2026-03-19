@@ -2376,7 +2376,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
                     <tr>
                       <th className="w-[180px] px-3 py-2">{t('Month', 'Month')}</th>
-                      <th className="w-[120px] px-3 py-2 text-right">{t('完整天数', 'Complete Days')}</th>
+                      <th className="w-[120px] px-3 py-2 text-right">{t('天数', 'Days')}</th>
                       <th className="px-3 py-2 text-right">{t('Total', 'Total')}</th>
                       <th className="w-[140px] px-3 py-2 text-right">{t('日均流入', 'Avg/Day')}</th>
                     </tr>

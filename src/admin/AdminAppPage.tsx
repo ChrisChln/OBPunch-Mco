@@ -31,6 +31,7 @@ import HomeDashboardPage from './pages/HomeDashboardPage';
 import AuditPage from './pages/AuditPage';
 import PunchesPage from './pages/PunchesPage';
 import ForecastPage from './pages/ForecastPage';
+import PredictionModelPage from './pages/PredictionModelPage';
 import EfficiencyPage from './pages/EfficiencyPage';
 import AppDialog from '../components/AppDialog';
 import {
@@ -11580,6 +11581,9 @@ ${rowsToHtml(late)}
             )}
             {page === 'forecast' && (
               <ForecastPage t={t} isLocked={isLocked} serverTime={serverTime} supabase={supabase} themeMode={themeMode} />
+            )}
+            {page === 'prediction_model' && (
+              <PredictionModelPage t={t} isLocked={isLocked} themeMode={themeMode} serverTime={serverTime} supabase={supabase} />
             )}
             {page === 'efficiency' && <EfficiencyPage t={t} isLocked={isLocked} supabase={supabase} themeMode={themeMode} serverTime={serverTime} />}
             {page === 'punches' && (
