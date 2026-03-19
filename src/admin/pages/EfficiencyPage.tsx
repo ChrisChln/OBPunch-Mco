@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useRef } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createPortal } from 'react-dom';
 import type { ForecastModelRow } from '../forecast';
@@ -76,6 +77,7 @@ const HOUR_COLUMNS: HourColumnKey[] = [
   'h00', 'h01', 'h02', 'h03', 'h04', 'h05', 'h06', 'h07', 'h08', 'h09', 'h10', 'h11',
   'h12', 'h13', 'h14', 'h15', 'h16', 'h17', 'h18', 'h19', 'h20', 'h21', 'h22', 'h23'
 ];
+const INBOUND_DERIVED_KEYS: InboundKey[] = ['oi_pieces', 'oi_packages', 'single_pkgs', 'single_piece', 'multi_pkgs', 'multi_piece'];
 
 const INBOUND_META: Array<[InboundKey, string, string]> = [
   ['oi_pieces', 'OI Pieces', 'OI Pieces'],
@@ -229,8 +231,10 @@ const inferLastFilledHour = (row: Partial<Record<HourColumnKey, number | null | 
   }
   return null;
 };
+const clearInboundDerivedValues = (rows: InboundMetric[]) =>
+  rows.map((row) => (INBOUND_DERIVED_KEYS.includes(row.key) ? { ...row, value: '' } : row));
 const withInboundPieces = (rows: InboundMetric[], nextPieces: number | null) => {
-  if (!Number.isFinite(nextPieces ?? NaN) || nextPieces === null) return rows;
+  if (!Number.isFinite(nextPieces ?? NaN) || nextPieces === null) return clearInboundDerivedValues(rows);
   const totalPieces = Math.max(0, Math.round(nextPieces));
   const basePieces = toNum(getInboundValue(rows, 'oi_pieces'));
   const basePackages = toNum(getInboundValue(rows, 'oi_packages'));
@@ -377,6 +381,8 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
   const [forecastBridge, setForecastBridge] = useState<ForecastBridge | null>(null);
   const [selectedPlanningDate, setSelectedPlanningDate] = useState(() => toDateOnly(addDays(serverTime, 1)));
   const [arrangementInput, setArrangementInput] = useState<ArrangementInput>({ ds: '', ns: '' });
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const arrangementLoadedKeyRef = useRef('');
 
   const loadTemplates = async () => {
     if (!supabase) {
@@ -428,10 +434,36 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
     const loadForecastBridge = async () => {
       if (!supabase) {
         setForecastBridge(null);
+        setForecastLoading(false);
+        arrangementLoadedKeyRef.current = `${selectedPlanningDate}__`;
+        setArrangementInput({ ds: '', ns: '' });
         return;
       }
 
+      setForecastLoading(true);
       const planningDate = selectedPlanningDate;
+      const planningInputRes = await supabase
+        .from(FORECAST_INPUT_TABLE)
+        .select('input_date,actual_day_shift_plan,actual_night_shift_plan')
+        .eq('input_date', planningDate)
+        .maybeSingle();
+      if (planningInputRes.error) {
+        arrangementLoadedKeyRef.current = `${planningDate}__`;
+        setArrangementInput({ ds: '', ns: '' });
+      } else {
+        const nextArrangementInput = {
+          ds:
+            planningInputRes.data?.actual_day_shift_plan != null
+              ? String(planningInputRes.data.actual_day_shift_plan)
+              : '',
+          ns:
+            planningInputRes.data?.actual_night_shift_plan != null
+              ? String(planningInputRes.data.actual_night_shift_plan)
+              : ''
+        };
+        arrangementLoadedKeyRef.current = `${planningDate}__${nextArrangementInput.ds}__${nextArrangementInput.ns}`;
+        setArrangementInput(nextArrangementInput);
+      }
       const forecastSourceDate = toDateOnly(addDays(new Date(`${planningDate}T00:00:00`), -1));
       const previousDate = toDateOnly(addDays(new Date(`${forecastSourceDate}T00:00:00`), -1));
       const weekday = getIsoWeekday(new Date(`${forecastSourceDate}T00:00:00`)) as WeekdayValue;
@@ -455,6 +487,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
 
       if (historyRes.error || !latestHistoryRow?.date) {
         setForecastBridge(null);
+        setForecastLoading(false);
         return;
       }
 
@@ -465,12 +498,14 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       const cutoffHour = rawLastFilledHour !== null && rawLastFilledHour >= 11 ? 12 : null;
       if (!cutoffHour) {
         setForecastBridge(null);
+        setForecastLoading(false);
         return;
       }
 
       const modelRes = await supabase.rpc('get_forecasting_model', { p_lookback_days: null });
       if (modelRes.error) {
         setForecastBridge(null);
+        setForecastLoading(false);
         return;
       }
 
@@ -500,7 +535,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
           dsOiPieces: null,
           nsOiPieces: null
         });
-        setArrangementInput({ ds: '', ns: '' });
+        setForecastLoading(false);
         return;
       }
 
@@ -514,7 +549,6 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
         actual_night_shift_plan: (row as any).actual_night_shift_plan == null ? null : Number((row as any).actual_night_shift_plan)
       }));
       const previousDayRow = inputRows.find((row) => row.input_date === previousDate) ?? null;
-      const planningRow = inputRows.find((row) => row.input_date === planningDate) ?? null;
       const nextDayShiftForecast =
         previousDayRow && fullDayForecast !== null
           ? Math.round(
@@ -536,24 +570,37 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
         dsOiPieces,
         nsOiPieces
       });
-      setArrangementInput({
-        ds:
-          planningRow?.actual_day_shift_plan != null
-            ? String(planningRow.actual_day_shift_plan)
-            : dsOiPieces != null
-              ? String(dsOiPieces)
-              : '',
-        ns:
-          planningRow?.actual_night_shift_plan != null
-            ? String(planningRow.actual_night_shift_plan)
-            : nsOiPieces != null
-              ? String(nsOiPieces)
-              : ''
-      });
+      setForecastLoading(false);
     };
 
     void loadForecastBridge();
   }, [selectedPlanningDate, supabase]);
+
+  useEffect(() => {
+    if (!supabase || isLocked || forecastLoading) return;
+    const nextKey = `${selectedPlanningDate}__${arrangementInput.ds}__${arrangementInput.ns}`;
+    if (nextKey === arrangementLoadedKeyRef.current) return;
+    const timer = window.setTimeout(async () => {
+      const ds = toOptionalNum(arrangementInput.ds);
+      const ns = toOptionalNum(arrangementInput.ns);
+      const res = await supabase.from(FORECAST_INPUT_TABLE).upsert(
+        {
+          input_date: selectedPlanningDate,
+          actual_day_shift_plan: ds,
+          actual_night_shift_plan: ns
+        },
+        { onConflict: 'input_date' }
+      );
+      if (res.error) {
+        setError(String(res.error.message ?? 'Save failed.'));
+        return;
+      }
+      arrangementLoadedKeyRef.current = nextKey;
+      setError(null);
+      setMessage(t('实际排班安排已保存。', 'Actual shift plan saved.'));
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [arrangementInput, forecastLoading, isLocked, selectedPlanningDate, supabase, t]);
 
   const effectiveOrderInboundDs = useMemo(
     () => withInboundPieces(draftPayload.orderInboundDs, forecastBridge?.dsOiPieces ?? null),
@@ -701,14 +748,13 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
   }, [draftPayload, arrangedOrderInboundDs, arrangedOrderInboundNs]);
 
   const summary = useMemo(() => {
-    const getVal = (rows: InboundMetric[], key: InboundKey) => rows.find((item) => item.key === key)?.value ?? '';
     return {
-      dsPieces: getVal(effectiveOrderInboundDs, 'oi_pieces') || '-',
-      nsPieces: getVal(effectiveOrderInboundNs, 'oi_pieces') || '-',
+      dsPieces: forecastBridge?.dsOiPieces != null ? String(forecastBridge.dsOiPieces) : '-',
+      nsPieces: forecastBridge?.nsOiPieces != null ? String(forecastBridge.nsOiPieces) : '-',
       arrangedDsPieces: arrangementInput.ds || '-',
       arrangedNsPieces: arrangementInput.ns || '-'
     };
-  }, [effectiveOrderInboundDs, effectiveOrderInboundNs, arrangementInput.ds, arrangementInput.ns]);
+  }, [forecastBridge?.dsOiPieces, forecastBridge?.nsOiPieces, arrangementInput.ds, arrangementInput.ns]);
 
   const inboundSections: Array<{
     title: string;
@@ -753,25 +799,6 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
     value: string
   ) =>
     setDraftPayload((prev) => ({ ...prev, [section]: prev[section].map((item) => (item.key === key ? { ...item, [field]: value } : item)) }));
-
-  const persistArrangementInput = async (nextValue: ArrangementInput) => {
-    if (!supabase || isLocked) return;
-    const ds = toOptionalNum(nextValue.ds);
-    const ns = toOptionalNum(nextValue.ns);
-    const res = await supabase.from(FORECAST_INPUT_TABLE).upsert(
-      {
-        input_date: selectedPlanningDate,
-        actual_day_shift_plan: ds,
-        actual_night_shift_plan: ns
-      },
-      { onConflict: 'input_date' }
-    );
-    if (res.error) {
-      setError(String(res.error.message ?? 'Save failed.'));
-      return;
-    }
-    setMessage(t('实际产能安排已保存。', 'Actual staffing plan saved.'));
-  };
 
   const saveTemplate = async (mode: 'update' | 'create') => {
     if (!supabase) {
@@ -850,13 +877,14 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
                   type="text"
                   inputMode="numeric"
                   value={card.value}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const nextValue = e.target.value.replace(/[^\d]/g, '');
                     setArrangementInput((prev) => ({
                       ...prev,
-                      [card.key]: e.target.value.replace(/[^\d]/g, '')
-                    }))
-                  }
-                  onBlur={() => void persistArrangementInput(arrangementInput)}
+                      [card.key]: nextValue
+                    }));
+                    setError(null);
+                  }}
                   disabled={isLocked}
                   style={{
                     backgroundColor: 'transparent',
