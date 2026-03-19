@@ -340,6 +340,7 @@ export default function EmployeesToolbar({
                             onClick={(e) => e.stopPropagation()}
                             onChange={() => setEmployeeLabels((prev) => (prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]))}
                             className="sr-only"
+                            aria-label={t('选择该标签', `Select label ${item}`)}
                           />
                           <span
                             aria-hidden="true"
