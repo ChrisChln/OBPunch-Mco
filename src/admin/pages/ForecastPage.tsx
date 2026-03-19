@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import StyledDateInput from '../components/StyledDateInput';
 import type { ForecastModelRow } from '../forecast';
 import { FORECAST_HOURS, calculateForecast, getIsoWeekday } from '../forecast';
 
@@ -159,7 +160,30 @@ const getWeekDates = (baseDate: Date, weekOffset = 0) => {
   const monday = addDays(anchor, -(currentWeekday - 1) - weekOffset * 7);
   return Array.from({ length: 7 }, (_, index) => toDateOnly(addDays(monday, index)));
 };
-
+const getWeekStartDateOnly = (dateOnly: string) => {
+  if (!isValidDateOnly(dateOnly)) return '';
+  const date = new Date(`${dateOnly}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return '';
+  const weekday = getIsoWeekday(date);
+  return toDateOnly(addDays(date, -(weekday - 1)));
+};
+const getMonthKeyFromDateOnly = (dateOnly: string) => {
+  if (!isValidDateOnly(dateOnly)) return '';
+  return String(dateOnly).slice(0, 7);
+};
+const getDateRangeDays = (startDate: string, endDate: string) => {
+  if (!isValidDateOnly(startDate) || !isValidDateOnly(endDate)) return [] as string[];
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return [] as string[];
+  const days: string[] = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    days.push(toDateOnly(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return days;
+};
 const normalizeHeaderKey = (value: string) => String(value ?? '').trim().toLowerCase().replace(/\s+/g, '').replace(/_/g, '');
 
 const isValidDateOnly = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -757,7 +781,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const [manualInputWeekOffset, setManualInputWeekOffset] = useState(0);
   const [forecastDialogView, setForecastDialogView] = useState<ForecastDialogView>('weekly');
   const [historyWindowRows, setHistoryWindowRows] = useState<VolumeHistoryUploadRow[]>([]);
-  const [comparisonHistoryRows, setComparisonHistoryRows] = useState<VolumeHistoryUploadRow[]>([]);
+  const [rangeHistoryRows, setRangeHistoryRows] = useState<VolumeHistoryUploadRow[]>([]);
   const [historyWindowLoading, setHistoryWindowLoading] = useState(false);
   const [historyWindowError, setHistoryWindowError] = useState<string | null>(null);
   const [historyPasteValue, setHistoryPasteValue] = useState('');
@@ -771,10 +795,19 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [allHistoryModelRows, setAllHistoryModelRows] = useState<ForecastModelRow[]>([]);
-  const [recentInventoryTrendRows, setRecentInventoryTrendRows] = useState<VolumeHistoryUploadRow[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [volumeTrendRangeStart, setVolumeTrendRangeStart] = useState(() => toDateOnly(addDays(serverTime, -6)));
+  const [volumeTrendRangeEnd, setVolumeTrendRangeEnd] = useState(() => toDateOnly(serverTime));
+  const [inventoryTrendRangeStart, setInventoryTrendRangeStart] = useState(() => toDateOnly(addDays(serverTime, -29)));
+  const [inventoryTrendRangeEnd, setInventoryTrendRangeEnd] = useState(() => toDateOnly(serverTime));
+  const [historyTableRangeStart, setHistoryTableRangeStart] = useState(() => getWeekDates(serverTime, 0)[0] ?? toDateOnly(serverTime));
+  const [historyTableRangeEnd, setHistoryTableRangeEnd] = useState(() => getWeekDates(serverTime, 0)[6] ?? toDateOnly(serverTime));
+  const [weeklyTableRangeStart, setWeeklyTableRangeStart] = useState(() => toDateOnly(addDays(serverTime, -55)));
+  const [weeklyTableRangeEnd, setWeeklyTableRangeEnd] = useState(() => toDateOnly(serverTime));
+  const [monthlyTableRangeStart, setMonthlyTableRangeStart] = useState(() => toDateOnly(addDays(serverTime, -185)));
+  const [monthlyTableRangeEnd, setMonthlyTableRangeEnd] = useState(() => toDateOnly(serverTime));
   const panelClass = isLight ? 'border border-slate-200 bg-white' : 'border border-white/10 bg-black/20';
   const subPanelClass = isLight ? 'border border-slate-200 bg-slate-50' : 'border border-white/10 bg-slate-950/50';
   const inputClass = isLight
@@ -905,33 +938,42 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     setManualInputsLoading(false);
   };
 
-  const loadComparisonHistory = async () => {
-    if (!supabase) {
-      setComparisonHistoryRows([]);
-      return;
-    }
-    const currentWeek = getWeekDates(serverTime, 0);
-    const previousWeek = getWeekDates(serverTime, 1);
-    const res = await supabase
-      .from('volume_history')
-      .select('*')
-      .gte('date', previousWeek[0])
-      .lte('date', currentWeek[currentWeek.length - 1])
-      .order('date', { ascending: true });
-    if (res.error) {
-      setComparisonHistoryRows([]);
-      return;
-    }
-    setComparisonHistoryRows(((res.data as VolumeHistoryUploadRow[] | null) ?? []).map((row) => ({ ...row } as VolumeHistoryUploadRow)));
+  const getVolumeTrendComparisonStart = () => {
+    const currentRangeDays = getDateRangeDays(volumeTrendRangeStart, volumeTrendRangeEnd).length;
+    if (currentRangeDays <= 0) return volumeTrendRangeStart;
+    return toDateOnly(addDays(new Date(`${volumeTrendRangeStart}T00:00:00`), -currentRangeDays));
   };
 
-  const loadRecentInventoryTrendHistory = async () => {
+  const loadRangeHistory = async () => {
     if (!supabase) {
-      setRecentInventoryTrendRows([]);
+      setRangeHistoryRows([]);
       return;
     }
-    const endDate = toDateOnly(serverTime);
-    const startDate = toDateOnly(addDays(serverTime, -29));
+    const allStarts = [
+      historyTableRangeStart,
+      inventoryTrendRangeStart,
+      weeklyTableRangeStart,
+      monthlyTableRangeStart,
+      getVolumeTrendComparisonStart()
+    ].filter((value) => isValidDateOnly(value));
+    const allEnds = [
+      historyTableRangeEnd,
+      inventoryTrendRangeEnd,
+      weeklyTableRangeEnd,
+      monthlyTableRangeEnd,
+      volumeTrendRangeEnd
+    ].filter((value) => isValidDateOnly(value));
+    if (allStarts.length === 0 || allEnds.length === 0) {
+      setRangeHistoryRows([]);
+      return;
+    }
+    const startDate = [...allStarts].sort()[0];
+    const sortedEnds = [...allEnds].sort();
+    const endDate = sortedEnds.length > 0 ? sortedEnds[sortedEnds.length - 1] : '';
+    if (!startDate || !endDate) {
+      setRangeHistoryRows([]);
+      return;
+    }
     const res = await supabase
       .from('volume_history')
       .select('*')
@@ -939,10 +981,10 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       .lte('date', endDate)
       .order('date', { ascending: true });
     if (res.error) {
-      setRecentInventoryTrendRows([]);
+      setRangeHistoryRows([]);
       return;
     }
-    setRecentInventoryTrendRows(((res.data as VolumeHistoryUploadRow[] | null) ?? []).map((row) => ({ ...row } as VolumeHistoryUploadRow)));
+    setRangeHistoryRows(((res.data as VolumeHistoryUploadRow[] | null) ?? []).map((row) => ({ ...row } as VolumeHistoryUploadRow)));
   };
 
   const loadAllHistoryModel = async () => {
@@ -1016,10 +1058,24 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
 
   useEffect(() => {
     const run = async () => {
-      await Promise.all([loadModel(lookbackMode), loadManualInputs(), loadAllHistoryModel(), loadComparisonHistory(), loadRecentInventoryTrendHistory()]);
+      await Promise.all([loadModel(lookbackMode), loadManualInputs(), loadAllHistoryModel(), loadRangeHistory()]);
     };
     void run();
-  }, [lookbackMode, serverTime, supabase]);
+  }, [
+    lookbackMode,
+    serverTime,
+    supabase,
+    historyTableRangeStart,
+    historyTableRangeEnd,
+    inventoryTrendRangeStart,
+    inventoryTrendRangeEnd,
+    weeklyTableRangeStart,
+    weeklyTableRangeEnd,
+    monthlyTableRangeStart,
+    monthlyTableRangeEnd,
+    volumeTrendRangeStart,
+    volumeTrendRangeEnd
+  ]);
 
   useEffect(() => {
     void loadAutoForecastSnapshot(selectedWeekday);
@@ -1100,46 +1156,60 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       predicted_full_day_volume_12: predictedFullDayVolume12
     };
   }, [calculateNoonPredictedFullDayVolume, historyWindowRows, selectedWeekdayManualRows]);
+  const rangeHistoryByDate = useMemo(() => new Map(rangeHistoryRows.map((row) => [row.date, row])), [rangeHistoryRows]);
+  const volumeTrendDates = useMemo(() => getDateRangeDays(volumeTrendRangeStart, volumeTrendRangeEnd), [volumeTrendRangeEnd, volumeTrendRangeStart]);
+  const volumeTrendPreviousDates = useMemo(() => {
+    const days = volumeTrendDates.length;
+    if (days <= 0) return [] as string[];
+    const start = toDateOnly(addDays(new Date(`${volumeTrendRangeStart}T00:00:00`), -days));
+    const end = toDateOnly(addDays(new Date(`${volumeTrendRangeStart}T00:00:00`), -1));
+    return getDateRangeDays(start, end);
+  }, [volumeTrendDates.length, volumeTrendRangeStart]);
+  const inventoryTrendDates = useMemo(() => getDateRangeDays(inventoryTrendRangeStart, inventoryTrendRangeEnd), [inventoryTrendRangeEnd, inventoryTrendRangeStart]);
+  const historyTableDates = useMemo(() => getDateRangeDays(historyTableRangeStart, historyTableRangeEnd), [historyTableRangeEnd, historyTableRangeStart]);
+  const weeklyHistoryRowsFiltered = useMemo(
+    () => rangeHistoryRows.filter((row) => row.date >= weeklyTableRangeStart && row.date <= weeklyTableRangeEnd),
+    [rangeHistoryRows, weeklyTableRangeEnd, weeklyTableRangeStart]
+  );
+  const monthlyHistoryRowsFiltered = useMemo(
+    () => rangeHistoryRows.filter((row) => row.date >= monthlyTableRangeStart && row.date <= monthlyTableRangeEnd),
+    [monthlyTableRangeEnd, monthlyTableRangeStart, rangeHistoryRows]
+  );
   const weekVolumeTrendSeries = useMemo(() => {
-    const currentWeekDates = getWeekDates(serverTime, 0);
-    const previousWeekDates = getWeekDates(serverTime, 1);
-    const byDate = new Map(comparisonHistoryRows.map((row) => [row.date, row]));
-    const labels = WEEKDAY_OPTIONS.map((option) => option.zh);
-    const forecastValues = currentWeekDates.map((date) => {
-      const historyRow = byDate.get(date) ?? null;
+    const labels = volumeTrendDates.map((date) => date.slice(5));
+    const forecastValues = volumeTrendDates.map((date) => {
+      const historyRow = rangeHistoryByDate.get(date) ?? null;
       return calculateNoonPredictedFullDayVolume(date, historyRow);
     });
-    const thisWeekValues = currentWeekDates.map((date) => {
-      const row = byDate.get(date);
+    const thisWeekValues = volumeTrendDates.map((date) => {
+      const row = rangeHistoryByDate.get(date);
       if (!row || !isCompleteHistoryDay(row)) return null;
       return HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0);
     });
-    const lastWeekValues = previousWeekDates.map((date) => {
-      const row = byDate.get(date);
+    const lastWeekValues = volumeTrendPreviousDates.map((date) => {
+      const row = rangeHistoryByDate.get(date);
       return row ? HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0) : null;
     });
     return {
       labels,
       series: [
         { key: 'forecast', label: t('预测', 'Forecast'), color: 'rgba(132,204,22,1)', values: forecastValues },
-        { key: 'this-week', label: t('本周', 'This week'), color: 'rgba(14,165,233,1)', values: thisWeekValues },
-        { key: 'last-week', label: t('上周', 'Last week'), color: 'rgba(225,29,72,1)', values: lastWeekValues }
+        { key: 'this-week', label: t('当前范围', 'Current range'), color: 'rgba(14,165,233,1)', values: thisWeekValues },
+        { key: 'last-week', label: t('上一周期', 'Previous period'), color: 'rgba(225,29,72,1)', values: lastWeekValues }
       ]
     };
-  }, [calculateNoonPredictedFullDayVolume, comparisonHistoryRows, serverTime, t]);
+  }, [calculateNoonPredictedFullDayVolume, rangeHistoryByDate, t, volumeTrendDates, volumeTrendPreviousDates]);
   const inventoryConversionTrendSeries = useMemo(() => {
-    const dateLabels = Array.from({ length: 30 }, (_, index) => toDateOnly(addDays(serverTime, index - 29)));
-    const historyByDate = new Map(recentInventoryTrendRows.map((row) => [row.date, row]));
     return {
-      dateRange: `${dateLabels[0]} - ${dateLabels[dateLabels.length - 1]}`,
-      labels: dateLabels.map((date) => date.slice(5)),
+      dateRange: inventoryTrendDates.length > 0 ? `${inventoryTrendDates[0]} - ${inventoryTrendDates[inventoryTrendDates.length - 1]}` : '',
+      labels: inventoryTrendDates.map((date) => date.slice(5)),
       series: [
         {
           key: 'itr-30d',
           label: t('库存转换率', 'ITR'),
           color: 'rgba(245,158,11,1)',
-          values: dateLabels.map((date) => {
-            const row = historyByDate.get(date);
+          values: inventoryTrendDates.map((date) => {
+            const row = rangeHistoryByDate.get(date);
             const inventoryLevel = Number(manualInputByDate.get(date)?.inventory_level ?? 0);
             if (!row || !isCompleteHistoryDay(row) || inventoryLevel <= 0) return null;
             const dailyTotal = HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0);
@@ -1148,7 +1218,58 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
         }
       ] as LineChartSeries[]
     };
-  }, [manualInputByDate, recentInventoryTrendRows, serverTime, t]);
+  }, [inventoryTrendDates, manualInputByDate, rangeHistoryByDate, t]);
+  const weeklyInflowTableRows = useMemo(() => {
+    const historyByDate = new Map(weeklyHistoryRowsFiltered.map((row) => [row.date, row]));
+    const weekStarts = Array.from(
+      new Set(
+        weeklyHistoryRowsFiltered
+          .map((row) => getWeekStartDateOnly(row.date))
+          .filter((value) => Boolean(value))
+      )
+    ).sort((a, b) => b.localeCompare(a));
+    return weekStarts.map((weekStart) => {
+      const days = getWeekDates(new Date(`${weekStart}T00:00:00`), 0);
+      const dayValues = days.map((date) => {
+        const row = historyByDate.get(date);
+        if (!row || !isCompleteHistoryDay(row)) return null;
+        return HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0);
+      });
+      const completeDays = dayValues.filter((value) => value !== null).length;
+      const total = dayValues.reduce<number>((sum, value) => sum + Number(value ?? 0), 0);
+      return {
+        weekStart,
+        weekEnd: days[days.length - 1] ?? weekStart,
+        dayValues,
+        total,
+        averagePerCompleteDay: completeDays > 0 ? total / completeDays : null
+      };
+    });
+  }, [weeklyHistoryRowsFiltered]);
+  const monthlyInflowTableRows = useMemo(() => {
+    const monthKeys = Array.from(
+      new Set(
+        monthlyHistoryRowsFiltered
+          .map((row) => getMonthKeyFromDateOnly(row.date))
+          .filter((value) => Boolean(value))
+      )
+    ).sort((a, b) => b.localeCompare(a));
+    return monthKeys.map((monthKey) => {
+      const rows = monthlyHistoryRowsFiltered.filter((row) => getMonthKeyFromDateOnly(row.date) === monthKey);
+      const dayValues = rows.map((row) => {
+        if (!isCompleteHistoryDay(row)) return null;
+        return HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0);
+      });
+      const completeDays = dayValues.filter((value) => value !== null).length;
+      const total = dayValues.reduce<number>((sum, value) => sum + Number(value ?? 0), 0);
+      return {
+        monthKey,
+        total,
+        completeDays,
+        averagePerCompleteDay: completeDays > 0 ? total / completeDays : null
+      };
+    });
+  }, [monthlyHistoryRowsFiltered]);
   const buildManualInputDraftRows = (weekOffset: number, historyRowsOverride?: VolumeHistoryUploadRow[]) => {
     const existingByDate = new Map(manualInputRows.map((row) => [row.input_date, row]));
     const historyRows = historyRowsOverride ?? historyWindowRows;
@@ -1182,7 +1303,6 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       });
   };
   const currentWeekDates = useMemo(() => getWeekDates(serverTime, manualInputWeekOffset), [serverTime, manualInputWeekOffset]);
-  const pageWeekDates = useMemo(() => getWeekDates(serverTime, 0), [serverTime]);
   const forecastAtNoonByWeekday = useMemo(
     () =>
       new Map(
@@ -1618,6 +1738,17 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     () => modelRows.filter((row) => row.weekday === selectedWeekday).sort((a, b) => a.hour_of_day - b.hour_of_day),
     [modelRows, selectedWeekday]
   );
+  const weekdayRowsWithHourShare = useMemo(
+    () =>
+      weekdayRows.map((row, index) => {
+        const previousAvgShare = index > 0 ? Number(weekdayRows[index - 1]?.avg_share ?? 0) : 0;
+        return {
+          ...row,
+          hour_share: Math.max(0, Number(row.avg_share ?? 0) - previousAvgShare)
+        };
+      }),
+    [weekdayRows]
+  );
   const manualInputRangeLabel =
     manualInputDraftRows.length > 0
       ? `${manualInputDraftRows[0].input_date} - ${manualInputDraftRows[manualInputDraftRows.length - 1].input_date}`
@@ -2043,8 +2174,13 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           <div className={['min-w-0 rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className={['text-sm font-semibold', valueClass].join(' ')}>{t('单量趋势', 'Volume trend')}</div>
-              <div className={['text-xs', helperClass].join(' ')}>{t('预测 / 本周 / 上周', 'Forecast / This week / Last week')}</div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <StyledDateInput value={volumeTrendRangeStart} onChange={setVolumeTrendRangeStart} themeMode={themeMode} max={volumeTrendRangeEnd} />
+                <span className={helperClass}>to</span>
+                <StyledDateInput value={volumeTrendRangeEnd} onChange={setVolumeTrendRangeEnd} themeMode={themeMode} min={volumeTrendRangeStart} />
+              </div>
             </div>
+            <div className={['mb-3 text-xs', helperClass].join(' ')}>{t('预测 / 当前范围 / 上一周期', 'Forecast / Current range / Previous period')}</div>
             <div className={['rounded-2xl p-4', chartWrapClass].join(' ')}>
               <WeekVolumeLineChart themeMode={themeMode} labels={weekVolumeTrendSeries.labels} series={weekVolumeTrendSeries.series} />
             </div>
@@ -2053,14 +2189,23 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           <div className={['min-w-0 rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className={['text-sm font-semibold', valueClass].join(' ')}>
-                {t('最近30天库存转换率变化', '30-day inventory turnover trend')}
+                {t('库存转换率', 'Inventory turnover rate')}
               </div>
-              <div className={['text-xs', helperClass].join(' ')}>
-                {inventoryConversionTrendSeries.dateRange}
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <StyledDateInput
+                  value={inventoryTrendRangeStart}
+                  onChange={setInventoryTrendRangeStart}
+                  themeMode={themeMode}
+                  max={inventoryTrendRangeEnd}
+                />
+                <span className={helperClass}>to</span>
+                <StyledDateInput
+                  value={inventoryTrendRangeEnd}
+                  onChange={setInventoryTrendRangeEnd}
+                  themeMode={themeMode}
+                  min={inventoryTrendRangeStart}
+                />
               </div>
-            </div>
-            <div className={['mb-3 text-xs', helperClass].join(' ')}>
-              {t('仅绘制有完整数据且有库存值的日期。', 'Only dates with complete history and inventory are plotted.')}
             </div>
             <div className={['rounded-2xl p-4', chartWrapClass].join(' ')}>
               <WeekVolumeLineChart
@@ -2078,7 +2223,11 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           <div className={['min-w-0 rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className={['text-sm font-semibold', valueClass].join(' ')}>{t('历史流入', 'Historical inflow')}</div>
-              <div className={['text-xs', helperClass].join(' ')}>{`${pageWeekDates[0]} - ${pageWeekDates[pageWeekDates.length - 1]}`}</div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <StyledDateInput value={historyTableRangeStart} onChange={setHistoryTableRangeStart} themeMode={themeMode} max={historyTableRangeEnd} />
+                <span className={helperClass}>to</span>
+                <StyledDateInput value={historyTableRangeEnd} onChange={setHistoryTableRangeEnd} themeMode={themeMode} min={historyTableRangeStart} />
+              </div>
             </div>
             <div className="min-w-0 overflow-x-auto overflow-y-hidden">
               <div className={['min-w-0 rounded-2xl', tableWrapClass].join(' ')}>
@@ -2098,8 +2247,8 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   </tr>
                 </thead>
                 <tbody>
-                  {pageWeekDates.map((date) => {
-                    const row = comparisonHistoryRows.find((item) => item.date === date);
+                  {historyTableDates.map((date) => {
+                    const row = rangeHistoryByDate.get(date);
                     const weekday = getWeekdayFromDateOnly(date) ?? 1;
                     const noonCoefficient = forecastAtNoonByWeekday.get(weekday) ?? null;
                     const lastFilledHour = row ? Number(row.last_filled_hour ?? inferLastFilledHour(row)) : null;
@@ -2138,7 +2287,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                       </tr>
                     );
                   })}
-                  {loading && comparisonHistoryRows.length === 0 && (
+                  {loading && historyTableDates.length === 0 && (
                     <tr>
                       <td colSpan={HOUR_COLUMNS.length + 7} className={['px-3 py-6 text-center', helperClass].join(' ')}>
                         {t('Loading...', 'Loading...')}
@@ -2147,6 +2296,110 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   )}
                 </tbody>
               </table>
+              </div>
+            </div>
+          </div>
+
+          <div className={['min-w-0 rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className={['text-sm font-semibold', valueClass].join(' ')}>
+                {t('周维度流入', 'Weekly inflow')}
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <StyledDateInput value={weeklyTableRangeStart} onChange={setWeeklyTableRangeStart} themeMode={themeMode} max={weeklyTableRangeEnd} />
+                <span className={helperClass}>to</span>
+                <StyledDateInput value={weeklyTableRangeEnd} onChange={setWeeklyTableRangeEnd} themeMode={themeMode} min={weeklyTableRangeStart} />
+              </div>
+            </div>
+            <div className="min-w-0 overflow-x-auto overflow-y-hidden">
+              <div className={['min-w-0 rounded-2xl', tableWrapClass].join(' ')}>
+                <table className="w-full min-w-[960px] table-fixed text-left text-xs">
+                  <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
+                    <tr>
+                      <th className="w-[220px] px-3 py-2">{t('Week', 'Week')}</th>
+                      {WEEKDAY_OPTIONS.map((option) => (
+                        <th key={`weekly-${option.value}`} className="px-3 py-2 text-right">
+                          {t(option.zh, option.shortEn)}
+                        </th>
+                      ))}
+                      <th className="px-3 py-2 text-right">{t('Total', 'Total')}</th>
+                      <th className="w-[120px] px-3 py-2 text-right">{t('日均流入', 'Avg/Day')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {weeklyInflowTableRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={10} className={['px-3 py-6 text-center', helperClass].join(' ')}>
+                          {loading ? t('Loading...', 'Loading...') : t('No weekly inflow data', 'No weekly inflow data')}
+                        </td>
+                      </tr>
+                    ) : (
+                      weeklyInflowTableRows.map((row) => (
+                        <tr key={row.weekStart} className={tableRowClass}>
+                          <td className="px-3 py-2 font-semibold">
+                            <div className="flex items-center justify-between gap-3">
+                              <span>{row.weekStart}</span>
+                              <span className={helperClass}>to</span>
+                              <span>{row.weekEnd}</span>
+                            </div>
+                          </td>
+                          {row.dayValues.map((value, index) => (
+                            <td key={`${row.weekStart}-${index}`} className="px-3 py-2 text-right">
+                              {value === null ? '-' : formatNumber(value)}
+                            </td>
+                          ))}
+                          <td className="px-3 py-2 text-right font-semibold">{formatNumber(row.total)}</td>
+                          <td className="px-3 py-2 text-right font-semibold">{formatNumber(row.averagePerCompleteDay)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div className={['min-w-0 rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className={['text-sm font-semibold', valueClass].join(' ')}>
+                {t('月维度流入', 'Monthly inflow')}
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <StyledDateInput value={monthlyTableRangeStart} onChange={setMonthlyTableRangeStart} themeMode={themeMode} max={monthlyTableRangeEnd} />
+                <span className={helperClass}>to</span>
+                <StyledDateInput value={monthlyTableRangeEnd} onChange={setMonthlyTableRangeEnd} themeMode={themeMode} min={monthlyTableRangeStart} />
+              </div>
+            </div>
+            <div className="min-w-0 overflow-x-auto overflow-y-hidden">
+              <div className={['min-w-0 rounded-2xl', tableWrapClass].join(' ')}>
+                <table className="w-full min-w-[640px] table-fixed text-left text-xs">
+                  <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
+                    <tr>
+                      <th className="w-[180px] px-3 py-2">{t('Month', 'Month')}</th>
+                      <th className="w-[120px] px-3 py-2 text-right">{t('完整天数', 'Complete Days')}</th>
+                      <th className="px-3 py-2 text-right">{t('Total', 'Total')}</th>
+                      <th className="w-[140px] px-3 py-2 text-right">{t('日均流入', 'Avg/Day')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {monthlyInflowTableRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className={['px-3 py-6 text-center', helperClass].join(' ')}>
+                          {loading ? t('Loading...', 'Loading...') : t('No monthly inflow data', 'No monthly inflow data')}
+                        </td>
+                      </tr>
+                    ) : (
+                      monthlyInflowTableRows.map((row) => (
+                        <tr key={row.monthKey} className={tableRowClass}>
+                          <td className="px-3 py-2 font-semibold">{row.monthKey}</td>
+                          <td className="px-3 py-2 text-right">{row.completeDays}</td>
+                          <td className="px-3 py-2 text-right font-semibold">{formatNumber(row.total)}</td>
+                          <td className="px-3 py-2 text-right font-semibold">{formatNumber(row.averagePerCompleteDay)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
@@ -2168,22 +2421,24 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   <tr>
                     <th className="px-3 py-2">{t('Hour', 'Hour')}</th>
                     <th className="px-3 py-2">{t('Avg share', 'Avg share')}</th>
+                    <th className="px-3 py-2">{t('Hours Percentage', 'Hours Percentage')}</th>
                     <th className="px-3 py-2">{t('SD', 'SD')}</th>
                     <th className="px-3 py-2">{t('Sample', 'Sample')}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {weekdayRows.length === 0 ? (
+                  {weekdayRowsWithHourShare.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className={['px-3 py-6 text-center', helperClass].join(' ')}>
+                      <td colSpan={5} className={['px-3 py-6 text-center', helperClass].join(' ')}>
                         {loading ? t('Loading...', 'Loading...') : t('No model data', 'No model data')}
                       </td>
                     </tr>
                   ) : (
-                    weekdayRows.map((row) => (
+                    weekdayRowsWithHourShare.map((row) => (
                       <tr key={`${row.weekday}-${row.hour_of_day}`} className={tableRowClass}>
                         <td className="px-3 py-2">{row.hour_of_day}:00</td>
                         <td className="px-3 py-2">{formatPercent(row.avg_share)}</td>
+                        <td className="px-3 py-2">{formatPercent(row.hour_share)}</td>
                         <td className="px-3 py-2">{formatPercent(row.stddev_share)}</td>
                         <td className="px-3 py-2">{row.sample_size ?? '-'}</td>
                       </tr>

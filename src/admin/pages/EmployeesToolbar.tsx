@@ -4,6 +4,7 @@ type TranslateFn = (zh: string, en: string) => string;
 
 type EmployeesToolbarProps = {
   t: TranslateFn;
+  themeMode: 'light' | 'dark';
   isLocked: boolean;
   employeeBadgeBatchPrinting: boolean;
   employeeBadgeBatchSelectedStaffIds: string[];
@@ -35,6 +36,7 @@ type EmployeesToolbarProps = {
 
 export default function EmployeesToolbar({
   t,
+  themeMode,
   isLocked,
   employeeBadgeBatchPrinting,
   employeeBadgeBatchSelectedStaffIds,
@@ -63,6 +65,7 @@ export default function EmployeesToolbar({
   getScheduleLabelToneClass,
   cycleScheduleLabelTone
 }: EmployeesToolbarProps) {
+  const isLight = themeMode === 'light';
   const labelDetailsRef = useRef<HTMLDetailsElement | null>(null);
 
   useEffect(() => {
@@ -236,8 +239,10 @@ export default function EmployeesToolbar({
           <details ref={labelDetailsRef} className="relative mt-2">
             <summary
               className={[
-                'flex h-[46px] cursor-pointer list-none items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition',
-                'hover:border-white/20',
+                'flex h-[46px] cursor-pointer list-none items-center justify-between rounded-2xl border px-4 text-sm outline-none transition',
+                isLight
+                  ? 'border-slate-300 bg-white text-slate-800 shadow-sm hover:border-slate-400'
+                  : 'border-white/10 bg-black/30 text-white hover:border-white/20',
                 isLocked ? 'pointer-events-none cursor-not-allowed opacity-60' : ''
               ].join(' ')}
             >
@@ -248,10 +253,17 @@ export default function EmployeesToolbar({
                     ? employeeLabels.join(', ')
                     : `${employeeLabels.slice(0, 2).join(', ')} +${employeeLabels.length - 2}`}
               </span>
-              <span className="ml-3 text-xs text-slate-400">{employeeLabels.length}</span>
+              <span className={['ml-3 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{employeeLabels.length}</span>
             </summary>
-            <div className="absolute z-30 mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/95 p-3 shadow-2xl backdrop-blur">
-              <div className="mb-2 flex items-center justify-between text-[11px] text-slate-400">
+            <div
+              className={[
+                'absolute z-30 mt-2 w-full rounded-2xl border p-3',
+                isLight
+                  ? 'border-slate-200 bg-[#fffdf8] shadow-[0_18px_40px_rgba(15,23,42,0.14)]'
+                  : 'border-slate-700 bg-slate-900 shadow-[0_18px_40px_rgba(0,0,0,0.45)]'
+              ].join(' ')}
+            >
+              <div className={['mb-2 flex items-center justify-between text-[11px]', isLight ? 'text-slate-500' : 'text-slate-300'].join(' ')}>
                 <span>{t('可多选', 'Multi-select')}</span>
                 <button
                   type="button"
@@ -260,14 +272,26 @@ export default function EmployeesToolbar({
                     e.preventDefault();
                     setEmployeeLabels([]);
                   }}
-                  className="rounded-md bg-white/10 px-2 py-1 text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  className={[
+                    'min-w-[52px] rounded-md border px-2 py-1 text-[12px] font-medium leading-none transition disabled:cursor-not-allowed disabled:opacity-50',
+                    isLight
+                      ? 'border-slate-300 bg-white text-slate-600 shadow-sm hover:border-slate-400 hover:bg-slate-50'
+                      : 'border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700'
+                  ].join(' ')}
                 >
                   {t('清空', 'Clear')}
                 </button>
               </div>
               <div className="max-h-56 space-y-1 overflow-auto pr-1">
                 {employeeFilterLabelOptions.length === 0 ? (
-                  <p className="rounded-lg bg-white/5 px-2 py-2 text-xs text-slate-400">{t('暂无标签', 'No labels')}</p>
+                  <p
+                    className={[
+                      'rounded-lg border px-2 py-2 text-xs',
+                      isLight ? 'border-slate-200 bg-slate-50 text-slate-500' : 'border-slate-700 bg-slate-800 text-slate-300'
+                    ].join(' ')}
+                  >
+                    {t('暂无标签', 'No labels')}
+                  </p>
                 ) : (
                   employeeFilterLabelOptions.map((item) => {
                     const checked = employeeLabels.includes(item);
@@ -284,7 +308,13 @@ export default function EmployeesToolbar({
                         }}
                         className={[
                           'flex cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-sm transition',
-                          checked ? 'border-neon/50 bg-neon/10 text-neon' : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                          checked
+                            ? isLight
+                              ? 'border-lime-300 bg-lime-50 text-lime-900'
+                              : 'border-lime-400/60 bg-lime-400/12 text-lime-200'
+                            : isLight
+                              ? 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
+                              : 'border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700'
                         ].join(' ')}
                       >
                         <span className={['inline-flex max-w-[62%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold', getScheduleLabelToneClass(item)].join(' ')}>
@@ -309,8 +339,25 @@ export default function EmployeesToolbar({
                             checked={checked}
                             onClick={(e) => e.stopPropagation()}
                             onChange={() => setEmployeeLabels((prev) => (prev.includes(item) ? prev.filter((v) => v !== item) : [...prev, item]))}
-                            className="h-3.5 w-3.5 accent-lime-400"
+                            className="sr-only"
                           />
+                          <span
+                            aria-hidden="true"
+                            className={[
+                              'flex h-[18px] w-[18px] items-center justify-center rounded-md border transition',
+                              checked
+                                ? isLight
+                                  ? 'border-lime-500 bg-lime-500 text-white shadow-[0_0_0_1px_rgba(132,204,22,0.18)]'
+                                  : 'border-lime-400 bg-lime-400 text-slate-950 shadow-[0_0_0_1px_rgba(163,230,53,0.28)]'
+                                : isLight
+                                  ? 'border-slate-300 bg-white text-transparent'
+                                  : 'border-slate-500 bg-slate-900 text-transparent'
+                            ].join(' ')}
+                          >
+                            <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+                            </svg>
+                          </span>
                         </div>
                       </div>
                     );

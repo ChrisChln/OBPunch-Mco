@@ -1,3 +1,5 @@
+import StyledDateInput from '../components/StyledDateInput';
+
 type TranslateFn = (zh: string, en: string) => string;
 
 type TimecardControlsProps = {
@@ -90,12 +92,11 @@ export default function TimecardControls({
             return (
               <div className="flex items-center gap-2 rounded-2xl bg-white/5 px-4 py-2">
                 <span className="text-xs uppercase tracking-[0.25em] text-slate-400">Week</span>
-                <input
-                  type="date"
+                <StyledDateInput
+                  themeMode="dark"
                   disabled={isLocked}
                   value={timecardWeekInput}
-                  onChange={(e) => {
-                    const raw = e.target.value;
+                  onChange={(raw) => {
                     setTimecardWeekInput(raw);
                     if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return;
                     const dt = new Date(`${raw}T00:00:00`);
@@ -105,7 +106,6 @@ export default function TimecardControls({
                     setTimecardWeekOffset(nextOffset);
                     void fetchTimecard({ reset: true, weekOffset: nextOffset, lockUi: false });
                   }}
-                  className="rounded-xl border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-slate-200 outline-none focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
                   title={t('选择任意日期', 'Pick any date')}
                 />
               </div>
