@@ -2060,7 +2060,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
               </div>
             </div>
             <div className={['mb-3 text-xs', helperClass].join(' ')}>
-              {t('仅统计完整日，按当日总流入除以库存计算。', 'Complete days only, calculated as daily total inflow divided by inventory.')}
+              {t('仅绘制有完整数据且有库存值的日期。', 'Only dates with complete history and inventory are plotted.')}
             </div>
             <div className={['rounded-2xl p-4', chartWrapClass].join(' ')}>
               <WeekVolumeLineChart
@@ -2068,7 +2068,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                 labels={inventoryConversionTrendSeries.labels}
                 series={inventoryConversionTrendSeries.series}
                 valueFormatter={(value) => formatPercent(value, 2)}
-                yAxisFormatter={(value) => formatPercent(value, 0)}
+                yAxisFormatter={(value) => formatPercent(value, 2)}
                 labelStride={3}
                 maxValueOverride={0.01}
               />
