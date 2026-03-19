@@ -435,7 +435,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       if (!supabase) {
         setForecastBridge(null);
         setForecastLoading(false);
-        arrangementLoadedKeyRef.current = `${selectedPlanningDate}__`;
+        arrangementLoadedKeyRef.current = `${selectedPlanningDate}____`;
         setArrangementInput({ ds: '', ns: '' });
         return;
       }
@@ -448,7 +448,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
         .eq('input_date', planningDate)
         .maybeSingle();
       if (planningInputRes.error) {
-        arrangementLoadedKeyRef.current = `${planningDate}__`;
+        arrangementLoadedKeyRef.current = `${planningDate}____`;
         setArrangementInput({ ds: '', ns: '' });
       } else {
         const nextArrangementInput = {
