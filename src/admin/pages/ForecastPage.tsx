@@ -778,6 +778,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const [manualInputsError, setManualInputsError] = useState<string | null>(null);
   const [manualInputDialogOpen, setManualInputDialogOpen] = useState(false);
   const [manualInputDraftRows, setManualInputDraftRows] = useState<ForecastManualInputDraftRow[]>([]);
+  const [manualInputDraftDirty, setManualInputDraftDirty] = useState(false);
   const [manualInputWeekOffset, setManualInputWeekOffset] = useState(0);
   const [forecastDialogView, setForecastDialogView] = useState<ForecastDialogView>('weekly');
   const [historyWindowRows, setHistoryWindowRows] = useState<VolumeHistoryUploadRow[]>([]);
@@ -1092,8 +1093,9 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
 
   useEffect(() => {
     if (!manualInputDialogOpen) return;
+    if (manualInputDraftDirty) return;
     setManualInputDraftRows(buildManualInputDraftRows(manualInputWeekOffset));
-  }, [allHistoryModelRows, historyWindowRows, manualInputDialogOpen, manualInputRows, manualInputWeekOffset]);
+  }, [allHistoryModelRows, historyWindowRows, manualInputDialogOpen, manualInputDraftDirty, manualInputRows, manualInputWeekOffset]);
 
   const selectedWeekdayManualRows = useMemo(
     () =>
@@ -1350,6 +1352,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     const weekDates = getWeekDates(serverTime, 0);
     const historyRows = await loadHistoryWindow(weekDates);
     setManualInputDraftRows(buildManualInputDraftRows(0, historyRows));
+    setManualInputDraftDirty(false);
     setHistoryPasteDate(getDefaultHistoryPasteDate(weekDates));
     setManualInputSaveError(null);
     setManualInputSaveMessage(null);
@@ -1361,6 +1364,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     const weekDates = getWeekDates(serverTime, 0);
     const historyRows = await loadHistoryWindow(weekDates);
     setManualInputDraftRows(buildManualInputDraftRows(0, historyRows));
+    setManualInputDraftDirty(false);
     setHistoryPasteDate(getDefaultHistoryPasteDate(weekDates));
     setManualInputSaveError(null);
     setManualInputSaveMessage(null);
@@ -1372,12 +1376,14 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     setManualInputWeekOffset(nextOffset);
     const historyRows = await loadHistoryWindow(nextWeekDates);
     setManualInputDraftRows(buildManualInputDraftRows(nextOffset, historyRows));
+    setManualInputDraftDirty(false);
     setHistoryPasteDate((current) => (nextWeekDates.includes(current) ? current : getDefaultHistoryPasteDate(nextWeekDates)));
     setManualInputSaveError(null);
   };
   const closeManualInputDialog = () => {
     if (manualInputSaving) return;
     setManualInputDialogOpen(false);
+    setManualInputDraftDirty(false);
     setManualInputSaveError(null);
   };
   const parsePastedVolumeHistoryRows = (text: string, selectedDate?: string) => {
@@ -1673,6 +1679,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     await loadManualInputs();
     setManualInputSaving(false);
     setManualInputDialogOpen(false);
+    setManualInputDraftDirty(false);
     setManualInputSaveMessage(t(`已保存 ${payloadRows.length} 行。`, `Saved ${payloadRows.length} row(s).`));
   };
 
@@ -2504,6 +2511,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                       const historyRows = await loadHistoryWindow(weekDates);
                       setManualInputWeekOffset(0);
                       setManualInputDraftRows(buildManualInputDraftRows(0, historyRows));
+                      setManualInputDraftDirty(false);
                       setHistoryPasteDate(getDefaultHistoryPasteDate(weekDates));
                       setManualInputSaveError(null);
                     }}
@@ -2568,11 +2576,12 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                             <td className="px-2 py-3 align-top">
                               <input
                                 value={draftRow.previous_day_backlog}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  setManualInputDraftDirty(true);
                                   setManualInputDraftRows((prev) =>
                                     prev.map((row, rowIndex) => (rowIndex === index ? { ...row, previous_day_backlog: e.target.value } : row))
-                                  )
-                                }
+                                  );
+                                }}
                                 disabled={manualInputSaving}
                                 inputMode="numeric"
                                 className={[
@@ -2600,11 +2609,12 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                             <td className="px-2 py-3 align-top">
                               <input
                                 value={draftRow.inventory_level}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  setManualInputDraftDirty(true);
                                   setManualInputDraftRows((prev) =>
                                     prev.map((row, rowIndex) => (rowIndex === index ? { ...row, inventory_level: e.target.value } : row))
-                                  )
-                                }
+                                  );
+                                }}
                                 disabled={manualInputSaving}
                                 inputMode="numeric"
                                 className={[
@@ -2620,11 +2630,12 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                 <input
                                   type="checkbox"
                                   checked={draftRow.severe_weather}
-                                  onChange={(e) =>
+                                  onChange={(e) => {
+                                    setManualInputDraftDirty(true);
                                     setManualInputDraftRows((prev) =>
                                       prev.map((row, rowIndex) => (rowIndex === index ? { ...row, severe_weather: e.target.checked } : row))
-                                    )
-                                  }
+                                    );
+                                  }}
                                   disabled={manualInputSaving}
                                   className="h-4 w-4 rounded border-slate-300"
                                 />
@@ -2634,11 +2645,12 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                             <td className="px-2 py-3 align-top">
                               <input
                                 value={draftRow.full_day_capacity}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  setManualInputDraftDirty(true);
                                   setManualInputDraftRows((prev) =>
                                     prev.map((row, rowIndex) => (rowIndex === index ? { ...row, full_day_capacity: e.target.value } : row))
-                                  )
-                                }
+                                  );
+                                }}
                                 disabled={manualInputSaving}
                                 inputMode="numeric"
                                 className={[
