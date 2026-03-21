@@ -43,6 +43,23 @@ import {
   shouldRunWeeklyScheduleReset,
   shouldRunWeeklyScheduleRollover
 } from './scheduleWeek';
+import { formatRoundedHours, getTimecardTerminatedByDay } from './timecardDisplay';
+import {
+  evaluateLateDecision,
+  formatClockMinutes,
+  getClockMinutesFromDate,
+  LATE_BASELINE_MIN_PERSONAL_SAMPLES,
+  LATE_BASELINE_MIN_TEAM_SAMPLES,
+  LATE_BASELINE_SAMPLE_TARGET,
+  LATE_GUARDRAIL_BUFFER_MINUTES,
+  LATE_GRACE_MINUTES,
+  LATE_OUTLIER_MAX_DELTA_MINUTES,
+  parseClockTextToMinutes,
+  resolvePlannedStartMinutes,
+  type LateBaselineSource,
+  type LateRoundingFamily,
+  type LateSample
+} from './lateMarks';
 import type {
   AdminPage,
   AllowedPosition,
@@ -80,6 +97,17 @@ type ScheduleMistakeDraft = {
   reason: string;
   saving: boolean;
 };
+type LateMarkView = {
+  minutesLate: number;
+  source: LateBaselineSource;
+  roundingFamily: LateRoundingFamily;
+  learnedExpectedStartRaw: string;
+  learnedExpectedStartRounded: string;
+  guardrailExpectedStart: string;
+  finalExpectedStart: string;
+  firstIn: string;
+  sampleCount: number;
+};
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
@@ -113,6 +141,10 @@ const OBUP_UPLOAD_RECORDS_TABLE = (import.meta.env.VITE_OBUP_UPLOAD_RECORDS_TABL
 const MISTAKE_REPORT_TABLE = (import.meta.env.VITE_MISTAKE_REPORT_TABLE as string | undefined) ?? 'ob_mistake_reports';
 const SCHEDULE_UPH_DAYS = 30;
 const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
+const ATTENDANCE_MARK_TYPES = ['absent', 'excuse', 'temporary_leave', 'late'] as const;
+const NON_LATE_ATTENDANCE_MARK_TYPES = ['absent', 'excuse', 'temporary_leave'] as const;
+const LATE_LOOKBACK_DAYS = 120;
+const LATE_MIN_VALID_PUNCH_COUNT = 2;
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
 const SCHEDULE_WEEK_RESET_KEY = 'schedule_transient_reset_week';
 const SCHEDULE_WEEK_ROLLOVER_KEY = 'schedule_week_rollover_marker';
@@ -449,6 +481,21 @@ const getDayIndexFromTemplateDate = (dateOnly: string, weekOffset = 0) => {
   if (diffDays < 0 || diffDays > 6) return null;
   return diffDays;
 };
+const getMonthDateRange = (value: Date) => {
+  const start = new Date(value);
+  start.setDate(1);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setMonth(end.getMonth() + 1, 0);
+  end.setHours(0, 0, 0, 0);
+  return {
+    start,
+    end,
+    startKey: toDateOnly(start),
+    endKey: toDateOnly(end)
+  };
+};
+const formatYearMonthKey = (value: Date) => `${value.getFullYear()}/${String(value.getMonth() + 1).padStart(2, '0')}`;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const parseDeviceCountedAtFromNote = (note: unknown) => {
@@ -517,6 +564,41 @@ const getWorkDateRange = (workDate: string) => {
   start.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
   const end = addDays(start, 1);
   return { start, end };
+};
+const toOperationalWorkDate = (atRaw: string, actionRaw?: string) => {
+  const at = new Date(atRaw);
+  if (Number.isNaN(at.getTime())) return '';
+  const action = String(actionRaw ?? '').trim().toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+  const bucketMs = getOperationalBucketTimeMs(at, action);
+  const shifted = new Date(bucketMs - DAY_CUTOFF_MS);
+  return toDateOnly(shifted);
+};
+const extractPunchAuditWorkDates = (row: Pick<AuditRow, 'action' | 'created_at' | 'payload'>) => {
+  const action = String(row.action ?? '').trim();
+  const payload = ((row.payload ?? {}) as Record<string, any>) ?? {};
+  const dates = new Set<string>();
+  const explicitWorkDate = String(payload.work_date ?? '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(explicitWorkDate)) dates.add(explicitWorkDate);
+  if (action === 'punch_manual_add') {
+    const key = toOperationalWorkDate(String(payload.created_at ?? ''), String(payload.action ?? ''));
+    if (key) dates.add(key);
+  } else if (action === 'punch_manual_edit') {
+    const before = (payload.before ?? null) as Record<string, any> | null;
+    const after = (payload.after ?? null) as Record<string, any> | null;
+    const beforeKey = before ? toOperationalWorkDate(String(before.created_at ?? ''), String(before.action ?? '')) : '';
+    const afterKey = after ? toOperationalWorkDate(String(after.created_at ?? ''), String(after.action ?? '')) : '';
+    if (beforeKey) dates.add(beforeKey);
+    if (afterKey) dates.add(afterKey);
+  } else if (action === 'punch_manual_delete') {
+    const before = (payload.before ?? null) as Record<string, any> | null;
+    const beforeKey = before ? toOperationalWorkDate(String(before.created_at ?? ''), String(before.action ?? '')) : '';
+    if (beforeKey) dates.add(beforeKey);
+  }
+  if (dates.size === 0) {
+    const fallback = toOperationalWorkDate(String(row.created_at ?? ''));
+    if (fallback) dates.add(fallback);
+  }
+  return Array.from(dates);
 };
 const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   const hit = ALLOWED_POSITIONS.find((p) => p.toLowerCase() === String(value ?? '').trim().toLowerCase());
@@ -818,6 +900,8 @@ export default function AdminAppPage() {
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
   const scheduleMistakeRequestRef = useRef(0);
+  const scheduleLateRequestRef = useRef(0);
+  const scheduleMonthlyAbsentRequestRef = useRef(0);
   const schedulePunchPresenceRequestRef = useRef(0);
 
   const [page, setPage] = useState<AdminPage>('home');
@@ -1076,9 +1160,12 @@ export default function AdminAppPage() {
   const [schedulePunchPresenceKeys, setSchedulePunchPresenceKeys] = useState<Set<string>>(new Set());
   const [schedulePunchPresenceReady, setSchedulePunchPresenceReady] = useState(false);
   const [schedulePunchPresenceWeekOffset, setSchedulePunchPresenceWeekOffset] = useState<number | null>(null);
+  const [scheduleFirstInByStaffDayKey, setScheduleFirstInByStaffDayKey] = useState<Record<string, string>>({});
   const [scheduleUphByStaffId, setScheduleUphByStaffId] = useState<Record<string, number | null>>({});
   const [scheduleMistakeByStaffId, setScheduleMistakeByStaffId] = useState<Record<string, number>>({});
   const [scheduleMistakeDetailsByStaffId, setScheduleMistakeDetailsByStaffId] = useState<Record<string, ScheduleMistakeDetail[]>>({});
+  const [scheduleMonthlyAbsentDatesByStaffId, setScheduleMonthlyAbsentDatesByStaffId] = useState<Record<string, string[]>>({});
+  const [scheduleLateByStaffDayKey, setScheduleLateByStaffDayKey] = useState<Record<string, LateMarkView>>({});
   const [scheduleMistakeDraft, setScheduleMistakeDraft] = useState<ScheduleMistakeDraft>({
     open: false,
     staff_id: '',
@@ -2795,7 +2882,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     if (!supabase) {
       setScheduleError('缺少 Supabase 配置。');
       setScheduleRows([]);
-      return;
+      return [] as ScheduleRow[];
     }
 
     const weekOffset = options?.weekOffsetOverride ?? scheduleWeekOffset;
@@ -2822,7 +2909,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (res.error) {
           if (!isAbortLikeError(res.error.message)) setScheduleError(res.error.message);
           setScheduleRows([]);
-          return;
+          return [] as ScheduleRow[];
         }
         const rows = (((res.data as any[]) ?? []) as ScheduleRow[]);
         allRows.push(...rows);
@@ -2831,13 +2918,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
       setScheduleRows(allRows);
       setScheduleRowsWeekOffset(weekOffset);
+      return allRows;
     };
 
     if (!lockUi) {
-      await exec();
-      return;
+      return await exec();
     }
-    await runLocked('schedule', exec);
+    let loadedRows: ScheduleRow[] = [];
+    await runLocked('schedule', async () => {
+      loadedRows = await exec();
+    });
+    return loadedRows;
   };
 
   const fetchSchedulePublishSetting = async () => {
@@ -2939,7 +3030,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           .delete()
           .eq('staff_id', staff)
           .eq('work_date', targetWorkDate)
-          .in('mark_type', ['absent', 'excuse', 'temporary_leave'] as any);
+          .in('mark_type', ATTENDANCE_MARK_TYPES as any);
         if (clearRes.error) {
           setScheduleError(clearRes.error.message);
           return false;
@@ -3016,7 +3107,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             return !(rowStaff === staff && rowDayIndex === dayIndex);
           })
         );
-        await syncAttendanceMark();
+        const synced = await syncAttendanceMark();
+        if (synced) {
+          await fetchScheduleMonthlyAbsentDates();
+        }
         void writeAudit({
           action: 'schedule_clear',
           staffId: staff,
@@ -3099,7 +3193,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (!replaced) next.push(localRow);
         return next;
       });
-      await syncAttendanceMark();
+      const synced = await syncAttendanceMark();
+      if (synced) {
+        await fetchScheduleMonthlyAbsentDates();
+      }
 
       void writeAudit({
         action:
@@ -3416,7 +3513,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const exec = async () => {
       await resetScheduleTransientStatesForWeek({ lockUi: false });
       await activatePlannedScheduleStatesForToday({ lockUi: false });
-      await Promise.all([
+      const [latestScheduleRows] = await Promise.all([
         fetchSchedule({ lockUi: false }),
         fetchSchedulePublishSetting()
       ]);
@@ -3432,7 +3529,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       await Promise.all([
         fetchSchedulePunchPresence({ employeesOverride: latestEmployees }),
         fetchScheduleUph({ employeesOverride: latestEmployees }),
-        fetchScheduleMistakeCounts({ employeesOverride: latestEmployees })
+        fetchScheduleMistakeCounts({ employeesOverride: latestEmployees }),
+        fetchScheduleMonthlyAbsentDates({ employeesOverride: latestEmployees, monthDateOverride: scheduleWeekStart }),
+        fetchScheduleLateMarks({
+          employeesOverride: latestEmployees,
+          scheduleRowsOverride: latestScheduleRows
+        })
       ]);
     };
     if (!lockUi) {
@@ -3664,6 +3766,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     if (!supabase) {
       if (!isStale()) {
         setSchedulePunchPresenceKeys(new Set());
+        setScheduleFirstInByStaffDayKey({});
         setSchedulePunchPresenceReady(true);
         setSchedulePunchPresenceWeekOffset(null);
       }
@@ -3683,6 +3786,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     if (staffSet.size === 0) {
       if (!isStale()) {
         setSchedulePunchPresenceKeys(new Set());
+        setScheduleFirstInByStaffDayKey({});
         setSchedulePunchPresenceReady(true);
         setSchedulePunchPresenceWeekOffset(options?.weekOffsetOverride ?? scheduleWeekOffset);
       }
@@ -3692,6 +3796,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const mode = options?.mode ?? 'week';
     const dayMs = 24 * 60 * 60 * 1000;
     const found = new Set<string>();
+    const firstInByDayKey: Record<string, string> = {};
     const staffBatches = chunk(Array.from(staffSet), 120);
 
     if (mode === 'operational_day') {
@@ -3721,6 +3826,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           if (res.error) {
             if (!isStale()) {
               setSchedulePunchPresenceKeys(new Set());
+              setScheduleFirstInByStaffDayKey({});
               setSchedulePunchPresenceReady(false);
               setSchedulePunchPresenceWeekOffset(null);
             }
@@ -3739,6 +3845,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
       if (!isStale()) {
         setSchedulePunchPresenceKeys(found);
+        setScheduleFirstInByStaffDayKey({});
         setSchedulePunchPresenceReady(true);
         setSchedulePunchPresenceWeekOffset(null);
       }
@@ -3769,6 +3876,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (res.error) {
           if (!isStale()) {
             setSchedulePunchPresenceKeys(new Set());
+            setScheduleFirstInByStaffDayKey({});
             setSchedulePunchPresenceReady(false);
             setSchedulePunchPresenceWeekOffset(null);
           }
@@ -3785,6 +3893,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           const dayIndex = Math.floor((getOperationalBucketTimeMs(at, action) - day0StartMs) / dayMs);
           if (dayIndex < 0 || dayIndex > 6) continue;
           found.add(`${staff}__${dayIndex}`);
+          if (action === 'IN') {
+            const firstInKey = `${staff}__${dayIndex}`;
+            const prev = firstInByDayKey[firstInKey];
+            if (!prev || at.getTime() < new Date(prev).getTime()) {
+              firstInByDayKey[firstInKey] = at.toISOString();
+            }
+          }
         }
 
         if (rows.length < pageSize) break;
@@ -3793,6 +3908,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
     if (!isStale()) {
       setSchedulePunchPresenceKeys(found);
+      setScheduleFirstInByStaffDayKey(firstInByDayKey);
       setSchedulePunchPresenceReady(true);
       setSchedulePunchPresenceWeekOffset(weekOffset);
     }
@@ -4112,6 +4228,105 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     if (requestId === scheduleMistakeRequestRef.current) {
       setScheduleMistakeByStaffId(nextMap);
       setScheduleMistakeDetailsByStaffId(nextDetailMap);
+    }
+  };
+  const fetchScheduleMonthlyAbsentDates = async (options?: {
+    employeesOverride?: EmployeeRow[] | null;
+    monthDateOverride?: Date;
+  }) => {
+    const requestId = scheduleMonthlyAbsentRequestRef.current + 1;
+    scheduleMonthlyAbsentRequestRef.current = requestId;
+    const employeesForMonthlyAbsent = options?.employeesOverride ?? employees;
+
+    if (!supabase) {
+      if (requestId === scheduleMonthlyAbsentRequestRef.current) {
+        setScheduleMonthlyAbsentDatesByStaffId({});
+      }
+      return;
+    }
+
+    const staffIds = Array.from(
+      new Set(
+        employeesForMonthlyAbsent
+          .map((employee) => normalizeStaffId(String(employee.staff_id ?? '').trim()))
+          .filter(Boolean)
+      )
+    );
+    if (staffIds.length === 0) {
+      if (requestId === scheduleMonthlyAbsentRequestRef.current) {
+        setScheduleMonthlyAbsentDatesByStaffId({});
+      }
+      return;
+    }
+
+    const monthBase = options?.monthDateOverride ?? scheduleWeekStart;
+    const { startKey, endKey } = getMonthDateRange(monthBase);
+    const datesByStaff = new Map<string, Set<string>>();
+
+    for (const batch of chunk(staffIds, 200)) {
+      const res = await supabase
+        .from(ATTENDANCE_MARKS_TABLE)
+        .select('staff_id, work_date')
+        .in('staff_id', batch as any[])
+        .eq('mark_type', 'absent')
+        .gte('work_date', startKey)
+        .lte('work_date', endKey)
+        .limit(10000);
+      if (res.error) {
+        if (!isMissingTableError(res.error.message, ATTENDANCE_MARKS_TABLE)) {
+          console.warn('[schedule] load monthly absent counts failed:', res.error.message);
+        }
+        if (requestId === scheduleMonthlyAbsentRequestRef.current) {
+          setScheduleMonthlyAbsentDatesByStaffId({});
+        }
+        return;
+      }
+      for (const row of ((res.data as any[] | null) ?? [])) {
+        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+        const workDate = String(row.work_date ?? '').trim();
+        if (!staff || !workDate) continue;
+        const existing = datesByStaff.get(staff) ?? new Set<string>();
+        existing.add(workDate);
+        datesByStaff.set(staff, existing);
+      }
+    }
+
+    const nextMap: Record<string, string[]> = {};
+    for (const staff of staffIds) {
+      nextMap[staff] = Array.from(datesByStaff.get(staff) ?? []).sort((a, b) => a.localeCompare(b, 'en-US'));
+    }
+    if (requestId === scheduleMonthlyAbsentRequestRef.current) {
+      setScheduleMonthlyAbsentDatesByStaffId(nextMap);
+    }
+  };
+  const fetchScheduleLateMarks = async (options?: {
+    employeesOverride?: EmployeeRow[] | null;
+    scheduleRowsOverride?: ScheduleRow[] | null;
+  }) => {
+    const requestId = scheduleLateRequestRef.current + 1;
+    scheduleLateRequestRef.current = requestId;
+    const employeesForLate = options?.employeesOverride ?? employees;
+    const rowsForLate = options?.scheduleRowsOverride ?? scheduleRows;
+
+    if (!supabase) {
+      if (requestId === scheduleLateRequestRef.current) setScheduleLateByStaffDayKey({});
+      return;
+    }
+
+    try {
+      const result = await syncLateMarksForWeek({
+        weekStart: scheduleWeekStart,
+        targetEmployees: employeesForLate,
+        scheduleRowsForWeek: rowsForLate ?? undefined
+      });
+      if (requestId === scheduleLateRequestRef.current) {
+        setScheduleLateByStaffDayKey(result.lateByStaffDayKey);
+      }
+    } catch (error) {
+      console.warn('[schedule] sync late marks failed:', error);
+      if (requestId === scheduleLateRequestRef.current) {
+        setScheduleLateByStaffDayKey({});
+      }
     }
   };
   const getCurrentOperationalDate = () => {
@@ -6165,11 +6380,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     return out;
   };
 
-  const formatHours = (value: number) => {
-    const rounded = Math.round(value * 100) / 100;
-    if (rounded <= 0) return '';
-    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
-  };
+  const formatHours = (value: number) => formatRoundedHours(value);
 
   const formatAuditDetail = (row: AuditRow) => {
     const action = String(row.action ?? '').trim();
@@ -6755,6 +6966,449 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     });
   };
 
+  const syncLateMarksForWeek = async (options: {
+    weekStart: Date;
+    targetEmployees: Array<
+      Pick<EmployeeRow, 'staff_id' | 'position' | 'shift' | 'terminated_at' | 'name' | 'agency'> & {
+        terminatedAt?: string | null;
+      }
+    >;
+    scheduleRowsForWeek?: ScheduleRow[];
+  }) => {
+    const empty = { lateByStaffDayKey: {} as Record<string, LateMarkView> };
+    if (!supabase) return empty;
+
+    const weekStart = new Date(options.weekStart);
+    if (Number.isNaN(weekStart.getTime())) return empty;
+    const weekDateKeys = Array.from({ length: 7 }, (_, idx) => toDateOnly(addDays(weekStart, idx)));
+    const weekStartKey = weekDateKeys[0] ?? '';
+    const weekEndKey = weekDateKeys[6] ?? '';
+    if (!weekStartKey || !weekEndKey) return empty;
+
+    const profileByStaff = new Map<
+      string,
+      { position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null; name: string; agency: string }
+    >();
+    for (const employee of options.targetEmployees ?? []) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff) continue;
+      profileByStaff.set(staff, {
+        position: String(employee.position ?? '').trim(),
+        shift: normalizeShiftValue(String(employee.shift ?? '').trim()),
+        terminatedAt: String(employee.terminated_at ?? employee.terminatedAt ?? '').trim() || null,
+        name: String(employee.name ?? '').trim(),
+        agency: String(employee.agency ?? '').trim()
+      });
+    }
+    const targetStaffIds = Array.from(profileByStaff.keys());
+    if (targetStaffIds.length === 0) return empty;
+
+    const fetchScheduleRowsPaged = async (buildQuery: (from: number, to: number) => any) => {
+      const pageSize = 2000;
+      const maxPages = 60;
+      const allRows: ScheduleRow[] = [];
+      for (let page = 0; page < maxPages; page += 1) {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const res = await buildQuery(from, to);
+        if (res.error) return { rows: [] as ScheduleRow[], error: res.error.message as string };
+        const rows = (((res.data as any[]) ?? []) as ScheduleRow[]).map((row) => ({
+          ...row,
+          shift: normalizeShiftValue(String((row as any).shift ?? '').trim()) || null,
+          position: String((row as any).position ?? '').trim()
+        }));
+        allRows.push(...rows);
+        if (rows.length < pageSize) break;
+      }
+      return { rows: allRows, error: null as string | null };
+    };
+
+    const fetchEmployeeShiftByStaffIds = async (staffIds: string[]) => {
+      const shiftByStaff = new Map<string, '' | 'early' | 'late'>();
+      if (staffIds.length === 0) return shiftByStaff;
+      const mode = await resolveEmployeeColumnMode();
+      for (const batch of chunk(staffIds, 200)) {
+        const select = mode === 'cased' ? 'staff_id, shift, "Position", name, "Agency", terminated_at' : 'staff_id, shift, position, name, agency, terminated_at';
+        const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch as any);
+        if (res.error) throw new Error(res.error.message);
+        for (const row of ((res.data as any[]) ?? [])) {
+          const staff = normalizeStaffId(String(row?.staff_id ?? '').trim());
+          if (!staff) continue;
+          shiftByStaff.set(staff, normalizeShiftValue(String(row?.shift ?? '').trim()));
+          if (!profileByStaff.has(staff)) {
+            profileByStaff.set(staff, {
+              position: String(row?.position ?? row?.Position ?? '').trim(),
+              shift: normalizeShiftValue(String(row?.shift ?? '').trim()),
+              terminatedAt: String(row?.terminated_at ?? '').trim() || null,
+              name: String(row?.name ?? '').trim(),
+              agency: String(row?.agency ?? row?.Agency ?? '').trim()
+            });
+          }
+        }
+      }
+      return shiftByStaff;
+    };
+
+    let weekScheduleRows = options.scheduleRowsForWeek;
+    if (!weekScheduleRows) {
+      const weekScheduleRes = await fetchScheduleRowsPaged((from, to) =>
+        supabase
+          .from(SCHEDULE_TABLE)
+          .select('staff_id, date, position, note')
+          .in('staff_id', targetStaffIds as any)
+          .gte('date', weekStartKey)
+          .lte('date', weekEndKey)
+          .range(from, to)
+      );
+      if (weekScheduleRes.error) throw new Error(weekScheduleRes.error);
+      weekScheduleRows = weekScheduleRes.rows;
+    }
+
+    const initialShiftByStaff = await fetchEmployeeShiftByStaffIds(targetStaffIds);
+
+    const weekScheduleByKey = new Map<string, ScheduleRow>();
+    for (const row of weekScheduleRows) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      const workDate = String(row.date ?? '').trim();
+      if (!staff || !/^\d{4}-\d{2}-\d{2}$/.test(workDate)) continue;
+      weekScheduleByKey.set(`${staff}__${workDate}`, row);
+    }
+
+    const targetWorkDays: Array<{ staff: string; workDate: string; shift: 'early' | 'late'; position: string }> = [];
+    for (const workDate of weekDateKeys) {
+      for (const staff of targetStaffIds) {
+        const row = weekScheduleByKey.get(`${staff}__${workDate}`);
+        if (!row) continue;
+        const state = getScheduleBaseStateFromNote(row.note);
+        if (!isWorkingScheduleBaseState(state)) continue;
+        const profile = profileByStaff.get(staff);
+        const shift = initialShiftByStaff.get(staff) || profile?.shift || 'early';
+        const position = String((row as any).position ?? profile?.position ?? '').trim();
+        if (!position) continue;
+        const terminatedAt = String(profile?.terminatedAt ?? '').trim();
+        if (terminatedAt) {
+          const terminatedDate = toDateOnly(new Date(terminatedAt));
+          if (terminatedDate && workDate >= terminatedDate) continue;
+        }
+        targetWorkDays.push({ staff, workDate, shift, position });
+      }
+    }
+
+    const relevantPositions = Array.from(
+      new Set([
+        ...targetWorkDays.map((item) => item.position).filter(Boolean),
+        ...Array.from(profileByStaff.values())
+          .map((profile) => String(profile.position ?? '').trim())
+          .filter(Boolean)
+      ])
+    );
+    const relevantShifts = Array.from(
+      new Set([
+        ...targetWorkDays.map((item) => item.shift).filter(Boolean),
+        ...Array.from(profileByStaff.values())
+          .map((profile) => profile.shift)
+          .filter((shift): shift is 'early' | 'late' => shift === 'early' || shift === 'late')
+      ])
+    ) as Array<'early' | 'late'>;
+    const lookbackStartKey = toDateOnly(addDays(weekStart, -LATE_LOOKBACK_DAYS));
+
+    const [personalHistoryRes, teamHistoryRes] = await Promise.all([
+      fetchScheduleRowsPaged((from, to) =>
+        supabase
+          .from(SCHEDULE_TABLE)
+          .select('staff_id, date, position, note')
+          .in('staff_id', targetStaffIds as any)
+          .gte('date', lookbackStartKey)
+          .lte('date', weekEndKey)
+          .range(from, to)
+      ),
+      relevantPositions.length === 0 || relevantShifts.length === 0
+        ? Promise.resolve({ rows: [] as ScheduleRow[], error: null as string | null })
+        : fetchScheduleRowsPaged((from, to) =>
+            supabase
+              .from(SCHEDULE_TABLE)
+              .select('staff_id, date, position, note')
+              .in('position', relevantPositions as any)
+              .gte('date', lookbackStartKey)
+              .lte('date', weekEndKey)
+              .range(from, to)
+          )
+    ]);
+    if (personalHistoryRes.error) throw new Error(personalHistoryRes.error);
+    if (teamHistoryRes.error) throw new Error(teamHistoryRes.error);
+
+    const historicalScheduleRows = new Map<string, ScheduleRow>();
+    for (const row of [...personalHistoryRes.rows, ...teamHistoryRes.rows]) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      const workDate = String(row.date ?? '').trim();
+      if (!staff || !/^\d{4}-\d{2}-\d{2}$/.test(workDate)) continue;
+      const position = String((row as any).position ?? '').trim();
+      historicalScheduleRows.set(`${staff}__${workDate}__${position}`, {
+        ...row,
+        position
+      });
+    }
+
+    const historicalStaffIds = Array.from(
+      new Set([
+        ...targetStaffIds,
+        ...Array.from(historicalScheduleRows.values())
+          .map((row) => normalizeStaffId(String(row.staff_id ?? '').trim()))
+          .filter(Boolean)
+      ])
+    );
+    const historicalShiftByStaff = await fetchEmployeeShiftByStaffIds(historicalStaffIds);
+
+    const fetchPunchRows = async (staffIds: string[], startIso: string, endIso: string) => {
+      if (staffIds.length === 0) return { rows: [] as any[], error: null as string | null };
+      const all: any[] = [];
+      for (const batch of chunk(staffIds, 200)) {
+        const pageSize = 1000;
+        const maxPages = 80;
+        for (let page = 0; page < maxPages; page += 1) {
+          const from = page * pageSize;
+          const to = from + pageSize - 1;
+          const base = () =>
+            supabase
+              .from('ob_punches')
+              .select('staff_id, action, created_at, id')
+              .in('staff_id', batch as any)
+              .gte('created_at', startIso)
+              .lt('created_at', endIso);
+          const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
+          const attempt = attemptCreatedAt.error ? await base().order('id', { ascending: true }).range(from, to) : attemptCreatedAt;
+          if (attempt.error) return { rows: [] as any[], error: attempt.error.message as string };
+          const rows = (attempt.data as any[] | null) ?? [];
+          if (rows.length === 0) break;
+          all.push(...rows);
+          if (rows.length < pageSize) break;
+        }
+      }
+      return { rows: all, error: null as string | null };
+    };
+
+    const historyStartRange = getWorkDateRange(lookbackStartKey);
+    const historyEndRange = getWorkDateRange(toDateOnly(addDays(weekStart, 7)));
+    const punchesRes = await fetchPunchRows(
+      historicalStaffIds,
+      historyStartRange?.start.toISOString() ?? new Date(`${lookbackStartKey}T00:00:00`).toISOString(),
+      historyEndRange?.start.toISOString() ?? new Date(`${weekEndKey}T23:59:59.999`).toISOString()
+    );
+    if (punchesRes.error) throw new Error(punchesRes.error);
+
+    const firstInByStaffDay = new Map<string, Date>();
+    const punchCountByStaffDay = new Map<string, number>();
+    for (const row of punchesRes.rows ?? []) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      const action = String(row.action ?? '').trim().toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+      const atRaw = String(row.created_at ?? '').trim();
+      if (!staff || !atRaw) continue;
+      const at = new Date(atRaw);
+      if (Number.isNaN(at.getTime())) continue;
+      const workDate = toOperationalWorkDate(atRaw, action);
+      if (!workDate) continue;
+      const key = `${staff}__${workDate}`;
+      punchCountByStaffDay.set(key, Number(punchCountByStaffDay.get(key) ?? 0) + 1);
+      if (action !== 'IN') continue;
+      const prev = firstInByStaffDay.get(key);
+      if (!prev || at.getTime() < prev.getTime()) firstInByStaffDay.set(key, at);
+    }
+
+    const manualAuditRows: AuditRow[] = [];
+    for (const batch of chunk(historicalStaffIds, 200)) {
+      const res = await supabase
+        .from(AUDIT_TABLE)
+        .select('staff_id, action, created_at, payload')
+        .in('staff_id', batch as any)
+        .in('action', ['punch_manual_add', 'punch_manual_edit', 'punch_manual_delete'] as any)
+        .gte('created_at', new Date(`${lookbackStartKey}T00:00:00`).toISOString());
+      if (res.error) throw new Error(res.error.message);
+      manualAuditRows.push(...(((res.data as any[]) ?? []) as AuditRow[]));
+    }
+    const manualDayKeys = new Set<string>();
+    for (const row of manualAuditRows) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) continue;
+      for (const workDate of extractPunchAuditWorkDates(row)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(workDate)) continue;
+        manualDayKeys.add(`${staff}__${workDate}`);
+      }
+    }
+
+    const targetWorkDayKeySet = new Set(targetWorkDays.map((item) => `${item.staff}__${item.workDate}`));
+    for (const workDate of weekDateKeys) {
+      for (const staff of targetStaffIds) {
+        const dayKey = `${staff}__${workDate}`;
+        if (targetWorkDayKeySet.has(dayKey)) continue;
+        if (!firstInByStaffDay.has(dayKey)) continue;
+        const row = weekScheduleByKey.get(dayKey);
+        if (row) {
+          const state = getScheduleBaseStateFromNote(row.note);
+          if (!isWorkingScheduleBaseState(state)) continue;
+        }
+        const profile = profileByStaff.get(staff);
+        const shift = initialShiftByStaff.get(staff) || profile?.shift || 'early';
+        const position = String((row as any)?.position ?? profile?.position ?? '').trim();
+        if (!position) continue;
+        const terminatedAt = String(profile?.terminatedAt ?? '').trim();
+        if (terminatedAt) {
+          const terminatedDate = toDateOnly(new Date(terminatedAt));
+          if (terminatedDate && workDate >= terminatedDate) continue;
+        }
+        targetWorkDays.push({ staff, workDate, shift, position });
+        targetWorkDayKeySet.add(dayKey);
+      }
+    }
+
+    const personalSamplesByKey = new Map<string, LateSample[]>();
+    const teamSamplesByKey = new Map<string, LateSample[]>();
+    const punchOnlyPersonalSamplesByStaff = new Map<string, LateSample[]>();
+    for (const row of historicalScheduleRows.values()) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      const workDate = String(row.date ?? '').trim();
+      if (!staff || !/^\d{4}-\d{2}-\d{2}$/.test(workDate)) continue;
+      const state = getScheduleBaseStateFromNote(row.note);
+      if (!isWorkingScheduleBaseState(state)) continue;
+      if (manualDayKeys.has(`${staff}__${workDate}`)) continue;
+      const firstIn = firstInByStaffDay.get(`${staff}__${workDate}`);
+      const punchCount = Number(punchCountByStaffDay.get(`${staff}__${workDate}`) ?? 0);
+      if (!firstIn || punchCount < LATE_MIN_VALID_PUNCH_COUNT) continue;
+      const shift = historicalShiftByStaff.get(staff) || profileByStaff.get(staff)?.shift || '';
+      const position = String((row as any).position ?? '').trim();
+      if (!shift || !position) continue;
+      const firstInMinutes = getClockMinutesFromDate(firstIn);
+      const sample: LateSample = { workDate, firstInMinutes };
+      const personalKey = `${staff}__${shift}__${position}`;
+      const teamKey = `${shift}__${position}`;
+      if (!personalSamplesByKey.has(personalKey)) personalSamplesByKey.set(personalKey, []);
+      personalSamplesByKey.get(personalKey)!.push(sample);
+      if (!teamSamplesByKey.has(teamKey)) teamSamplesByKey.set(teamKey, []);
+      teamSamplesByKey.get(teamKey)!.push(sample);
+    }
+    for (const [key, firstIn] of firstInByStaffDay.entries()) {
+      const [staff, workDate] = String(key).split('__');
+      if (!staff || !workDate) continue;
+      if (manualDayKeys.has(`${staff}__${workDate}`)) continue;
+      const punchCount = Number(punchCountByStaffDay.get(`${staff}__${workDate}`) ?? 0);
+      if (punchCount < LATE_MIN_VALID_PUNCH_COUNT) continue;
+      const firstInMinutes = getClockMinutesFromDate(firstIn);
+      if (!punchOnlyPersonalSamplesByStaff.has(staff)) punchOnlyPersonalSamplesByStaff.set(staff, []);
+      punchOnlyPersonalSamplesByStaff.get(staff)!.push({ workDate, firstInMinutes });
+    }
+
+    const marksToInsert: Array<{
+      staff_id: string;
+      work_date: string;
+      mark_type: 'late';
+      source: string;
+      operator: string | null;
+      payload: Record<string, unknown>;
+      updated_at: string;
+    }> = [];
+    const lateByStaffDayKey: Record<string, LateMarkView> = {};
+    const nowIso = new Date(serverTime).toISOString();
+    for (const item of targetWorkDays) {
+      const dayKey = `${item.staff}__${item.workDate}`;
+      const firstIn = firstInByStaffDay.get(dayKey);
+      if (!firstIn) continue;
+      const personalKey = `${item.staff}__${item.shift}__${item.position}`;
+      const teamKey = `${item.shift}__${item.position}`;
+      // Manual punch edits should not pollute the learned baseline,
+      // but the corrected day itself still needs late detection.
+      const personalSamples = Array.from(
+        new Map(
+          [...(personalSamplesByKey.get(personalKey) ?? []), ...(punchOnlyPersonalSamplesByStaff.get(item.staff) ?? [])]
+            .filter((sample) => sample.workDate < item.workDate)
+            .map((sample) => [sample.workDate, sample] as const)
+        ).values()
+      );
+      const teamSamples = (teamSamplesByKey.get(teamKey) ?? []).filter((sample) => sample.workDate < item.workDate);
+      const fallbackPlannedStartMinutes = parseClockTextToMinutes(getPlannedStartTime(item.shift, item.position));
+      if (!Number.isFinite(fallbackPlannedStartMinutes)) continue;
+      const plannedStartMinutes = resolvePlannedStartMinutes({
+        shift: item.shift,
+        position: item.position,
+        fallbackPlannedStartMinutes: fallbackPlannedStartMinutes as number,
+        personalSamples,
+        teamSamples,
+        sampleTarget: LATE_BASELINE_SAMPLE_TARGET,
+        minPersonalSamples: LATE_BASELINE_MIN_PERSONAL_SAMPLES,
+        minTeamSamples: LATE_BASELINE_MIN_TEAM_SAMPLES,
+        outlierMaxDeltaMinutes: LATE_OUTLIER_MAX_DELTA_MINUTES
+      });
+      const decision = evaluateLateDecision({
+        firstInMinutes: getClockMinutesFromDate(firstIn),
+        personalSamples,
+        teamSamples,
+        shift: item.shift,
+        plannedStartMinutes: plannedStartMinutes as number,
+        graceMinutes: LATE_GRACE_MINUTES,
+        sampleTarget: LATE_BASELINE_SAMPLE_TARGET,
+        minPersonalSamples: LATE_BASELINE_MIN_PERSONAL_SAMPLES,
+        minTeamSamples: LATE_BASELINE_MIN_TEAM_SAMPLES,
+        outlierMaxDeltaMinutes: LATE_OUTLIER_MAX_DELTA_MINUTES
+      });
+      if (!decision.isLate) continue;
+      const view: LateMarkView = {
+        minutesLate: decision.minutesLate,
+        source: decision.source,
+        roundingFamily: decision.roundingFamily,
+        learnedExpectedStartRaw: formatClockMinutes(decision.learnedExpectedStartMinutesRaw),
+        learnedExpectedStartRounded: formatClockMinutes(decision.learnedExpectedStartMinutesRounded),
+        guardrailExpectedStart: formatClockMinutes(decision.guardrailExpectedStartMinutes),
+        finalExpectedStart: formatClockMinutes(decision.finalExpectedStartMinutes),
+        firstIn: formatClockMinutes(decision.firstInMinutes),
+        sampleCount: decision.sampleCount
+      };
+      lateByStaffDayKey[dayKey] = view;
+      marksToInsert.push({
+        staff_id: item.staff,
+        work_date: item.workDate,
+        mark_type: 'late',
+        source: 'late_auto',
+        operator: user?.email ?? null,
+        payload: {
+          reason: 'historical_baseline',
+          learned_expected_start_raw: view.learnedExpectedStartRaw,
+          learned_expected_start_rounded: view.learnedExpectedStartRounded,
+          guardrail_expected_start: view.guardrailExpectedStart,
+          final_expected_start: view.finalExpectedStart,
+          first_in: view.firstIn,
+          minutes_late: view.minutesLate,
+          sample_count: view.sampleCount,
+          baseline_source: view.source,
+          rounding_family: view.roundingFamily,
+          shift: item.shift,
+          position: item.position
+        },
+        updated_at: nowIso
+      });
+    }
+
+    try {
+      for (const batch of chunk(targetStaffIds, 200)) {
+        const clearRes = await supabase
+          .from(ATTENDANCE_MARKS_TABLE)
+          .delete()
+          .in('staff_id', batch as any)
+          .gte('work_date', weekStartKey)
+          .lte('work_date', weekEndKey)
+          .eq('mark_type', 'late');
+        if (clearRes.error) throw new Error(clearRes.error.message);
+      }
+      if (marksToInsert.length > 0) {
+        const upsertRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert(marksToInsert as any, {
+          onConflict: 'staff_id,work_date,mark_type'
+        });
+        if (upsertRes.error) throw new Error(upsertRes.error.message);
+      }
+    } catch (error) {
+      console.warn('[late] persist late marks failed:', error);
+    }
+
+    return { lateByStaffDayKey };
+  };
+
   const fetchTimecard = async ({
     reset,
     weekOffset,
@@ -6922,11 +7576,45 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const fetchAttendanceMarksByStaff = async (staffIds: string[]) => {
       if (isStale()) {
         return {
-          marksByStaff: {} as Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }>,
+          marksByStaff: {} as Record<
+            string,
+            {
+              absentByDay: boolean[];
+              leaveByDay: boolean[];
+              tempRestByDay: boolean[];
+              lateByDay: boolean[];
+              lateMinutesByDay: number[];
+              lateSourceByDay: string[];
+              lateRoundingFamilyByDay: string[];
+              lateLearnedExpectedStartRawByDay: string[];
+              lateLearnedExpectedStartRoundedByDay: string[];
+              lateGuardrailExpectedStartByDay: string[];
+              lateFinalExpectedStartByDay: string[];
+              lateFirstInByDay: string[];
+              lateSampleCountByDay: number[];
+            }
+          >,
           error: STALE_TIMECARD_REQUEST
         };
       }
-      const marksByStaff: Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }> = {};
+      const marksByStaff: Record<
+        string,
+        {
+          absentByDay: boolean[];
+          leaveByDay: boolean[];
+          tempRestByDay: boolean[];
+          lateByDay: boolean[];
+          lateMinutesByDay: number[];
+          lateSourceByDay: string[];
+          lateRoundingFamilyByDay: string[];
+          lateLearnedExpectedStartRawByDay: string[];
+          lateLearnedExpectedStartRoundedByDay: string[];
+          lateGuardrailExpectedStartByDay: string[];
+          lateFinalExpectedStartByDay: string[];
+          lateFirstInByDay: string[];
+          lateSampleCountByDay: number[];
+        }
+      > = {};
       if (!supabase || staffIds.length === 0) {
         return { marksByStaff, error: null as string | null };
       }
@@ -6937,20 +7625,54 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       for (const batch of batches) {
         const { data, error } = await supabase
           .from(ATTENDANCE_MARKS_TABLE)
-          .select('staff_id, work_date, mark_type')
+          .select('staff_id, work_date, mark_type, payload')
           .in('staff_id', batch)
           .gte('work_date', weekStartDate)
           .lte('work_date', weekEndDate)
-          .in('mark_type', ['absent', 'excuse', 'temporary_leave'] as any);
+          .in('mark_type', ATTENDANCE_MARK_TYPES as any);
         if (isStale()) {
           return {
-            marksByStaff: {} as Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }>,
+            marksByStaff: {} as Record<
+              string,
+              {
+                absentByDay: boolean[];
+                leaveByDay: boolean[];
+                tempRestByDay: boolean[];
+                lateByDay: boolean[];
+                lateMinutesByDay: number[];
+                lateSourceByDay: string[];
+                lateRoundingFamilyByDay: string[];
+                lateLearnedExpectedStartRawByDay: string[];
+                lateLearnedExpectedStartRoundedByDay: string[];
+                lateGuardrailExpectedStartByDay: string[];
+                lateFinalExpectedStartByDay: string[];
+                lateFirstInByDay: string[];
+                lateSampleCountByDay: number[];
+              }
+            >,
             error: STALE_TIMECARD_REQUEST
           };
         }
         if (error) {
           return {
-            marksByStaff: {} as Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }>,
+            marksByStaff: {} as Record<
+              string,
+              {
+                absentByDay: boolean[];
+                leaveByDay: boolean[];
+                tempRestByDay: boolean[];
+                lateByDay: boolean[];
+                lateMinutesByDay: number[];
+                lateSourceByDay: string[];
+                lateRoundingFamilyByDay: string[];
+                lateLearnedExpectedStartRawByDay: string[];
+                lateLearnedExpectedStartRoundedByDay: string[];
+                lateGuardrailExpectedStartByDay: string[];
+                lateFinalExpectedStartByDay: string[];
+                lateFirstInByDay: string[];
+                lateSampleCountByDay: number[];
+              }
+            >,
             error: error.message
           };
         }
@@ -6966,11 +7688,34 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           const rec = (marksByStaff[staff] ??= {
             absentByDay: new Array(7).fill(false) as boolean[],
             leaveByDay: new Array(7).fill(false) as boolean[],
-            tempRestByDay: new Array(7).fill(false) as boolean[]
+            tempRestByDay: new Array(7).fill(false) as boolean[],
+            lateByDay: new Array(7).fill(false) as boolean[],
+            lateMinutesByDay: new Array(7).fill(0) as number[],
+            lateSourceByDay: new Array(7).fill('') as string[],
+            lateRoundingFamilyByDay: new Array(7).fill('') as string[],
+            lateLearnedExpectedStartRawByDay: new Array(7).fill('') as string[],
+            lateLearnedExpectedStartRoundedByDay: new Array(7).fill('') as string[],
+            lateGuardrailExpectedStartByDay: new Array(7).fill('') as string[],
+            lateFinalExpectedStartByDay: new Array(7).fill('') as string[],
+            lateFirstInByDay: new Array(7).fill('') as string[],
+            lateSampleCountByDay: new Array(7).fill(0) as number[]
           });
           if (markType === 'absent') rec.absentByDay[dayIndex] = true;
           if (markType === 'excuse') rec.leaveByDay[dayIndex] = true;
           if (markType === 'temporary_leave') rec.tempRestByDay[dayIndex] = true;
+          if (markType === 'late') {
+            const payload = ((row as any).payload ?? {}) as Record<string, unknown>;
+            rec.lateByDay[dayIndex] = true;
+            rec.lateMinutesByDay[dayIndex] = Number(payload.minutes_late ?? 0);
+            rec.lateSourceByDay[dayIndex] = String(payload.baseline_source ?? '').trim();
+            rec.lateRoundingFamilyByDay[dayIndex] = String(payload.rounding_family ?? '').trim();
+            rec.lateLearnedExpectedStartRawByDay[dayIndex] = String(payload.learned_expected_start_raw ?? '').trim();
+            rec.lateLearnedExpectedStartRoundedByDay[dayIndex] = String(payload.learned_expected_start_rounded ?? '').trim();
+            rec.lateGuardrailExpectedStartByDay[dayIndex] = String(payload.guardrail_expected_start ?? '').trim();
+            rec.lateFinalExpectedStartByDay[dayIndex] = String(payload.final_expected_start ?? '').trim();
+            rec.lateFirstInByDay[dayIndex] = String(payload.first_in ?? '').trim();
+            rec.lateSampleCountByDay[dayIndex] = Number(payload.sample_count ?? 0);
+          }
         }
       }
       return { marksByStaff, error: null as string | null };
@@ -7025,11 +7770,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       agency,
       position,
       profileShift,
+      terminatedAt,
       eventsByStaff,
       scheduledByStaff,
       scheduleStateByStaff,
       scheduleKnownByStaff,
       marksByStaff,
+      lateByStaffDayKey,
+      lateMarksSynced,
       capEnd
     }: {
       staff: string;
@@ -7037,11 +7785,31 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       agency: string;
       position: string;
       profileShift: '' | 'early' | 'late';
+      terminatedAt: string | null;
       eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT'; manual: boolean }>>;
       scheduledByStaff: Record<string, boolean[]>;
       scheduleStateByStaff: Record<string, ScheduleBaseState[]>;
       scheduleKnownByStaff: Record<string, boolean[]>;
-      marksByStaff: Record<string, { absentByDay: boolean[]; leaveByDay: boolean[]; tempRestByDay: boolean[] }>;
+      marksByStaff: Record<
+        string,
+        {
+          absentByDay: boolean[];
+          leaveByDay: boolean[];
+          tempRestByDay: boolean[];
+          lateByDay: boolean[];
+          lateMinutesByDay: number[];
+          lateSourceByDay: string[];
+          lateRoundingFamilyByDay: string[];
+          lateLearnedExpectedStartRawByDay: string[];
+          lateLearnedExpectedStartRoundedByDay: string[];
+          lateGuardrailExpectedStartByDay: string[];
+          lateFinalExpectedStartByDay: string[];
+          lateFirstInByDay: string[];
+          lateSampleCountByDay: number[];
+        }
+      >;
+      lateByStaffDayKey: Record<string, LateMarkView>;
+      lateMarksSynced: boolean;
       capEnd: Date;
     }): TimecardRow => {
       const events = eventsByStaff[staff] ?? [];
@@ -7108,22 +7876,86 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const markRec = marksByStaff[staff] ?? {
         absentByDay: new Array(7).fill(false) as boolean[],
         leaveByDay: new Array(7).fill(false) as boolean[],
-        tempRestByDay: new Array(7).fill(false) as boolean[]
+        tempRestByDay: new Array(7).fill(false) as boolean[],
+        lateByDay: new Array(7).fill(false) as boolean[],
+        lateMinutesByDay: new Array(7).fill(0) as number[],
+        lateSourceByDay: new Array(7).fill('') as string[],
+        lateRoundingFamilyByDay: new Array(7).fill('') as string[],
+        lateLearnedExpectedStartRawByDay: new Array(7).fill('') as string[],
+        lateLearnedExpectedStartRoundedByDay: new Array(7).fill('') as string[],
+        lateGuardrailExpectedStartByDay: new Array(7).fill('') as string[],
+        lateFinalExpectedStartByDay: new Array(7).fill('') as string[],
+        lateFirstInByDay: new Array(7).fill('') as string[],
+        lateSampleCountByDay: new Array(7).fill(0) as number[]
       };
       const absentByDay = [...markRec.absentByDay];
       const leaveByDay = [...markRec.leaveByDay];
       const tempRestByDay = [...markRec.tempRestByDay];
+      const lateByDay = lateMarksSynced ? (new Array(7).fill(false) as boolean[]) : [...markRec.lateByDay];
+      const lateMinutesByDay = lateMarksSynced ? (new Array(7).fill(0) as number[]) : [...markRec.lateMinutesByDay];
+      const lateSourceByDay = lateMarksSynced ? (new Array(7).fill('') as string[]) : [...markRec.lateSourceByDay];
+      const lateRoundingFamilyByDay = lateMarksSynced ? (new Array(7).fill('') as string[]) : [...markRec.lateRoundingFamilyByDay];
+      const lateLearnedExpectedStartRawByDay = lateMarksSynced ? (new Array(7).fill('') as string[]) : [...markRec.lateLearnedExpectedStartRawByDay];
+      const lateLearnedExpectedStartRoundedByDay = lateMarksSynced ? (new Array(7).fill('') as string[]) : [...markRec.lateLearnedExpectedStartRoundedByDay];
+      const lateGuardrailExpectedStartByDay = lateMarksSynced ? (new Array(7).fill('') as string[]) : [...markRec.lateGuardrailExpectedStartByDay];
+      const lateFinalExpectedStartByDay = lateMarksSynced ? (new Array(7).fill('') as string[]) : [...markRec.lateFinalExpectedStartByDay];
+      const lateFirstInByDay = lateMarksSynced ? (new Array(7).fill('') as string[]) : [...markRec.lateFirstInByDay];
+      const lateSampleCountByDay = lateMarksSynced ? (new Array(7).fill(0) as number[]) : [...markRec.lateSampleCountByDay];
       const scheduleStates = scheduleStateByStaff[staff] ?? (new Array(7).fill('work') as ScheduleBaseState[]);
       const scheduleKnownByDay = scheduleKnownByStaff[staff] ?? (new Array(7).fill(false) as boolean[]);
       const restByDay = scheduleStates.map((state, idx) => state === 'rest' && scheduleKnownByDay[idx]);
+      const weekDateKeys = Array.from({ length: 7 }, (_, idx) => toDateOnly(addDays(weekStart, idx)));
+      const terminatedByDay = getTimecardTerminatedByDay({
+        terminatedAt,
+        weekDateKeys
+      });
+      for (let idx = 0; idx < 7; idx += 1) {
+        const late = lateByStaffDayKey[`${staff}__${weekDateKeys[idx]}`];
+        if (!late) continue;
+        lateByDay[idx] = true;
+        lateMinutesByDay[idx] = Number(late.minutesLate ?? 0);
+        lateSourceByDay[idx] = String(late.source ?? '').trim();
+        lateRoundingFamilyByDay[idx] = String(late.roundingFamily ?? '').trim();
+        lateLearnedExpectedStartRawByDay[idx] = String(late.learnedExpectedStartRaw ?? '').trim();
+        lateLearnedExpectedStartRoundedByDay[idx] = String(late.learnedExpectedStartRounded ?? '').trim();
+        lateGuardrailExpectedStartByDay[idx] = String(late.guardrailExpectedStart ?? '').trim();
+        lateFinalExpectedStartByDay[idx] = String(late.finalExpectedStart ?? '').trim();
+        lateFirstInByDay[idx] = String(late.firstIn ?? '').trim();
+        lateSampleCountByDay[idx] = Number(late.sampleCount ?? 0);
+      }
       const absentVisibleByNoon = Array.from({ length: 7 }, (_, idx) => {
-        const workDate = toDateOnly(addDays(weekStart, idx));
+        const workDate = weekDateKeys[idx] ?? '';
         const noon = new Date(`${workDate}T00:00:00`);
         if (Number.isNaN(noon.getTime())) return false;
         noon.setHours(TIMECARD_ABSENT_VISIBLE_HOUR, 0, 0, 0);
         return capEnd.getTime() >= noon.getTime();
       });
       for (let idx = 0; idx < 7; idx += 1) {
+        if (terminatedByDay[idx]) continue;
+        if (hasPunchByDay[idx]) continue;
+        const state = scheduleStates[idx] ?? 'work';
+        if (scheduleKnownByDay[idx]) {
+          if (state === 'leave' || state === 'planned_leave') {
+            leaveByDay[idx] = true;
+            continue;
+          }
+          if (state === 'temp_rest' || state === 'planned_temp_rest') {
+            tempRestByDay[idx] = true;
+            continue;
+          }
+          if (state === 'rest') {
+            restByDay[idx] = true;
+            continue;
+          }
+        }
+        if (!closedDayByIndex[idx]) continue;
+        if (absentByDay[idx] || leaveByDay[idx] || tempRestByDay[idx]) continue;
+        if (!scheduledByDay[idx]) {
+          restByDay[idx] = true;
+        }
+      }
+      for (let idx = 0; idx < 7; idx += 1) {
+        if (terminatedByDay[idx]) continue;
         const isWorking = isWorkingScheduleBaseState(scheduleStates[idx] ?? 'work');
         if (!isWorking) continue;
         if (!scheduledByDay[idx]) continue;
@@ -7132,8 +7964,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (!absentVisibleByNoon[idx]) continue;
         absentByDay[idx] = true;
       }
-      if (timecardWeekOffset < 0) {
+      if (offset < 0) {
         for (let idx = 0; idx < 7; idx += 1) {
+          if (terminatedByDay[idx]) continue;
           if (scheduleKnownByDay[idx]) continue;
           if (hasPunchByDay[idx]) continue;
           if (absentByDay[idx] || leaveByDay[idx] || tempRestByDay[idx]) continue;
@@ -7159,7 +7992,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         absentByDay,
         leaveByDay,
         tempRestByDay,
+        lateByDay,
+        lateMinutesByDay,
+        lateSourceByDay,
+        lateRoundingFamilyByDay,
+        lateLearnedExpectedStartRawByDay,
+        lateLearnedExpectedStartRoundedByDay,
+        lateGuardrailExpectedStartByDay,
+        lateFinalExpectedStartByDay,
+        lateFirstInByDay,
+        lateSampleCountByDay,
         restByDay,
+        terminatedByDay,
         inProgressByDay,
         inProgressWeek,
         manualByDay,
@@ -7248,11 +8092,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             agency: profile.agency,
             position: profile.position,
             profileShift: profile.shift,
+            terminatedAt: null,
             eventsByStaff,
             scheduledByStaff: scheduledRes.scheduledByStaff,
             scheduleStateByStaff: scheduledRes.scheduleStateByStaff,
             scheduleKnownByStaff: scheduledRes.scheduleKnownByStaff ?? {},
             marksByStaff: marksRes.marksByStaff,
+            lateByStaffDayKey: {},
+            lateMarksSynced: false,
             capEnd
           });
         });
@@ -7266,7 +8113,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const buildEmployees = (m: EmployeeColumnMode) => {
         const agencyCol = m === 'cased' ? 'Agency' : 'agency';
         const positionCol = m === 'cased' ? 'Position' : 'position';
-        const select = m === 'cased' ? 'staff_id, name, "Agency", "Position", shift' : 'staff_id, name, agency, position, shift';
+        const select = '*';
 
         let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
         if (agencyValue) q = q.ilike(agencyCol as any, agencyValue);
@@ -7286,7 +8133,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const buildEmployeesNoActive = (m: EmployeeColumnMode) => {
           const agencyCol = m === 'cased' ? 'Agency' : 'agency';
           const positionCol = m === 'cased' ? 'Position' : 'position';
-          const select = m === 'cased' ? 'staff_id, name, "Agency", "Position", shift' : 'staff_id, name, agency, position, shift';
+          const select = '*';
           let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
           if (agencyValue) q = q.ilike(agencyCol as any, agencyValue);
           if (positionValue) {
@@ -7318,7 +8165,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
 
       const employees = employeeRows ?? [];
-      const employeeByStaffId = new Map<string, { staff_id: string; name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>();
+      const employeeByStaffId = new Map<
+        string,
+        { staff_id: string; name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }
+      >();
       for (const e of employees) {
         const staff = String(e.staff_id ?? '').trim();
         if (!staff) continue;
@@ -7326,9 +8176,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const agency = String(e.agency ?? e.Agency ?? '').trim();
         const position = String(e.position ?? e.Position ?? '').trim();
         const shift = normalizeShiftValue(String(e.shift ?? '').trim());
+        const terminatedAt = String((e as any).terminated_at ?? '').trim() || null;
         const existing = employeeByStaffId.get(staff);
         if (!existing) {
-          employeeByStaffId.set(staff, { staff_id: staff, name, agency, position, shift });
+          employeeByStaffId.set(staff, { staff_id: staff, name, agency, position, shift, terminatedAt });
           continue;
         }
         // Keep first row order, but fill missing fields from duplicate rows.
@@ -7336,6 +8187,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (!existing.agency && agency) existing.agency = agency;
         if (!existing.position && position) existing.position = position;
         if (!existing.shift && shift) existing.shift = shift;
+        if (!existing.terminatedAt && terminatedAt) existing.terminatedAt = terminatedAt;
       }
       const uniqueEmployees = Array.from(employeeByStaffId.values());
       const staffIds = uniqueEmployees.map((e) => e.staff_id);
@@ -7421,6 +8273,27 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         return { rows: [] as TimecardRow[], hasMore: false, error: marksRes.error };
       }
 
+      let lateByStaffDayKey: Record<string, LateMarkView> = {};
+      let lateMarksSynced = false;
+      try {
+        lateByStaffDayKey = (
+          await syncLateMarksForWeek({
+            weekStart,
+            targetEmployees: uniqueEmployees.map((employee) => ({
+              staff_id: employee.staff_id,
+              name: employee.name,
+              agency: employee.agency,
+              position: employee.position,
+              shift: employee.shift,
+              terminated_at: employee.terminatedAt
+            }))
+          })
+        ).lateByStaffDayKey;
+        lateMarksSynced = true;
+      } catch (error) {
+        console.warn('[timecard] sync late marks failed:', error);
+      }
+
       const rows: TimecardRow[] = uniqueEmployees.map((e) => {
         const staff = e.staff_id;
         const name = e.name;
@@ -7433,11 +8306,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           agency,
           position,
           profileShift,
+          terminatedAt: e.terminatedAt,
           eventsByStaff,
           scheduledByStaff: scheduledRes.scheduledByStaff,
           scheduleStateByStaff: scheduledRes.scheduleStateByStaff,
           scheduleKnownByStaff: scheduledRes.scheduleKnownByStaff ?? {},
           marksByStaff: marksRes.marksByStaff,
+          lateByStaffDayKey,
+          lateMarksSynced,
           capEnd
         });
       });
@@ -7683,7 +8559,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         .delete()
         .gte('work_date', weekDateByIndex[0] ?? '')
         .lte('work_date', weekDateByIndex[6] ?? '')
-        .in('mark_type', ['absent', 'excuse', 'temporary_leave'] as any);
+        .in('mark_type', NON_LATE_ATTENDANCE_MARK_TYPES as any);
       if (clearRes.error) {
         setStatus({ tone: 'error', message: `重算失败：${clearRes.error.message}` });
         return;
@@ -7699,9 +8575,38 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         }
       }
 
+      let lateCount = 0;
+      try {
+        const staffIds = Array.from(new Set(Array.from(stateByStaffDay.keys()).map((key) => String(key.split('__')[0] ?? '').trim()).filter(Boolean)));
+        const employeeMap = new Map<string, EmployeeRow>();
+        for (const employee of employees) {
+          const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+          if (!staff || employeeMap.has(staff)) continue;
+          employeeMap.set(staff, employee);
+        }
+        const lateRes = await syncLateMarksForWeek({
+          weekStart,
+          targetEmployees: staffIds.map((staff) => {
+            const employee = employeeMap.get(staff);
+            return {
+              staff_id: staff,
+              name: String(employee?.name ?? '').trim(),
+              agency: String(employee?.agency ?? employee?.Agency ?? '').trim(),
+              position: String(employee?.position ?? employee?.Position ?? '').trim(),
+              shift: normalizeShiftValue(String(employee?.shift ?? '').trim()),
+              terminated_at: String((employee as any)?.terminated_at ?? '').trim() || null
+            };
+          })
+        });
+        lateCount = Object.keys(lateRes.lateByStaffDayKey).length;
+      } catch (error: any) {
+        setStatus({ tone: 'error', message: `重算迟到失败：${String(error?.message ?? error ?? 'Unknown error')}` });
+        return;
+      }
+
       setStatus({
         tone: 'success',
-        message: `已重算本周标记：${weekDateByIndex[0]} ~ ${weekDateByIndex[6]}（${marksToInsert.length} 条）`
+        message: `已重算本周标记：${weekDateByIndex[0]} ~ ${weekDateByIndex[6]}（缺勤/请假 ${marksToInsert.length} 条，迟到 ${lateCount} 条）`
       });
       await fetchTimecard({ reset: true, lockUi: false });
     });
@@ -8583,6 +9488,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     void fetchScheduleUph();
     void fetchScheduleMistakeCounts();
   }, [page, employees]);
+
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    void fetchScheduleMonthlyAbsentDates();
+  }, [page, employees, scheduleWeekOffset, toDateOnly(serverTime)]);
+
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    if (scheduleRowsWeekOffset !== scheduleWeekOffset) return;
+    void fetchScheduleLateMarks();
+  }, [page, employees, scheduleRows, scheduleRowsWeekOffset, scheduleWeekOffset, toDateOnly(serverTime)]);
 
   useEffect(() => {
     if (page !== 'schedule') return;
@@ -9999,6 +10915,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const baseWeekStart = startOfWeekMonday(serverTime);
     return addDays(baseWeekStart, scheduleWeekOffset * 7);
   }, [serverTime, scheduleWeekOffset]);
+  const scheduleMonthRange = useMemo(() => getMonthDateRange(scheduleWeekStart), [scheduleWeekStart]);
+  const scheduleMonthLabel = useMemo(() => formatYearMonthKey(scheduleWeekStart), [scheduleWeekStart]);
 
   const scheduleDays = useMemo(
     () => Array.from({ length: 7 }, (_, idx) => addDays(scheduleWeekStart, idx)),
@@ -10010,12 +10928,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   }, [serverTime, timecardWeekOffset]);
 
   const toOperationalDateFromAudit = (atRaw: string, actionRaw?: string) => {
-    const at = new Date(atRaw);
-    if (Number.isNaN(at.getTime())) return '';
-    const action = String(actionRaw ?? '').trim().toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-    const bucketMs = getOperationalBucketTimeMs(at, action);
-    const shifted = new Date(bucketMs - DAY_CUTOFF_MS);
-    return toDateOnly(shifted);
+    return toOperationalWorkDate(atRaw, actionRaw);
   };
 
   const scheduleAuditByStaffDate = useMemo(() => {
@@ -10067,24 +10980,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (/^\d{4}-\d{2}-\d{2}$/.test(workDate)) {
         dateKeys.add(workDate);
       }
-      if (action === 'punch_manual_add') {
-        const key = toOperationalDateFromAudit(String(payload.created_at ?? ''), String(payload.action ?? ''));
-        if (key) dateKeys.add(key);
-      } else if (action === 'punch_manual_edit') {
-        const before = (payload.before ?? null) as Record<string, any> | null;
-        const after = (payload.after ?? null) as Record<string, any> | null;
-        const keyBefore = before
-          ? toOperationalDateFromAudit(String(before.created_at ?? ''), String(before.action ?? ''))
-          : '';
-        const keyAfter = after ? toOperationalDateFromAudit(String(after.created_at ?? ''), String(after.action ?? '')) : '';
-        if (keyBefore) dateKeys.add(keyBefore);
-        if (keyAfter) dateKeys.add(keyAfter);
-      } else if (action === 'punch_manual_delete') {
-        const before = (payload.before ?? null) as Record<string, any> | null;
-        const key = before
-          ? toOperationalDateFromAudit(String(before.created_at ?? ''), String(before.action ?? ''))
-          : '';
-        if (key) dateKeys.add(key);
+      if (action === 'punch_manual_add' || action === 'punch_manual_edit' || action === 'punch_manual_delete') {
+        for (const key of extractPunchAuditWorkDates(row)) {
+          if (key) dateKeys.add(key);
+        }
       } else if (action === 'punch_count_verified') {
         // use payload.work_date when available
       } else {
@@ -11362,6 +12261,76 @@ ${rowsToHtml(late)}
   const scheduleIsCurrentWeek = scheduleWeekOffset === 0;
   const schedulePunchPresenceMatchesWeek = schedulePunchPresenceWeekOffset === scheduleWeekOffset;
   const scheduleLateAbsentVisibleMinutes = 16 * 60 + 30;
+  const scheduleMonthlyAbsentByStaffId = useMemo(() => {
+    const nextMap: Record<string, number> = {};
+    const liveDatesByStaff = new Map<string, Set<string>>();
+
+    if (page === 'schedule' && scheduleIsCurrentWeek && schedulePunchPresenceReady && schedulePunchPresenceMatchesWeek) {
+      for (const employee of employees) {
+        const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+        if (!staff) continue;
+        for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+          const day = scheduleDays[dayIndex];
+          if (!day) continue;
+          const operationalDate = toDateOnly(day);
+          if (operationalDate < scheduleMonthRange.startKey || operationalDate > scheduleMonthRange.endKey) continue;
+
+          const key = `${staff}__${dayIndex}`;
+          const row = scheduleRowsByStaffDayIndex.get(key);
+          if (!row || !isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note))) continue;
+
+          const hasPunch = schedulePunchPresenceKeys.has(key);
+          const scheduledShiftForAbsent = employeeShiftByStaffId[staff]?.shift ?? '';
+          const targetShift: 'early' | 'late' =
+            scheduledShiftForAbsent === 'late'
+              ? 'late'
+              : (row?.shift as 'early' | 'late' | null) === 'late'
+                ? 'late'
+                : 'early';
+          const isPastOperationalDay = dayIndex < homeOperationalDayIndex;
+          const isCurrentOperationalDay = dayIndex === homeOperationalDayIndex;
+          const hideLateAbsent = targetShift === 'late' && scheduleNowMinutes < scheduleLateAbsentVisibleMinutes;
+          const showAbsent = !hasPunch && (isPastOperationalDay || (isCurrentOperationalDay && !hideLateAbsent));
+          const state: ScheduleDisplayState = getScheduleDisplayState(row, hasPunch, { showAbsent: Boolean(showAbsent) });
+          if (state !== 'absent') continue;
+
+          const existing = liveDatesByStaff.get(staff) ?? new Set<string>();
+          existing.add(operationalDate);
+          liveDatesByStaff.set(staff, existing);
+        }
+      }
+    }
+
+    const staffIds = new Set<string>([
+      ...Object.keys(scheduleMonthlyAbsentDatesByStaffId),
+      ...Array.from(liveDatesByStaff.keys())
+    ]);
+    for (const staff of staffIds) {
+      const merged = new Set(scheduleMonthlyAbsentDatesByStaffId[staff] ?? []);
+      const liveDates = liveDatesByStaff.get(staff);
+      if (liveDates) {
+        for (const workDate of liveDates) merged.add(workDate);
+      }
+      nextMap[staff] = merged.size;
+    }
+    return nextMap;
+  }, [
+    page,
+    employees,
+    scheduleDays,
+    scheduleMonthRange.startKey,
+    scheduleMonthRange.endKey,
+    scheduleMonthlyAbsentDatesByStaffId,
+    scheduleIsCurrentWeek,
+    schedulePunchPresenceReady,
+    schedulePunchPresenceMatchesWeek,
+    scheduleRowsByStaffDayIndex,
+    schedulePunchPresenceKeys,
+    employeeShiftByStaffId,
+    homeOperationalDayIndex,
+    scheduleNowMinutes,
+    scheduleLateAbsentVisibleMinutes
+  ]);
   const scheduleAutoMistakeByStaffId = useMemo(() => {
     const nextMap: Record<string, number> = {};
     if (page !== 'schedule' || !scheduleIsCurrentWeek || !schedulePunchPresenceReady || !schedulePunchPresenceMatchesWeek) return nextMap;
@@ -11408,6 +12377,67 @@ ${rowsToHtml(late)}
     scheduleNowMinutes,
     scheduleLateAbsentVisibleMinutes
   ]);
+  const scheduleLateDisplayByStaffDayKey = useMemo(() => {
+    const nextMap: Record<string, LateMarkView> = { ...scheduleLateByStaffDayKey };
+    if (page !== 'schedule' || !schedulePunchPresenceReady || !schedulePunchPresenceMatchesWeek) return nextMap;
+    for (const employee of scheduleEmployeesBase) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff) continue;
+      const shift = normalizeShiftValue(String(employee.shift ?? '').trim()) || 'early';
+      const position = String(employee.position ?? employee.Position ?? '').trim();
+      if (!position) continue;
+      if (shift === 'early' && normalizePositionKey(position) === 'Pick') continue;
+      const plannedStartMinutes = parseClockTextToMinutes(getPlannedStartTime(shift, position));
+      if (!Number.isFinite(plannedStartMinutes)) continue;
+      for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+        const dateKey = toDateOnly(scheduleDays[dayIndex] as Date);
+        const staffDayKey = `${staff}__${dateKey}`;
+        if (nextMap[staffDayKey]) continue;
+        const firstInIso = scheduleFirstInByStaffDayKey[`${staff}__${dayIndex}`];
+        if (!firstInIso) continue;
+        const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
+        if (row) {
+          const state = getScheduleBaseStateFromNote(row.note);
+          if (!isWorkingScheduleBaseState(state)) continue;
+        }
+        const firstIn = new Date(firstInIso);
+        if (Number.isNaN(firstIn.getTime())) continue;
+        const firstInMinutes = getClockMinutesFromDate(firstIn);
+        const minutesLate = Math.max(0, Math.round(firstInMinutes - (plannedStartMinutes as number)));
+        if (minutesLate <= LATE_GRACE_MINUTES) continue;
+        nextMap[staffDayKey] = {
+          minutesLate,
+          source: 'planned',
+          roundingFamily: shift === 'late' ? 'late_shift_points' : 'early_hour',
+          learnedExpectedStartRaw: formatClockMinutes(plannedStartMinutes as number),
+          learnedExpectedStartRounded: formatClockMinutes(plannedStartMinutes as number),
+          guardrailExpectedStart: formatClockMinutes((plannedStartMinutes as number) + LATE_GUARDRAIL_BUFFER_MINUTES),
+          finalExpectedStart: formatClockMinutes(plannedStartMinutes as number),
+          firstIn: formatClockMinutes(firstInMinutes),
+          sampleCount: 0
+        };
+      }
+    }
+    return nextMap;
+  }, [
+    page,
+    scheduleLateByStaffDayKey,
+    schedulePunchPresenceReady,
+    schedulePunchPresenceMatchesWeek,
+    scheduleEmployeesBase,
+    scheduleFirstInByStaffDayKey,
+    scheduleRowsByStaffDayIndex,
+    scheduleDays
+  ]);
+  const scheduleLateCountByStaffId = useMemo(() => {
+    const nextMap: Record<string, number> = {};
+    for (const [key] of Object.entries(scheduleLateDisplayByStaffDayKey)) {
+      const staff = String(key.split('__')[0] ?? '').trim();
+      if (!staff) continue;
+      nextMap[staff] = (nextMap[staff] ?? 0) + 1;
+    }
+    return nextMap;
+  }, [scheduleLateDisplayByStaffDayKey]);
   const scheduleAutoMistakeDetailsByStaffId = useMemo(() => {
     const nextMap: Record<string, ScheduleMistakeDetail[]> = {};
     if (page !== 'schedule' || !scheduleIsCurrentWeek || !schedulePunchPresenceReady || !schedulePunchPresenceMatchesWeek) return nextMap;
@@ -12011,6 +13041,15 @@ ${rowsToHtml(late)}
                               UPH{scheduleSortByUphDesc ? ' ↓' : ''}
                             </button>
                           </th>
+                          <th
+                            className="sticky top-0 z-20 w-[64px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur"
+                            title={t(`${scheduleMonthLabel} 累计缺勤`, `Absent in ${scheduleMonthLabel}`)}
+                          >
+                            {t('月缺勤', 'Abs MTD')}
+                          </th>
+                          <th className="sticky top-0 z-20 w-[58px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
+                            Late
+                          </th>
                           <th className="sticky top-0 z-20 w-[58px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
                             Mistake
                           </th>
@@ -12155,6 +13194,50 @@ ${rowsToHtml(late)}
                               <td className="px-1 py-2 text-center font-mono text-slate-200">{formatUph(scheduleUphByStaffId[staff])}</td>
                               <td className="px-1 py-2 text-center">
                                 {(() => {
+                                  const count = Number(scheduleMonthlyAbsentByStaffId[staff] ?? 0);
+                                  const toneClass =
+                                    count <= 0
+                                      ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
+                                      : count <= 2
+                                        ? 'border-amber-400/60 bg-amber-500/15 text-amber-200'
+                                        : 'border-rose-400/60 bg-rose-500/15 text-rose-200';
+                                  return (
+                                    <span
+                                      className={[
+                                        'inline-flex min-w-[38px] items-center justify-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
+                                        toneClass
+                                      ].join(' ')}
+                                      title={t(`${scheduleMonthLabel} 累计缺勤`, `Absent in ${scheduleMonthLabel}`)}
+                                    >
+                                      {count}
+                                    </span>
+                                  );
+                                })()}
+                              </td>
+                              <td className="px-1 py-2 text-center">
+                                {(() => {
+                                  const count = Number(scheduleLateCountByStaffId[staff] ?? 0);
+                                  const toneClass =
+                                    count <= 0
+                                      ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
+                                      : count <= 2
+                                        ? 'border-amber-400/60 bg-amber-500/15 text-amber-200'
+                                        : 'border-rose-400/60 bg-rose-500/15 text-rose-200';
+                                  return (
+                                    <span
+                                      className={[
+                                        'inline-flex min-w-[38px] items-center justify-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
+                                        toneClass
+                                      ].join(' ')}
+                                      title={t('本周迟到次数', 'Late count this week')}
+                                    >
+                                      {count}
+                                    </span>
+                                  );
+                                })()}
+                              </td>
+                              <td className="px-1 py-2 text-center">
+                                {(() => {
                                   const manualCount = Number(scheduleMistakeByStaffId[staff] ?? 0);
                                   const autoCount = Number(scheduleAutoMistakeByStaffId[staff] ?? 0);
                                   const count = manualCount + autoCount;
@@ -12249,6 +13332,8 @@ ${rowsToHtml(late)}
                                 const state: ScheduleDisplayState = getScheduleDisplayState(row, hasPunch, { showAbsent });
                                 const scheduleAuditKey = `${staff}__${getTemplateDateByDayIndex(dayIndex, scheduleWeekOffset)}`;
                                 const scheduleCellAudit = scheduleAuditByStaffDate.get(scheduleAuditKey) ?? [];
+                                const lateInfo = scheduleLateDisplayByStaffDayKey[`${staff}__${toDateOnly(scheduleDays[dayIndex] as Date)}`];
+                                const lateTitle = lateInfo ? `${t('迟到', 'Late')} ${lateInfo.minutesLate}${t('分钟', 'm')}` : '';
 
                                 return (
                                   <td key={key} className="px-0.5 py-1.5 align-middle">
@@ -12294,6 +13379,7 @@ ${rowsToHtml(late)}
                                                 ? 'bg-rose-600 text-white'
                                               : 'bg-ember text-white'
                                           ].join(' ')}
+                                          title={lateTitle || undefined}
                                         >
                                           {state === 'work'
                                             ? t('工作', 'Work')
@@ -12315,6 +13401,9 @@ ${rowsToHtml(late)}
                                                 ? t('计划临时排休', 'Planned Tem Off')
                                               : t('休息', 'Off')}
                                         </button>
+                                        {lateInfo && (
+                                          <span className="pointer-events-none absolute -left-1 -top-1 h-2 w-2 rounded-full bg-amber-400 shadow-[0_0_0_1px_rgba(251,191,36,0.55)]" />
+                                        )}
                                         {scheduleCellAudit.length > 0 && (
                                           <span
                                             className={[
