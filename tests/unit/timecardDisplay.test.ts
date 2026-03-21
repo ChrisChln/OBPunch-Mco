@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   formatRoundedHours,
   getTimecardCellHoursText,
+  getTimecardTerminatedByDay,
   getTimecardTotalHoursText
 } from '../../src/admin/timecardDisplay';
 
@@ -40,5 +41,14 @@ describe('timecardDisplay', () => {
         inProgressWeek: false
       })
     ).toBe('0');
+  });
+
+  test('marks the termination day and later days as terminated', () => {
+    expect(
+      getTimecardTerminatedByDay({
+        terminatedAt: '2026-03-18T15:50:06.336Z',
+        weekDateKeys: ['2026-03-16', '2026-03-17', '2026-03-18', '2026-03-19', '2026-03-20', '2026-03-21', '2026-03-22']
+      })
+    ).toEqual([false, false, true, true, true, true, true]);
   });
 });

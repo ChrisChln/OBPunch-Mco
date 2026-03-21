@@ -43,7 +43,7 @@ import {
   shouldRunWeeklyScheduleReset,
   shouldRunWeeklyScheduleRollover
 } from './scheduleWeek';
-import { formatRoundedHours } from './timecardDisplay';
+import { formatRoundedHours, getTimecardTerminatedByDay } from './timecardDisplay';
 import type {
   AdminPage,
   AllowedPosition,
@@ -7115,6 +7115,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       agency,
       position,
       profileShift,
+      terminatedAt,
       eventsByStaff,
       scheduledByStaff,
       scheduleStateByStaff,
@@ -7127,6 +7128,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       agency: string;
       position: string;
       profileShift: '' | 'early' | 'late';
+      terminatedAt: string | null;
       eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT'; manual: boolean }>>;
       scheduledByStaff: Record<string, boolean[]>;
       scheduleStateByStaff: Record<string, ScheduleBaseState[]>;
@@ -7206,14 +7208,44 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const scheduleStates = scheduleStateByStaff[staff] ?? (new Array(7).fill('work') as ScheduleBaseState[]);
       const scheduleKnownByDay = scheduleKnownByStaff[staff] ?? (new Array(7).fill(false) as boolean[]);
       const restByDay = scheduleStates.map((state, idx) => state === 'rest' && scheduleKnownByDay[idx]);
+      const weekDateKeys = Array.from({ length: 7 }, (_, idx) => toDateOnly(addDays(weekStart, idx)));
+      const terminatedByDay = getTimecardTerminatedByDay({
+        terminatedAt,
+        weekDateKeys
+      });
       const absentVisibleByNoon = Array.from({ length: 7 }, (_, idx) => {
-        const workDate = toDateOnly(addDays(weekStart, idx));
+        const workDate = weekDateKeys[idx] ?? '';
         const noon = new Date(`${workDate}T00:00:00`);
         if (Number.isNaN(noon.getTime())) return false;
         noon.setHours(TIMECARD_ABSENT_VISIBLE_HOUR, 0, 0, 0);
         return capEnd.getTime() >= noon.getTime();
       });
       for (let idx = 0; idx < 7; idx += 1) {
+        if (terminatedByDay[idx]) continue;
+        if (hasPunchByDay[idx]) continue;
+        const state = scheduleStates[idx] ?? 'work';
+        if (scheduleKnownByDay[idx]) {
+          if (state === 'leave' || state === 'planned_leave') {
+            leaveByDay[idx] = true;
+            continue;
+          }
+          if (state === 'temp_rest' || state === 'planned_temp_rest') {
+            tempRestByDay[idx] = true;
+            continue;
+          }
+          if (state === 'rest') {
+            restByDay[idx] = true;
+            continue;
+          }
+        }
+        if (!closedDayByIndex[idx]) continue;
+        if (absentByDay[idx] || leaveByDay[idx] || tempRestByDay[idx]) continue;
+        if (!scheduledByDay[idx]) {
+          restByDay[idx] = true;
+        }
+      }
+      for (let idx = 0; idx < 7; idx += 1) {
+        if (terminatedByDay[idx]) continue;
         const isWorking = isWorkingScheduleBaseState(scheduleStates[idx] ?? 'work');
         if (!isWorking) continue;
         if (!scheduledByDay[idx]) continue;
@@ -7224,6 +7256,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
       if (offset < 0) {
         for (let idx = 0; idx < 7; idx += 1) {
+          if (terminatedByDay[idx]) continue;
           if (scheduleKnownByDay[idx]) continue;
           if (hasPunchByDay[idx]) continue;
           if (absentByDay[idx] || leaveByDay[idx] || tempRestByDay[idx]) continue;
@@ -7250,6 +7283,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         leaveByDay,
         tempRestByDay,
         restByDay,
+        terminatedByDay,
         inProgressByDay,
         inProgressWeek,
         manualByDay,
@@ -7338,6 +7372,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             agency: profile.agency,
             position: profile.position,
             profileShift: profile.shift,
+            terminatedAt: null,
             eventsByStaff,
             scheduledByStaff: scheduledRes.scheduledByStaff,
             scheduleStateByStaff: scheduledRes.scheduleStateByStaff,
@@ -7356,7 +7391,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const buildEmployees = (m: EmployeeColumnMode) => {
         const agencyCol = m === 'cased' ? 'Agency' : 'agency';
         const positionCol = m === 'cased' ? 'Position' : 'position';
-        const select = m === 'cased' ? 'staff_id, name, "Agency", "Position", shift' : 'staff_id, name, agency, position, shift';
+        const select = '*';
 
         let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
         if (agencyValue) q = q.ilike(agencyCol as any, agencyValue);
@@ -7376,7 +7411,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const buildEmployeesNoActive = (m: EmployeeColumnMode) => {
           const agencyCol = m === 'cased' ? 'Agency' : 'agency';
           const positionCol = m === 'cased' ? 'Position' : 'position';
-          const select = m === 'cased' ? 'staff_id, name, "Agency", "Position", shift' : 'staff_id, name, agency, position, shift';
+          const select = '*';
           let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
           if (agencyValue) q = q.ilike(agencyCol as any, agencyValue);
           if (positionValue) {
@@ -7408,7 +7443,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       }
 
       const employees = employeeRows ?? [];
-      const employeeByStaffId = new Map<string, { staff_id: string; name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>();
+      const employeeByStaffId = new Map<
+        string,
+        { staff_id: string; name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }
+      >();
       for (const e of employees) {
         const staff = String(e.staff_id ?? '').trim();
         if (!staff) continue;
@@ -7416,9 +7454,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const agency = String(e.agency ?? e.Agency ?? '').trim();
         const position = String(e.position ?? e.Position ?? '').trim();
         const shift = normalizeShiftValue(String(e.shift ?? '').trim());
+        const terminatedAt = String((e as any).terminated_at ?? '').trim() || null;
         const existing = employeeByStaffId.get(staff);
         if (!existing) {
-          employeeByStaffId.set(staff, { staff_id: staff, name, agency, position, shift });
+          employeeByStaffId.set(staff, { staff_id: staff, name, agency, position, shift, terminatedAt });
           continue;
         }
         // Keep first row order, but fill missing fields from duplicate rows.
@@ -7426,6 +7465,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (!existing.agency && agency) existing.agency = agency;
         if (!existing.position && position) existing.position = position;
         if (!existing.shift && shift) existing.shift = shift;
+        if (!existing.terminatedAt && terminatedAt) existing.terminatedAt = terminatedAt;
       }
       const uniqueEmployees = Array.from(employeeByStaffId.values());
       const staffIds = uniqueEmployees.map((e) => e.staff_id);
@@ -7523,6 +7563,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           agency,
           position,
           profileShift,
+          terminatedAt: e.terminatedAt,
           eventsByStaff,
           scheduledByStaff: scheduledRes.scheduledByStaff,
           scheduleStateByStaff: scheduledRes.scheduleStateByStaff,

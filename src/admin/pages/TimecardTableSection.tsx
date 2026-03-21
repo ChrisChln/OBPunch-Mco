@@ -203,6 +203,10 @@ export default function TimecardTableSection({
                           <span className="text-[11px] font-semibold text-amber-300" title="Temporary Off">
                             {t('临时排休', 'Temp Off')}
                           </span>
+                        ) : r.terminatedByDay?.[idx] ? (
+                          <span className="text-[11px] font-semibold text-slate-400" title="Terminated">
+                            {t('离职', 'Terminated')}
+                          </span>
                         ) : r.restByDay[idx] &&
                           toDateOnly(addDays(addDays(startOfWeekMonday(serverTime), timecardWeekOffset * 7), idx)) <= toDateOnly(serverTime) ? (
                           <span className="text-[11px] font-semibold text-amber-300" title="Off">

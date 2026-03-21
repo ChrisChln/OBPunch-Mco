@@ -4,6 +4,9 @@ export const formatRoundedHours = (value: number) => {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 };
 
+const toLocalDateKey = (value: Date) =>
+  `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+
 export const getTimecardCellHoursText = (options: {
   hours: number;
   punchCount: number;
@@ -27,4 +30,16 @@ export const getTimecardTotalHoursText = (options: {
     : 0;
   if (weeklyPunchCount > 0 || options.inProgressWeek) return '0';
   return '';
+};
+
+export const getTimecardTerminatedByDay = (options: {
+  terminatedAt?: string | null;
+  weekDateKeys: string[];
+}) => {
+  const terminatedRaw = String(options.terminatedAt ?? '').trim();
+  if (!terminatedRaw) return options.weekDateKeys.map(() => false);
+  const terminatedAt = new Date(terminatedRaw);
+  if (Number.isNaN(terminatedAt.getTime())) return options.weekDateKeys.map(() => false);
+  const terminatedDateKey = toLocalDateKey(terminatedAt);
+  return options.weekDateKeys.map((dateKey) => Boolean(dateKey && dateKey >= terminatedDateKey));
 };

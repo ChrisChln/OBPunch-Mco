@@ -79,6 +79,7 @@ export type TimecardRow = {
   leaveByDay: boolean[]; // 0..6 (Mon..Sun)
   tempRestByDay: boolean[]; // 0..6 (Mon..Sun)
   restByDay: boolean[]; // 0..6 (Mon..Sun)
+  terminatedByDay: boolean[]; // 0..6 (Mon..Sun)
   inProgressByDay: boolean[]; // 0..6 (Mon..Sun)
   inProgressWeek: boolean;
   manualByDay: boolean[]; // 0..6 (Mon..Sun)
