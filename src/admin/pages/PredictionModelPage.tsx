@@ -830,7 +830,7 @@ const assignDailyPoints = (apes: BaseVersionApeMap): BaseVersionPointMap => {
 };
 
 // Sum the previous 14 days of points to decide the next champion model.
-const calculateRollingScores = (rows: V4OutputRow[], currentIndex: number, window = 14): BaseVersionPointMap => {
+const calculateRollingScores = (rows: { dailyPoints: BaseVersionPointMap }[], currentIndex: number, window = 14): BaseVersionPointMap => {
   const history = rows.slice(Math.max(0, currentIndex - window), currentIndex);
   return BASE_VERSION_KEYS.reduce<BaseVersionPointMap>((result, key) => {
     result[key] = history.reduce((sum, row) => sum + row.dailyPoints[key], 0);
@@ -838,7 +838,7 @@ const calculateRollingScores = (rows: V4OutputRow[], currentIndex: number, windo
   }, createBaseVersionPointMap());
 };
 
-const calculateRollingAverageErrors = (rows: V4OutputRow[], currentIndex: number, window = 14): BaseVersionApeMap => {
+const calculateRollingAverageErrors = (rows: { apes: BaseVersionApeMap }[], currentIndex: number, window = 14): BaseVersionApeMap => {
   const history = rows.slice(Math.max(0, currentIndex - window), currentIndex);
   return BASE_VERSION_KEYS.reduce<BaseVersionApeMap>((result, key) => {
     result[key] = mean(history.map((row) => row.apes[key]).filter((value): value is number => value !== null));
@@ -894,7 +894,7 @@ const calculateBiasAdjustment = <TRow extends { actual: number | null }>(
 };
 
 const calculateInverseErrorWeights = (
-  rows: V4OutputRow[],
+  rows: { apes: BaseVersionApeMap }[],
   currentIndex: number,
   currentForecasts: BaseVersionForecastMap,
   window = 14
@@ -1133,8 +1133,8 @@ const buildV5Model = (rows: VersionInputRow[]) => {
   sortedRows.forEach((row, index) => {
     const apes = calculateErrors(row);
     const dailyPoints = assignDailyPoints(apes);
-    const rollingScores14 = calculateRollingScores(outputRows as unknown as V4OutputRow[], index, 14);
-    const rollingAverageErrors14 = calculateRollingAverageErrors(outputRows as unknown as V4OutputRow[], index, 14);
+    const rollingScores14 = calculateRollingScores(outputRows, index, 14);
+    const rollingAverageErrors14 = calculateRollingAverageErrors(outputRows, index, 14);
     const blendSelection = buildAdaptiveBlendWeights(outputRows, index, row.forecasts);
     const biasAdjustment = calculateBiasAdjustment(outputRows, index, (historyRow) => historyRow.v5Forecast, 7, 0.02);
     const v5Forecast = blendSelection.baseForecast === null ? null : blendSelection.baseForecast * (1 + biasAdjustment.adjustmentRate);
@@ -1170,8 +1170,8 @@ const buildV6Model = (rows: VersionInputRow[]) => {
   sortedRows.forEach((row, index) => {
     const apes = calculateErrors(row);
     const dailyPoints = assignDailyPoints(apes);
-    const rollingScores14 = calculateRollingScores(outputRows as unknown as V4OutputRow[], index, 14);
-    const rollingAverageErrors14 = calculateRollingAverageErrors(outputRows as unknown as V4OutputRow[], index, 14);
+    const rollingScores14 = calculateRollingScores(outputRows, index, 14);
+    const rollingAverageErrors14 = calculateRollingAverageErrors(outputRows, index, 14);
     const blendSelection = buildAdaptiveBlendWeights(outputRows, index, row.forecasts);
     const calibration = calculateResidualCalibration(outputRows, index, row.date);
     const v6Forecast = blendSelection.baseForecast === null ? null : blendSelection.baseForecast * (1 + calibration.adjustmentRate);
