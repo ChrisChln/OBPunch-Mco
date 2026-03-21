@@ -43,6 +43,7 @@ import {
   shouldRunWeeklyScheduleReset,
   shouldRunWeeklyScheduleRollover
 } from './scheduleWeek';
+import { formatRoundedHours } from './timecardDisplay';
 import type {
   AdminPage,
   AllowedPosition,
@@ -449,6 +450,21 @@ const getDayIndexFromTemplateDate = (dateOnly: string, weekOffset = 0) => {
   if (diffDays < 0 || diffDays > 6) return null;
   return diffDays;
 };
+const getMonthDateRange = (value: Date) => {
+  const start = new Date(value);
+  start.setDate(1);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setMonth(end.getMonth() + 1, 0);
+  end.setHours(0, 0, 0, 0);
+  return {
+    start,
+    end,
+    startKey: toDateOnly(start),
+    endKey: toDateOnly(end)
+  };
+};
+const formatYearMonthKey = (value: Date) => `${value.getFullYear()}/${String(value.getMonth() + 1).padStart(2, '0')}`;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const parseDeviceCountedAtFromNote = (note: unknown) => {
@@ -818,6 +834,7 @@ export default function AdminAppPage() {
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
   const scheduleMistakeRequestRef = useRef(0);
+  const scheduleMonthlyAbsentRequestRef = useRef(0);
   const schedulePunchPresenceRequestRef = useRef(0);
 
   const [page, setPage] = useState<AdminPage>('home');
@@ -1079,6 +1096,7 @@ export default function AdminAppPage() {
   const [scheduleUphByStaffId, setScheduleUphByStaffId] = useState<Record<string, number | null>>({});
   const [scheduleMistakeByStaffId, setScheduleMistakeByStaffId] = useState<Record<string, number>>({});
   const [scheduleMistakeDetailsByStaffId, setScheduleMistakeDetailsByStaffId] = useState<Record<string, ScheduleMistakeDetail[]>>({});
+  const [scheduleMonthlyAbsentDatesByStaffId, setScheduleMonthlyAbsentDatesByStaffId] = useState<Record<string, string[]>>({});
   const [scheduleMistakeDraft, setScheduleMistakeDraft] = useState<ScheduleMistakeDraft>({
     open: false,
     staff_id: '',
@@ -3016,7 +3034,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             return !(rowStaff === staff && rowDayIndex === dayIndex);
           })
         );
-        await syncAttendanceMark();
+        const synced = await syncAttendanceMark();
+        if (synced) {
+          await fetchScheduleMonthlyAbsentDates();
+        }
         void writeAudit({
           action: 'schedule_clear',
           staffId: staff,
@@ -3099,7 +3120,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (!replaced) next.push(localRow);
         return next;
       });
-      await syncAttendanceMark();
+      const synced = await syncAttendanceMark();
+      if (synced) {
+        await fetchScheduleMonthlyAbsentDates();
+      }
 
       void writeAudit({
         action:
@@ -3432,7 +3456,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       await Promise.all([
         fetchSchedulePunchPresence({ employeesOverride: latestEmployees }),
         fetchScheduleUph({ employeesOverride: latestEmployees }),
-        fetchScheduleMistakeCounts({ employeesOverride: latestEmployees })
+        fetchScheduleMistakeCounts({ employeesOverride: latestEmployees }),
+        fetchScheduleMonthlyAbsentDates({ employeesOverride: latestEmployees, monthDateOverride: scheduleWeekStart })
       ]);
     };
     if (!lockUi) {
@@ -4112,6 +4137,75 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     if (requestId === scheduleMistakeRequestRef.current) {
       setScheduleMistakeByStaffId(nextMap);
       setScheduleMistakeDetailsByStaffId(nextDetailMap);
+    }
+  };
+  const fetchScheduleMonthlyAbsentDates = async (options?: {
+    employeesOverride?: EmployeeRow[] | null;
+    monthDateOverride?: Date;
+  }) => {
+    const requestId = scheduleMonthlyAbsentRequestRef.current + 1;
+    scheduleMonthlyAbsentRequestRef.current = requestId;
+    const employeesForMonthlyAbsent = options?.employeesOverride ?? employees;
+
+    if (!supabase) {
+      if (requestId === scheduleMonthlyAbsentRequestRef.current) {
+        setScheduleMonthlyAbsentDatesByStaffId({});
+      }
+      return;
+    }
+
+    const staffIds = Array.from(
+      new Set(
+        employeesForMonthlyAbsent
+          .map((employee) => normalizeStaffId(String(employee.staff_id ?? '').trim()))
+          .filter(Boolean)
+      )
+    );
+    if (staffIds.length === 0) {
+      if (requestId === scheduleMonthlyAbsentRequestRef.current) {
+        setScheduleMonthlyAbsentDatesByStaffId({});
+      }
+      return;
+    }
+
+    const monthBase = options?.monthDateOverride ?? scheduleWeekStart;
+    const { startKey, endKey } = getMonthDateRange(monthBase);
+    const datesByStaff = new Map<string, Set<string>>();
+
+    for (const batch of chunk(staffIds, 200)) {
+      const res = await supabase
+        .from(ATTENDANCE_MARKS_TABLE)
+        .select('staff_id, work_date')
+        .in('staff_id', batch as any[])
+        .eq('mark_type', 'absent')
+        .gte('work_date', startKey)
+        .lte('work_date', endKey)
+        .limit(10000);
+      if (res.error) {
+        if (!isMissingTableError(res.error.message, ATTENDANCE_MARKS_TABLE)) {
+          console.warn('[schedule] load monthly absent counts failed:', res.error.message);
+        }
+        if (requestId === scheduleMonthlyAbsentRequestRef.current) {
+          setScheduleMonthlyAbsentDatesByStaffId({});
+        }
+        return;
+      }
+      for (const row of ((res.data as any[] | null) ?? [])) {
+        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+        const workDate = String(row.work_date ?? '').trim();
+        if (!staff || !workDate) continue;
+        const existing = datesByStaff.get(staff) ?? new Set<string>();
+        existing.add(workDate);
+        datesByStaff.set(staff, existing);
+      }
+    }
+
+    const nextMap: Record<string, string[]> = {};
+    for (const staff of staffIds) {
+      nextMap[staff] = Array.from(datesByStaff.get(staff) ?? []).sort((a, b) => a.localeCompare(b, 'en-US'));
+    }
+    if (requestId === scheduleMonthlyAbsentRequestRef.current) {
+      setScheduleMonthlyAbsentDatesByStaffId(nextMap);
     }
   };
   const getCurrentOperationalDate = () => {
@@ -6165,11 +6259,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     return out;
   };
 
-  const formatHours = (value: number) => {
-    const rounded = Math.round(value * 100) / 100;
-    if (rounded <= 0) return '';
-    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
-  };
+  const formatHours = (value: number) => formatRoundedHours(value);
 
   const formatAuditDetail = (row: AuditRow) => {
     const action = String(row.action ?? '').trim();
@@ -7132,7 +7222,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (!absentVisibleByNoon[idx]) continue;
         absentByDay[idx] = true;
       }
-      if (timecardWeekOffset < 0) {
+      if (offset < 0) {
         for (let idx = 0; idx < 7; idx += 1) {
           if (scheduleKnownByDay[idx]) continue;
           if (hasPunchByDay[idx]) continue;
@@ -8586,6 +8676,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
   useEffect(() => {
     if (page !== 'schedule') return;
+    void fetchScheduleMonthlyAbsentDates();
+  }, [page, employees, scheduleWeekOffset, toDateOnly(serverTime)]);
+
+  useEffect(() => {
+    if (page !== 'schedule') return;
     void maybeRolloverScheduleWeek();
     void activatePlannedScheduleStatesForToday({ lockUi: false });
     const timer = window.setInterval(() => {
@@ -9999,6 +10094,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const baseWeekStart = startOfWeekMonday(serverTime);
     return addDays(baseWeekStart, scheduleWeekOffset * 7);
   }, [serverTime, scheduleWeekOffset]);
+  const scheduleMonthRange = useMemo(() => getMonthDateRange(scheduleWeekStart), [scheduleWeekStart]);
+  const scheduleMonthLabel = useMemo(() => formatYearMonthKey(scheduleWeekStart), [scheduleWeekStart]);
 
   const scheduleDays = useMemo(
     () => Array.from({ length: 7 }, (_, idx) => addDays(scheduleWeekStart, idx)),
@@ -11362,6 +11459,76 @@ ${rowsToHtml(late)}
   const scheduleIsCurrentWeek = scheduleWeekOffset === 0;
   const schedulePunchPresenceMatchesWeek = schedulePunchPresenceWeekOffset === scheduleWeekOffset;
   const scheduleLateAbsentVisibleMinutes = 16 * 60 + 30;
+  const scheduleMonthlyAbsentByStaffId = useMemo(() => {
+    const nextMap: Record<string, number> = {};
+    const liveDatesByStaff = new Map<string, Set<string>>();
+
+    if (page === 'schedule' && scheduleIsCurrentWeek && schedulePunchPresenceReady && schedulePunchPresenceMatchesWeek) {
+      for (const employee of employees) {
+        const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+        if (!staff) continue;
+        for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+          const day = scheduleDays[dayIndex];
+          if (!day) continue;
+          const operationalDate = toDateOnly(day);
+          if (operationalDate < scheduleMonthRange.startKey || operationalDate > scheduleMonthRange.endKey) continue;
+
+          const key = `${staff}__${dayIndex}`;
+          const row = scheduleRowsByStaffDayIndex.get(key);
+          if (!row || !isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note))) continue;
+
+          const hasPunch = schedulePunchPresenceKeys.has(key);
+          const scheduledShiftForAbsent = employeeShiftByStaffId[staff]?.shift ?? '';
+          const targetShift: 'early' | 'late' =
+            scheduledShiftForAbsent === 'late'
+              ? 'late'
+              : (row?.shift as 'early' | 'late' | null) === 'late'
+                ? 'late'
+                : 'early';
+          const isPastOperationalDay = dayIndex < homeOperationalDayIndex;
+          const isCurrentOperationalDay = dayIndex === homeOperationalDayIndex;
+          const hideLateAbsent = targetShift === 'late' && scheduleNowMinutes < scheduleLateAbsentVisibleMinutes;
+          const showAbsent = !hasPunch && (isPastOperationalDay || (isCurrentOperationalDay && !hideLateAbsent));
+          const state: ScheduleDisplayState = getScheduleDisplayState(row, hasPunch, { showAbsent: Boolean(showAbsent) });
+          if (state !== 'absent') continue;
+
+          const existing = liveDatesByStaff.get(staff) ?? new Set<string>();
+          existing.add(operationalDate);
+          liveDatesByStaff.set(staff, existing);
+        }
+      }
+    }
+
+    const staffIds = new Set<string>([
+      ...Object.keys(scheduleMonthlyAbsentDatesByStaffId),
+      ...Array.from(liveDatesByStaff.keys())
+    ]);
+    for (const staff of staffIds) {
+      const merged = new Set(scheduleMonthlyAbsentDatesByStaffId[staff] ?? []);
+      const liveDates = liveDatesByStaff.get(staff);
+      if (liveDates) {
+        for (const workDate of liveDates) merged.add(workDate);
+      }
+      nextMap[staff] = merged.size;
+    }
+    return nextMap;
+  }, [
+    page,
+    employees,
+    scheduleDays,
+    scheduleMonthRange.startKey,
+    scheduleMonthRange.endKey,
+    scheduleMonthlyAbsentDatesByStaffId,
+    scheduleIsCurrentWeek,
+    schedulePunchPresenceReady,
+    schedulePunchPresenceMatchesWeek,
+    scheduleRowsByStaffDayIndex,
+    schedulePunchPresenceKeys,
+    employeeShiftByStaffId,
+    homeOperationalDayIndex,
+    scheduleNowMinutes,
+    scheduleLateAbsentVisibleMinutes
+  ]);
   const scheduleAutoMistakeByStaffId = useMemo(() => {
     const nextMap: Record<string, number> = {};
     if (page !== 'schedule' || !scheduleIsCurrentWeek || !schedulePunchPresenceReady || !schedulePunchPresenceMatchesWeek) return nextMap;
@@ -12011,6 +12178,12 @@ ${rowsToHtml(late)}
                               UPH{scheduleSortByUphDesc ? ' ↓' : ''}
                             </button>
                           </th>
+                          <th
+                            className="sticky top-0 z-20 w-[64px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur"
+                            title={t(`${scheduleMonthLabel} 累计缺勤`, `Absent in ${scheduleMonthLabel}`)}
+                          >
+                            {t('月缺勤', 'Abs MTD')}
+                          </th>
                           <th className="sticky top-0 z-20 w-[58px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
                             Mistake
                           </th>
@@ -12153,6 +12326,28 @@ ${rowsToHtml(late)}
                                 })()}
                               </td>
                               <td className="px-1 py-2 text-center font-mono text-slate-200">{formatUph(scheduleUphByStaffId[staff])}</td>
+                              <td className="px-1 py-2 text-center">
+                                {(() => {
+                                  const count = Number(scheduleMonthlyAbsentByStaffId[staff] ?? 0);
+                                  const toneClass =
+                                    count <= 0
+                                      ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
+                                      : count <= 2
+                                        ? 'border-amber-400/60 bg-amber-500/15 text-amber-200'
+                                        : 'border-rose-400/60 bg-rose-500/15 text-rose-200';
+                                  return (
+                                    <span
+                                      className={[
+                                        'inline-flex min-w-[38px] items-center justify-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
+                                        toneClass
+                                      ].join(' ')}
+                                      title={t(`${scheduleMonthLabel} 累计缺勤`, `Absent in ${scheduleMonthLabel}`)}
+                                    >
+                                      {count}
+                                    </span>
+                                  );
+                                })()}
+                              </td>
                               <td className="px-1 py-2 text-center">
                                 {(() => {
                                   const manualCount = Number(scheduleMistakeByStaffId[staff] ?? 0);

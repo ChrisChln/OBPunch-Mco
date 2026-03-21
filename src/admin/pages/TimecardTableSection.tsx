@@ -1,5 +1,7 @@
 ﻿type TranslateFn = (zh: string, en: string) => string;
 
+import { getTimecardCellHoursText, getTimecardTotalHoursText } from '../timecardDisplay';
+
 type TimecardTableSectionProps = {
   t: TranslateFn;
   isLocked: boolean;
@@ -140,9 +142,14 @@ export default function TimecardTableSection({
                   {(() => {
                     const timecardAuditKey = `${r.staff_id}__${toDateOnly(addDays(timecardWeekStart, idx))}`;
                     const timecardCellAudit = timecardAuditByStaffDate.get(timecardAuditKey) ?? [];
+                    const hoursText = getTimecardCellHoursText({
+                      hours: h,
+                      punchCount: Number(r.punchCountByDay?.[idx] ?? 0),
+                      inProgress: Boolean(r.inProgressByDay?.[idx])
+                    });
                     return (
                       <div className="group relative inline-flex items-center justify-center">
-                        {formatHours(h) ? (
+                        {hoursText ? (
                           <button
                             type="button"
                             disabled={isLocked}
@@ -182,7 +189,7 @@ export default function TimecardTableSection({
                             })()}
                             title={t('查看/编辑打卡流水', 'View/Edit Punch Log')}
                           >
-                            {formatHours(h)}
+                            {hoursText}
                           </button>
                         ) : r.absentByDay[idx] ? (
                           <span className="inline-flex rounded px-1.5 py-0.5 text-[11px] font-semibold text-rose-200" title="Scheduled but no punch">
@@ -237,28 +244,34 @@ export default function TimecardTableSection({
                 </td>
               ))}
               <td className="w-[92px] px-2 py-1.5 text-center align-middle font-semibold text-slate-200">
-                {formatHours(r.totalHours) ? (
-                  <button
-                    type="button"
-                    disabled={isLocked}
-                    onClick={() => void openTimecardPunchModal(r.staff_id, null)}
-                    className={(() => {
-                      const hasOver8 = r.hoursByDay.some((v: number) => v > 8.5);
-                      const inProgress = r.inProgressWeek;
-                      const manual = r.manualWeek;
-                      const base = 'rounded px-1.5 py-0.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
-                      if (manual) return [base, 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'].join(' ');
-                      if (hasOver8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
-                      if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
-                      return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
-                    })()}
-                    title={t('查看本周打卡流水（只读）', 'View this week punch log (read-only)')}
-                  >
-                    {formatHours(r.totalHours)}
-                  </button>
-                ) : (
-                  ''
-                )}
+                {(() => {
+                  const totalHoursText = getTimecardTotalHoursText({
+                    totalHours: Number(r.totalHours ?? 0),
+                    punchCounts: Array.isArray(r.punchCountByDay) ? r.punchCountByDay : [],
+                    inProgressWeek: Boolean(r.inProgressWeek)
+                  });
+                  if (!totalHoursText) return '';
+                  return (
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onClick={() => void openTimecardPunchModal(r.staff_id, null)}
+                      className={(() => {
+                        const hasOver8 = r.hoursByDay.some((v: number) => v > 8.5);
+                        const inProgress = r.inProgressWeek;
+                        const manual = r.manualWeek;
+                        const base = 'rounded px-1.5 py-0.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
+                        if (manual) return [base, 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'].join(' ');
+                        if (hasOver8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
+                        if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
+                        return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
+                      })()}
+                      title={t('查看本周打卡流水（只读）', 'View this week punch log (read-only)')}
+                    >
+                      {totalHoursText}
+                    </button>
+                  );
+                })()}
               </td>
             </tr>
           ))}
