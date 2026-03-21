@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import StyledDateInput from '../components/StyledDateInput';
 import { getIsoWeekday } from '../forecast';
 
@@ -48,6 +48,7 @@ type ForecastInputRow = {
   current_cumulative_volume_12?: number | null;
   inventory_level?: number | null;
   severe_weather?: boolean | null;
+  major_promotion?: boolean | null;
   full_day_capacity?: number | null;
   yesterday_inflow_00_14?: number | null;
 };
@@ -59,6 +60,7 @@ type FeatureContextDay = {
   current_cumulative_volume_12: number;
   inventory_level: number;
   severe_weather: boolean;
+  major_promotion: boolean;
   full_day_capacity: number;
   yesterday_inflow_00_14: number;
 };
@@ -78,7 +80,8 @@ type ModelKey =
   | 'trend_blend'
   | 'feature_regression_v1'
   | 'feature_regression_v2'
-  | 'feature_regression_v3';
+  | 'feature_regression_v3'
+  | 'feature_regression_v7';
 type ModelForecastMap = Record<ModelKey, number | null>;
 
 type EvaluationRow = {
@@ -100,7 +103,7 @@ type ModelMetric = {
 };
 
 type BaseVersionKey = 'v0' | 'v1' | 'v2' | 'v3';
-type VersionKey = BaseVersionKey | 'v4' | 'v4_ensemble' | 'v5' | 'v6';
+type VersionKey = BaseVersionKey | 'v4' | 'v4_ensemble' | 'v5' | 'v6' | 'v7';
 type BaseVersionForecastMap = Record<BaseVersionKey, number | null>;
 type VersionForecastMap = Record<VersionKey, number | null>;
 type BaseVersionApeMap = Record<BaseVersionKey, number | null>;
@@ -238,6 +241,18 @@ const FEATURE_NAMES_V3 = [
   'severe_weather_ctx'
 ] as const;
 
+const FEATURE_NAMES_V7 = [
+  'forecast_v1',
+  'forecast_v2',
+  'forecast_v3',
+  'rolling_mean_7_model',
+  'previous_day_total_ctx',
+  'previous_vs_recent14_ctx',
+  'recent_itr_mean_7_ctx',
+  'severe_weather_ctx',
+  'major_promotion_ctx'
+] as const;
+
 type FeatureName = (typeof FEATURE_NAMES)[number];
 type FeatureVector = Record<FeatureName, number>;
 type FeatureSample = { features: FeatureVector; target: number };
@@ -271,13 +286,25 @@ type TrainedFeatureModelV3 = {
   sampleSize: number;
 };
 
+type FeatureNameV7 = (typeof FEATURE_NAMES_V7)[number];
+type FeatureVectorV7 = Record<FeatureNameV7, number>;
+type FeatureSampleV7 = { features: FeatureVectorV7; target: number };
+type TrainedFeatureModelV7 = {
+  bias: number;
+  weights: number[];
+  means: number[];
+  stds: number[];
+  sampleSize: number;
+};
+
 const MODEL_KEYS: ModelKey[] = [
   'same_weekday_median',
   'rolling_mean_7',
   'trend_blend',
   'feature_regression_v1',
   'feature_regression_v2',
-  'feature_regression_v3'
+  'feature_regression_v3',
+  'feature_regression_v7'
 ];
 const MODEL_LABELS: Record<ModelKey, string> = {
   same_weekday_median: 'Same Weekday Median',
@@ -285,11 +312,12 @@ const MODEL_LABELS: Record<ModelKey, string> = {
   trend_blend: 'Trend Blend',
   feature_regression_v1: 'Feature Regression V1',
   feature_regression_v2: 'Feature Regression V2',
-  feature_regression_v3: 'Feature Regression V3'
+  feature_regression_v3: 'Feature Regression V3',
+  feature_regression_v7: 'Feature Regression V7'
 };
 const BASE_VERSION_KEYS: BaseVersionKey[] = ['v0', 'v1', 'v2', 'v3'];
 const BLEND_VERSION_KEYS: BaseVersionKey[] = ['v1', 'v2', 'v3'];
-const VERSION_KEYS: VersionKey[] = [...BASE_VERSION_KEYS, 'v4', 'v4_ensemble', 'v5', 'v6'];
+const VERSION_KEYS: VersionKey[] = [...BASE_VERSION_KEYS, 'v4', 'v4_ensemble', 'v5', 'v6', 'v7'];
 const VERSION_LABELS: Record<VersionKey, string> = {
   v0: 'V0',
   v1: 'V1',
@@ -298,7 +326,8 @@ const VERSION_LABELS: Record<VersionKey, string> = {
   v4: 'V4 Champion',
   v4_ensemble: 'V4 Ensemble',
   v5: 'V5 Adaptive Blend',
-  v6: 'V6 Residual Blend'
+  v6: 'V6 Residual Blend',
+  v7: 'V7 Promotion-Aware Model'
 };
 const VERSION_TIEBREAK_ORDER: BaseVersionKey[] = ['v3', 'v2', 'v1', 'v0'];
 const DAILY_POINT_VALUES = [3, 2, 1, 0] as const;
@@ -345,6 +374,18 @@ const FEATURE_LABELS_V3: Record<FeatureNameV3, string> = {
   previous_vs_recent14_ctx: 'Prev vs 14D mean',
   recent_itr_mean_7_ctx: 'Recent ITR mean 7D',
   severe_weather_ctx: 'Severe weather'
+};
+
+const FEATURE_LABELS_V7: Record<FeatureNameV7, string> = {
+  forecast_v1: 'V1 forecast',
+  forecast_v2: 'V2 forecast',
+  forecast_v3: 'V3 forecast',
+  rolling_mean_7_model: '7-day mean forecast',
+  previous_day_total_ctx: 'Previous day total',
+  previous_vs_recent14_ctx: 'Prev vs 14D mean',
+  recent_itr_mean_7_ctx: 'Recent ITR mean 7D',
+  severe_weather_ctx: 'Severe weather',
+  major_promotion_ctx: 'Major promotion'
 };
 
 const toDateOnly = (date: Date) => {
@@ -420,6 +461,7 @@ const createFeatureContext = (date: string, input: ForecastInputRow | null): Fea
   current_cumulative_volume_12: Math.max(0, sanitizeNumber(input?.current_cumulative_volume_12)),
   inventory_level: Math.max(0, sanitizeNumber(input?.inventory_level)),
   severe_weather: Boolean(input?.severe_weather),
+  major_promotion: Boolean(input?.major_promotion),
   full_day_capacity: Math.max(0, sanitizeNumber(input?.full_day_capacity)),
   yesterday_inflow_00_14: Math.max(0, sanitizeNumber(input?.yesterday_inflow_00_14))
 });
@@ -542,6 +584,40 @@ const buildFeatureVectorV3 = (
     previous_vs_recent14_ctx: clamp(summary.previousVsRecent14, -3, 3),
     recent_itr_mean_7_ctx: summary.recentItrMean7,
     severe_weather_ctx: targetDay.severe_weather ? 1 : 0
+  };
+};
+
+const buildFeatureVectorV7 = (
+  targetDay: FeatureContextDay,
+  priorDays: PreparedDay[],
+  baseForecasts: {
+    rollingMean7: number | null;
+    forecastV1: number | null;
+    forecastV2: number | null;
+    forecastV3: number | null;
+  }
+): FeatureVectorV7 | null => {
+  const summary = buildHistorySummary(targetDay.weekday, priorDays);
+  if (!summary) return null;
+  if (
+    baseForecasts.rollingMean7 === null ||
+    baseForecasts.forecastV1 === null ||
+    baseForecasts.forecastV2 === null ||
+    baseForecasts.forecastV3 === null
+  ) {
+    return null;
+  }
+
+  return {
+    forecast_v1: baseForecasts.forecastV1,
+    forecast_v2: baseForecasts.forecastV2,
+    forecast_v3: baseForecasts.forecastV3,
+    rolling_mean_7_model: baseForecasts.rollingMean7,
+    previous_day_total_ctx: summary.previousDay.total,
+    previous_vs_recent14_ctx: clamp(summary.previousVsRecent14, -3, 3),
+    recent_itr_mean_7_ctx: summary.recentItrMean7,
+    severe_weather_ctx: targetDay.severe_weather ? 1 : 0,
+    major_promotion_ctx: targetDay.major_promotion ? 1 : 0
   };
 };
 
@@ -671,6 +747,48 @@ const trainFeatureRegressionV3 = (samples: FeatureSampleV3[]): TrainedFeatureMod
   return { bias, weights, means, stds, sampleSize: samples.length };
 };
 
+const trainFeatureRegressionV7 = (samples: FeatureSampleV7[]): TrainedFeatureModelV7 | null => {
+  if (samples.length < 18) return null;
+  const means = FEATURE_NAMES_V7.map((name) => mean(samples.map((sample) => sample.features[name])) ?? 0);
+  const stds = FEATURE_NAMES_V7.map((name, index) => {
+    const base = means[index];
+    const variance = mean(samples.map((sample) => (sample.features[name] - base) ** 2)) ?? 0;
+    return Math.sqrt(Math.max(variance, 1e-6)) || 1;
+  });
+
+  let bias = mean(samples.map((sample) => sample.target)) ?? 0;
+  let weights = Array.from({ length: FEATURE_NAMES_V7.length }, () => 0);
+  const learningRate = 0.03;
+  const l2 = 0.04;
+  const scale = 2 / samples.length;
+
+  for (let iteration = 0; iteration < 320; iteration += 1) {
+    const biasGradient = samples.reduce((sum, sample) => {
+      const prediction = bias + FEATURE_NAMES_V7.reduce((inner, name, index) => {
+        const normalized = (sample.features[name] - means[index]) / stds[index];
+        return inner + normalized * weights[index];
+      }, 0);
+      return sum + (prediction - sample.target);
+    }, 0);
+
+    const weightGradients = FEATURE_NAMES_V7.map((name, index) =>
+      samples.reduce((sum, sample) => {
+        const prediction = bias + FEATURE_NAMES_V7.reduce((inner, innerName, innerIndex) => {
+          const normalized = (sample.features[innerName] - means[innerIndex]) / stds[innerIndex];
+          return inner + normalized * weights[innerIndex];
+        }, 0);
+        const normalized = (sample.features[name] - means[index]) / stds[index];
+        return sum + (prediction - sample.target) * normalized;
+      }, 0)
+    );
+
+    bias -= learningRate * scale * biasGradient;
+    weights = weights.map((weight, index) => weight - learningRate * (scale * weightGradients[index] + l2 * weight));
+  }
+
+  return { bias, weights, means, stds, sampleSize: samples.length };
+};
+
 const predictFeatureRegression = (model: TrainedFeatureModel | null, vector: FeatureVector | null) => {
   if (!model || !vector) return null;
   const rawPrediction = model.bias + FEATURE_NAMES.reduce((sum, name, index) => {
@@ -709,6 +827,23 @@ const predictFeatureRegressionV3 = (model: TrainedFeatureModelV3 | null, vector:
   }, 0);
 
   const anchors = [vector.forecast_v2, vector.forecast_v1, vector.rolling_mean_7_model, vector.previous_day_total_ctx].filter((value) => value > 0);
+  const anchor = mean(anchors) ?? rawPrediction;
+  const safePrediction = Number.isFinite(rawPrediction) ? rawPrediction : anchor;
+  const lowerBound = Math.max(0, anchor * 0.35);
+  const upperBound = Math.max(lowerBound + 1, anchor * 1.85);
+  return clamp(Math.max(0, safePrediction), lowerBound, upperBound);
+};
+
+const predictFeatureRegressionV7 = (model: TrainedFeatureModelV7 | null, vector: FeatureVectorV7 | null) => {
+  if (!model || !vector) return null;
+  const rawPrediction = model.bias + FEATURE_NAMES_V7.reduce((sum, name, index) => {
+    const normalized = (vector[name] - model.means[index]) / model.stds[index];
+    return sum + normalized * model.weights[index];
+  }, 0);
+
+  const anchors = [vector.forecast_v3, vector.forecast_v2, vector.forecast_v1, vector.rolling_mean_7_model, vector.previous_day_total_ctx].filter(
+    (value) => value > 0
+  );
   const anchor = mean(anchors) ?? rawPrediction;
   const safePrediction = Number.isFinite(rawPrediction) ? rawPrediction : anchor;
   const lowerBound = Math.max(0, anchor * 0.35);
@@ -1234,7 +1369,7 @@ const buildVersionMetricSlice = (rows: VersionEvaluationRow[], key: VersionKey):
   };
 };
 
-// Compare V0-V5 over the full window and over the most recent 14 completed days.
+// Compare V0-V7 over the full window and over the most recent 14 completed days.
 const evaluateModels = (rows: VersionEvaluationRow[], targetForecasts: VersionForecastMap, recentWindow = 14): VersionMetric[] => {
   const recentRows = rows.slice(-recentWindow);
   return VERSION_KEYS.map((key) => ({
@@ -1262,6 +1397,7 @@ function MetricCard({
   themeMode: 'light' | 'dark';
 }) {
   const isLight = themeMode === 'light';
+
   return (
     <div
       className={[
@@ -1308,7 +1444,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         supabase
           .from(INPUT_TABLE)
           .select(
-            'input_date,weekday,previous_day_backlog,current_cumulative_volume_12,inventory_level,severe_weather,full_day_capacity,yesterday_inflow_00_14'
+            'input_date,weekday,previous_day_backlog,current_cumulative_volume_12,inventory_level,severe_weather,major_promotion,full_day_capacity,yesterday_inflow_00_14'
           )
           .gte('input_date', preloadStart)
           .lte('input_date', maxDate)
@@ -1363,7 +1499,8 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         context.inventory_level > 0 ||
         context.full_day_capacity > 0 ||
         context.yesterday_inflow_00_14 > 0 ||
-        context.severe_weather
+        context.severe_weather ||
+        context.major_promotion
       );
     });
 
@@ -1371,9 +1508,11 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     const trainingSamplesV1Cache = new Map<string, FeatureSample[]>();
     const trainingSamplesV2Cache = new Map<string, FeatureSampleV2[]>();
     const trainingSamplesV3Cache = new Map<string, FeatureSampleV3[]>();
+    const trainingSamplesV7Cache = new Map<string, FeatureSampleV7[]>();
     const featureModelV1Cache = new Map<string, TrainedFeatureModel | null>();
     const featureModelV2Cache = new Map<string, TrainedFeatureModelV2 | null>();
     const featureModelV3Cache = new Map<string, TrainedFeatureModelV3 | null>();
+    const featureModelV7Cache = new Map<string, TrainedFeatureModelV7 | null>();
     const coreForecastCache = new Map<
       string,
       {
@@ -1383,6 +1522,8 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         featureVectorV2: FeatureVectorV2 | null;
         featureForecastV2: number | null;
         featureVectorV3: FeatureVectorV3 | null;
+        featureForecastV3: number | null;
+        featureVectorV7: FeatureVectorV7 | null;
       }
     >();
 
@@ -1452,6 +1593,13 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         forecastV1: featureForecastV1,
         forecastV2: featureForecastV2
       });
+      const featureForecastV3 = predictFeatureRegressionV3(getFeatureModelV3(targetDate), featureVectorV3);
+      const featureVectorV7 = buildFeatureVectorV7(targetContext, priorDays, {
+        rollingMean7: baselinePredictions.rolling_mean_7,
+        forecastV1: featureForecastV1,
+        forecastV2: featureForecastV2,
+        forecastV3: featureForecastV3
+      });
 
       const result = {
         baselinePredictions,
@@ -1459,7 +1607,9 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         featureForecastV1,
         featureVectorV2,
         featureForecastV2,
-        featureVectorV3
+        featureVectorV3,
+        featureForecastV3,
+        featureVectorV7
       };
       coreForecastCache.set(targetDate, result);
       return result;
@@ -1486,13 +1636,35 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       return featureModelV3Cache.get(cutoffDate) ?? null;
     };
 
+    const getTrainingSamplesV7 = (cutoffDate: string, lookbackDays = 160) => {
+      const cacheKey = `${cutoffDate}:${lookbackDays}`;
+      const cached = trainingSamplesV7Cache.get(cacheKey);
+      if (cached) return cached;
+      const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+      const samples = candidateDays.reduce<FeatureSampleV7[]>((rows, day) => {
+        const features = getCoreForecasts(day.date, day.context).featureVectorV7;
+        if (features) rows.push({ features, target: day.total });
+        return rows;
+      }, []);
+      trainingSamplesV7Cache.set(cacheKey, samples);
+      return samples;
+    };
+
+    const getFeatureModelV7 = (cutoffDate: string) => {
+      if (!featureModelV7Cache.has(cutoffDate)) {
+        featureModelV7Cache.set(cutoffDate, trainFeatureRegressionV7(getTrainingSamplesV7(cutoffDate)));
+      }
+      return featureModelV7Cache.get(cutoffDate) ?? null;
+    };
+
     const buildForecasts = (targetDate: string, targetContext: FeatureContextDay): ModelForecastMap => {
       const core = getCoreForecasts(targetDate, targetContext);
       return {
         ...core.baselinePredictions,
         feature_regression_v1: core.featureForecastV1,
         feature_regression_v2: core.featureForecastV2,
-        feature_regression_v3: predictFeatureRegressionV3(getFeatureModelV3(targetDate), core.featureVectorV3)
+        feature_regression_v3: core.featureForecastV3,
+        feature_regression_v7: predictFeatureRegressionV7(getFeatureModelV7(targetDate), core.featureVectorV7)
       };
     };
 
@@ -1526,6 +1698,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     const targetFeatureModelV1 = getFeatureModelV1(forecastTargetDate);
     const targetFeatureModelV2 = getFeatureModelV2(forecastTargetDate);
     const targetFeatureModelV3 = getFeatureModelV3(forecastTargetDate);
+    const targetFeatureModelV7 = getFeatureModelV7(forecastTargetDate);
 
     const leaderboard = MODEL_KEYS.map((key) => buildMetric(evaluationRows, key, targetForecasts[key])).sort((a, b) => {
       if (a.wape === null) return 1;
@@ -1535,14 +1708,18 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
 
     const baselineMetrics = leaderboard.filter(
       (metric) =>
-        metric.key !== 'feature_regression_v1' && metric.key !== 'feature_regression_v2' && metric.key !== 'feature_regression_v3'
+        metric.key !== 'feature_regression_v1' &&
+        metric.key !== 'feature_regression_v2' &&
+        metric.key !== 'feature_regression_v3' &&
+        metric.key !== 'feature_regression_v7'
     );
     const bestBaselineMetric = baselineMetrics[0] ?? null;
     const featureMetricV1 = leaderboard.find((metric) => metric.key === 'feature_regression_v1') ?? null;
     const featureMetricV2 = leaderboard.find((metric) => metric.key === 'feature_regression_v2') ?? null;
     const featureMetricV3 = leaderboard.find((metric) => metric.key === 'feature_regression_v3') ?? null;
+    const featureMetricV7 = leaderboard.find((metric) => metric.key === 'feature_regression_v7') ?? null;
     const bestFeatureMetric =
-      [featureMetricV1, featureMetricV2, featureMetricV3]
+      [featureMetricV1, featureMetricV2, featureMetricV3, featureMetricV7]
         .filter((metric): metric is ModelMetric => metric !== null)
         .sort((a, b) => {
           if (a.wape === null) return 1;
@@ -1589,6 +1766,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     const targetV4Row = v4Rows.find((row) => row.date === forecastTargetDate) ?? null;
     const targetV5Row = v5Rows.find((row) => row.date === forecastTargetDate) ?? null;
     const targetV6Row = v6Rows.find((row) => row.date === forecastTargetDate) ?? null;
+    const evaluationRowsByDate = new Map(evaluationRows.map((row) => [row.date, row]));
     const v5RowsByDate = new Map(v5Rows.map((row) => [row.date, row]));
     const v6RowsByDate = new Map(v6Rows.map((row) => [row.date, row]));
     const versionEvaluationRows: VersionEvaluationRow[] = v4Rows
@@ -1601,7 +1779,8 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
           v4: row.v4Forecast,
           v4_ensemble: row.v4EnsembleForecast,
           v5: v5RowsByDate.get(row.date)?.v5Forecast ?? null,
-          v6: v6RowsByDate.get(row.date)?.v6Forecast ?? null
+          v6: v6RowsByDate.get(row.date)?.v6Forecast ?? null,
+          v7: evaluationRowsByDate.get(row.date)?.forecasts.feature_regression_v7 ?? null
         }
       }));
     const targetVersionForecasts: VersionForecastMap = {
@@ -1609,15 +1788,16 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       v4: targetV4Row?.v4Forecast ?? null,
       v4_ensemble: targetV4Row?.v4EnsembleForecast ?? null,
       v5: targetV5Row?.v5Forecast ?? null,
-      v6: targetV6Row?.v6Forecast ?? null
+      v6: targetV6Row?.v6Forecast ?? null,
+      v7: targetForecasts.feature_regression_v7
     };
     const versionLeaderboard = evaluateModels(versionEvaluationRows, targetVersionForecasts);
     const currentVersionLeaderboard = rankCurrentVersionMetrics(versionLeaderboard);
     const bestVersionMetric = currentVersionLeaderboard[0] ?? versionLeaderboard[0] ?? null;
     const v0Metric = versionLeaderboard.find((metric) => metric.key === 'v0') ?? null;
     const bestAdvancedVersionMetric = currentVersionLeaderboard.find((metric) => metric.key !== 'v0') ?? versionLeaderboard.find((metric) => metric.key !== 'v0') ?? null;
-    const adaptiveComparisonLeaderboard = currentVersionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6'].includes(metric.key));
-    const bestAdaptiveOverallMetric = versionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6'].includes(metric.key))[0] ?? null;
+    const adaptiveComparisonLeaderboard = currentVersionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6', 'v7'].includes(metric.key));
+    const bestAdaptiveOverallMetric = versionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6', 'v7'].includes(metric.key))[0] ?? null;
     const bestAdaptiveRecent14Metric =
       [...adaptiveComparisonLeaderboard].sort((a, b) => {
         if (a.recent14.wape === null) return 1;
@@ -1636,9 +1816,12 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       targetFeatureModelV2 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV2.weights, FEATURE_NAMES_V2, FEATURE_LABELS_V2);
     const featureImportanceRowsV3 =
       targetFeatureModelV3 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV3.weights, FEATURE_NAMES_V3, FEATURE_LABELS_V3);
+    const featureImportanceRowsV7 =
+      targetFeatureModelV7 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV7.weights, FEATURE_NAMES_V7, FEATURE_LABELS_V7);
     const importanceSumV1 = featureImportanceRowsV1.reduce((sum, row) => sum + row.importance, 0);
     const importanceSumV2 = featureImportanceRowsV2.reduce((sum, row) => sum + row.importance, 0);
     const importanceSumV3 = featureImportanceRowsV3.reduce((sum, row) => sum + row.importance, 0);
+    const importanceSumV7 = featureImportanceRowsV7.reduce((sum, row) => sum + row.importance, 0);
 
     return {
       analysisDays,
@@ -1650,6 +1833,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       targetFeatureModelV1,
       targetFeatureModelV2,
       targetFeatureModelV3,
+      targetFeatureModelV7,
       targetV4Row,
       targetV5Row,
       targetV6Row,
@@ -1679,12 +1863,17 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         ...row,
         importanceRatio: importanceSumV3 > 0 ? row.importance / importanceSumV3 : 0
       })),
+      featureImportanceRowsV7: featureImportanceRowsV7.map((row) => ({
+        ...row,
+        importanceRatio: importanceSumV7 > 0 ? row.importance / importanceSumV7 : 0
+      })),
       leaderboard,
       bestMetric,
       bestBaselineMetric,
       featureMetricV1,
       featureMetricV2,
       featureMetricV3,
+      featureMetricV7,
       bestFeatureMetric,
       improvementVsBaseline: versionImprovementVsBaseline
     };
@@ -1707,6 +1896,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     if (key === 'v4') return 'V4';
     if (key === 'v5') return 'V5';
     if (key === 'v6') return 'V6';
+    if (key === 'v7') return 'V7';
     return key?.toUpperCase() ?? 'V0';
   };
   const getLeaderboardModelName = (key: VersionKey) => {
@@ -1717,13 +1907,45 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     if (key === 'v4') return 'V4 Champion';
     if (key === 'v4_ensemble') return 'V4 Ensemble';
     if (key === 'v5') return 'V5 Adaptive Blend';
-    return 'V6 Residual Blend';
+    if (key === 'v6') return 'V6 Residual Blend';
+    return 'V7 Promotion-Aware Model';
   };
   const bestVersionLabel = getVersionLabel(data.bestVersionMetric?.key);
   const bestFeatureVersionLabel = data.bestAdvancedVersionMetric ? getVersionLabel(data.bestAdvancedVersionMetric.key) : null;
   const recentRows = data.evaluationRows.slice(-14).reverse();
   const recentV5Rows = data.v5Rows.filter((row) => row.actual !== null).slice(-14).reverse();
   const versionMetricsByKey = new Map(data.versionLeaderboard.map((metric) => [metric.key, metric]));
+  const versionComparisonRows: Array<{ key: VersionKey; label: string; champion: string }> = [
+    { key: 'v0', label: 'V0', champion: data.v0SourceLabel },
+    { key: 'v1', label: 'V1', champion: 'Feature Regression V1' },
+    { key: 'v2', label: 'V2', champion: 'Flow + Weather + ITR' },
+    { key: 'v3', label: 'V3', champion: 'Stacked Context Model' },
+    {
+      key: 'v4',
+      label: 'V4',
+      champion: data.targetV4Row?.championModel ? `${VERSION_LABELS[data.targetV4Row.championModel]} + bias correction` : '-'
+    },
+    { key: 'v4_ensemble', label: 'V4E', champion: 'Inverse 14-day error weights' },
+    {
+      key: 'v5',
+      label: 'V5',
+      champion: data.targetV5Row?.championModel
+        ? data.targetV5Row.blendMode === 'blend'
+          ? `${VERSION_LABELS[data.targetV5Row.championModel]} + recent14 blend`
+          : `${VERSION_LABELS[data.targetV5Row.championModel]} + recent14 bias`
+        : '-'
+    },
+    {
+      key: 'v6',
+      label: 'V6',
+      champion: data.targetV6Row?.championModel
+        ? data.targetV6Row.blendMode === 'blend'
+          ? `${VERSION_LABELS[data.targetV6Row.championModel]} + residual blend`
+          : `${VERSION_LABELS[data.targetV6Row.championModel]} + residual calibration`
+        : '-'
+    },
+    { key: 'v7', label: 'V7', champion: 'Promotion-aware stacked regression' }
+  ];
   const getAverageDiffHint = (key: VersionKey) => `${t('平均差异', 'Avg diff')} ${formatPercent(versionMetricsByKey.get(key)?.recent14.mape ?? null)}`;
 
   return (
@@ -1769,7 +1991,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
             </div>
           </div>
           <div className="mt-5 flex flex-wrap items-center gap-2">
-            <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('预测目标日', 'Target forecast day')}</div>
+            <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>Target forecast day</div>
             <StyledDateInput
               value={forecastTargetDate}
               onChange={(value) => {
@@ -1789,63 +2011,71 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
               <div className={['text-sm font-semibold', titleClass].join(' ')}>V0 Baseline Pack</div>
               <div className={['mt-2 text-sm', mutedClass].join(' ')}>
-                {data.bestBaselineMetric ? `${data.v0SourceLabel} champion • ${getAverageDiffHint('v0')}` : t('样本不足', 'Not enough samples')}
+                {data.bestBaselineMetric ? `${data.v0SourceLabel} champion - ${getAverageDiffHint('v0')}` : t('样本不足', 'Not enough samples')}
               </div>
             </div>
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
               <div className={['text-sm font-semibold', titleClass].join(' ')}>V1 Feature Regression</div>
               <div className={['mt-2 text-sm', mutedClass].join(' ')}>
                 {data.targetFeatureModelV1
-                  ? `${formatNumber(data.targetFeatureModelV1.sampleSize)} ${t('个训练样本', 'training samples')} • ${getAverageDiffHint('v1')}`
-                  : t('样本不足，尚未训练。', 'Not enough samples to train yet.')}
+                  ? `${formatNumber(data.targetFeatureModelV1.sampleSize)} training samples - ${getAverageDiffHint('v1')}`
+                  : 'Not enough samples to train yet.'}
               </div>
             </div>
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
               <div className={['text-sm font-semibold', titleClass].join(' ')}>V2 Flow + Weather + ITR</div>
               <div className={['mt-2 text-sm', mutedClass].join(' ')}>
                 {data.targetFeatureModelV2
-                  ? `${formatNumber(data.targetFeatureModelV2.sampleSize)} ${t('个训练样本', 'training samples')} • ${getAverageDiffHint('v2')}`
-                  : t('样本不足，尚未训练。', 'Not enough samples to train yet.')}
+                  ? `${formatNumber(data.targetFeatureModelV2.sampleSize)} training samples - ${getAverageDiffHint('v2')}`
+                  : 'Not enough samples to train yet.'}
               </div>
             </div>
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
               <div className={['text-sm font-semibold', titleClass].join(' ')}>V3 Stacked Context Model</div>
               <div className={['mt-2 text-sm', mutedClass].join(' ')}>
                 {data.targetFeatureModelV3
-                  ? `${formatNumber(data.targetFeatureModelV3.sampleSize)} ${t('个训练样本', 'training samples')} • ${getAverageDiffHint('v3')}`
-                  : t('样本不足，尚未训练。', 'Not enough samples to train yet.')}
+                  ? `${formatNumber(data.targetFeatureModelV3.sampleSize)} training samples - ${getAverageDiffHint('v3')}`
+                  : 'Not enough samples to train yet.'}
+              </div>
+            </div>
+            <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
+              <div className={['text-sm font-semibold', titleClass].join(' ')}>V7 Promotion-Aware Model</div>
+              <div className={['mt-2 text-sm', mutedClass].join(' ')}>
+                {data.targetFeatureModelV7
+                  ? `${formatNumber(data.targetFeatureModelV7.sampleSize)} training samples - ${getAverageDiffHint('v7')}`
+                  : 'Not enough promotion-aware samples to train V7 yet.'}
               </div>
             </div>
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
               <div className={['text-sm font-semibold', titleClass].join(' ')}>V4 Champion Selector</div>
               <div className={['mt-2 text-sm', mutedClass].join(' ')}>
                 {data.targetV4Row
-                  ? `${data.targetV4Row.championModel ? VERSION_LABELS[data.targetV4Row.championModel] : '-'} • ${t('偏差', 'bias')} ${formatPercent(data.targetV4Row.championBiasAverage7)} • ${getAverageDiffHint('v4')}`
-                  : t('历史不足，暂时无法评分。', 'Not enough history to score yet.')}
+                  ? `${data.targetV4Row.championModel ? VERSION_LABELS[data.targetV4Row.championModel] : '-'} - ${t('偏差', 'bias')} ${formatPercent(data.targetV4Row.championBiasAverage7)} - ${getAverageDiffHint('v4')}`
+                  : 'Not enough history to score yet.'}
               </div>
             </div>
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
               <div className={['text-sm font-semibold', titleClass].join(' ')}>V4 Ensemble</div>
               <div className={['mt-2 text-sm', mutedClass].join(' ')}>
                 {data.targetV4Row
-                  ? `${t('逆14日误差加权', 'Inverse 14-day error weights')} • ${t('偏差', 'bias')} ${formatPercent(data.targetV4Row.ensembleBiasAverage7)} • ${getAverageDiffHint('v4_ensemble')}`
-                  : t('历史不足，暂时无法加权。', 'Not enough history to weight yet.')}
+                  ? `Inverse 14-day error weights - bias ${formatPercent(data.targetV4Row.ensembleBiasAverage7)} - ${getAverageDiffHint('v4_ensemble')}`
+                  : 'Not enough history to weight yet.'}
               </div>
             </div>
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
               <div className={['text-sm font-semibold', titleClass].join(' ')}>V5 Adaptive Blend</div>
               <div className={['mt-2 text-sm', mutedClass].join(' ')}>
                 {data.targetV5Row
-                  ? `${data.targetV5Row.championModel ? VERSION_LABELS[data.targetV5Row.championModel] : '-'} • ${t('调整率', 'adjustment')} ${formatPercent(data.targetV5Row.adjustmentRate)} • ${getAverageDiffHint('v5')}`
-                  : t('历史不足，暂时无法动态调节。', 'Not enough history for dynamic adjustment yet.')}
+                  ? `${data.targetV5Row.championModel ? VERSION_LABELS[data.targetV5Row.championModel] : '-'} - adjustment ${formatPercent(data.targetV5Row.adjustmentRate)} - ${getAverageDiffHint('v5')}`
+                  : 'Not enough history for dynamic adjustment yet.'}
               </div>
             </div>
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
               <div className={['text-sm font-semibold', titleClass].join(' ')}>V6 Residual Blend</div>
               <div className={['mt-2 text-sm', mutedClass].join(' ')}>
                 {data.targetV6Row
-                  ? `${data.targetV6Row.championModel ? VERSION_LABELS[data.targetV6Row.championModel] : '-'} • ${t('残差修正', 'residual correction')} ${formatPercent(data.targetV6Row.adjustmentRate)} • ${getAverageDiffHint('v6')}`
-                  : t('历史不足，暂时无法进行残差校准。', 'Not enough history for residual calibration yet.')}
+                  ? `${data.targetV6Row.championModel ? VERSION_LABELS[data.targetV6Row.championModel] : '-'} - ${t('残差修正', 'residual correction')} ${formatPercent(data.targetV6Row.adjustmentRate)} - ${getAverageDiffHint('v6')}`
+                  : 'Not enough history for residual calibration yet.'}
               </div>
             </div>
           </div>
@@ -1854,29 +2084,29 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
 
       <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <MetricCard
-          label={t('完整历史日', 'Complete days')}
+          label={'Complete days'}
           value={formatNumber(data.analysisDays.length)}
           themeMode={themeMode}
         />
         <MetricCard
-          label={t('计划字段覆盖率', 'Planning coverage')}
+          label={'Planning coverage'}
           value={formatPercent(coverage, 0)}
           themeMode={themeMode}
         />
         <MetricCard
-          label={t('最佳版本', 'Best version')}
+          label={'Best version'}
           value={bestVersionLabel}
-          hint={data.bestVersionMetric ? `${data.bestVersionMetric.label} • 14D WAPE ${formatPercent(data.bestVersionMetric.recent14.wape)}` : '-'}
+          hint={data.bestVersionMetric ? `${data.bestVersionMetric.label} - 14D WAPE ${formatPercent(data.bestVersionMetric.recent14.wape)}` : '-'}
           themeMode={themeMode}
         />
         <MetricCard
-          label={t('目标日预测', 'Target forecast')}
+          label={'Target forecast'}
           value={formatNumber(targetForecastValue)}
-          hint={`${forecastTargetDate} • ${data.bestVersionMetric?.label ?? '-'} • 14D`}
+          hint={`${forecastTargetDate} - ${data.bestVersionMetric?.label ?? '-'} - 14D`}
           themeMode={themeMode}
         />
         <MetricCard
-          label={t('实际流入量', 'Actual inbound')}
+          label={'Actual inbound'}
           value={formatNumber(data.targetActual)}
           hint={`${t('差异', 'Difference')}: ${formatSignedNumber(targetDiff)}`}
           themeMode={themeMode}
@@ -1905,7 +2135,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('版本对比', 'Version comparison')}</div>
-                  <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('Baseline vs Feature Models', 'Baseline vs Feature Models')}</div>
+                  <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('版本预测对比', 'Forecast version comparison')}</div>
                 </div>
                 <div className={['text-sm', mutedClass].join(' ')}>
                   {data.improvementVsBaseline === null
@@ -1920,88 +2150,54 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                   <thead>
                     <tr className={tableHeaderClass}>
                       <th className="rounded-l-2xl px-4 py-3 text-left font-semibold">Version</th>
-                      <th className="px-4 py-3 text-left font-semibold">{t('冠军模型', 'Champion')}</th>
+                      <th className="px-4 py-3 text-left font-semibold">Champion</th>
+                      <th className="px-4 py-3 text-right font-semibold">Samples</th>
                       <th className="px-4 py-3 text-right font-semibold">WAPE</th>
-                      <th className="rounded-r-2xl px-4 py-3 text-right font-semibold">{t('目标日预测', 'Target forecast')}</th>
+                      <th className="px-4 py-3 text-right font-semibold">Actual inbound</th>
+                      <th className="px-4 py-3 text-right font-semibold">Target forecast</th>
+                      <th className="rounded-r-2xl px-4 py-3 text-right font-semibold">Variance %</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td className={['border-b px-4 py-3 font-semibold', cellClass].join(' ')}>V0</td>
-                      <td className={['border-b px-4 py-3', cellClass].join(' ')}>{data.v0SourceLabel}</td>
-                      <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatPercent(versionMetricsByKey.get('v0')?.wape ?? null)}</td>
-                      <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(versionMetricsByKey.get('v0')?.targetForecast ?? null)}</td>
-                    </tr>
-                    <tr>
-                      <td className={['px-4 py-3 font-semibold', cellClass].join(' ')}>V1</td>
-                      <td className={['px-4 py-3', cellClass].join(' ')}>Feature Regression V1</td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatPercent(versionMetricsByKey.get('v1')?.wape ?? null)}</td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(versionMetricsByKey.get('v1')?.targetForecast ?? null)}</td>
-                    </tr>
-                    <tr>
-                      <td className={['px-4 py-3 font-semibold', cellClass].join(' ')}>V2</td>
-                      <td className={['px-4 py-3', cellClass].join(' ')}>Flow + Weather + ITR</td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatPercent(versionMetricsByKey.get('v2')?.wape ?? null)}</td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(versionMetricsByKey.get('v2')?.targetForecast ?? null)}</td>
-                    </tr>
-                    <tr>
-                      <td className={['px-4 py-3 font-semibold', cellClass].join(' ')}>V3</td>
-                      <td className={['px-4 py-3', cellClass].join(' ')}>Stacked Context Model</td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatPercent(versionMetricsByKey.get('v3')?.wape ?? null)}</td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(versionMetricsByKey.get('v3')?.targetForecast ?? null)}</td>
-                    </tr>
-                    <tr>
-                      <td className={['px-4 py-3 font-semibold', cellClass].join(' ')}>V4</td>
-                      <td className={['px-4 py-3', cellClass].join(' ')}>
-                        {data.targetV4Row?.championModel ? `${VERSION_LABELS[data.targetV4Row.championModel]} + bias correction` : '-'}
-                      </td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatPercent(versionMetricsByKey.get('v4')?.wape ?? null)}</td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(versionMetricsByKey.get('v4')?.targetForecast ?? null)}</td>
-                    </tr>
-                    <tr>
-                      <td className={['px-4 py-3 font-semibold', cellClass].join(' ')}>V4E</td>
-                      <td className={['px-4 py-3', cellClass].join(' ')}>{t('逆14日误差加权', 'Inverse 14-day error weights')}</td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatPercent(versionMetricsByKey.get('v4_ensemble')?.wape ?? null)}</td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(versionMetricsByKey.get('v4_ensemble')?.targetForecast ?? null)}</td>
-                    </tr>
-                    <tr>
-                      <td className={['px-4 py-3 font-semibold', cellClass].join(' ')}>V5</td>
-                      <td className={['px-4 py-3', cellClass].join(' ')}>
-                        {data.targetV5Row?.championModel
-                          ? data.targetV5Row.blendMode === 'blend'
-                            ? `${VERSION_LABELS[data.targetV5Row.championModel]} + recent14 blend`
-                            : `${VERSION_LABELS[data.targetV5Row.championModel]} + recent14 bias`
-                          : '-'}
-                      </td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatPercent(versionMetricsByKey.get('v5')?.wape ?? null)}</td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(versionMetricsByKey.get('v5')?.targetForecast ?? null)}</td>
-                    </tr>
-                    <tr>
-                      <td className={['px-4 py-3 font-semibold', cellClass].join(' ')}>V6</td>
-                      <td className={['px-4 py-3', cellClass].join(' ')}>
-                        {data.targetV6Row?.championModel
-                          ? data.targetV6Row.blendMode === 'blend'
-                            ? `${VERSION_LABELS[data.targetV6Row.championModel]} + residual blend`
-                            : `${VERSION_LABELS[data.targetV6Row.championModel]} + residual calibration`
-                          : '-'}
-                      </td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatPercent(versionMetricsByKey.get('v6')?.wape ?? null)}</td>
-                      <td className={['px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(versionMetricsByKey.get('v6')?.targetForecast ?? null)}</td>
-                    </tr>
+                    {versionComparisonRows.map((row, index) => {
+                      const metric = versionMetricsByKey.get(row.key);
+                      const targetForecast = metric?.targetForecast ?? null;
+                      const variance =
+                        data.targetActual !== null && targetForecast !== null && targetForecast > 0
+                          ? (data.targetActual - targetForecast) / targetForecast
+                          : null;
+                      const rowCellClass = [
+                        index < versionComparisonRows.length - 1 ? 'border-b px-4 py-3' : 'px-4 py-3',
+                        cellClass
+                      ].join(' ');
+
+                      return (
+                        <tr key={row.key}>
+                          <td className={[rowCellClass, 'font-semibold'].join(' ')}>{row.label}</td>
+                          <td className={rowCellClass}>{row.champion}</td>
+                          <td className={[rowCellClass, 'text-right'].join(' ')}>{formatNumber(metric?.samples ?? null)}</td>
+                          <td className={[rowCellClass, 'text-right'].join(' ')}>{formatPercent(metric?.wape ?? null)}</td>
+                          <td className={[rowCellClass, 'text-right'].join(' ')}>{formatNumber(data.targetActual)}</td>
+                          <td className={[rowCellClass, 'text-right'].join(' ')}>{formatNumber(metric?.targetForecast ?? null)}</td>
+                          <td className={[rowCellClass, 'text-right'].join(' ')}>{formatPercent(variance)}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             </div>
 
             <div className={['rounded-[28px] p-5', panelClass].join(' ')}>
-              <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('目标日输入快照', 'Target input snapshot')}</div>
+              <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('目标输入快照', 'Target input snapshot')}</div>
               <div className="mt-4 grid gap-3">
                 {[
                   { label: t('Backlog', 'Backlog'), value: data.targetInput?.previous_day_backlog ?? 0 },
                   { label: t('Inventory', 'Inventory'), value: data.targetInput?.inventory_level ?? 0 },
                   { label: t('Capacity', 'Capacity'), value: data.targetInput?.full_day_capacity ?? 0 },
                   { label: t('Yesterday 00-14', 'Yesterday 00-14'), value: data.targetInput?.yesterday_inflow_00_14 ?? 0 },
-                  { label: t('Severe weather', 'Severe weather'), value: data.targetInput?.severe_weather ? t('是', 'Yes') : t('否', 'No') },
+                  { label: t('恶劣天气', 'Severe weather'), value: data.targetInput?.severe_weather ? t('是', 'Yes') : t('否', 'No') },
+                  { label: t('大促', 'Major promotion'), value: data.targetInput?.major_promotion ? t('是', 'Yes') : t('否', 'No') },
                   {
                     label: t('12点累计量', '12:00 cumulative'),
                     value: `${formatNumber(data.targetInput?.current_cumulative_volume_12 ?? 0)} ${t('(仅展示，不训练)', '(display only, excluded)')}`
@@ -2026,7 +2222,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                   <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('时间序列回测', 'Time-series backtest')}</div>
                 </div>
                 <div className={['text-sm', mutedClass].join(' ')}>
-                  {formatNumber(data.versionEvaluationRows.length)} {t('个可评估样本日', 'evaluation days')} • {t('按最近14天WAPE排序', 'sorted by recent 14D WAPE')}
+                  {formatNumber(data.versionEvaluationRows.length)} {t('个可评估样本日', 'evaluation days')} - {t('按最近14天WAPE排序', 'sorted by recent 14D WAPE')}
                 </div>
               </div>
               <div className="mt-4 overflow-x-auto">
@@ -2080,33 +2276,42 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
             </div>
 
             <div className={['rounded-[28px] p-5', panelClass].join(' ')}>
-              <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('Feature Models', 'Feature Models')}</div>
+              <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('特征模型', 'Feature Models')}</div>
               <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('特征权重快照', 'Feature weight snapshot')}</div>
               <p className={['mt-2 text-sm leading-6', mutedClass].join(' ')}>
                 {t(
-                  'V1 保留 backlog / inventory / capacity 等运营特征；V2 只看历史流入、恶劣天气与库存转换率（ITR）相关特征；V3 再把 V1 / V2、7D 基线预测和最近上下文做二层融合。',
+                  'V1 保留 backlog / inventory / capacity 等运营特征；V2 只看历史流入、恶劣天气与库存周转率（ITR）相关特征；V3 再把 V1 / V2、7日基线预测和最近上下文做二层融合。',
                   'V1 keeps operational features like backlog / inventory / capacity; V2 only uses historical inflow, severe weather, and inventory turnover rate (ITR) features; V3 stacks V1, V2, the 7-day baseline, and recent context into a second-stage regression.'
                 )}
+              </p>
+              <p className={['mt-2 text-sm leading-6', mutedClass].join(' ')}>
+                {t('V7 在 V3 的上下文堆叠基础上额外引入大促信息。', 'V7 extends the stacked context model with major-promotion information.')}
               </p>
               <div className="mt-4 space-y-4">
                 {[
                   {
                     key: 'v1',
                     title: 'V1 Feature Regression',
-                    emptyText: t('当前完整样本还不够，V1 暂时不展示特征权重。', 'Not enough complete samples yet to show V1 feature weights.'),
+                    emptyText: 'Not enough complete samples yet to show V1 feature weights.',
                     rows: data.featureImportanceRowsV1
                   },
                   {
                     key: 'v2',
                     title: 'V2 Flow + Weather + ITR',
-                    emptyText: t('当前完整样本还不够，V2 暂时不展示特征权重。', 'Not enough complete samples yet to show V2 feature weights.'),
+                    emptyText: 'Not enough complete samples yet to show V2 feature weights.',
                     rows: data.featureImportanceRowsV2
                   },
                   {
                     key: 'v3',
                     title: 'V3 Stacked Context Model',
-                    emptyText: t('当前可用的 V1 / V2 重叠样本还不够，V3 暂时不展示特征权重。', 'Not enough trainable V1 / V2 overlap yet to show V3 feature weights.'),
+                    emptyText: 'Not enough trainable V1 / V2 overlap yet to show V3 feature weights.',
                     rows: data.featureImportanceRowsV3
+                  },
+                  {
+                    key: 'v7',
+                    title: 'V7 Promotion-Aware Model',
+                    emptyText: 'Not enough promotion-labeled overlap yet to show V7 feature weights.',
+                    rows: data.featureImportanceRowsV7
                   }
                 ].map((section) => (
                   <div key={section.key} className={['rounded-2xl p-4', subPanelClass].join(' ')}>
@@ -2143,7 +2348,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('自适应模型评估', 'Adaptive model summary')}</div>
-                  <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('V0-V3 与 V5/V6 对比', 'V0-V3 vs V5/V6')}</div>
+                  <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('V0-V3 与 V5-V7 对比', 'V0-V3 and V5-V7')}</div>
                 </div>
                 <div className={['text-sm text-right', mutedClass].join(' ')}>
                   <div>{t('整体最佳', 'Best overall')}: {data.bestAdaptiveOverallMetric?.label ?? '-'}</div>
@@ -2234,9 +2439,9 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                     <th className="px-4 py-3 text-right font-semibold">S V3</th>
                     <th className="px-4 py-3 text-left font-semibold">{t('冠军', 'Champion')}</th>
                     <th className="px-4 py-3 text-right font-semibold">{t('基础预测', 'Base')}</th>
-                    <th className="px-4 py-3 text-right font-semibold">{t('调整率', 'Adjustment')}</th>
+                    <th className="px-4 py-3 text-right font-semibold">Adjustment</th>
                     <th className="px-4 py-3 text-right font-semibold">V5</th>
-                    <th className="rounded-r-2xl px-4 py-3 text-right font-semibold">{t('V5误差率', 'V5 error rate')}</th>
+                    <th className="rounded-r-2xl px-4 py-3 text-right font-semibold">V5 error rate</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2294,6 +2499,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                       <th className="px-4 py-3 text-right font-semibold">V1</th>
                       <th className="px-4 py-3 text-right font-semibold">V2</th>
                       <th className="px-4 py-3 text-right font-semibold">V3</th>
+                      <th className="px-4 py-3 text-right font-semibold">V7</th>
                       <th className="rounded-r-2xl px-4 py-3 text-left font-semibold">{t('最佳', 'Best')}</th>
                     </tr>
                   </thead>
@@ -2309,6 +2515,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v1)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v2)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v3)}</td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v7)}</td>
                         <td className={['border-b px-4 py-3', cellClass].join(' ')}>{row.bestModel}</td>
                       </tr>
                     ))}

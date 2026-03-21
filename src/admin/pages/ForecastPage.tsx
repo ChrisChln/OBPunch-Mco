@@ -61,6 +61,7 @@ type ForecastManualInputRow = {
   current_cumulative_volume_12: number;
   inventory_level: number;
   severe_weather: boolean;
+  major_promotion: boolean;
   full_day_capacity: number;
   yesterday_inflow_00_14: number;
   updated_at?: string | null;
@@ -73,6 +74,7 @@ type ForecastManualInputDraftRow = {
   predicted_full_day_volume_12: string;
   inventory_level: string;
   severe_weather: boolean;
+  major_promotion: boolean;
   full_day_capacity: string;
   yesterday_inflow_00_14: string;
 };
@@ -930,6 +932,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
         current_cumulative_volume_12: Number((row as any).current_cumulative_volume_12 ?? 0),
         inventory_level: Number((row as any).inventory_level ?? 0),
         severe_weather: Boolean((row as any).severe_weather ?? false),
+        major_promotion: Boolean((row as any).major_promotion ?? false),
         full_day_capacity: Number(row.full_day_capacity ?? 0),
         yesterday_inflow_00_14: Number(row.yesterday_inflow_00_14 ?? 0),
         updated_at: row.updated_at ?? null,
@@ -1296,6 +1299,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           predicted_full_day_volume_12: predictedFullDayVolume12 === null ? '' : String(predictedFullDayVolume12),
           inventory_level: displayDraftNumber(existing?.inventory_level),
           severe_weather: existing ? Boolean(existing.severe_weather) : false,
+          major_promotion: existing ? Boolean(existing.major_promotion) : false,
           full_day_capacity: displayDraftNumber(existing?.full_day_capacity),
           yesterday_inflow_00_14:
             autoYesterdayInflow !== null
@@ -1614,6 +1618,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       current_cumulative_volume_12: number;
       inventory_level: number;
       severe_weather: boolean;
+      major_promotion: boolean;
       full_day_capacity: number;
       yesterday_inflow_00_14: number;
     }> = [];
@@ -1644,7 +1649,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
         draftRow.inventory_level,
         draftRow.full_day_capacity,
         draftRow.yesterday_inflow_00_14
-      ].some((value) => String(value ?? '').trim() !== '') || draftRow.severe_weather;
+      ].some((value) => String(value ?? '').trim() !== '') || draftRow.severe_weather || draftRow.major_promotion;
       if (!hasAnyValue) continue;
 
       payloadRows.push({
@@ -1653,6 +1658,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
         current_cumulative_volume_12: Number(existingManualRow?.current_cumulative_volume_12 ?? 0),
         inventory_level: inventoryLevel ?? 0,
         severe_weather: Boolean(draftRow.severe_weather),
+        major_promotion: Boolean(draftRow.major_promotion),
         full_day_capacity: fullDayCapacity ?? 0,
         yesterday_inflow_00_14: yesterdayInflow0014 ?? 0
       });
@@ -2050,6 +2056,10 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                         <div>
                           <div className={labelClass}>{t('恶劣天气', 'Severe weather')}</div>
                           <div className={valueClass}>{row.severe_weather ? t('是', 'Yes') : t('否', 'No')}</div>
+                        </div>
+                        <div>
+                          <div className={labelClass}>{t('大促', 'Major promotion')}</div>
+                          <div className={valueClass}>{row.major_promotion ? t('是', 'Yes') : t('否', 'No')}</div>
                         </div>
                         <div>
                           <div className={labelClass}>{t('全天产能', 'Capacity')}</div>
@@ -2536,6 +2546,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                         <col className="w-[150px]" />
                         <col className="w-[130px]" />
                         <col className="w-[100px]" />
+                        <col className="w-[100px]" />
                         <col className="w-[140px]" />
                         <col className="w-[160px]" />
                       </colgroup>
@@ -2547,6 +2558,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                           <th className="px-2 py-2">{t('今日预测单量', 'Predicted volume at 12:00')}</th>
                           <th className="px-2 py-2">{t('库存量', 'Inventory')}</th>
                           <th className="px-2 py-2">{t('恶劣天气', 'Severe weather')}</th>
+                          <th className="px-2 py-2">{t('大促', 'Major promotion')}</th>
                           <th className="px-2 py-2">{t('全天产能', 'Full-day capacity')}</th>
                           <th className="px-2 py-2">{t('昨日00:00-14:00流入量', 'Yesterday 00:00-14:00 inflow')}</th>
                         </tr>
@@ -2640,6 +2652,23 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                   className="h-4 w-4 rounded border-slate-300"
                                 />
                                 <span>{t('恶劣', 'Severe')}</span>
+                              </label>
+                            </td>
+                            <td className="px-2 py-3 align-middle">
+                              <label className={['flex items-center gap-1.5 text-sm font-medium', valueClass].join(' ')}>
+                                <input
+                                  type="checkbox"
+                                  checked={draftRow.major_promotion}
+                                  onChange={(e) => {
+                                    setManualInputDraftDirty(true);
+                                    setManualInputDraftRows((prev) =>
+                                      prev.map((row, rowIndex) => (rowIndex === index ? { ...row, major_promotion: e.target.checked } : row))
+                                    );
+                                  }}
+                                  disabled={manualInputSaving}
+                                  className="h-4 w-4 rounded border-slate-300"
+                                />
+                                <span>{t('大促', 'Promo')}</span>
                               </label>
                             </td>
                             <td className="px-2 py-3 align-top">
