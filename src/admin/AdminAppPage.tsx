@@ -1810,8 +1810,9 @@ const normalizeShiftValue = (value: string): '' | 'early' | 'late' => {
 };
 const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const pos = normalizePositionKey(position) ?? '';
-  if (shift === 'early') return pos === 'Pick' ? '07:00' : '08:00';
-  return pos === 'Pick' ? '15:30' : '16:30';
+  const isSevenThirtyTrack = pos === 'Pick' || pos === 'Transfer';
+  if (shift === 'early') return isSevenThirtyTrack ? '07:00' : '08:00';
+  return isSevenThirtyTrack ? '15:30' : '16:30';
 };
 
   const fetchRealtimeAttendance = async () => {
