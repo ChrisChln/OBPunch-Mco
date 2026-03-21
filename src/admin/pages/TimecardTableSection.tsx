@@ -147,6 +147,9 @@ export default function TimecardTableSection({
                       punchCount: Number(r.punchCountByDay?.[idx] ?? 0),
                       inProgress: Boolean(r.inProgressByDay?.[idx])
                     });
+                    const late = Boolean(r.lateByDay?.[idx]);
+                    const lateMinutes = Number(r.lateMinutesByDay?.[idx] ?? 0);
+                    const lateTitle = late ? `${t('迟到', 'Late')} ${lateMinutes}${t('分钟', 'm')}` : '';
                     return (
                       <div className="group relative inline-flex items-center justify-center">
                         {hoursText ? (
@@ -187,10 +190,17 @@ export default function TimecardTableSection({
                               if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
                               return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
                             })()}
-                            title={t('查看/编辑打卡流水', 'View/Edit Punch Log')}
+                            title={[t('查看/编辑打卡流水', 'View/Edit Punch Log'), lateTitle].filter(Boolean).join(' | ')}
                           >
                             {hoursText}
                           </button>
+                        ) : late ? (
+                          <span
+                            className="inline-flex rounded border border-amber-300/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-amber-200"
+                            title={lateTitle || t('迟到', 'Late')}
+                          >
+                            {t('迟到', 'Late')}
+                          </span>
                         ) : r.absentByDay[idx] ? (
                           <span className="inline-flex rounded px-1.5 py-0.5 text-[11px] font-semibold text-rose-200" title="Scheduled but no punch">
                             {t('缺勤', 'Absent')}
@@ -214,6 +224,12 @@ export default function TimecardTableSection({
                           </span>
                         ) : (
                           ''
+                        )}
+                        {late && (
+                          <span
+                            className="pointer-events-none absolute -left-1 -top-1 h-2 w-2 rounded-full bg-amber-400 shadow-[0_0_0_1px_rgba(251,191,36,0.55)]"
+                            title={lateTitle || t('迟到', 'Late')}
+                          />
                         )}
                         {timecardCellAudit.length > 0 && (
                           <span className="pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full bg-rose-500 shadow-[0_0_0_1px_rgba(244,63,94,0.55)]" />
