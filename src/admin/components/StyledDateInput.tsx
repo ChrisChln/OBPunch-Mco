@@ -60,13 +60,15 @@ export default function StyledDateInput({
     return getStartOfMonth(new Date());
   });
   const [panelPosition, setPanelPosition] = useState({ top: 0, left: 0 });
-  const selectedDate = isValidDateOnly(value) ? new Date(`${value}T00:00:00`) : null;
+  const selectedDateOnly = isValidDateOnly(value) ? value : null;
   const today = toDateOnly(new Date());
 
   useEffect(() => {
-    if (!open || !selectedDate) return;
-    setViewMonth(getStartOfMonth(selectedDate));
-  }, [open, selectedDate]);
+    if (!open || !selectedDateOnly) return;
+    // Keep the month synced to the selected value only when the value itself changes
+    // or the picker is reopened. Parent re-renders should not snap the calendar back.
+    setViewMonth(getStartOfMonth(new Date(`${selectedDateOnly}T00:00:00`)));
+  }, [open, selectedDateOnly]);
 
   useEffect(() => {
     if (!open || disabled) return;
