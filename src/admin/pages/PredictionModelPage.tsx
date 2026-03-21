@@ -847,17 +847,26 @@ const calculateRollingAverageErrors = (rows: V4OutputRow[], currentIndex: number
 };
 
 // Prefer the highest rolling score, then the smallest 14-day average error.
-const selectChampionModel = (rollingScores: BaseVersionPointMap, rollingAverageErrors: BaseVersionApeMap): BaseVersionKey | null => {
-  const ranked = BASE_VERSION_KEYS.map((key) => ({
-    key,
-    score: rollingScores[key],
-    averageError: rollingAverageErrors[key] ?? Number.POSITIVE_INFINITY
-  })).sort(
-    (a, b) =>
-      b.score - a.score ||
-      a.averageError - b.averageError ||
-      VERSION_TIEBREAK_ORDER.indexOf(a.key) - VERSION_TIEBREAK_ORDER.indexOf(b.key)
-  );
+const selectChampionModel = (
+  rollingScores: BaseVersionPointMap,
+  rollingAverageErrors: BaseVersionApeMap,
+  currentForecasts: BaseVersionForecastMap
+): BaseVersionKey | null => {
+  const availableKeys = BASE_VERSION_KEYS.filter((key) => currentForecasts[key] !== null);
+  if (!availableKeys.length) return null;
+
+  const ranked = availableKeys
+    .map((key) => ({
+      key,
+      score: rollingScores[key],
+      averageError: rollingAverageErrors[key] ?? Number.POSITIVE_INFINITY
+    }))
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        a.averageError - b.averageError ||
+        VERSION_TIEBREAK_ORDER.indexOf(a.key) - VERSION_TIEBREAK_ORDER.indexOf(b.key)
+    );
 
   return ranked[0]?.key ?? null;
 };
@@ -1086,7 +1095,7 @@ const buildV4Model = (rows: VersionInputRow[]) => {
     const dailyPoints = assignDailyPoints(apes);
     const rollingScores14 = calculateRollingScores(outputRows, index, 14);
     const rollingAverageErrors14 = calculateRollingAverageErrors(outputRows, index, 14);
-    const championModel = selectChampionModel(rollingScores14, rollingAverageErrors14);
+    const championModel = selectChampionModel(rollingScores14, rollingAverageErrors14, row.forecasts);
     const baseForecast = championModel ? row.forecasts[championModel] : null;
     const championBias = calculateBiasAdjustment(
       outputRows,
