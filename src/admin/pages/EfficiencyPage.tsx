@@ -4,6 +4,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createPortal } from 'react-dom';
 import type { ForecastModelRow } from '../forecast';
 import { calculateForecast, getIsoWeekday } from '../forecast';
+import {
+  loadDynamicEfficiencyUphMap,
+  type DynamicProcKey,
+  type DynamicUphByShiftProc
+} from '../efficiencyDynamicTemplate';
 
 type TranslateFn = (zh: string, en: string) => string;
 type ThemeMode = 'light' | 'dark';
@@ -72,11 +77,20 @@ type ArrangementInput = { ds: string; ns: string };
 
 const TABLE = 'efficiency_templates';
 const FORECAST_INPUT_TABLE = 'volume_forecast_daily_inputs';
+const SYSTEM_DYNAMIC_TEMPLATE_ID = '__system_dynamic__';
+const DYNAMIC_TEMPLATE_CACHE_TTL_MS = 5 * 60 * 1000;
 const HOUR_COLUMNS: HourColumnKey[] = [
   'h00', 'h01', 'h02', 'h03', 'h04', 'h05', 'h06', 'h07', 'h08', 'h09', 'h10', 'h11',
   'h12', 'h13', 'h14', 'h15', 'h16', 'h17', 'h18', 'h19', 'h20', 'h21', 'h22', 'h23'
 ];
 const INBOUND_DERIVED_KEYS: InboundKey[] = ['oi_pieces', 'oi_packages', 'single_pkgs', 'single_piece', 'multi_pkgs', 'multi_piece'];
+const INBOUND_HIDDEN_INPUT_KEYS = new Set<InboundKey>(['oi_pieces', 'oi_packages', 'single_pkgs', 'single_piece', 'multi_pkgs', 'multi_piece']);
+const INBOUND_RATIO_PAIRS: Partial<Record<InboundKey, InboundKey>> = {
+  single_ratio_pcs: 'multi_ratio_pcs',
+  multi_ratio_pcs: 'single_ratio_pcs',
+  single_ratio_pkgs: 'multi_ratio_pkgs',
+  multi_ratio_pkgs: 'single_ratio_pkgs'
+};
 
 const INBOUND_META: Array<[InboundKey, string, string]> = [
   ['oi_pieces', 'OI Pieces', 'OI Pieces'],
@@ -128,6 +142,22 @@ const buildProc = (values: Partial<Record<ProcKey, Partial<Omit<ProcRow, 'key' |
 
 const buildLabor = (values: Partial<Record<LaborKey, Pick<LaborRow, 'ds' | 'ns'>>> = {}): LaborRow[] =>
   LABOR_META.map(([key, labelZh, labelEn]) => ({ key, labelZh, labelEn, ds: values[key]?.ds ?? '', ns: values[key]?.ns ?? '' }));
+
+const applyDynamicUphToProcRows = (
+  rows: ProcRow[],
+  shift: 'early' | 'late',
+  uphByShiftProc: DynamicUphByShiftProc
+) =>
+  rows.map((row) => {
+    const nextUph = uphByShiftProc[shift][row.key as DynamicProcKey];
+    return nextUph ? { ...row, uph: nextUph } : row;
+  });
+
+const applyDynamicUphToPayload = (payload: Payload, uphByShiftProc: DynamicUphByShiftProc): Payload => ({
+  ...payload,
+  areaEfficiencyDs: applyDynamicUphToProcRows(payload.areaEfficiencyDs, 'early', uphByShiftProc),
+  areaEfficiencyNs: applyDynamicUphToProcRows(payload.areaEfficiencyNs, 'late', uphByShiftProc)
+});
 
 const defaultPayload = (): Payload => ({
   orderInboundDs: buildInbound(),
@@ -204,6 +234,12 @@ const toPercent = (value: string) => {
   const n = Number(text);
   if (!Number.isFinite(n)) return 0;
   return n > 1 ? n / 100 : n;
+};
+const formatPercentInput = (value: number) => {
+  const normalized = Math.max(0, Math.min(1, value));
+  const percentValue = normalized * 100;
+  const rounded = Math.round(percentValue * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
 };
 const calculateCapacity = (uph: string, ewh: string, people: number, lead: string) => {
   const uphValue = toNum(uph);
@@ -374,6 +410,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
   const [newTemplateName, setNewTemplateName] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [dynamicTemplateLoading, setDynamicTemplateLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [parameterDialogOpen, setParameterDialogOpen] = useState(false);
@@ -382,6 +419,14 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
   const [arrangementInput, setArrangementInput] = useState<ArrangementInput>({ ds: '', ns: '' });
   const [forecastLoading, setForecastLoading] = useState(false);
   const arrangementLoadedKeyRef = useRef('');
+  const dynamicTemplateRequestRef = useRef(0);
+  const dynamicTemplateCacheRef = useRef<{
+    dayKey: string;
+    at: number;
+    result: Awaited<ReturnType<typeof loadDynamicEfficiencyUphMap>>;
+  } | null>(null);
+  const isSystemDynamicTemplate = selectedTemplateId === SYSTEM_DYNAMIC_TEMPLATE_ID;
+  const systemDynamicTemplateName = t('系统动态模板', 'System dynamic template');
 
   const loadTemplates = async () => {
     if (!supabase) {
@@ -787,8 +832,74 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
   void inboundSections;
   void efficiencySections;
 
+  const templateOptions = useMemo(() => {
+    const options: Array<{ id: string; name: string }> = [];
+    if (templates.length === 0) {
+      options.push({ id: '', name: t('默认模板（未保存）', 'Default template (unsaved)') });
+    }
+    options.push({ id: SYSTEM_DYNAMIC_TEMPLATE_ID, name: systemDynamicTemplateName });
+    for (const item of templates) options.push({ id: item.id, name: item.name });
+    return options;
+  }, [systemDynamicTemplateName, t, templates]);
+
+  const loadDynamicTemplateResult = async () => {
+    const dayKey = toDateOnly(serverTime);
+    const cached = dynamicTemplateCacheRef.current;
+    if (cached && cached.dayKey === dayKey && Date.now() - cached.at < DYNAMIC_TEMPLATE_CACHE_TTL_MS) {
+      return cached.result;
+    }
+    const result = await loadDynamicEfficiencyUphMap({ supabase, serverTime });
+    if (!result.error) {
+      dynamicTemplateCacheRef.current = {
+        dayKey,
+        at: Date.now(),
+        result
+      };
+    }
+    return result;
+  };
+
   const selectTemplate = (id: string) => {
+    const requestId = dynamicTemplateRequestRef.current + 1;
+    dynamicTemplateRequestRef.current = requestId;
+    if (id === SYSTEM_DYNAMIC_TEMPLATE_ID) {
+      setSelectedTemplateId(id);
+      setDraftName(systemDynamicTemplateName);
+      setError(null);
+      setMessage(null);
+      setDynamicTemplateLoading(true);
+      void (async () => {
+        const result = await loadDynamicTemplateResult();
+        if (requestId !== dynamicTemplateRequestRef.current) return;
+        setDynamicTemplateLoading(false);
+        if (result.error) {
+          setMessage(t('系统动态模板加载失败，已保留当前模板值。', 'Dynamic template failed to load. Current template values were kept.'));
+          return;
+        }
+        setDraftPayload((prev) => applyDynamicUphToPayload(prev, result.uphByShiftProc));
+        if (result.missingKeys.length > 0) {
+          setMessage(
+            t(
+              `系统动态模板已刷新，${result.missingKeys.length} 个工序近 7 天无样本，保留当前模板值。`,
+              `${result.missingKeys.length} dynamic UPH rows had no 7-day sample. Current template values were kept.`
+            )
+          );
+        } else {
+          setMessage(t('系统动态模板已刷新，UPH 已更新为最近 7 天平均值。', 'Dynamic template refreshed with the last 7-day average UPH.'));
+        }
+      })();
+      return;
+    }
+
+    setDynamicTemplateLoading(false);
     setSelectedTemplateId(id);
+    if (!id) {
+      setDraftName(t('默认模板', 'Default template'));
+      setDraftPayload(defaultPayload());
+      setError(null);
+      setMessage(null);
+      return;
+    }
     const hit = templates.find((item) => item.id === id);
     if (!hit) return;
     setDraftName(hit.name);
@@ -798,7 +909,34 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
   };
 
   const updateInbound = (section: 'orderInboundDs' | 'orderInboundNs', key: InboundKey, value: string) =>
-    setDraftPayload((prev) => ({ ...prev, [section]: prev[section].map((item) => (item.key === key ? { ...item, value } : item)) }));
+    setDraftPayload((prev) => {
+      const counterpart = INBOUND_RATIO_PAIRS[key];
+      const trimmed = String(value ?? '').trim();
+      if (!counterpart) {
+        return { ...prev, [section]: prev[section].map((item) => (item.key === key ? { ...item, value } : item)) };
+      }
+
+      if (!trimmed) {
+        return {
+          ...prev,
+          [section]: prev[section].map((item) => (
+            item.key === key || item.key === counterpart ? { ...item, value: '' } : item
+          ))
+        };
+      }
+
+      const normalized = Math.max(0, Math.min(1, toPercent(trimmed)));
+      const nextValue = formatPercentInput(normalized);
+      const complementValue = formatPercentInput(1 - normalized);
+      return {
+        ...prev,
+        [section]: prev[section].map((item) => {
+          if (item.key === key) return { ...item, value: nextValue };
+          if (item.key === counterpart) return { ...item, value: complementValue };
+          return item;
+        })
+      };
+    });
 
   const updateProc = (
     section: 'areaEfficiencyDs' | 'areaEfficiencyNs',
@@ -811,6 +949,10 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
   const saveTemplate = async (mode: 'update' | 'create') => {
     if (!supabase) {
       setError('Missing Supabase configuration.');
+      return;
+    }
+    if (mode === 'update' && isSystemDynamicTemplate) {
+      setError(t('系统动态模板不能直接覆盖，请另存为模板。', 'System dynamic template cannot be overwritten. Save it as a new template instead.'));
       return;
     }
     const name = (mode === 'create' ? newTemplateName : draftName).trim();
@@ -1079,7 +1221,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
 
       {parameterDialogOpen && typeof document !== 'undefined'
         ? createPortal(
-        <div className={['fixed inset-0 z-[80] flex items-center justify-center p-4', isLight ? 'bg-slate-900/35' : 'bg-black/75'].join(' ')} onClick={() => setParameterDialogOpen(false)}>
+        <div className={['fixed inset-0 z-[80] flex items-center justify-center p-4', isLight ? 'bg-slate-900/35' : 'bg-black/75'].join(' ')}>
           <div
             className={['max-h-[94vh] w-full max-w-[1780px] overflow-hidden rounded-[28px] border shadow-[0_30px_80px_rgba(0,0,0,0.35)]', isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-slate-950'].join(' ')}
             onClick={(e) => e.stopPropagation()}
@@ -1099,19 +1241,18 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
             <div className="max-h-[calc(94vh-74px)] overflow-y-auto px-5 py-5">
               <div className={['mb-4 rounded-[22px] border p-4', shellClass].join(' ')}>
                 <div className="grid gap-3 xl:grid-cols-[minmax(0,220px)_minmax(0,220px)_auto_minmax(0,220px)_auto]">
-                  <div>
-                    <div className={['mb-2 text-xs uppercase tracking-[0.2em]', labelClass].join(' ')}>{t('当前模板', 'Current template')}</div>
-                    <select value={selectedTemplateId} disabled={isLocked || loading || templates.length === 0} onChange={(e) => selectTemplate(e.target.value)} className={inputClass}>
-                      {templates.length === 0 ? <option value="">{t('默认模板（未保存）', 'Default template (unsaved)')}</option> : null}
-                      {templates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                    <div>
+                      <div className={['mb-2 text-xs uppercase tracking-[0.2em]', labelClass].join(' ')}>{t('当前模板', 'Current template')}</div>
+                    <select value={selectedTemplateId} disabled={isLocked || loading} onChange={(e) => selectTemplate(e.target.value)} className={inputClass}>
+                      {templateOptions.map((item) => <option key={item.id || '__default__'} value={item.id}>{item.name}</option>)}
                     </select>
                   </div>
                   <div>
                     <div className={['mb-2 text-xs uppercase tracking-[0.2em]', labelClass].join(' ')}>{t('模板名称', 'Template name')}</div>
-                    <input value={draftName} onChange={(e) => setDraftName(e.target.value)} disabled={isLocked || saving} className={inputClass} />
+                    <input value={draftName} onChange={(e) => setDraftName(e.target.value)} disabled={isLocked || saving || isSystemDynamicTemplate} className={inputClass} />
                   </div>
                   <div className="flex items-end">
-                    <button type="button" disabled={isLocked || saving} onClick={() => void saveTemplate('update')} className={primaryBtn}>
+                    <button type="button" disabled={isLocked || saving || isSystemDynamicTemplate} onClick={() => void saveTemplate('update')} className={primaryBtn}>
                       {saving ? t('保存中...', 'Saving...') : t('保存模板', 'Save template')}
                     </button>
                   </div>
@@ -1125,13 +1266,20 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
                     </button>
                   </div>
                 </div>
+                {isSystemDynamicTemplate ? (
+                  <div className={['mt-3 text-xs', labelClass].join(' ')}>
+                    {dynamicTemplateLoading
+                      ? t('系统动态模板正在从 OBUP 刷新最近 7 天平均 UPH。', 'System dynamic template is refreshing the last 7-day average UPH from OBUP.')
+                      : t('系统动态模板中的 UPH 为自动值且只读；如需固化，请使用“另存为模板”。', 'UPH is auto-filled and read-only in the system dynamic template. Use "Save as template" to keep a snapshot.')}
+                  </div>
+                ) : null}
               </div>
 
               <div className="grid gap-6 xl:grid-cols-2">
                 <div className="grid gap-4">
                   <SectionBlock title={t('ToC Order Inbound DS', 'ToC Order Inbound DS')} subtitle={t('日班入库拆分参数', 'Day shift inbound split metrics')} themeMode={themeMode}>
                     <div className={['overflow-hidden rounded-2xl border', isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/15'].join(' ')}>
-                      {effectiveOrderInboundDs.filter((row) => row.key !== 'oi_pieces').map((row, index) => (
+                      {effectiveOrderInboundDs.filter((row) => !INBOUND_HIDDEN_INPUT_KEYS.has(row.key)).map((row, index) => (
                         <label
                           key={`orderInboundDs-${row.key}`}
                           className={[
@@ -1145,7 +1293,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
                           <input
                             value={row.value}
                             onChange={(e) => updateInbound('orderInboundDs', row.key, e.target.value)}
-                            disabled={isLocked || saving || row.key === 'oi_pieces'}
+                            disabled={isLocked || saving}
                             className={inputClass}
                           />
                         </label>
@@ -1160,9 +1308,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
                           <tr>
                             <th className="px-3 py-2.5">{t('Process', 'Process')}</th>
                             <th className="px-3 py-2.5">UPH</th>
-                            <th className="px-3 py-2.5">{t('Goal', 'Goal')}</th>
                             <th className="px-3 py-2.5">EWH</th>
-                            <th className="px-3 py-2.5">{t('# of People', '# of People')}</th>
                             <th className="px-3 py-2.5">{t('Lead', 'Lead')}</th>
                           </tr>
                         </thead>
@@ -1170,9 +1316,14 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
                           {draftPayload.areaEfficiencyDs.map((row) => (
                             <tr key={`areaEfficiencyDs-${row.key}`} className={rowClass}>
                               <td className="px-3 py-2.5 font-medium whitespace-nowrap">{t(row.labelZh, row.labelEn)}</td>
-                              {(['uph', 'goal', 'ewh', 'people', 'lead'] as const).map((field) => (
+                              {(['uph', 'ewh', 'lead'] as const).map((field) => (
                                 <td key={field} className="px-3 py-2.5">
-                                  <input value={row[field]} onChange={(e) => updateProc('areaEfficiencyDs', row.key, field, e.target.value)} disabled={isLocked || saving} className={inputClass} />
+                                  <input
+                                    value={row[field]}
+                                    onChange={(e) => updateProc('areaEfficiencyDs', row.key, field, e.target.value)}
+                                    disabled={isLocked || saving || (isSystemDynamicTemplate && field === 'uph')}
+                                    className={inputClass}
+                                  />
                                 </td>
                               ))}
                             </tr>
@@ -1186,7 +1337,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
                 <div className="grid gap-4">
                   <SectionBlock title={t('ToC Order Inbound NS', 'ToC Order Inbound NS')} subtitle={t('夜班入库拆分参数', 'Night shift inbound split metrics')} themeMode={themeMode}>
                     <div className={['overflow-hidden rounded-2xl border', isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/15'].join(' ')}>
-                      {effectiveOrderInboundNs.filter((row) => row.key !== 'oi_pieces').map((row, index) => (
+                      {effectiveOrderInboundNs.filter((row) => !INBOUND_HIDDEN_INPUT_KEYS.has(row.key)).map((row, index) => (
                         <label
                           key={`orderInboundNs-${row.key}`}
                           className={[
@@ -1200,7 +1351,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
                           <input
                             value={row.value}
                             onChange={(e) => updateInbound('orderInboundNs', row.key, e.target.value)}
-                            disabled={isLocked || saving || row.key === 'oi_pieces'}
+                            disabled={isLocked || saving}
                             className={inputClass}
                           />
                         </label>
@@ -1215,9 +1366,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
                           <tr>
                             <th className="px-3 py-2.5">{t('Process', 'Process')}</th>
                             <th className="px-3 py-2.5">UPH</th>
-                            <th className="px-3 py-2.5">{t('Goal', 'Goal')}</th>
                             <th className="px-3 py-2.5">EWH</th>
-                            <th className="px-3 py-2.5">{t('# of People', '# of People')}</th>
                             <th className="px-3 py-2.5">{t('Lead', 'Lead')}</th>
                           </tr>
                         </thead>
@@ -1225,9 +1374,14 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
                           {draftPayload.areaEfficiencyNs.map((row) => (
                             <tr key={`areaEfficiencyNs-${row.key}`} className={rowClass}>
                               <td className="px-3 py-2.5 font-medium whitespace-nowrap">{t(row.labelZh, row.labelEn)}</td>
-                              {(['uph', 'goal', 'ewh', 'people', 'lead'] as const).map((field) => (
+                              {(['uph', 'ewh', 'lead'] as const).map((field) => (
                                 <td key={field} className="px-3 py-2.5">
-                                  <input value={row[field]} onChange={(e) => updateProc('areaEfficiencyNs', row.key, field, e.target.value)} disabled={isLocked || saving} className={inputClass} />
+                                  <input
+                                    value={row[field]}
+                                    onChange={(e) => updateProc('areaEfficiencyNs', row.key, field, e.target.value)}
+                                    disabled={isLocked || saving || (isSystemDynamicTemplate && field === 'uph')}
+                                    className={inputClass}
+                                  />
                                 </td>
                               ))}
                             </tr>
