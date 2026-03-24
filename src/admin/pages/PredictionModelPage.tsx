@@ -102,6 +102,17 @@ type ModelMetric = {
   targetForecast: number | null;
 };
 
+type ChampionScoreRow = {
+  key: ModelKey;
+  label: string;
+  samples: number;
+  actualInbound: number | null;
+  targetForecast: number | null;
+  variance: number | null;
+  score: number;
+  toppingRate: number | null;
+};
+
 type BaseVersionKey = 'v0' | 'v1' | 'v2' | 'v3';
 type VersionKey = BaseVersionKey | 'v4' | 'v4_ensemble' | 'v5' | 'v6' | 'v7';
 type BaseVersionForecastMap = Record<BaseVersionKey, number | null>;
@@ -915,6 +926,11 @@ const calculateAbsolutePercentageError = (prediction: number | null, actual: num
   return Math.abs(prediction - actual) / actual;
 };
 
+const calculateVarianceRate = (prediction: number | null, actual: number | null) => {
+  if (prediction === null || actual === null || prediction <= 0) return null;
+  return (actual - prediction) / prediction;
+};
+
 const buildBaseVersionMetricSlice = (rows: VersionInputRow[], key: BaseVersionKey): VersionMetricSlice => {
   const validRows = rows.filter((row) => row.actual !== null && row.forecasts[key] !== null) as Array<VersionInputRow & { actual: number }>;
   const totalActual = validRows.reduce((sum, row) => sum + row.actual, 0);
@@ -1705,6 +1721,53 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       if (b.wape === null) return -1;
       return a.wape - b.wape;
     });
+    const modelMetricsByKey = new Map(leaderboard.map((metric) => [metric.key, metric]));
+    const championScoreMap = new Map<ModelKey, number>(MODEL_KEYS.map((key) => [key, 0]));
+
+    evaluationRows.forEach((row) => {
+      const winner = MODEL_KEYS.map((key) => {
+        const variance = calculateVarianceRate(row.forecasts[key], row.actual);
+        return {
+          key,
+          absVariance: variance === null ? Number.POSITIVE_INFINITY : Math.abs(variance),
+          absError: row.forecasts[key] === null ? Number.POSITIVE_INFINITY : Math.abs((row.forecasts[key] ?? 0) - row.actual)
+        };
+      })
+        .filter((item) => Number.isFinite(item.absVariance))
+        .sort(
+          (a, b) =>
+            a.absVariance - b.absVariance ||
+            a.absError - b.absError ||
+            MODEL_KEYS.indexOf(a.key) - MODEL_KEYS.indexOf(b.key)
+        )[0];
+
+      if (winner) {
+        championScoreMap.set(winner.key, (championScoreMap.get(winner.key) ?? 0) + 1);
+      }
+    });
+    const championScoreboard: ChampionScoreRow[] = MODEL_KEYS.map((key) => {
+      const metric = modelMetricsByKey.get(key);
+      const targetForecast = targetForecasts[key];
+      const samples = metric?.samples ?? 0;
+      const score = championScoreMap.get(key) ?? 0;
+      return {
+        key,
+        label: MODEL_LABELS[key],
+        samples,
+        actualInbound: targetActualDay?.total ?? null,
+        targetForecast,
+        variance: calculateVarianceRate(targetForecast, targetActualDay?.total ?? null),
+        score,
+        toppingRate: samples > 0 ? score / samples : null
+      };
+    }).sort(
+      (a, b) =>
+        (b.toppingRate ?? Number.NEGATIVE_INFINITY) - (a.toppingRate ?? Number.NEGATIVE_INFINITY) ||
+        b.score - a.score ||
+        (b.samples - a.samples) ||
+        Math.abs(a.variance ?? Number.POSITIVE_INFINITY) - Math.abs(b.variance ?? Number.POSITIVE_INFINITY) ||
+        MODEL_KEYS.indexOf(a.key) - MODEL_KEYS.indexOf(b.key)
+    );
 
     const baselineMetrics = leaderboard.filter(
       (metric) =>
@@ -1868,6 +1931,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         importanceRatio: importanceSumV7 > 0 ? row.importance / importanceSumV7 : 0
       })),
       leaderboard,
+      championScoreboard,
       bestMetric,
       bestBaselineMetric,
       featureMetricV1,
@@ -2002,6 +2066,53 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
               disabled={isLocked}
               min={historyRangeStart}
             />
+          </div>
+          <div className="mt-8">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('冠军榜', 'Champion board')}</div>
+                <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('历史日冠军积分', 'Historical daily winners')}</div>
+              </div>
+              <div className={['text-sm text-right', mutedClass].join(' ')}>
+                <div>{formatNumber(data.evaluationRows.length)} {t('个历史样本日', 'historical days')}</div>
+                <div className="mt-1">{t('每日 |差异%| 最小模型 +1 分', 'Lowest daily |variance %| gets +1 point')}</div>
+              </div>
+            </div>
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className={tableHeaderClass}>
+                    <th className="rounded-l-2xl px-4 py-3 text-left font-semibold">Model</th>
+                    <th className="px-4 py-3 text-right font-semibold">{t('样本数', 'Samples')}</th>
+                    <th className="px-4 py-3 text-right font-semibold">{t('实际流入', 'Actual inbound')}</th>
+                    <th className="px-4 py-3 text-right font-semibold">{t('预测值', 'Target forecast')}</th>
+                    <th className="px-4 py-3 text-right font-semibold">{t('差异%', 'Variance %')}</th>
+                    <th className="px-4 py-3 text-right font-semibold">Score</th>
+                    <th className="rounded-r-2xl px-4 py-3 text-right font-semibold">{t('登顶率', 'Win rate')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.championScoreboard.map((row, index) => {
+                    const rowCellClass = [
+                      index < data.championScoreboard.length - 1 ? 'border-b px-4 py-3' : 'px-4 py-3',
+                      cellClass
+                    ].join(' ');
+
+                    return (
+                      <tr key={`champion-${row.key}`}>
+                        <td className={[rowCellClass, 'font-semibold'].join(' ')}>{row.label}</td>
+                        <td className={[rowCellClass, 'text-right'].join(' ')}>{formatNumber(row.samples)}</td>
+                        <td className={[rowCellClass, 'text-right'].join(' ')}>{formatNumber(row.actualInbound)}</td>
+                        <td className={[rowCellClass, 'text-right'].join(' ')}>{formatNumber(row.targetForecast)}</td>
+                        <td className={[rowCellClass, 'text-right'].join(' ')}>{formatPercent(row.variance)}</td>
+                        <td className={[rowCellClass, 'text-right font-semibold'].join(' ')}>{formatNumber(row.score)}</td>
+                        <td className={[rowCellClass, 'text-right font-semibold'].join(' ')}>{formatPercent(row.toppingRate)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 
