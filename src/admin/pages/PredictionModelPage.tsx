@@ -12,7 +12,7 @@ type PredictionModelPageProps = {
   themeMode: 'light' | 'dark';
 };
 
-type VolumeHistoryRow = {
+export type VolumeHistoryRow = {
   date: string;
   last_filled_hour?: number | null;
   h00?: number | null;
@@ -41,7 +41,7 @@ type VolumeHistoryRow = {
   h23?: number | null;
 };
 
-type ForecastInputRow = {
+export type ForecastInputRow = {
   input_date: string;
   weekday?: number | null;
   previous_day_backlog?: number | null;
@@ -53,7 +53,7 @@ type ForecastInputRow = {
   yesterday_inflow_00_14?: number | null;
 };
 
-type FeatureContextDay = {
+export type FeatureContextDay = {
   date: string;
   weekday: number;
   previous_day_backlog: number;
@@ -63,6 +63,12 @@ type FeatureContextDay = {
   major_promotion: boolean;
   full_day_capacity: number;
   yesterday_inflow_00_14: number;
+  holiday_name: string | null;
+  is_holiday: boolean;
+  is_pre_holiday: boolean;
+  is_post_holiday: boolean;
+  days_to_next_holiday: number;
+  days_from_prev_holiday: number;
 };
 
 type PreparedDay = {
@@ -74,7 +80,7 @@ type PreparedDay = {
   context: FeatureContextDay;
 };
 
-type ModelKey =
+export type ModelKey =
   | 'same_weekday_median'
   | 'rolling_mean_7'
   | 'trend_blend'
@@ -115,8 +121,61 @@ type ChampionScoreRow = {
   toppingRate: number | null;
 };
 
+type OfficialRunRow = {
+  id: number;
+  target_date: string;
+  cutoff_mode: CutoffMode;
+  run_type: string;
+  status: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  code_version?: string | null;
+  recommendation_json?: Record<string, unknown> | null;
+};
+
+type OfficialPredictionRow = {
+  id: number;
+  run_id: number;
+  target_date: string;
+  cutoff_mode: CutoffMode;
+  candidate_scope: 'model' | 'version';
+  candidate_key: string;
+  candidate_label: string;
+  forecast_value: number;
+  training_samples: number;
+  metrics_json?: Record<string, unknown> | null;
+  is_recommended?: boolean | null;
+};
+
+type OfficialPublicationRow = {
+  id: number;
+  target_date: string;
+  cutoff_mode: CutoffMode;
+  run_id?: number | null;
+  recommended_prediction_id?: number | null;
+  selected_prediction_id?: number | null;
+  recommended_forecast?: number | null;
+  published_forecast?: number | null;
+  is_manual_override?: boolean | null;
+  override_reason?: string | null;
+  published_by?: string | null;
+  published_at?: string | null;
+  status: string;
+};
+
+type OfficialAlertRow = {
+  id: number;
+  alert_date: string;
+  target_date?: string | null;
+  alert_type: string;
+  severity: 'info' | 'warning' | 'critical';
+  details_json?: Record<string, unknown> | null;
+  status: string;
+  created_at?: string | null;
+};
+
 type BaseVersionKey = 'v0' | 'v1' | 'v2' | 'v3';
-type VersionKey = BaseVersionKey | 'v4' | 'v4_ensemble' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9';
+export type VersionKey = BaseVersionKey | 'v4' | 'v4_ensemble' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9';
 type BaseVersionForecastMap = Record<BaseVersionKey, number | null>;
 type VersionForecastMap = Record<VersionKey, number | null>;
 type BaseVersionApeMap = Record<BaseVersionKey, number | null>;
@@ -206,11 +265,11 @@ type VersionMetric = VersionMetricSlice & {
   recent14: VersionMetricSlice;
 };
 
-type CutoffMode = 'preopen';
+export type CutoffMode = 'preopen';
 
 const HISTORY_TABLE = 'volume_history';
 const INPUT_TABLE = 'volume_forecast_daily_inputs';
-const MAIN_LEADERBOARD_CUTOFF: CutoffMode = 'preopen';
+export const MAIN_LEADERBOARD_CUTOFF: CutoffMode = 'preopen';
 const HOUR_COLUMNS = Array.from({ length: 24 }, (_, idx) => `h${String(idx).padStart(2, '0')}`) as Array<
   Exclude<keyof VolumeHistoryRow, 'date' | 'last_filled_hour'>
 >;
@@ -279,6 +338,11 @@ const FEATURE_NAMES_V8 = [
   'has_capacity_ctx',
   'severe_weather_ctx',
   'major_promotion_ctx',
+  'is_holiday_ctx',
+  'is_pre_holiday_ctx',
+  'is_post_holiday_ctx',
+  'days_to_next_holiday_ctx',
+  'days_from_prev_holiday_ctx',
   'week_of_month_ctx',
   'month_progress_ctx',
   'is_weekend_ctx',
@@ -299,6 +363,11 @@ const FEATURE_NAMES_V9 = [
   'capacity_vs_recent14_ctx',
   'severe_weather_ctx',
   'major_promotion_ctx',
+  'is_holiday_ctx',
+  'is_pre_holiday_ctx',
+  'is_post_holiday_ctx',
+  'days_to_next_holiday_ctx',
+  'days_from_prev_holiday_ctx',
   'week_of_month_ctx',
   'month_progress_ctx',
   'is_weekend_ctx',
@@ -486,6 +555,11 @@ const FEATURE_LABELS_V8: Record<FeatureNameV8, string> = {
   has_capacity_ctx: 'Has capacity',
   severe_weather_ctx: 'Severe weather',
   major_promotion_ctx: 'Major promotion',
+  is_holiday_ctx: 'Holiday',
+  is_pre_holiday_ctx: 'Pre-holiday',
+  is_post_holiday_ctx: 'Post-holiday',
+  days_to_next_holiday_ctx: 'Days to next holiday',
+  days_from_prev_holiday_ctx: 'Days from prev holiday',
   week_of_month_ctx: 'Week of month',
   month_progress_ctx: 'Month progress',
   is_weekend_ctx: 'Weekend',
@@ -506,6 +580,11 @@ const FEATURE_LABELS_V9: Record<FeatureNameV9, string> = {
   capacity_vs_recent14_ctx: 'Capacity / 14D mean',
   severe_weather_ctx: 'Severe weather',
   major_promotion_ctx: 'Major promotion',
+  is_holiday_ctx: 'Holiday',
+  is_pre_holiday_ctx: 'Pre-holiday',
+  is_post_holiday_ctx: 'Post-holiday',
+  days_to_next_holiday_ctx: 'Days to next holiday',
+  days_from_prev_holiday_ctx: 'Days from prev holiday',
   week_of_month_ctx: 'Week of month',
   month_progress_ctx: 'Month progress',
   is_weekend_ctx: 'Weekend',
@@ -554,6 +633,94 @@ const isMonthStartWindow = (dateOnly: string, window = 3) => {
 const isMonthEndWindow = (dateOnly: string, window = 3) => {
   const { dayOfMonth, daysInMonth } = getDateParts(dateOnly);
   return daysInMonth - dayOfMonth < window;
+};
+
+type HolidayEntry = {
+  date: string;
+  name: string;
+};
+
+const US_HOLIDAY_CACHE = new Map<number, HolidayEntry[]>();
+
+const getNthWeekdayOfMonth = (year: number, monthIndex: number, isoWeekday: number, occurrence: number) => {
+  const date = new Date(year, monthIndex, 1);
+  let matchCount = 0;
+  while (date.getMonth() === monthIndex) {
+    if (getIsoWeekday(date) === isoWeekday) {
+      matchCount += 1;
+      if (matchCount === occurrence) return toDateOnly(date);
+    }
+    date.setDate(date.getDate() + 1);
+  }
+  return toDateOnly(new Date(year, monthIndex, 1));
+};
+
+const getLastWeekdayOfMonth = (year: number, monthIndex: number, isoWeekday: number) => {
+  const date = new Date(year, monthIndex + 1, 0);
+  while (getIsoWeekday(date) !== isoWeekday) {
+    date.setDate(date.getDate() - 1);
+  }
+  return toDateOnly(date);
+};
+
+const buildObservedHolidayEntries = (name: string, actualDate: string): HolidayEntry[] => {
+  const entries: HolidayEntry[] = [{ date: actualDate, name }];
+  const weekday = getIsoWeekday(new Date(`${actualDate}T00:00:00`));
+  if (weekday === 6) {
+    entries.push({ date: addDays(actualDate, -1), name: `${name} (Observed)` });
+  } else if (weekday === 7) {
+    entries.push({ date: addDays(actualDate, 1), name: `${name} (Observed)` });
+  }
+  return entries;
+};
+
+const getUSHolidayEntriesForYear = (year: number): HolidayEntry[] => {
+  const cached = US_HOLIDAY_CACHE.get(year);
+  if (cached) return cached;
+
+  const entries = [
+    ...buildObservedHolidayEntries('New Year\'s Day', toDateOnly(new Date(year, 0, 1))),
+    { date: getNthWeekdayOfMonth(year, 0, 1, 3), name: 'Martin Luther King Jr. Day' },
+    { date: getNthWeekdayOfMonth(year, 1, 1, 3), name: 'Presidents Day' },
+    { date: getLastWeekdayOfMonth(year, 4, 1), name: 'Memorial Day' },
+    ...buildObservedHolidayEntries('Juneteenth', toDateOnly(new Date(year, 5, 19))),
+    ...buildObservedHolidayEntries('Independence Day', toDateOnly(new Date(year, 6, 4))),
+    { date: getNthWeekdayOfMonth(year, 8, 1, 1), name: 'Labor Day' },
+    { date: getNthWeekdayOfMonth(year, 9, 1, 2), name: 'Columbus Day' },
+    ...buildObservedHolidayEntries('Veterans Day', toDateOnly(new Date(year, 10, 11))),
+    { date: getNthWeekdayOfMonth(year, 10, 4, 4), name: 'Thanksgiving Day' },
+    ...buildObservedHolidayEntries('Christmas Day', toDateOnly(new Date(year, 11, 25)))
+  ];
+
+  const deduped = Array.from(
+    new Map(entries.map((entry) => [`${entry.date}:${entry.name}`, entry])).values()
+  ).sort((a, b) => a.date.localeCompare(b.date));
+  US_HOLIDAY_CACHE.set(year, deduped);
+  return deduped;
+};
+
+const getDateDistanceInDays = (fromDate: string, toDate: string) =>
+  Math.round((new Date(`${toDate}T00:00:00`).getTime() - new Date(`${fromDate}T00:00:00`).getTime()) / 86400000);
+
+export const getUSHolidayContext = (dateOnly: string) => {
+  const { year } = getDateParts(dateOnly);
+  const holidays = [year - 1, year, year + 1]
+    .flatMap((holidayYear) => getUSHolidayEntriesForYear(holidayYear))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const sameDayHolidays = holidays.filter((holiday) => holiday.date === dateOnly);
+  const previousHoliday = [...holidays].reverse().find((holiday) => holiday.date < dateOnly) ?? null;
+  const nextHoliday = holidays.find((holiday) => holiday.date > dateOnly) ?? null;
+  const daysFromPrevHoliday = clamp(previousHoliday ? getDateDistanceInDays(previousHoliday.date, dateOnly) : 14, 0, 14);
+  const daysToNextHoliday = clamp(nextHoliday ? getDateDistanceInDays(dateOnly, nextHoliday.date) : 14, 0, 14);
+
+  return {
+    holidayName: sameDayHolidays.length ? sameDayHolidays.map((holiday) => holiday.name).join(' / ') : null,
+    isHoliday: sameDayHolidays.length > 0,
+    isPreHoliday: !sameDayHolidays.length && daysToNextHoliday === 1,
+    isPostHoliday: !sameDayHolidays.length && daysFromPrevHoliday === 1,
+    daysToNextHoliday,
+    daysFromPrevHoliday
+  };
 };
 
 const formatNumber = (value: number | null, digits = 0) => {
@@ -609,17 +776,26 @@ const getInventoryTurnoverRate = (day: PreparedDay) => {
   return day.total / inventoryLevel;
 };
 
-const createFeatureContext = (date: string, input: ForecastInputRow | null): FeatureContextDay => ({
-  date,
-  weekday: Number(input?.weekday ?? getIsoWeekday(new Date(`${date}T00:00:00`))),
-  previous_day_backlog: Math.max(0, sanitizeNumber(input?.previous_day_backlog)),
-  current_cumulative_volume_12: Math.max(0, sanitizeNumber(input?.current_cumulative_volume_12)),
-  inventory_level: Math.max(0, sanitizeNumber(input?.inventory_level)),
-  severe_weather: Boolean(input?.severe_weather),
-  major_promotion: Boolean(input?.major_promotion),
-  full_day_capacity: Math.max(0, sanitizeNumber(input?.full_day_capacity)),
-  yesterday_inflow_00_14: Math.max(0, sanitizeNumber(input?.yesterday_inflow_00_14))
-});
+export const createFeatureContext = (date: string, input: ForecastInputRow | null): FeatureContextDay => {
+  const holidayContext = getUSHolidayContext(date);
+  return {
+    date,
+    weekday: Number(input?.weekday ?? getIsoWeekday(new Date(`${date}T00:00:00`))),
+    previous_day_backlog: Math.max(0, sanitizeNumber(input?.previous_day_backlog)),
+    current_cumulative_volume_12: Math.max(0, sanitizeNumber(input?.current_cumulative_volume_12)),
+    inventory_level: Math.max(0, sanitizeNumber(input?.inventory_level)),
+    severe_weather: Boolean(input?.severe_weather),
+    major_promotion: Boolean(input?.major_promotion),
+    full_day_capacity: Math.max(0, sanitizeNumber(input?.full_day_capacity)),
+    yesterday_inflow_00_14: Math.max(0, sanitizeNumber(input?.yesterday_inflow_00_14)),
+    holiday_name: holidayContext.holidayName,
+    is_holiday: holidayContext.isHoliday,
+    is_pre_holiday: holidayContext.isPreHoliday,
+    is_post_holiday: holidayContext.isPostHoliday,
+    days_to_next_holiday: holidayContext.daysToNextHoliday,
+    days_from_prev_holiday: holidayContext.daysFromPrevHoliday
+  };
+};
 
 const hasPreopenPlanningSignal = (context: FeatureContextDay) =>
   context.full_day_capacity > 0 || context.severe_weather || context.major_promotion;
@@ -811,6 +987,11 @@ const buildFeatureVectorV8 = (
     has_capacity_ctx: cappedCapacity > 0 ? 1 : 0,
     severe_weather_ctx: targetDay.severe_weather ? 1 : 0,
     major_promotion_ctx: targetDay.major_promotion ? 1 : 0,
+    is_holiday_ctx: targetDay.is_holiday ? 1 : 0,
+    is_pre_holiday_ctx: targetDay.is_pre_holiday ? 1 : 0,
+    is_post_holiday_ctx: targetDay.is_post_holiday ? 1 : 0,
+    days_to_next_holiday_ctx: clamp(targetDay.days_to_next_holiday, 0, 14),
+    days_from_prev_holiday_ctx: clamp(targetDay.days_from_prev_holiday, 0, 14),
     week_of_month_ctx: clamp(weekOfMonth, 1, 5),
     month_progress_ctx: clamp(monthProgress, 0, 1),
     is_weekend_ctx: targetDay.weekday >= 6 ? 1 : 0,
@@ -860,6 +1041,11 @@ const buildFeatureVectorV9 = (
     capacity_vs_recent14_ctx: clamp(capacityVsRecent14, 0, 1.25),
     severe_weather_ctx: targetDay.severe_weather ? 1 : 0,
     major_promotion_ctx: targetDay.major_promotion ? 1 : 0,
+    is_holiday_ctx: targetDay.is_holiday ? 1 : 0,
+    is_pre_holiday_ctx: targetDay.is_pre_holiday ? 1 : 0,
+    is_post_holiday_ctx: targetDay.is_post_holiday ? 1 : 0,
+    days_to_next_holiday_ctx: clamp(targetDay.days_to_next_holiday, 0, 14),
+    days_from_prev_holiday_ctx: clamp(targetDay.days_from_prev_holiday, 0, 14),
     week_of_month_ctx: clamp(weekOfMonth, 1, 5),
     month_progress_ctx: clamp(monthProgress, 0, 1),
     is_weekend_ctx: targetDay.weekday >= 6 ? 1 : 0,
@@ -1971,6 +2157,579 @@ const evaluateModels = (rows: VersionEvaluationRow[], targetForecasts: VersionFo
   });
 };
 
+export const buildPredictionWorkbenchData = ({
+  historyRows,
+  inputRows,
+  historyRangeStart,
+  historyRangeEnd,
+  forecastTargetDate
+}: {
+  historyRows: VolumeHistoryRow[];
+  inputRows: ForecastInputRow[];
+  historyRangeStart: string;
+  historyRangeEnd: string;
+  forecastTargetDate: string;
+}) => {
+  const inputByDate = new Map(inputRows.map((row) => [row.input_date, row]));
+  const fullHistoryDays = historyRows
+    .filter((row) => Number(row.last_filled_hour ?? inferLastFilledHour(row) ?? -1) >= 23)
+    .map<PreparedDay>((row) => {
+      const input = inputByDate.get(row.date) ?? null;
+      const context = createFeatureContext(row.date, input);
+      return {
+        date: row.date,
+        weekday: context.weekday,
+        total: sumHistoryRow(row),
+        history: row,
+        input,
+        context
+      };
+    });
+
+  const analysisDays = fullHistoryDays.filter((day) => day.date >= historyRangeStart && day.date <= historyRangeEnd);
+  const planningCoverageDays = analysisDays.filter((day) => hasPreopenPlanningSignal(day.context));
+
+  const priorDaysCache = new Map<string, PreparedDay[]>();
+  const trainingSamplesV1Cache = new Map<string, FeatureSample[]>();
+  const trainingSamplesV2Cache = new Map<string, FeatureSampleV2[]>();
+  const trainingSamplesV3Cache = new Map<string, FeatureSampleV3[]>();
+  const trainingSamplesV7Cache = new Map<string, FeatureSampleV7[]>();
+  const trainingSamplesV8Cache = new Map<string, FeatureSampleV8[]>();
+  const trainingSamplesV9Cache = new Map<string, FeatureSampleV9[]>();
+  const featureModelV1Cache = new Map<string, TrainedFeatureModel | null>();
+  const featureModelV2Cache = new Map<string, TrainedFeatureModelV2 | null>();
+  const featureModelV3Cache = new Map<string, TrainedFeatureModelV3 | null>();
+  const featureModelV7Cache = new Map<string, TrainedFeatureModelV7 | null>();
+  const featureModelV8Cache = new Map<string, TrainedFeatureModelV8 | null>();
+  const featureModelV9Cache = new Map<string, TrainedFeatureModelV9 | null>();
+  const coreForecastCache = new Map<
+    string,
+    {
+      baselinePredictions: Pick<ModelForecastMap, 'same_weekday_median' | 'rolling_mean_7' | 'trend_blend'>;
+      featureVectorV1: FeatureVector | null;
+      featureForecastV1: number | null;
+      featureVectorV2: FeatureVectorV2 | null;
+      featureForecastV2: number | null;
+      featureVectorV3: FeatureVectorV3 | null;
+      featureForecastV3: number | null;
+      featureVectorV7: FeatureVectorV7 | null;
+      featureVectorV8: FeatureVectorV8 | null;
+      featureVectorV9: FeatureVectorV9 | null;
+    }
+  >();
+
+  const getPriorDays = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = priorDaysCache.get(cacheKey);
+    if (cached) return cached;
+    const priorDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    priorDaysCache.set(cacheKey, priorDays);
+    return priorDays;
+  };
+
+  const getTrainingSamplesV1 = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = trainingSamplesV1Cache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const samples = candidateDays.reduce<FeatureSample[]>((rows, day) => {
+      const features = buildFeatureVector(day.date, day.context, getPriorDays(day.date, lookbackDays));
+      if (features) rows.push({ features, target: day.total });
+      return rows;
+    }, []);
+    trainingSamplesV1Cache.set(cacheKey, samples);
+    return samples;
+  };
+
+  const getTrainingSamplesV2 = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = trainingSamplesV2Cache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const samples = candidateDays.reduce<FeatureSampleV2[]>((rows, day) => {
+      const features = buildFeatureVectorV2(day.context, getPriorDays(day.date, lookbackDays));
+      if (features) rows.push({ features, target: day.total });
+      return rows;
+    }, []);
+    trainingSamplesV2Cache.set(cacheKey, samples);
+    return samples;
+  };
+
+  const getFeatureModelV1 = (cutoffDate: string) => {
+    if (!featureModelV1Cache.has(cutoffDate)) {
+      featureModelV1Cache.set(cutoffDate, trainFeatureRegression(getTrainingSamplesV1(cutoffDate)));
+    }
+    return featureModelV1Cache.get(cutoffDate) ?? null;
+  };
+
+  const getFeatureModelV2 = (cutoffDate: string) => {
+    if (!featureModelV2Cache.has(cutoffDate)) {
+      featureModelV2Cache.set(cutoffDate, trainFeatureRegressionV2(getTrainingSamplesV2(cutoffDate)));
+    }
+    return featureModelV2Cache.get(cutoffDate) ?? null;
+  };
+
+  const getCoreForecasts = (targetDate: string, targetContext: FeatureContextDay) => {
+    const cached = coreForecastCache.get(targetDate);
+    if (cached) return cached;
+
+    const priorDays = getPriorDays(targetDate);
+    const baselinePredictions = buildBaselinePredictions(targetDate, priorDays);
+    const featureVectorV1 = buildFeatureVector(targetDate, targetContext, priorDays);
+    const featureForecastV1 = predictFeatureRegression(getFeatureModelV1(targetDate), featureVectorV1);
+    const featureVectorV2 = buildFeatureVectorV2(targetContext, priorDays);
+    const featureForecastV2 = predictFeatureRegressionV2(getFeatureModelV2(targetDate), featureVectorV2);
+    const featureVectorV3 = buildFeatureVectorV3(targetContext, priorDays, {
+      forecastV1: featureForecastV1,
+      forecastV2: featureForecastV2,
+      rollingMean7: baselinePredictions.rolling_mean_7
+    });
+    const featureForecastV3 = predictFeatureRegressionV3(getFeatureModelV3(targetDate), featureVectorV3);
+    const featureVectorV7 = buildFeatureVectorV7(targetContext, priorDays, {
+      forecastV1: featureForecastV1,
+      forecastV2: featureForecastV2,
+      forecastV3: featureForecastV3,
+      rollingMean7: baselinePredictions.rolling_mean_7
+    });
+    const featureVectorV8 = buildFeatureVectorV8(targetDate, targetContext, priorDays, {
+      forecastV2: featureForecastV2,
+      rollingMean7: baselinePredictions.rolling_mean_7
+    });
+    const featureVectorV9 = buildFeatureVectorV9(targetDate, targetContext, priorDays, {
+      forecastV1: featureForecastV1,
+      forecastV2: featureForecastV2,
+      forecastV3: featureForecastV3,
+      rollingMean7: baselinePredictions.rolling_mean_7
+    });
+    const next = {
+      baselinePredictions,
+      featureVectorV1,
+      featureForecastV1,
+      featureVectorV2,
+      featureForecastV2,
+      featureVectorV3,
+      featureForecastV3,
+      featureVectorV7,
+      featureVectorV8,
+      featureVectorV9
+    };
+    coreForecastCache.set(targetDate, next);
+    return next;
+  };
+
+  const getTrainingSamplesV3 = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = trainingSamplesV3Cache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const samples = candidateDays.reduce<FeatureSampleV3[]>((rows, day) => {
+      const core = getCoreForecasts(day.date, day.context);
+      if (core.featureVectorV3) rows.push({ features: core.featureVectorV3, target: day.total });
+      return rows;
+    }, []);
+    trainingSamplesV3Cache.set(cacheKey, samples);
+    return samples;
+  };
+
+  const getFeatureModelV3 = (cutoffDate: string) => {
+    if (!featureModelV3Cache.has(cutoffDate)) {
+      featureModelV3Cache.set(cutoffDate, trainFeatureRegressionV3(getTrainingSamplesV3(cutoffDate)));
+    }
+    return featureModelV3Cache.get(cutoffDate) ?? null;
+  };
+
+  const getTrainingSamplesV7 = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = trainingSamplesV7Cache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const samples = candidateDays.reduce<FeatureSampleV7[]>((rows, day) => {
+      const core = getCoreForecasts(day.date, day.context);
+      if (core.featureVectorV7) rows.push({ features: core.featureVectorV7, target: day.total });
+      return rows;
+    }, []);
+    trainingSamplesV7Cache.set(cacheKey, samples);
+    return samples;
+  };
+
+  const getFeatureModelV7 = (cutoffDate: string) => {
+    if (!featureModelV7Cache.has(cutoffDate)) {
+      featureModelV7Cache.set(cutoffDate, trainFeatureRegressionV7(getTrainingSamplesV7(cutoffDate)));
+    }
+    return featureModelV7Cache.get(cutoffDate) ?? null;
+  };
+
+  const getTrainingSamplesV8 = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = trainingSamplesV8Cache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const samples = candidateDays.reduce<FeatureSampleV8[]>((rows, day) => {
+      const core = getCoreForecasts(day.date, day.context);
+      if (core.featureVectorV8) rows.push({ features: core.featureVectorV8, target: day.total });
+      return rows;
+    }, []);
+    trainingSamplesV8Cache.set(cacheKey, samples);
+    return samples;
+  };
+
+  const getFeatureModelV8 = (cutoffDate: string) => {
+    if (!featureModelV8Cache.has(cutoffDate)) {
+      featureModelV8Cache.set(cutoffDate, trainFeatureRegressionV8(getTrainingSamplesV8(cutoffDate)));
+    }
+    return featureModelV8Cache.get(cutoffDate) ?? null;
+  };
+
+  const getTrainingSamplesV9 = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = trainingSamplesV9Cache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const samples = candidateDays.reduce<FeatureSampleV9[]>((rows, day) => {
+      const core = getCoreForecasts(day.date, day.context);
+      if (core.featureVectorV9) rows.push({ features: core.featureVectorV9, target: day.total });
+      return rows;
+    }, []);
+    trainingSamplesV9Cache.set(cacheKey, samples);
+    return samples;
+  };
+
+  const getFeatureModelV9 = (cutoffDate: string) => {
+    if (!featureModelV9Cache.has(cutoffDate)) {
+      featureModelV9Cache.set(cutoffDate, trainXGBoostRegressionV9(getTrainingSamplesV9(cutoffDate)));
+    }
+    return featureModelV9Cache.get(cutoffDate) ?? null;
+  };
+
+  const buildForecasts = (targetDate: string, targetContext: FeatureContextDay): ModelForecastMap => {
+    const core = getCoreForecasts(targetDate, targetContext);
+    return {
+      ...core.baselinePredictions,
+      feature_regression_v1: core.featureForecastV1,
+      feature_regression_v2: core.featureForecastV2,
+      feature_regression_v3: core.featureForecastV3,
+      feature_regression_v7: predictFeatureRegressionV7(getFeatureModelV7(targetDate), core.featureVectorV7),
+      feature_regression_v8: predictFeatureRegressionV8(getFeatureModelV8(targetDate), core.featureVectorV8),
+      feature_xgboost_v9: predictXGBoostRegressionV9(getFeatureModelV9(targetDate), core.featureVectorV9)
+    };
+  };
+
+  const evaluationRows = analysisDays.reduce<EvaluationRow[]>((rows, day) => {
+    const forecasts = buildForecasts(day.date, day.context);
+    if (MODEL_KEYS.every((key) => forecasts[key] === null)) return rows;
+
+    const bestModel =
+      MODEL_KEYS.map((key) => ({
+        key,
+        label: MODEL_LABELS[key],
+        error: forecasts[key] === null ? Number.POSITIVE_INFINITY : Math.abs((forecasts[key] ?? 0) - day.total)
+      }))
+        .filter((item) => Number.isFinite(item.error))
+        .sort((a, b) => a.error - b.error)[0]?.label ?? '-';
+
+    rows.push({
+      date: day.date,
+      weekday: day.weekday,
+      actual: day.total,
+      forecasts,
+      bestModel
+    });
+    return rows;
+  }, []);
+
+  const targetInput = inputByDate.get(forecastTargetDate) ?? null;
+  const targetContext = createFeatureContext(forecastTargetDate, targetInput);
+  const targetActualDay = fullHistoryDays.find((day) => day.date === forecastTargetDate) ?? null;
+  const targetCoreForecasts = getCoreForecasts(forecastTargetDate, targetContext);
+  const targetForecasts = buildForecasts(forecastTargetDate, targetContext);
+  const targetFeatureModelV1 = getFeatureModelV1(forecastTargetDate);
+  const targetFeatureModelV2 = getFeatureModelV2(forecastTargetDate);
+  const targetFeatureModelV3 = getFeatureModelV3(forecastTargetDate);
+  const targetFeatureModelV7 = getFeatureModelV7(forecastTargetDate);
+  const targetFeatureModelV8 = getFeatureModelV8(forecastTargetDate);
+  const targetFeatureModelV9 = getFeatureModelV9(forecastTargetDate);
+
+  const leaderboard = MODEL_KEYS.map((key) => buildMetric(evaluationRows, key, targetForecasts[key])).sort((a, b) => {
+    if (a.wape === null) return 1;
+    if (b.wape === null) return -1;
+    return a.wape - b.wape;
+  });
+  const modelMetricsByKey = new Map(leaderboard.map((metric) => [metric.key, metric]));
+  const championScoreMap = new Map<ModelKey, number>(MODEL_KEYS.map((key) => [key, 0]));
+
+  evaluationRows.forEach((row) => {
+    const winner = MODEL_KEYS.map((key) => {
+      const variance = calculateVarianceRate(row.forecasts[key], row.actual);
+      return {
+        key,
+        absVariance: variance === null ? Number.POSITIVE_INFINITY : Math.abs(variance),
+        absError: row.forecasts[key] === null ? Number.POSITIVE_INFINITY : Math.abs((row.forecasts[key] ?? 0) - row.actual)
+      };
+    })
+      .filter((item) => Number.isFinite(item.absVariance))
+      .sort(
+        (a, b) =>
+          a.absVariance - b.absVariance ||
+          a.absError - b.absError ||
+          MODEL_KEYS.indexOf(a.key) - MODEL_KEYS.indexOf(b.key)
+      )[0];
+
+    if (winner) {
+      championScoreMap.set(winner.key, (championScoreMap.get(winner.key) ?? 0) + 1);
+    }
+  });
+  const championScoreboard: ChampionScoreRow[] = MODEL_KEYS.map((key) => {
+    const metric = modelMetricsByKey.get(key);
+    const targetForecast = targetForecasts[key];
+    const samples = metric?.samples ?? 0;
+    const score = championScoreMap.get(key) ?? 0;
+    return {
+      key,
+      label: MODEL_LABELS[key],
+      samples,
+      actualInbound: targetActualDay?.total ?? null,
+      targetForecast,
+      variance: calculateVarianceRate(targetForecast, targetActualDay?.total ?? null),
+      score,
+      toppingRate: samples > 0 ? score / samples : null
+    };
+  }).sort(
+    (a, b) =>
+      (b.toppingRate ?? Number.NEGATIVE_INFINITY) - (a.toppingRate ?? Number.NEGATIVE_INFINITY) ||
+      b.score - a.score ||
+      b.samples - a.samples ||
+      Math.abs(a.variance ?? Number.POSITIVE_INFINITY) - Math.abs(b.variance ?? Number.POSITIVE_INFINITY) ||
+      MODEL_KEYS.indexOf(a.key) - MODEL_KEYS.indexOf(b.key)
+  );
+
+  const baselineMetrics = leaderboard.filter(
+    (metric) =>
+      metric.key !== 'feature_regression_v1' &&
+      metric.key !== 'feature_regression_v2' &&
+      metric.key !== 'feature_regression_v3' &&
+      metric.key !== 'feature_regression_v7' &&
+      metric.key !== 'feature_regression_v8' &&
+      metric.key !== 'feature_xgboost_v9'
+  );
+  const bestBaselineMetric = baselineMetrics[0] ?? null;
+  const featureMetricV1 = leaderboard.find((metric) => metric.key === 'feature_regression_v1') ?? null;
+  const featureMetricV2 = leaderboard.find((metric) => metric.key === 'feature_regression_v2') ?? null;
+  const featureMetricV3 = leaderboard.find((metric) => metric.key === 'feature_regression_v3') ?? null;
+  const featureMetricV7 = leaderboard.find((metric) => metric.key === 'feature_regression_v7') ?? null;
+  const featureMetricV8 = leaderboard.find((metric) => metric.key === 'feature_regression_v8') ?? null;
+  const featureMetricV9 = leaderboard.find((metric) => metric.key === 'feature_xgboost_v9') ?? null;
+  const bestFeatureMetric =
+    [featureMetricV1, featureMetricV2, featureMetricV3, featureMetricV7, featureMetricV8, featureMetricV9]
+      .filter((metric): metric is ModelMetric => metric !== null)
+      .sort((a, b) => {
+        if (a.wape === null) return 1;
+        if (b.wape === null) return -1;
+        return a.wape - b.wape;
+      })[0] ?? null;
+  const bestMetric = leaderboard[0] ?? null;
+  const v0SourceKey =
+    bestBaselineMetric?.key === 'same_weekday_median' ||
+    bestBaselineMetric?.key === 'rolling_mean_7' ||
+    bestBaselineMetric?.key === 'trend_blend'
+      ? bestBaselineMetric.key
+      : 'rolling_mean_7';
+  const v0SourceLabel = MODEL_LABELS[v0SourceKey];
+  const versionInputRows: VersionInputRow[] = evaluationRows.map((row) => ({
+    date: row.date,
+    actual: row.actual,
+    forecasts: {
+      v0: row.forecasts[v0SourceKey],
+      v1: row.forecasts.feature_regression_v1,
+      v2: row.forecasts.feature_regression_v2,
+      v3: row.forecasts.feature_regression_v3
+    }
+  }));
+  const targetVersionInputRow: VersionInputRow = {
+    date: forecastTargetDate,
+    actual: targetActualDay?.total ?? null,
+    forecasts: {
+      v0: targetForecasts[v0SourceKey],
+      v1: targetForecasts.feature_regression_v1,
+      v2: targetForecasts.feature_regression_v2,
+      v3: targetForecasts.feature_regression_v3
+    }
+  };
+  const v4Rows = buildV4Model(
+    versionInputRows.some((row) => row.date === forecastTargetDate) ? versionInputRows : [...versionInputRows, targetVersionInputRow]
+  );
+  const v5Rows = buildV5Model(
+    versionInputRows.some((row) => row.date === forecastTargetDate) ? versionInputRows : [...versionInputRows, targetVersionInputRow]
+  );
+  const v6Rows = buildV6Model(
+    versionInputRows.some((row) => row.date === forecastTargetDate) ? versionInputRows : [...versionInputRows, targetVersionInputRow]
+  );
+  const targetV4Row = v4Rows.find((row) => row.date === forecastTargetDate) ?? null;
+  const targetV5Row = v5Rows.find((row) => row.date === forecastTargetDate) ?? null;
+  const targetV6Row = v6Rows.find((row) => row.date === forecastTargetDate) ?? null;
+  const evaluationRowsByDate = new Map(evaluationRows.map((row) => [row.date, row]));
+  const v5RowsByDate = new Map(v5Rows.map((row) => [row.date, row]));
+  const v6RowsByDate = new Map(v6Rows.map((row) => [row.date, row]));
+  const versionEvaluationRows: VersionEvaluationRow[] = v4Rows
+    .filter((row): row is V4OutputRow & { actual: number } => row.actual !== null && row.date >= historyRangeStart && row.date <= historyRangeEnd)
+    .map((row) => ({
+      date: row.date,
+      actual: row.actual,
+      forecasts: {
+        ...row.forecasts,
+        v4: row.v4Forecast,
+        v4_ensemble: row.v4EnsembleForecast,
+        v5: v5RowsByDate.get(row.date)?.v5Forecast ?? null,
+        v6: v6RowsByDate.get(row.date)?.v6Forecast ?? null,
+        v7: evaluationRowsByDate.get(row.date)?.forecasts.feature_regression_v7 ?? null,
+        v8: evaluationRowsByDate.get(row.date)?.forecasts.feature_regression_v8 ?? null,
+        v9: evaluationRowsByDate.get(row.date)?.forecasts.feature_xgboost_v9 ?? null
+      }
+    }));
+  const targetVersionForecasts: VersionForecastMap = {
+    ...(targetV4Row?.forecasts ?? targetVersionInputRow.forecasts),
+    v4: targetV4Row?.v4Forecast ?? null,
+    v4_ensemble: targetV4Row?.v4EnsembleForecast ?? null,
+    v5: targetV5Row?.v5Forecast ?? null,
+    v6: targetV6Row?.v6Forecast ?? null,
+    v7: targetForecasts.feature_regression_v7,
+    v8: targetForecasts.feature_regression_v8,
+    v9: targetForecasts.feature_xgboost_v9
+  };
+  const versionLeaderboard = evaluateModels(versionEvaluationRows, targetVersionForecasts);
+  const currentVersionLeaderboard = rankCurrentVersionMetrics(versionLeaderboard);
+  const bestVersionMetric = currentVersionLeaderboard[0] ?? versionLeaderboard[0] ?? null;
+  const v0Metric = versionLeaderboard.find((metric) => metric.key === 'v0') ?? null;
+  const bestAdvancedVersionMetric = currentVersionLeaderboard.find((metric) => metric.key !== 'v0') ?? versionLeaderboard.find((metric) => metric.key !== 'v0') ?? null;
+  const adaptiveComparisonLeaderboard =
+    currentVersionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6', 'v7', 'v8', 'v9'].includes(metric.key));
+  const bestAdaptiveOverallMetric =
+    versionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6', 'v7', 'v8', 'v9'].includes(metric.key))[0] ?? null;
+  const bestAdaptiveRecent14Metric =
+    [...adaptiveComparisonLeaderboard].sort((a, b) => {
+      if (a.recent14.wape === null) return 1;
+      if (b.recent14.wape === null) return -1;
+      return a.recent14.wape - b.recent14.wape;
+    })[0] ?? null;
+  const versionImprovementVsBaseline =
+    bestAdvancedVersionMetric !== null &&
+    bestAdvancedVersionMetric.recent14.wape !== null &&
+    v0Metric !== null &&
+    v0Metric.recent14.wape !== null
+      ? v0Metric.recent14.wape - bestAdvancedVersionMetric.recent14.wape
+      : null;
+  const featureImportanceRowsV1 = targetFeatureModelV1 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV1.weights, FEATURE_NAMES, FEATURE_LABELS);
+  const featureImportanceRowsV2 =
+    targetFeatureModelV2 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV2.weights, FEATURE_NAMES_V2, FEATURE_LABELS_V2);
+  const featureImportanceRowsV3 =
+    targetFeatureModelV3 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV3.weights, FEATURE_NAMES_V3, FEATURE_LABELS_V3);
+  const featureImportanceRowsV7 =
+    targetFeatureModelV7 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV7.weights, FEATURE_NAMES_V7, FEATURE_LABELS_V7);
+  const featureImportanceRowsV8 =
+    targetFeatureModelV8 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV8.weights, FEATURE_NAMES_V8, FEATURE_LABELS_V8);
+  const featureImportanceRowsV9 =
+    targetFeatureModelV9 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV9.featureGains, FEATURE_NAMES_V9, FEATURE_LABELS_V9);
+  const importanceSumV1 = featureImportanceRowsV1.reduce((sum, row) => sum + row.importance, 0);
+  const importanceSumV2 = featureImportanceRowsV2.reduce((sum, row) => sum + row.importance, 0);
+  const importanceSumV3 = featureImportanceRowsV3.reduce((sum, row) => sum + row.importance, 0);
+  const importanceSumV7 = featureImportanceRowsV7.reduce((sum, row) => sum + row.importance, 0);
+  const importanceSumV8 = featureImportanceRowsV8.reduce((sum, row) => sum + row.importance, 0);
+  const importanceSumV9 = featureImportanceRowsV9.reduce((sum, row) => sum + row.importance, 0);
+
+  return {
+    analysisDays,
+    planningCoverageDays,
+    evaluationRows,
+    targetInput,
+    targetContext,
+    targetActual: targetActualDay?.total ?? null,
+    targetForecasts,
+    targetFeatureSnapshot: {
+      cutoffMode: MAIN_LEADERBOARD_CUTOFF,
+      preopenContext: {
+        date: targetContext.date,
+        weekday: targetContext.weekday,
+        full_day_capacity: targetContext.full_day_capacity,
+        severe_weather: targetContext.severe_weather,
+        major_promotion: targetContext.major_promotion,
+        holiday_name: targetContext.holiday_name,
+        is_holiday: targetContext.is_holiday,
+        is_pre_holiday: targetContext.is_pre_holiday,
+        is_post_holiday: targetContext.is_post_holiday,
+        days_to_next_holiday: targetContext.days_to_next_holiday,
+        days_from_prev_holiday: targetContext.days_from_prev_holiday
+      },
+      vectors: {
+        v1: targetCoreForecasts.featureVectorV1,
+        v2: targetCoreForecasts.featureVectorV2,
+        v3: targetCoreForecasts.featureVectorV3,
+        v7: targetCoreForecasts.featureVectorV7,
+        v8: targetCoreForecasts.featureVectorV8,
+        v9: targetCoreForecasts.featureVectorV9
+      }
+    },
+    targetFeatureModelV1,
+    targetFeatureModelV2,
+    targetFeatureModelV3,
+    targetFeatureModelV7,
+    targetFeatureModelV8,
+    targetFeatureModelV9,
+    targetV4Row,
+    targetV5Row,
+    targetV6Row,
+    targetVersionForecasts,
+    v0SourceKey,
+    v0SourceLabel,
+    v4Rows,
+    v5Rows,
+    v6Rows,
+    versionEvaluationRows,
+    versionLeaderboard,
+    currentVersionLeaderboard,
+    adaptiveComparisonLeaderboard,
+    bestVersionMetric,
+    bestAdaptiveOverallMetric,
+    bestAdaptiveRecent14Metric,
+    v0Metric,
+    bestAdvancedVersionMetric,
+    featureImportanceRowsV1: featureImportanceRowsV1.map((row) => ({
+      ...row,
+      importanceRatio: importanceSumV1 > 0 ? row.importance / importanceSumV1 : 0
+    })),
+    featureImportanceRowsV2: featureImportanceRowsV2.map((row) => ({
+      ...row,
+      importanceRatio: importanceSumV2 > 0 ? row.importance / importanceSumV2 : 0
+    })),
+    featureImportanceRowsV3: featureImportanceRowsV3.map((row) => ({
+      ...row,
+      importanceRatio: importanceSumV3 > 0 ? row.importance / importanceSumV3 : 0
+    })),
+    featureImportanceRowsV7: featureImportanceRowsV7.map((row) => ({
+      ...row,
+      importanceRatio: importanceSumV7 > 0 ? row.importance / importanceSumV7 : 0
+    })),
+    featureImportanceRowsV8: featureImportanceRowsV8.map((row) => ({
+      ...row,
+      importanceRatio: importanceSumV8 > 0 ? row.importance / importanceSumV8 : 0
+    })),
+    featureImportanceRowsV9: featureImportanceRowsV9.map((row) => ({
+      ...row,
+      importanceRatio: importanceSumV9 > 0 ? row.importance / importanceSumV9 : 0
+    })),
+    leaderboard,
+    championScoreboard,
+    bestMetric,
+    bestBaselineMetric,
+    featureMetricV1,
+    featureMetricV2,
+    featureMetricV3,
+    featureMetricV7,
+    featureMetricV8,
+    featureMetricV9,
+    bestFeatureMetric,
+    improvementVsBaseline: versionImprovementVsBaseline
+  };
+};
+
 function MetricCard({
   label,
   value,
@@ -2008,6 +2767,15 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
   const [inputRows, setInputRows] = useState<ForecastInputRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [officialLoading, setOfficialLoading] = useState(false);
+  const [officialError, setOfficialError] = useState<string | null>(null);
+  const [officialRun, setOfficialRun] = useState<OfficialRunRow | null>(null);
+  const [officialPredictions, setOfficialPredictions] = useState<OfficialPredictionRow[]>([]);
+  const [officialPublication, setOfficialPublication] = useState<OfficialPublicationRow | null>(null);
+  const [officialAlerts, setOfficialAlerts] = useState<OfficialAlertRow[]>([]);
+  const [publishSaving, setPublishSaving] = useState(false);
+  const [manualPublishedForecast, setManualPublishedForecast] = useState('');
+  const [manualOverrideReason, setManualOverrideReason] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -2059,6 +2827,120 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       cancelled = true;
     };
   }, [forecastTargetDate, historyRangeEnd, historyRangeStart, supabase]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadOfficialData = async () => {
+      if (!supabase) return;
+      setOfficialLoading(true);
+      setOfficialError(null);
+      const alertWindowStart = addDays(forecastTargetDate, -14);
+
+      const [runResult, publicationResult, alertResult] = await Promise.all([
+        supabase
+          .from('volume_forecast_runs')
+          .select('id,target_date,cutoff_mode,run_type,status,started_at,finished_at,code_version,recommendation_json')
+          .eq('target_date', forecastTargetDate)
+          .eq('cutoff_mode', MAIN_LEADERBOARD_CUTOFF)
+          .order('started_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('volume_forecast_publications')
+          .select(
+            'id,target_date,cutoff_mode,run_id,recommended_prediction_id,selected_prediction_id,recommended_forecast,published_forecast,is_manual_override,override_reason,published_by,published_at,status'
+          )
+          .eq('target_date', forecastTargetDate)
+          .eq('cutoff_mode', MAIN_LEADERBOARD_CUTOFF)
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('volume_forecast_alerts')
+          .select('id,alert_date,target_date,alert_type,severity,details_json,status,created_at')
+          .gte('alert_date', alertWindowStart)
+          .lte('alert_date', forecastTargetDate)
+          .order('alert_date', { ascending: false })
+          .limit(20)
+      ]);
+
+      if (cancelled) return;
+      const primaryError = runResult.error ?? publicationResult.error ?? alertResult.error;
+      if (primaryError) {
+        setOfficialError(String(primaryError.message ?? 'Failed to load official forecast records.'));
+        setOfficialRun(null);
+        setOfficialPredictions([]);
+        setOfficialPublication(null);
+        setOfficialAlerts([]);
+        setOfficialLoading(false);
+        return;
+      }
+
+      const rawRun = ((runResult.data as OfficialRunRow | null) ?? null) as OfficialRunRow | null;
+      const nextRun = rawRun
+        ? {
+            ...rawRun,
+            id: Number(rawRun.id ?? 0)
+          }
+        : null;
+      const rawPublication = ((publicationResult.data as OfficialPublicationRow | null) ?? null) as OfficialPublicationRow | null;
+      const nextPublication = rawPublication
+        ? {
+            ...rawPublication,
+            id: Number(rawPublication.id ?? 0),
+            run_id: rawPublication.run_id == null ? null : Number(rawPublication.run_id),
+            recommended_prediction_id:
+              rawPublication.recommended_prediction_id == null ? null : Number(rawPublication.recommended_prediction_id),
+            selected_prediction_id: rawPublication.selected_prediction_id == null ? null : Number(rawPublication.selected_prediction_id),
+            recommended_forecast:
+              rawPublication.recommended_forecast == null ? null : Number(rawPublication.recommended_forecast),
+            published_forecast: rawPublication.published_forecast == null ? null : Number(rawPublication.published_forecast)
+          }
+        : null;
+      const nextAlerts = (((alertResult.data as OfficialAlertRow[] | null) ?? []) as OfficialAlertRow[]).map((row) => ({ ...row }));
+      let nextPredictions: OfficialPredictionRow[] = [];
+
+      if (nextRun?.id) {
+        const predictionResult = await supabase
+          .from('volume_forecast_predictions')
+          .select(
+            'id,run_id,target_date,cutoff_mode,candidate_scope,candidate_key,candidate_label,forecast_value,training_samples,metrics_json,is_recommended'
+          )
+          .eq('run_id', nextRun.id)
+          .order('candidate_scope', { ascending: true })
+          .order('is_recommended', { ascending: false })
+          .order('candidate_key', { ascending: true });
+        if (cancelled) return;
+        if (predictionResult.error) {
+          setOfficialError(String(predictionResult.error.message ?? 'Failed to load official predictions.'));
+          setOfficialRun(nextRun);
+          setOfficialPredictions([]);
+          setOfficialPublication(nextPublication);
+          setOfficialAlerts(nextAlerts);
+          setOfficialLoading(false);
+          return;
+        }
+        nextPredictions = (((predictionResult.data as OfficialPredictionRow[] | null) ?? []) as OfficialPredictionRow[]).map((row) => ({
+          ...row,
+          forecast_value: Number(row.forecast_value ?? 0),
+          training_samples: Number(row.training_samples ?? 0)
+        }));
+      }
+
+      setOfficialRun(nextRun);
+      setOfficialPredictions(nextPredictions);
+      setOfficialPublication(nextPublication);
+      setOfficialAlerts(nextAlerts);
+      setManualPublishedForecast(String(nextPublication?.published_forecast ?? nextPublication?.recommended_forecast ?? ''));
+      setManualOverrideReason(String(nextPublication?.override_reason ?? ''));
+      setOfficialLoading(false);
+    };
+
+    void loadOfficialData();
+    return () => {
+      cancelled = true;
+    };
+  }, [forecastTargetDate, supabase]);
 
   const data = useMemo(() => {
     const inputByDate = new Map(inputRows.map((row) => [row.input_date, row]));
@@ -2608,6 +3490,14 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
   const targetForecastValue = data.bestVersionMetric?.targetForecast ?? null;
   const targetDiff =
     data.targetActual !== null && targetForecastValue !== null ? data.targetActual - targetForecastValue : null;
+  const targetHolidayContext = getUSHolidayContext(forecastTargetDate);
+  const holidayWindowValue = targetHolidayContext.isHoliday
+    ? targetHolidayContext.holidayName ?? t('节假日', 'Holiday')
+    : targetHolidayContext.isPreHoliday
+      ? `${t('节前', 'Pre-holiday')} · ${targetHolidayContext.daysToNextHoliday}${t('天', 'd')}`
+      : targetHolidayContext.isPostHoliday
+        ? `${t('节后', 'Post-holiday')} · ${targetHolidayContext.daysFromPrevHoliday}${t('天', 'd')}`
+        : `${t('距下个节假日', 'Next holiday in')} ${targetHolidayContext.daysToNextHoliday}${t('天', 'd')}`;
   const preopenSnapshotItems = [
     {
       label: t('Capacity', 'Capacity'),
@@ -2620,6 +3510,14 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     {
       label: t('大促', 'Major promotion'),
       value: data.targetInput?.major_promotion ? t('是', 'Yes') : t('否', 'No')
+    },
+    {
+      label: t('节假日', 'Holiday'),
+      value: targetHolidayContext.isHoliday ? targetHolidayContext.holidayName ?? t('是', 'Yes') : t('否', 'No')
+    },
+    {
+      label: t('节假日窗口', 'Holiday window'),
+      value: holidayWindowValue
     }
   ];
   const sameDaySnapshotItems = [
@@ -2702,6 +3600,130 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     { key: 'v9', label: 'V9', champion: 'Gradient-boosted tree ensemble on V1/V2/V3 + preopen features' }
   ];
   const getAverageDiffHint = (key: VersionKey) => `${t('平均差异', 'Avg diff')} ${formatPercent(versionMetricsByKey.get(key)?.recent14.mape ?? null)}`;
+  const officialVersionPredictions = officialPredictions.filter((row) => row.candidate_scope === 'version');
+  const recommendedOfficialPrediction =
+    officialVersionPredictions.find((row) => row.id === officialPublication?.recommended_prediction_id) ??
+    officialVersionPredictions.find((row) => row.is_recommended) ??
+    officialVersionPredictions[0] ??
+    null;
+  const selectedOfficialPrediction =
+    officialVersionPredictions.find((row) => row.id === officialPublication?.selected_prediction_id) ??
+    recommendedOfficialPrediction;
+  const latestOfficialAlert = officialAlerts[0] ?? null;
+  const formatTimestamp = (value: string | null | undefined) =>
+    value
+      ? new Date(value).toLocaleString('en-US', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+      : '-';
+  const handlePublishRecommendation = async () => {
+    if (!supabase || !officialRun || !recommendedOfficialPrediction) return;
+    setPublishSaving(true);
+    setOfficialError(null);
+    const nowIso = new Date().toISOString();
+    const res = await supabase.from('volume_forecast_publications').upsert(
+      [
+        {
+          target_date: forecastTargetDate,
+          cutoff_mode: MAIN_LEADERBOARD_CUTOFF,
+          run_id: officialRun.id,
+          recommended_prediction_id: recommendedOfficialPrediction.id,
+          selected_prediction_id: recommendedOfficialPrediction.id,
+          recommended_forecast: recommendedOfficialPrediction.forecast_value,
+          published_forecast: recommendedOfficialPrediction.forecast_value,
+          is_manual_override: false,
+          override_reason: null,
+          published_by: 'admin_console',
+          published_at: nowIso,
+          status: 'published',
+          updated_at: nowIso
+        }
+      ],
+      { onConflict: 'target_date,cutoff_mode' }
+    );
+    if (res.error) {
+      setOfficialError(String(res.error.message ?? 'Failed to publish recommended forecast.'));
+      setPublishSaving(false);
+      return;
+    }
+    setPublishSaving(false);
+    setOfficialPublication((prev) => ({
+      id: Number(prev?.id ?? 0),
+      target_date: forecastTargetDate,
+      cutoff_mode: MAIN_LEADERBOARD_CUTOFF,
+      run_id: officialRun.id,
+      recommended_prediction_id: recommendedOfficialPrediction.id,
+      selected_prediction_id: recommendedOfficialPrediction.id,
+      recommended_forecast: recommendedOfficialPrediction.forecast_value,
+      published_forecast: recommendedOfficialPrediction.forecast_value,
+      is_manual_override: false,
+      override_reason: null,
+      published_by: 'admin_console',
+      published_at: nowIso,
+      status: 'published'
+    }));
+  };
+  const handlePublishManualOverride = async () => {
+    if (!supabase || !officialRun) return;
+    const manualValue = Number(String(manualPublishedForecast ?? '').trim());
+    if (!Number.isFinite(manualValue) || manualValue < 0) {
+      setOfficialError(t('请输入有效的正式预测值。', 'Please enter a valid published forecast.'));
+      return;
+    }
+    const overrideReason = String(manualOverrideReason ?? '').trim();
+    if (!overrideReason) {
+      setOfficialError(t('手工覆盖必须填写原因。', 'Manual override requires a reason.'));
+      return;
+    }
+    setPublishSaving(true);
+    setOfficialError(null);
+    const nowIso = new Date().toISOString();
+    const res = await supabase.from('volume_forecast_publications').upsert(
+      [
+        {
+          target_date: forecastTargetDate,
+          cutoff_mode: MAIN_LEADERBOARD_CUTOFF,
+          run_id: officialRun.id,
+          recommended_prediction_id: recommendedOfficialPrediction?.id ?? null,
+          selected_prediction_id: selectedOfficialPrediction?.id ?? null,
+          recommended_forecast: recommendedOfficialPrediction?.forecast_value ?? null,
+          published_forecast: manualValue,
+          is_manual_override: true,
+          override_reason: overrideReason,
+          published_by: 'admin_console',
+          published_at: nowIso,
+          status: 'published',
+          updated_at: nowIso
+        }
+      ],
+      { onConflict: 'target_date,cutoff_mode' }
+    );
+    if (res.error) {
+      setOfficialError(String(res.error.message ?? 'Failed to save manual override.'));
+      setPublishSaving(false);
+      return;
+    }
+    setPublishSaving(false);
+    setOfficialPublication((prev) => ({
+      id: Number(prev?.id ?? 0),
+      target_date: forecastTargetDate,
+      cutoff_mode: MAIN_LEADERBOARD_CUTOFF,
+      run_id: officialRun.id,
+      recommended_prediction_id: recommendedOfficialPrediction?.id ?? null,
+      selected_prediction_id: selectedOfficialPrediction?.id ?? null,
+      recommended_forecast: recommendedOfficialPrediction?.forecast_value ?? null,
+      published_forecast: manualValue,
+      is_manual_override: true,
+      override_reason: overrideReason,
+      published_by: 'admin_console',
+      published_at: nowIso,
+      status: 'published'
+    }));
+  };
 
   return (
     <section className="glass reveal rounded-3xl px-6 py-8">
@@ -2767,6 +3789,207 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
               disabled={isLocked}
               min={historyRangeStart}
             />
+          </div>
+          <div className="mt-8">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('正式闭环', 'Official closed loop')}</div>
+                <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('正式预测发布', 'Official forecast publication')}</div>
+              </div>
+              <div className={['text-sm text-right', mutedClass].join(' ')}>
+                <div>{t('唯一口径', 'Cutoff')}: {cutoffLabel}</div>
+                <div className="mt-1">{t('结果以落库 run/publication 为准', 'Runs and publications are the source of truth')}</div>
+              </div>
+            </div>
+            {officialError ? (
+              <div className={['mt-4 rounded-2xl border px-4 py-3 text-sm', messageClass].join(' ')}>
+                {t('正式闭环加载失败', 'Official closed-loop load failed')}: {officialError}
+              </div>
+            ) : null}
+            <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+              <div className={['rounded-[24px] p-5', subPanelClass].join(' ')}>
+                <div className="grid gap-4 md:grid-cols-3">
+                  <MetricCard
+                    label={t('候选推荐', 'Recommended candidate')}
+                    value={recommendedOfficialPrediction ? formatNumber(recommendedOfficialPrediction.forecast_value) : '-'}
+                    hint={
+                      recommendedOfficialPrediction
+                        ? `${recommendedOfficialPrediction.candidate_label} · ${t('14天WAPE', '14D WAPE')} ${formatPercent(
+                            Number((recommendedOfficialPrediction.metrics_json as any)?.recent14Wape ?? NaN)
+                          )}`
+                        : t('还没有正式 run', 'No official run yet')
+                    }
+                    themeMode={themeMode}
+                  />
+                  <MetricCard
+                    label={t('推荐正式值', 'Recommended official')}
+                    value={officialPublication?.recommended_forecast != null ? formatNumber(officialPublication.recommended_forecast) : '-'}
+                    hint={officialPublication ? `${t('状态', 'Status')}: ${officialPublication.status}` : t('等待官方预测任务', 'Waiting for official run')}
+                    themeMode={themeMode}
+                  />
+                  <MetricCard
+                    label={t('已发布正式值', 'Published official')}
+                    value={officialPublication?.published_forecast != null ? formatNumber(officialPublication.published_forecast) : '-'}
+                    hint={
+                      officialPublication?.published_at
+                        ? `${officialPublication.is_manual_override ? t('人工覆盖', 'Manual override') : t('接受推荐', 'Accepted recommendation')} · ${formatTimestamp(
+                            officialPublication.published_at
+                          )}`
+                        : t('尚未发布', 'Not published yet')
+                    }
+                    themeMode={themeMode}
+                  />
+                </div>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className={tableHeaderClass}>
+                        <th className="rounded-l-2xl px-4 py-3 text-left font-semibold">Version</th>
+                        <th className="px-4 py-3 text-right font-semibold">{t('预测值', 'Forecast')}</th>
+                        <th className="px-4 py-3 text-right font-semibold">{t('样本数', 'Samples')}</th>
+                        <th className="px-4 py-3 text-right font-semibold">{t('1%命中', 'Within 1%')}</th>
+                        <th className="px-4 py-3 text-right font-semibold">{t('3%命中', 'Within 3%')}</th>
+                        <th className="px-4 py-3 text-right font-semibold">14D WAPE</th>
+                        <th className="px-4 py-3 text-right font-semibold">P90 |Var|</th>
+                        <th className="rounded-r-2xl px-4 py-3 text-right font-semibold">{t('最差日', 'Worst day')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {officialVersionPredictions.length === 0 ? (
+                        <tr>
+                          <td className={['px-4 py-4 text-sm', messageClass].join(' ')} colSpan={8}>
+                            {officialLoading ? t('正式 run 加载中...', 'Loading official run...') : t('还没有落库的正式 version 预测。', 'No persisted official version forecasts yet.')}
+                          </td>
+                        </tr>
+                      ) : (
+                        officialVersionPredictions.map((row, index) => {
+                          const metrics = (row.metrics_json ?? {}) as Record<string, unknown>;
+                          const rowClass = [
+                            index < officialVersionPredictions.length - 1 ? 'border-b px-4 py-3' : 'px-4 py-3',
+                            cellClass
+                          ].join(' ');
+                          const isSelected = row.id === selectedOfficialPrediction?.id;
+                          return (
+                            <tr key={`official-version-${row.id}`} className={isSelected ? (isLight ? 'bg-sky-50/70' : 'bg-sky-500/10') : undefined}>
+                              <td className={rowClass}>
+                                <div className="font-semibold">{row.candidate_label}</div>
+                                <div className={['mt-1 text-xs', mutedClass].join(' ')}>
+                                  {row.is_recommended ? t('系统推荐', 'System recommendation') : row.id === officialPublication?.selected_prediction_id ? t('当前发布引用', 'Selected for publication') : row.candidate_key}
+                                </div>
+                              </td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatNumber(row.forecast_value)}</td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatNumber(row.training_samples)}</td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatPercent(Number(metrics.within1HitRate ?? NaN))}</td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatPercent(Number(metrics.within3HitRate ?? NaN))}</td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatPercent(Number(metrics.recent14Wape ?? NaN))}</td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatPercent(Number(metrics.p90AbsVariance ?? NaN))}</td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatPercent(Number(metrics.worstAbsVariance ?? NaN))}</td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div className={['rounded-[24px] p-5', subPanelClass].join(' ')}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('发布动作', 'Publication actions')}</div>
+                    <div className={['mt-2 text-lg font-semibold', titleClass].join(' ')}>{t('人工确认或覆盖', 'Accept or override')}</div>
+                  </div>
+                  <div className={['text-xs text-right', mutedClass].join(' ')}>
+                    <div>{t('Run 状态', 'Run status')}: {officialRun?.status ?? '-'}</div>
+                    <div className="mt-1">{t('开始时间', 'Started')}: {formatTimestamp(officialRun?.started_at)}</div>
+                  </div>
+                </div>
+                <div className={['mt-4 rounded-2xl border px-4 py-3 text-sm leading-6', messageClass].join(' ')}>
+                  <div>{t('推荐版本', 'Recommended version')}: {recommendedOfficialPrediction?.candidate_label ?? '-'}</div>
+                  <div>{t('已发布状态', 'Publication status')}: {officialPublication?.status ?? t('未创建', 'Not created')}</div>
+                  <div>{t('发布人', 'Published by')}: {officialPublication?.published_by ?? '-'}</div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    className={[
+                      'rounded-full px-4 py-2 text-sm font-semibold',
+                      isLight ? 'bg-slate-900 text-white disabled:bg-slate-300' : 'bg-white text-slate-900 disabled:bg-white/30'
+                    ].join(' ')}
+                    disabled={isLocked || publishSaving || !recommendedOfficialPrediction}
+                    onClick={() => void handlePublishRecommendation()}
+                  >
+                    {publishSaving ? t('保存中...', 'Saving...') : t('接受推荐', 'Accept recommendation')}
+                  </button>
+                </div>
+                <div className="mt-4 space-y-3">
+                  <label className="block">
+                    <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.18em]', mutedClass].join(' ')}>{t('正式预测值', 'Published forecast')}</div>
+                    <input
+                      value={manualPublishedForecast}
+                      onChange={(event) => setManualPublishedForecast(event.target.value)}
+                      disabled={isLocked || publishSaving || !officialRun}
+                      className={[
+                        'w-full rounded-2xl border px-4 py-3 text-sm outline-none',
+                        isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-slate-950/40 text-white'
+                      ].join(' ')}
+                      placeholder="0"
+                    />
+                  </label>
+                  <label className="block">
+                    <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.18em]', mutedClass].join(' ')}>{t('覆盖原因', 'Override reason')}</div>
+                    <textarea
+                      value={manualOverrideReason}
+                      onChange={(event) => setManualOverrideReason(event.target.value)}
+                      disabled={isLocked || publishSaving || !officialRun}
+                      rows={3}
+                      className={[
+                        'w-full rounded-2xl border px-4 py-3 text-sm outline-none',
+                        isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-slate-950/40 text-white'
+                      ].join(' ')}
+                      placeholder={t('例如：结合临时业务判断上调/下调。', 'For example: adjusted up/down based on operator judgment.')}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className={[
+                      'rounded-full px-4 py-2 text-sm font-semibold',
+                      isLight ? 'border border-slate-300 text-slate-900 disabled:text-slate-400' : 'border border-white/20 text-white disabled:text-white/40'
+                    ].join(' ')}
+                    disabled={isLocked || publishSaving || !officialRun}
+                    onClick={() => void handlePublishManualOverride()}
+                  >
+                    {t('手工覆盖正式值', 'Save manual override')}
+                  </button>
+                </div>
+                <div className="mt-5">
+                  <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('告警', 'Alerts')}</div>
+                  <div className="mt-3 space-y-2">
+                    {officialAlerts.length === 0 ? (
+                      <div className={['rounded-2xl border px-4 py-3 text-sm', messageClass].join(' ')}>
+                        {t('最近14天没有落库告警。', 'No persisted alerts in the last 14 days.')}
+                      </div>
+                    ) : (
+                      officialAlerts.slice(0, 5).map((alert) => (
+                        <div key={`official-alert-${alert.id}`} className={['rounded-2xl border px-4 py-3 text-sm', messageClass].join(' ')}>
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="font-semibold">{alert.alert_type}</div>
+                            <div className={mutedClass}>{alert.alert_date}</div>
+                          </div>
+                          <div className={['mt-1 text-xs', mutedClass].join(' ')}>
+                            {t('严重级别', 'Severity')}: {alert.severity} · {t('状态', 'Status')}: {alert.status}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+                {latestOfficialAlert ? (
+                  <div className={['mt-4 rounded-2xl border px-4 py-3 text-sm', messageClass].join(' ')}>
+                    {t('最新告警', 'Latest alert')}: {latestOfficialAlert.alert_type}
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </div>
           <div className="mt-8">
             <div className="flex items-center justify-between gap-3">
@@ -3127,14 +4350,14 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
               </p>
               <p className={['mt-2 text-sm leading-6', mutedClass].join(' ')}>
                 {t(
-                  'V8 是明日预测模型，只使用预测明天时已经知道的历史统计、产能、恶劣天气、大促与日历特征，不依赖明日 backlog / inventory / 00-14。',
-                  'V8 is the tomorrow-ready model. It only uses history summaries, capacity, severe weather, promotion, and calendar signals already known before tomorrow, without relying on tomorrow backlog / inventory / 00-14.'
+                  'V8 是明日预测模型，只使用预测明天时已经知道的历史统计、产能、恶劣天气、大促、节假日与日历特征，不依赖明日 backlog / inventory / 00-14。',
+                  'V8 is the tomorrow-ready model. It only uses history summaries, capacity, severe weather, promotion, holiday, and calendar signals already known before tomorrow, without relying on tomorrow backlog / inventory / 00-14.'
                 )}
               </p>
               <p className={['mt-2 text-sm leading-6', mutedClass].join(' ')}>
                 {t(
-                  'V9 是前端内训练的轻量 XGBoost 回归树集成，基于 V1 / V2 / V3 预测和开盘前可知特征做非线性拟合。',
-                  'V9 is a browser-trained lightweight XGBoost regressor that fits non-linear interactions on top of V1 / V2 / V3 forecasts and preopen-safe features.'
+                  'V9 是前端内训练的轻量 XGBoost 回归树集成，基于 V1 / V2 / V3 预测和开盘前可知的容量、天气、大促、节假日等特征做非线性拟合。',
+                  'V9 is a browser-trained lightweight XGBoost regressor that fits non-linear interactions on top of V1 / V2 / V3 forecasts and preopen-safe capacity, weather, promotion, and holiday features.'
                 )}
               </p>
               <div className="mt-4 space-y-4">
@@ -3399,6 +4622,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                 {[
                   t('主榜统一按明日开盘前口径评估。', 'Main leaderboard uses the tomorrow-preopen cutoff.'),
                   t('V1 已改成开盘前安全版，不再使用目标日 backlog / inventory / 00-14。', 'V1 has been redefined as preopen-safe and no longer uses target-day backlog / inventory / 00-14.'),
+                  t('美国节假日与 observed holiday 会按日期自动识别，不需要人工录入。', 'US holidays and observed holidays are detected automatically from the date, with no manual input required.'),
                   t('只使用预测时点已经知道的数据。', 'Use only data known at prediction time.'),
                   t('12点累计量会导致 next-day 泄漏，所以只展示不训练。', '12:00 cumulative would leak next-day information, so it is displayed only and excluded from training.'),
                   t('Backlog / Inventory / Yesterday 00-14 属于同日字段，只展示，不参与公平榜。', 'Backlog / Inventory / Yesterday 00-14 are same-day fields. They are shown for reference only and excluded from the fair leaderboard.'),
