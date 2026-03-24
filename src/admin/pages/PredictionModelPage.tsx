@@ -81,7 +81,9 @@ type ModelKey =
   | 'feature_regression_v1'
   | 'feature_regression_v2'
   | 'feature_regression_v3'
-  | 'feature_regression_v7';
+  | 'feature_regression_v7'
+  | 'feature_regression_v8'
+  | 'feature_xgboost_v9';
 type ModelForecastMap = Record<ModelKey, number | null>;
 
 type EvaluationRow = {
@@ -114,7 +116,7 @@ type ChampionScoreRow = {
 };
 
 type BaseVersionKey = 'v0' | 'v1' | 'v2' | 'v3';
-type VersionKey = BaseVersionKey | 'v4' | 'v4_ensemble' | 'v5' | 'v6' | 'v7';
+type VersionKey = BaseVersionKey | 'v4' | 'v4_ensemble' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9';
 type BaseVersionForecastMap = Record<BaseVersionKey, number | null>;
 type VersionForecastMap = Record<VersionKey, number | null>;
 type BaseVersionApeMap = Record<BaseVersionKey, number | null>;
@@ -204,8 +206,11 @@ type VersionMetric = VersionMetricSlice & {
   recent14: VersionMetricSlice;
 };
 
+type CutoffMode = 'preopen';
+
 const HISTORY_TABLE = 'volume_history';
 const INPUT_TABLE = 'volume_forecast_daily_inputs';
+const MAIN_LEADERBOARD_CUTOFF: CutoffMode = 'preopen';
 const HOUR_COLUMNS = Array.from({ length: 24 }, (_, idx) => `h${String(idx).padStart(2, '0')}`) as Array<
   Exclude<keyof VolumeHistoryRow, 'date' | 'last_filled_hour'>
 >;
@@ -216,17 +221,16 @@ const FEATURE_NAMES = [
   'rolling_mean_14',
   'previous_day_total',
   'previous_vs_recent14',
-  'previous_day_backlog',
-  'inventory_level',
   'full_day_capacity',
-  'yesterday_inflow_00_14',
-  'severe_weather',
-  'backlog_to_inventory',
   'capacity_vs_recent14',
-  'has_backlog',
-  'has_inventory',
   'has_capacity',
-  'has_yesterday_flow'
+  'severe_weather',
+  'major_promotion',
+  'week_of_month',
+  'month_progress',
+  'is_weekend',
+  'is_month_start_window',
+  'is_month_end_window'
 ] as const;
 
 const FEATURE_NAMES_V2 = [
@@ -262,6 +266,44 @@ const FEATURE_NAMES_V7 = [
   'recent_itr_mean_7_ctx',
   'severe_weather_ctx',
   'major_promotion_ctx'
+] as const;
+
+const FEATURE_NAMES_V8 = [
+  'forecast_v2',
+  'rolling_mean_7_model',
+  'same_weekday_mean_4_ctx',
+  'previous_day_total_ctx',
+  'previous_vs_recent14_ctx',
+  'full_day_capacity_ctx',
+  'capacity_vs_recent14_ctx',
+  'has_capacity_ctx',
+  'severe_weather_ctx',
+  'major_promotion_ctx',
+  'week_of_month_ctx',
+  'month_progress_ctx',
+  'is_weekend_ctx',
+  'is_month_start_window_ctx',
+  'is_month_end_window_ctx'
+] as const;
+
+const FEATURE_NAMES_V9 = [
+  'forecast_v1',
+  'forecast_v2',
+  'forecast_v3',
+  'rolling_mean_7_model',
+  'same_weekday_mean_4_ctx',
+  'previous_day_total_ctx',
+  'previous_vs_recent14_ctx',
+  'recent_itr_mean_7_ctx',
+  'full_day_capacity_ctx',
+  'capacity_vs_recent14_ctx',
+  'severe_weather_ctx',
+  'major_promotion_ctx',
+  'week_of_month_ctx',
+  'month_progress_ctx',
+  'is_weekend_ctx',
+  'is_month_start_window_ctx',
+  'is_month_end_window_ctx'
 ] as const;
 
 type FeatureName = (typeof FEATURE_NAMES)[number];
@@ -308,6 +350,35 @@ type TrainedFeatureModelV7 = {
   sampleSize: number;
 };
 
+type FeatureNameV8 = (typeof FEATURE_NAMES_V8)[number];
+type FeatureVectorV8 = Record<FeatureNameV8, number>;
+type FeatureSampleV8 = { features: FeatureVectorV8; target: number };
+type TrainedFeatureModelV8 = {
+  bias: number;
+  weights: number[];
+  means: number[];
+  stds: number[];
+  sampleSize: number;
+};
+
+type FeatureNameV9 = (typeof FEATURE_NAMES_V9)[number];
+type FeatureVectorV9 = Record<FeatureNameV9, number>;
+type FeatureSampleV9 = { features: FeatureVectorV9; target: number };
+type XGBoostTreeNodeV9 = {
+  featureIndex: number | null;
+  threshold: number | null;
+  left: XGBoostTreeNodeV9 | null;
+  right: XGBoostTreeNodeV9 | null;
+  leafWeight: number;
+};
+type TrainedFeatureModelV9 = {
+  baseScore: number;
+  trees: XGBoostTreeNodeV9[];
+  learningRate: number;
+  sampleSize: number;
+  featureGains: number[];
+};
+
 const MODEL_KEYS: ModelKey[] = [
   'same_weekday_median',
   'rolling_mean_7',
@@ -315,7 +386,9 @@ const MODEL_KEYS: ModelKey[] = [
   'feature_regression_v1',
   'feature_regression_v2',
   'feature_regression_v3',
-  'feature_regression_v7'
+  'feature_regression_v7',
+  'feature_regression_v8',
+  'feature_xgboost_v9'
 ];
 const MODEL_LABELS: Record<ModelKey, string> = {
   same_weekday_median: 'Same Weekday Median',
@@ -324,11 +397,13 @@ const MODEL_LABELS: Record<ModelKey, string> = {
   feature_regression_v1: 'Feature Regression V1',
   feature_regression_v2: 'Feature Regression V2',
   feature_regression_v3: 'Feature Regression V3',
-  feature_regression_v7: 'Feature Regression V7'
+  feature_regression_v7: 'Feature Regression V7',
+  feature_regression_v8: 'Feature Regression V8',
+  feature_xgboost_v9: 'XGBoost Regressor V9'
 };
 const BASE_VERSION_KEYS: BaseVersionKey[] = ['v0', 'v1', 'v2', 'v3'];
 const BLEND_VERSION_KEYS: BaseVersionKey[] = ['v1', 'v2', 'v3'];
-const VERSION_KEYS: VersionKey[] = [...BASE_VERSION_KEYS, 'v4', 'v4_ensemble', 'v5', 'v6', 'v7'];
+const VERSION_KEYS: VersionKey[] = [...BASE_VERSION_KEYS, 'v4', 'v4_ensemble', 'v5', 'v6', 'v7', 'v8', 'v9'];
 const VERSION_LABELS: Record<VersionKey, string> = {
   v0: 'V0',
   v1: 'V1',
@@ -338,7 +413,9 @@ const VERSION_LABELS: Record<VersionKey, string> = {
   v4_ensemble: 'V4 Ensemble',
   v5: 'V5 Adaptive Blend',
   v6: 'V6 Residual Blend',
-  v7: 'V7 Promotion-Aware Model'
+  v7: 'V7 Promotion-Aware Model',
+  v8: 'V8 Tomorrow Base',
+  v9: 'V9 XGBoost'
 };
 const VERSION_TIEBREAK_ORDER: BaseVersionKey[] = ['v3', 'v2', 'v1', 'v0'];
 const DAILY_POINT_VALUES = [3, 2, 1, 0] as const;
@@ -353,17 +430,16 @@ const FEATURE_LABELS: Record<FeatureName, string> = {
   rolling_mean_14: 'Rolling mean 14D',
   previous_day_total: 'Previous day total',
   previous_vs_recent14: 'Prev vs 14D mean',
-  previous_day_backlog: 'Backlog',
-  inventory_level: 'Inventory',
   full_day_capacity: 'Capacity',
-  yesterday_inflow_00_14: 'Yesterday 00-14',
-  severe_weather: 'Severe weather',
-  backlog_to_inventory: 'Backlog / inventory',
   capacity_vs_recent14: 'Capacity / 14D mean',
-  has_backlog: 'Has backlog',
-  has_inventory: 'Has inventory',
   has_capacity: 'Has capacity',
-  has_yesterday_flow: 'Has yesterday 00-14'
+  severe_weather: 'Severe weather',
+  major_promotion: 'Major promotion',
+  week_of_month: 'Week of month',
+  month_progress: 'Month progress',
+  is_weekend: 'Weekend',
+  is_month_start_window: 'Month start window',
+  is_month_end_window: 'Month end window'
 };
 const FEATURE_LABELS_V2: Record<FeatureNameV2, string> = {
   same_weekday_mean_4: 'Same weekday mean (4)',
@@ -399,6 +475,44 @@ const FEATURE_LABELS_V7: Record<FeatureNameV7, string> = {
   major_promotion_ctx: 'Major promotion'
 };
 
+const FEATURE_LABELS_V8: Record<FeatureNameV8, string> = {
+  forecast_v2: 'V2 forecast',
+  rolling_mean_7_model: '7-day mean forecast',
+  same_weekday_mean_4_ctx: 'Same weekday mean (4)',
+  previous_day_total_ctx: 'Previous day total',
+  previous_vs_recent14_ctx: 'Prev vs 14D mean',
+  full_day_capacity_ctx: 'Capacity',
+  capacity_vs_recent14_ctx: 'Capacity / 14D mean',
+  has_capacity_ctx: 'Has capacity',
+  severe_weather_ctx: 'Severe weather',
+  major_promotion_ctx: 'Major promotion',
+  week_of_month_ctx: 'Week of month',
+  month_progress_ctx: 'Month progress',
+  is_weekend_ctx: 'Weekend',
+  is_month_start_window_ctx: 'Month start window',
+  is_month_end_window_ctx: 'Month end window'
+};
+
+const FEATURE_LABELS_V9: Record<FeatureNameV9, string> = {
+  forecast_v1: 'V1 forecast',
+  forecast_v2: 'V2 forecast',
+  forecast_v3: 'V3 forecast',
+  rolling_mean_7_model: '7-day mean forecast',
+  same_weekday_mean_4_ctx: 'Same weekday mean (4)',
+  previous_day_total_ctx: 'Previous day total',
+  previous_vs_recent14_ctx: 'Prev vs 14D mean',
+  recent_itr_mean_7_ctx: 'Recent ITR mean 7D',
+  full_day_capacity_ctx: 'Capacity',
+  capacity_vs_recent14_ctx: 'Capacity / 14D mean',
+  severe_weather_ctx: 'Severe weather',
+  major_promotion_ctx: 'Major promotion',
+  week_of_month_ctx: 'Week of month',
+  month_progress_ctx: 'Month progress',
+  is_weekend_ctx: 'Weekend',
+  is_month_start_window_ctx: 'Month start window',
+  is_month_end_window_ctx: 'Month end window'
+};
+
 const toDateOnly = (date: Date) => {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -410,6 +524,36 @@ const addDays = (dateOnly: string, shift: number) => {
   const next = new Date(`${dateOnly}T00:00:00`);
   next.setDate(next.getDate() + shift);
   return toDateOnly(next);
+};
+
+const getDateParts = (dateOnly: string) => {
+  const date = new Date(`${dateOnly}T00:00:00`);
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const dayOfMonth = date.getDate();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  return { year, month, dayOfMonth, daysInMonth };
+};
+
+const getWeekOfMonth = (dateOnly: string) => {
+  const { dayOfMonth } = getDateParts(dateOnly);
+  return Math.ceil(dayOfMonth / 7);
+};
+
+const getMonthProgress = (dateOnly: string) => {
+  const { dayOfMonth, daysInMonth } = getDateParts(dateOnly);
+  if (daysInMonth <= 1) return 1;
+  return (dayOfMonth - 1) / (daysInMonth - 1);
+};
+
+const isMonthStartWindow = (dateOnly: string, window = 3) => {
+  const { dayOfMonth } = getDateParts(dateOnly);
+  return dayOfMonth <= window;
+};
+
+const isMonthEndWindow = (dateOnly: string, window = 3) => {
+  const { dayOfMonth, daysInMonth } = getDateParts(dateOnly);
+  return daysInMonth - dayOfMonth < window;
 };
 
 const formatNumber = (value: number | null, digits = 0) => {
@@ -477,6 +621,9 @@ const createFeatureContext = (date: string, input: ForecastInputRow | null): Fea
   yesterday_inflow_00_14: Math.max(0, sanitizeNumber(input?.yesterday_inflow_00_14))
 });
 
+const hasPreopenPlanningSignal = (context: FeatureContextDay) =>
+  context.full_day_capacity > 0 || context.severe_weather || context.major_promotion;
+
 const buildHistorySummary = (targetWeekday: number, priorDays: PreparedDay[]) => {
   if (priorDays.length < 14) return null;
 
@@ -529,11 +676,14 @@ const buildBaselinePredictions = (targetDate: string, priorDays: PreparedDay[]):
   };
 };
 
-const buildFeatureVector = (targetDay: FeatureContextDay, priorDays: PreparedDay[]): FeatureVector | null => {
+const buildFeatureVector = (targetDate: string, targetDay: FeatureContextDay, priorDays: PreparedDay[]): FeatureVector | null => {
   const summary = buildHistorySummary(targetDay.weekday, priorDays);
   if (!summary) return null;
-  const backlogToInventory = targetDay.inventory_level > 0 ? targetDay.previous_day_backlog / targetDay.inventory_level : 0;
-  const capacityVsRecent14 = summary.rollingMean14 > 0 ? targetDay.full_day_capacity / summary.rollingMean14 : 0;
+  const weekOfMonth = getWeekOfMonth(targetDate);
+  const monthProgress = getMonthProgress(targetDate);
+  const cappedCapacity =
+    summary.rollingMean14 > 0 ? Math.min(targetDay.full_day_capacity, summary.rollingMean14 * 1.25) : targetDay.full_day_capacity;
+  const capacityVsRecent14 = summary.rollingMean14 > 0 ? cappedCapacity / summary.rollingMean14 : 0;
 
   return {
     same_weekday_mean_4: summary.sameWeekdayMean4,
@@ -542,17 +692,16 @@ const buildFeatureVector = (targetDay: FeatureContextDay, priorDays: PreparedDay
     rolling_mean_14: summary.rollingMean14,
     previous_day_total: summary.previousDay.total,
     previous_vs_recent14: clamp(summary.previousVsRecent14, -3, 3),
-    previous_day_backlog: targetDay.previous_day_backlog,
-    inventory_level: targetDay.inventory_level,
-    full_day_capacity: targetDay.full_day_capacity,
-    yesterday_inflow_00_14: targetDay.yesterday_inflow_00_14,
+    full_day_capacity: cappedCapacity,
+    capacity_vs_recent14: clamp(capacityVsRecent14, 0, 1.25),
+    has_capacity: cappedCapacity > 0 ? 1 : 0,
     severe_weather: targetDay.severe_weather ? 1 : 0,
-    backlog_to_inventory: clamp(backlogToInventory, 0, 10),
-    capacity_vs_recent14: clamp(capacityVsRecent14, 0, 10),
-    has_backlog: targetDay.previous_day_backlog > 0 ? 1 : 0,
-    has_inventory: targetDay.inventory_level > 0 ? 1 : 0,
-    has_capacity: targetDay.full_day_capacity > 0 ? 1 : 0,
-    has_yesterday_flow: targetDay.yesterday_inflow_00_14 > 0 ? 1 : 0
+    major_promotion: targetDay.major_promotion ? 1 : 0,
+    week_of_month: clamp(weekOfMonth, 1, 5),
+    month_progress: clamp(monthProgress, 0, 1),
+    is_weekend: targetDay.weekday >= 6 ? 1 : 0,
+    is_month_start_window: isMonthStartWindow(targetDate) ? 1 : 0,
+    is_month_end_window: isMonthEndWindow(targetDate) ? 1 : 0
   };
 };
 
@@ -629,6 +778,234 @@ const buildFeatureVectorV7 = (
     recent_itr_mean_7_ctx: summary.recentItrMean7,
     severe_weather_ctx: targetDay.severe_weather ? 1 : 0,
     major_promotion_ctx: targetDay.major_promotion ? 1 : 0
+  };
+};
+
+const buildFeatureVectorV8 = (
+  targetDate: string,
+  targetDay: FeatureContextDay,
+  priorDays: PreparedDay[],
+  baseForecasts: {
+    rollingMean7: number | null;
+    forecastV2: number | null;
+  }
+): FeatureVectorV8 | null => {
+  const summary = buildHistorySummary(targetDay.weekday, priorDays);
+  if (!summary) return null;
+  if (baseForecasts.rollingMean7 === null || baseForecasts.forecastV2 === null) return null;
+
+  const weekOfMonth = getWeekOfMonth(targetDate);
+  const monthProgress = getMonthProgress(targetDate);
+  const cappedCapacity =
+    summary.rollingMean14 > 0 ? Math.min(targetDay.full_day_capacity, summary.rollingMean14 * 1.25) : targetDay.full_day_capacity;
+  const capacityVsRecent14 = summary.rollingMean14 > 0 ? cappedCapacity / summary.rollingMean14 : 0;
+
+  return {
+    forecast_v2: baseForecasts.forecastV2,
+    rolling_mean_7_model: baseForecasts.rollingMean7,
+    same_weekday_mean_4_ctx: summary.sameWeekdayMean4,
+    previous_day_total_ctx: summary.previousDay.total,
+    previous_vs_recent14_ctx: clamp(summary.previousVsRecent14, -3, 3),
+    full_day_capacity_ctx: cappedCapacity,
+    capacity_vs_recent14_ctx: clamp(capacityVsRecent14, 0, 1.25),
+    has_capacity_ctx: cappedCapacity > 0 ? 1 : 0,
+    severe_weather_ctx: targetDay.severe_weather ? 1 : 0,
+    major_promotion_ctx: targetDay.major_promotion ? 1 : 0,
+    week_of_month_ctx: clamp(weekOfMonth, 1, 5),
+    month_progress_ctx: clamp(monthProgress, 0, 1),
+    is_weekend_ctx: targetDay.weekday >= 6 ? 1 : 0,
+    is_month_start_window_ctx: isMonthStartWindow(targetDate) ? 1 : 0,
+    is_month_end_window_ctx: isMonthEndWindow(targetDate) ? 1 : 0
+  };
+};
+
+const buildFeatureVectorV9 = (
+  targetDate: string,
+  targetDay: FeatureContextDay,
+  priorDays: PreparedDay[],
+  baseForecasts: {
+    rollingMean7: number | null;
+    forecastV1: number | null;
+    forecastV2: number | null;
+    forecastV3: number | null;
+  }
+): FeatureVectorV9 | null => {
+  const summary = buildHistorySummary(targetDay.weekday, priorDays);
+  if (!summary) return null;
+  if (
+    baseForecasts.rollingMean7 === null ||
+    baseForecasts.forecastV1 === null ||
+    baseForecasts.forecastV2 === null ||
+    baseForecasts.forecastV3 === null
+  ) {
+    return null;
+  }
+
+  const weekOfMonth = getWeekOfMonth(targetDate);
+  const monthProgress = getMonthProgress(targetDate);
+  const cappedCapacity =
+    summary.rollingMean14 > 0 ? Math.min(targetDay.full_day_capacity, summary.rollingMean14 * 1.25) : targetDay.full_day_capacity;
+  const capacityVsRecent14 = summary.rollingMean14 > 0 ? cappedCapacity / summary.rollingMean14 : 0;
+
+  return {
+    forecast_v1: baseForecasts.forecastV1,
+    forecast_v2: baseForecasts.forecastV2,
+    forecast_v3: baseForecasts.forecastV3,
+    rolling_mean_7_model: baseForecasts.rollingMean7,
+    same_weekday_mean_4_ctx: summary.sameWeekdayMean4,
+    previous_day_total_ctx: summary.previousDay.total,
+    previous_vs_recent14_ctx: clamp(summary.previousVsRecent14, -3, 3),
+    recent_itr_mean_7_ctx: summary.recentItrMean7,
+    full_day_capacity_ctx: cappedCapacity,
+    capacity_vs_recent14_ctx: clamp(capacityVsRecent14, 0, 1.25),
+    severe_weather_ctx: targetDay.severe_weather ? 1 : 0,
+    major_promotion_ctx: targetDay.major_promotion ? 1 : 0,
+    week_of_month_ctx: clamp(weekOfMonth, 1, 5),
+    month_progress_ctx: clamp(monthProgress, 0, 1),
+    is_weekend_ctx: targetDay.weekday >= 6 ? 1 : 0,
+    is_month_start_window_ctx: isMonthStartWindow(targetDate) ? 1 : 0,
+    is_month_end_window_ctx: isMonthEndWindow(targetDate) ? 1 : 0
+  };
+};
+
+const buildThresholdCandidates = (values: number[], maxThresholds = 12) => {
+  const uniqueValues = [...new Set(values)].sort((a, b) => a - b);
+  if (uniqueValues.length < 2) return [];
+  const thresholds = uniqueValues.slice(0, -1).map((value, index) => (value + uniqueValues[index + 1]) / 2);
+  if (thresholds.length <= maxThresholds) return thresholds;
+  return Array.from({ length: maxThresholds }, (_, index) => {
+    const ratio = (index + 1) / (maxThresholds + 1);
+    const thresholdIndex = Math.min(thresholds.length - 1, Math.max(0, Math.round(ratio * (thresholds.length - 1))));
+    return thresholds[thresholdIndex];
+  });
+};
+
+const calculateXGBoostLeafWeight = (gradientSum: number, hessianSum: number, lambda: number, maxLeafMagnitude: number) =>
+  clamp(-gradientSum / (hessianSum + lambda), -maxLeafMagnitude, maxLeafMagnitude);
+
+const calculateXGBoostSplitGain = (
+  gradientSum: number,
+  hessianSum: number,
+  leftGradient: number,
+  leftHessian: number,
+  rightGradient: number,
+  rightHessian: number,
+  lambda: number,
+  gamma: number
+) =>
+  0.5 *
+    (leftGradient ** 2 / (leftHessian + lambda) +
+      rightGradient ** 2 / (rightHessian + lambda) -
+      gradientSum ** 2 / (hessianSum + lambda)) -
+  gamma;
+
+const buildDeterministicSubsetIndices = (indices: number[], ratio: number, seed: number, minCount: number) => {
+  const targetCount = clamp(Math.round(indices.length * ratio), Math.min(minCount, indices.length), indices.length);
+  return [...indices]
+    .map((index) => ({
+      index,
+      score: ((seed * 92821 + index * 68917 + 17) % 1000 + 1000) % 1000
+    }))
+    .sort((a, b) => a.score - b.score || a.index - b.index)
+    .slice(0, targetCount)
+    .map((item) => item.index);
+};
+
+const predictXGBoostTreeV9 = (tree: XGBoostTreeNodeV9, row: number[]): number => {
+  if (tree.featureIndex === null || tree.threshold === null || tree.left === null || tree.right === null) {
+    return tree.leafWeight;
+  }
+  return row[tree.featureIndex] <= tree.threshold ? predictXGBoostTreeV9(tree.left, row) : predictXGBoostTreeV9(tree.right, row);
+};
+
+const buildXGBoostTreeV9 = (
+  rows: number[][],
+  gradients: number[],
+  hessians: number[],
+  indices: number[],
+  depth: number,
+  featureGains: number[],
+  params: {
+    maxDepth: number;
+    minSamplesLeaf: number;
+    minSamplesSplit: number;
+    maxThresholds: number;
+    lambda: number;
+    gamma: number;
+    minGain: number;
+    maxLeafMagnitude: number;
+    featureIndices: number[];
+  }
+): XGBoostTreeNodeV9 => {
+  const gradientSum = indices.reduce((sum, index) => sum + gradients[index], 0);
+  const hessianSum = indices.reduce((sum, index) => sum + hessians[index], 0);
+  const leafWeight = calculateXGBoostLeafWeight(gradientSum, hessianSum, params.lambda, params.maxLeafMagnitude);
+
+  if (depth >= params.maxDepth || indices.length < params.minSamplesSplit) {
+    return { featureIndex: null, threshold: null, left: null, right: null, leafWeight };
+  }
+
+  let bestFeatureIndex = -1;
+  let bestThreshold = 0;
+  let bestGain = Number.NEGATIVE_INFINITY;
+  let bestLeftIndices: number[] = [];
+  let bestRightIndices: number[] = [];
+
+  for (const featureIndex of params.featureIndices) {
+    const thresholds = buildThresholdCandidates(indices.map((index) => rows[index][featureIndex]), params.maxThresholds);
+    thresholds.forEach((threshold) => {
+      const leftIndices: number[] = [];
+      const rightIndices: number[] = [];
+      let leftGradient = 0;
+      let rightGradient = 0;
+      let leftHessian = 0;
+      let rightHessian = 0;
+
+      indices.forEach((index) => {
+        if (rows[index][featureIndex] <= threshold) {
+          leftIndices.push(index);
+          leftGradient += gradients[index];
+          leftHessian += hessians[index];
+        } else {
+          rightIndices.push(index);
+          rightGradient += gradients[index];
+          rightHessian += hessians[index];
+        }
+      });
+
+      if (leftIndices.length < params.minSamplesLeaf || rightIndices.length < params.minSamplesLeaf) return;
+      const gain = calculateXGBoostSplitGain(
+        gradientSum,
+        hessianSum,
+        leftGradient,
+        leftHessian,
+        rightGradient,
+        rightHessian,
+        params.lambda,
+        params.gamma
+      );
+
+      if (gain > bestGain) {
+        bestFeatureIndex = featureIndex;
+        bestThreshold = threshold;
+        bestGain = gain;
+        bestLeftIndices = leftIndices;
+        bestRightIndices = rightIndices;
+      }
+    });
+  }
+
+  if (bestFeatureIndex < 0 || bestGain <= params.minGain || !bestLeftIndices.length || !bestRightIndices.length) {
+    return { featureIndex: null, threshold: null, left: null, right: null, leafWeight };
+  }
+
+  featureGains[bestFeatureIndex] = (featureGains[bestFeatureIndex] ?? 0) + bestGain;
+  return {
+    featureIndex: bestFeatureIndex,
+    threshold: bestThreshold,
+    left: buildXGBoostTreeV9(rows, gradients, hessians, bestLeftIndices, depth + 1, featureGains, params),
+    right: buildXGBoostTreeV9(rows, gradients, hessians, bestRightIndices, depth + 1, featureGains, params),
+    leafWeight
   };
 };
 
@@ -800,6 +1177,133 @@ const trainFeatureRegressionV7 = (samples: FeatureSampleV7[]): TrainedFeatureMod
   return { bias, weights, means, stds, sampleSize: samples.length };
 };
 
+const trainFeatureRegressionV8 = (samples: FeatureSampleV8[]): TrainedFeatureModelV8 | null => {
+  if (samples.length < 18) return null;
+  const means = FEATURE_NAMES_V8.map((name) => mean(samples.map((sample) => sample.features[name])) ?? 0);
+  const stds = FEATURE_NAMES_V8.map((name, index) => {
+    const base = means[index];
+    const variance = mean(samples.map((sample) => (sample.features[name] - base) ** 2)) ?? 0;
+    return Math.sqrt(Math.max(variance, 1e-6)) || 1;
+  });
+
+  let bias = mean(samples.map((sample) => sample.target)) ?? 0;
+  let weights = Array.from({ length: FEATURE_NAMES_V8.length }, () => 0);
+  const learningRate = 0.03;
+  const l2 = 0.04;
+  const scale = 2 / samples.length;
+
+  for (let iteration = 0; iteration < 320; iteration += 1) {
+    const biasGradient = samples.reduce((sum, sample) => {
+      const prediction = bias + FEATURE_NAMES_V8.reduce((inner, name, index) => {
+        const normalized = (sample.features[name] - means[index]) / stds[index];
+        return inner + normalized * weights[index];
+      }, 0);
+      return sum + (prediction - sample.target);
+    }, 0);
+
+    const weightGradients = FEATURE_NAMES_V8.map((name, index) =>
+      samples.reduce((sum, sample) => {
+        const prediction = bias + FEATURE_NAMES_V8.reduce((inner, innerName, innerIndex) => {
+          const normalized = (sample.features[innerName] - means[innerIndex]) / stds[innerIndex];
+          return inner + normalized * weights[innerIndex];
+        }, 0);
+        const normalized = (sample.features[name] - means[index]) / stds[index];
+        return sum + (prediction - sample.target) * normalized;
+      }, 0)
+    );
+
+    bias -= learningRate * scale * biasGradient;
+    weights = weights.map((weight, index) => weight - learningRate * (scale * weightGradients[index] + l2 * weight));
+  }
+
+  return { bias, weights, means, stds, sampleSize: samples.length };
+};
+
+const trainXGBoostRegressionV9 = (samples: FeatureSampleV9[]): TrainedFeatureModelV9 | null => {
+  if (samples.length < 20) return null;
+
+  const rows = samples.map((sample) => FEATURE_NAMES_V9.map((name) => sample.features[name]));
+  const targets = samples.map((sample) => sample.target);
+  const baseScore = mean(targets) ?? 0;
+  const predictions = Array.from({ length: samples.length }, () => baseScore);
+  const learningRate = 0.1;
+  const featureCount = FEATURE_NAMES_V9.length;
+  const validationCount = samples.length >= 28 ? clamp(Math.round(samples.length * 0.2), 6, 12) : 0;
+  const trainingBaseIndices = rows.slice(0, rows.length - validationCount).map((_, index) => index);
+  const validationIndices = rows.slice(rows.length - validationCount).map((_, index) => rows.length - validationCount + index);
+  const baseTreeParams = {
+    maxDepth: 2,
+    minSamplesLeaf: 8,
+    minSamplesSplit: 18,
+    maxThresholds: 8,
+    lambda: 5,
+    gamma: 0.08,
+    minGain: 0.01,
+    maxLeafMagnitude: Math.max(1200, baseScore * 0.12)
+  };
+
+  const trees: XGBoostTreeNodeV9[] = [];
+  const featureGains = Array.from({ length: featureCount }, () => 0);
+  let bestTrees: XGBoostTreeNodeV9[] = [];
+  let bestFeatureGains = [...featureGains];
+  let bestValidationMae = Number.POSITIVE_INFINITY;
+  let roundsSinceImprovement = 0;
+
+  for (let round = 0; round < 24; round += 1) {
+    const activeTrainingIndices =
+      trainingBaseIndices.length >= baseTreeParams.minSamplesSplit
+        ? buildDeterministicSubsetIndices(trainingBaseIndices, 0.82, round + 11, baseTreeParams.minSamplesSplit)
+        : trainingBaseIndices;
+    const activeFeatureIndices = buildDeterministicSubsetIndices(
+      FEATURE_NAMES_V9.map((_, index) => index),
+      0.76,
+      round + 101,
+      Math.min(8, featureCount)
+    );
+    const gradients = predictions.map((prediction, index) => prediction - targets[index]);
+    const hessians = Array.from({ length: samples.length }, () => 1);
+    const tree = buildXGBoostTreeV9(
+      rows,
+      gradients,
+      hessians,
+      activeTrainingIndices,
+      0,
+      featureGains,
+      {
+        ...baseTreeParams,
+        featureIndices: activeFeatureIndices
+      }
+    );
+    if (tree.featureIndex === null && round >= 6) break;
+    trees.push(tree);
+    predictions.forEach((_, index) => {
+      predictions[index] += learningRate * predictXGBoostTreeV9(tree, rows[index]);
+    });
+
+    const evaluationIndices = validationIndices.length ? validationIndices : trainingBaseIndices;
+    const validationMae =
+      mean(evaluationIndices.map((index) => Math.abs(predictions[index] - targets[index]))) ?? Number.POSITIVE_INFINITY;
+
+    if (validationMae < bestValidationMae - 1) {
+      bestValidationMae = validationMae;
+      bestTrees = [...trees];
+      bestFeatureGains = [...featureGains];
+      roundsSinceImprovement = 0;
+    } else {
+      roundsSinceImprovement += 1;
+      if (validationIndices.length && round >= 8 && roundsSinceImprovement >= 4) break;
+    }
+  }
+
+  return {
+    baseScore,
+    trees: bestTrees.length ? bestTrees : trees,
+    learningRate,
+    sampleSize: samples.length,
+    featureGains: bestTrees.length ? bestFeatureGains : featureGains
+  };
+};
+
 const predictFeatureRegression = (model: TrainedFeatureModel | null, vector: FeatureVector | null) => {
   if (!model || !vector) return null;
   const rawPrediction = model.bias + FEATURE_NAMES.reduce((sum, name, index) => {
@@ -860,6 +1364,72 @@ const predictFeatureRegressionV7 = (model: TrainedFeatureModelV7 | null, vector:
   const lowerBound = Math.max(0, anchor * 0.35);
   const upperBound = Math.max(lowerBound + 1, anchor * 1.85);
   return clamp(Math.max(0, safePrediction), lowerBound, upperBound);
+};
+
+const predictFeatureRegressionV8 = (model: TrainedFeatureModelV8 | null, vector: FeatureVectorV8 | null) => {
+  if (!model || !vector) return null;
+  const rawPrediction = model.bias + FEATURE_NAMES_V8.reduce((sum, name, index) => {
+    const normalized = (vector[name] - model.means[index]) / model.stds[index];
+    return sum + normalized * model.weights[index];
+  }, 0);
+
+  const seasonalAnchors = [
+    vector.forecast_v2,
+    vector.rolling_mean_7_model,
+    vector.same_weekday_mean_4_ctx,
+    vector.previous_day_total_ctx
+  ].filter((value) => value > 0);
+  const conservativeAnchors = [vector.forecast_v2, vector.rolling_mean_7_model, vector.previous_day_total_ctx].filter((value) => value > 0);
+  const seasonalAnchor = mean(seasonalAnchors) ?? rawPrediction;
+  const conservativeAnchor = mean(conservativeAnchors) ?? seasonalAnchor;
+  const safePrediction = Number.isFinite(rawPrediction) ? rawPrediction : seasonalAnchor;
+  const sampleTrust = clamp((model.sampleSize - 18) / 24, 0.15, 1);
+  const blendedPrediction = conservativeAnchor + (safePrediction - conservativeAnchor) * sampleTrust;
+  const hasExplicitEvent =
+    vector.severe_weather_ctx > 0 ||
+    vector.major_promotion_ctx > 0 ||
+    vector.is_month_start_window_ctx > 0 ||
+    vector.is_month_end_window_ctx > 0;
+  const downtrend = vector.previous_vs_recent14_ctx < -0.03;
+  const lowerMultiplier = hasExplicitEvent ? 0.82 : 0.88;
+  const upperMultiplier = hasExplicitEvent ? (downtrend ? 1.12 : 1.18) : downtrend ? 1.05 : 1.10;
+  const lowerBound = Math.max(0, conservativeAnchor * lowerMultiplier);
+  const upperBound = Math.max(lowerBound + 1, conservativeAnchor * upperMultiplier);
+  return clamp(Math.max(0, blendedPrediction), lowerBound, upperBound);
+};
+
+const predictXGBoostRegressionV9 = (model: TrainedFeatureModelV9 | null, vector: FeatureVectorV9 | null) => {
+  if (!model || !vector) return null;
+
+  const row = FEATURE_NAMES_V9.map((name) => vector[name]);
+  const rawPrediction =
+    model.baseScore + model.trees.reduce((sum, tree) => sum + model.learningRate * predictXGBoostTreeV9(tree, row), 0);
+  const anchors = [
+    vector.forecast_v3,
+    vector.forecast_v2,
+    vector.forecast_v1,
+    vector.rolling_mean_7_model,
+    vector.previous_day_total_ctx
+  ].filter((value) => value > 0);
+  const anchor = mean(anchors) ?? rawPrediction;
+  const safePrediction = Number.isFinite(rawPrediction) ? rawPrediction : anchor;
+  const anchorMin = Math.min(...anchors);
+  const anchorMax = Math.max(...anchors);
+  const consensusGap = anchors.length >= 2 && anchorMin > 0 ? anchorMax / anchorMin - 1 : 0;
+  const sampleTrust = clamp((model.sampleSize - 20) / 42, 0.12, 0.7);
+  const consensusTrust = clamp(1 - consensusGap * 2.2, 0.25, 1);
+  const blendedPrediction = anchor + (safePrediction - anchor) * sampleTrust * consensusTrust;
+  const hasExplicitEvent =
+    vector.severe_weather_ctx > 0 ||
+    vector.major_promotion_ctx > 0 ||
+    vector.is_month_start_window_ctx > 0 ||
+    vector.is_month_end_window_ctx > 0;
+  const downtrend = vector.previous_vs_recent14_ctx < -0.03;
+  const lowerMultiplier = hasExplicitEvent ? 0.84 : 0.9;
+  const upperMultiplier = hasExplicitEvent ? (downtrend ? 1.08 : 1.14) : downtrend ? 1.05 : 1.1;
+  const lowerBound = Math.max(0, anchor * lowerMultiplier);
+  const upperBound = Math.max(lowerBound + 1, anchor * upperMultiplier);
+  return clamp(Math.max(0, blendedPrediction), lowerBound, upperBound);
 };
 
 const buildMetric = (rows: EvaluationRow[], key: ModelKey, targetForecast: number | null): ModelMetric => {
@@ -1385,7 +1955,7 @@ const buildVersionMetricSlice = (rows: VersionEvaluationRow[], key: VersionKey):
   };
 };
 
-// Compare V0-V7 over the full window and over the most recent 14 completed days.
+// Compare V0-V9 over the full window and over the most recent 14 completed days.
 const evaluateModels = (rows: VersionEvaluationRow[], targetForecasts: VersionForecastMap, recentWindow = 14): VersionMetric[] => {
   const recentRows = rows.slice(-recentWindow);
   return VERSION_KEYS.map((key) => ({
@@ -1508,27 +2078,21 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       });
 
     const analysisDays = fullHistoryDays.filter((day) => day.date >= historyRangeStart && day.date <= historyRangeEnd);
-    const planningCoverageDays = analysisDays.filter((day) => {
-      const context = day.context;
-      return (
-        context.previous_day_backlog > 0 ||
-        context.inventory_level > 0 ||
-        context.full_day_capacity > 0 ||
-        context.yesterday_inflow_00_14 > 0 ||
-        context.severe_weather ||
-        context.major_promotion
-      );
-    });
+    const planningCoverageDays = analysisDays.filter((day) => hasPreopenPlanningSignal(day.context));
 
     const priorDaysCache = new Map<string, PreparedDay[]>();
     const trainingSamplesV1Cache = new Map<string, FeatureSample[]>();
     const trainingSamplesV2Cache = new Map<string, FeatureSampleV2[]>();
     const trainingSamplesV3Cache = new Map<string, FeatureSampleV3[]>();
     const trainingSamplesV7Cache = new Map<string, FeatureSampleV7[]>();
+    const trainingSamplesV8Cache = new Map<string, FeatureSampleV8[]>();
+    const trainingSamplesV9Cache = new Map<string, FeatureSampleV9[]>();
     const featureModelV1Cache = new Map<string, TrainedFeatureModel | null>();
     const featureModelV2Cache = new Map<string, TrainedFeatureModelV2 | null>();
     const featureModelV3Cache = new Map<string, TrainedFeatureModelV3 | null>();
     const featureModelV7Cache = new Map<string, TrainedFeatureModelV7 | null>();
+    const featureModelV8Cache = new Map<string, TrainedFeatureModelV8 | null>();
+    const featureModelV9Cache = new Map<string, TrainedFeatureModelV9 | null>();
     const coreForecastCache = new Map<
       string,
       {
@@ -1540,6 +2104,8 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         featureVectorV3: FeatureVectorV3 | null;
         featureForecastV3: number | null;
         featureVectorV7: FeatureVectorV7 | null;
+        featureVectorV8: FeatureVectorV8 | null;
+        featureVectorV9: FeatureVectorV9 | null;
       }
     >();
 
@@ -1558,7 +2124,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       if (cached) return cached;
       const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
       const samples = candidateDays.reduce<FeatureSample[]>((rows, day) => {
-        const features = buildFeatureVector(day.context, getPriorDays(day.date, lookbackDays));
+        const features = buildFeatureVector(day.date, day.context, getPriorDays(day.date, lookbackDays));
         if (features) rows.push({ features, target: day.total });
         return rows;
       }, []);
@@ -1600,7 +2166,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
 
       const priorDays = getPriorDays(targetDate);
       const baselinePredictions = buildBaselinePredictions(targetDate, priorDays);
-      const featureVectorV1 = buildFeatureVector(targetContext, priorDays);
+      const featureVectorV1 = buildFeatureVector(targetDate, targetContext, priorDays);
       const featureForecastV1 = predictFeatureRegression(getFeatureModelV1(targetDate), featureVectorV1);
       const featureVectorV2 = buildFeatureVectorV2(targetContext, priorDays);
       const featureForecastV2 = predictFeatureRegressionV2(getFeatureModelV2(targetDate), featureVectorV2);
@@ -1616,6 +2182,16 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         forecastV2: featureForecastV2,
         forecastV3: featureForecastV3
       });
+      const featureVectorV8 = buildFeatureVectorV8(targetDate, targetContext, priorDays, {
+        rollingMean7: baselinePredictions.rolling_mean_7,
+        forecastV2: featureForecastV2
+      });
+      const featureVectorV9 = buildFeatureVectorV9(targetDate, targetContext, priorDays, {
+        rollingMean7: baselinePredictions.rolling_mean_7,
+        forecastV1: featureForecastV1,
+        forecastV2: featureForecastV2,
+        forecastV3: featureForecastV3
+      });
 
       const result = {
         baselinePredictions,
@@ -1625,7 +2201,9 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         featureForecastV2,
         featureVectorV3,
         featureForecastV3,
-        featureVectorV7
+        featureVectorV7,
+        featureVectorV8,
+        featureVectorV9
       };
       coreForecastCache.set(targetDate, result);
       return result;
@@ -1673,6 +2251,48 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       return featureModelV7Cache.get(cutoffDate) ?? null;
     };
 
+    const getTrainingSamplesV8 = (cutoffDate: string, lookbackDays = 160) => {
+      const cacheKey = `${cutoffDate}:${lookbackDays}`;
+      const cached = trainingSamplesV8Cache.get(cacheKey);
+      if (cached) return cached;
+      const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+      const samples = candidateDays.reduce<FeatureSampleV8[]>((rows, day) => {
+        const features = getCoreForecasts(day.date, day.context).featureVectorV8;
+        if (features) rows.push({ features, target: day.total });
+        return rows;
+      }, []);
+      trainingSamplesV8Cache.set(cacheKey, samples);
+      return samples;
+    };
+
+    const getFeatureModelV8 = (cutoffDate: string) => {
+      if (!featureModelV8Cache.has(cutoffDate)) {
+        featureModelV8Cache.set(cutoffDate, trainFeatureRegressionV8(getTrainingSamplesV8(cutoffDate)));
+      }
+      return featureModelV8Cache.get(cutoffDate) ?? null;
+    };
+
+    const getTrainingSamplesV9 = (cutoffDate: string, lookbackDays = 160) => {
+      const cacheKey = `${cutoffDate}:${lookbackDays}`;
+      const cached = trainingSamplesV9Cache.get(cacheKey);
+      if (cached) return cached;
+      const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+      const samples = candidateDays.reduce<FeatureSampleV9[]>((rows, day) => {
+        const features = getCoreForecasts(day.date, day.context).featureVectorV9;
+        if (features) rows.push({ features, target: day.total });
+        return rows;
+      }, []);
+      trainingSamplesV9Cache.set(cacheKey, samples);
+      return samples;
+    };
+
+    const getFeatureModelV9 = (cutoffDate: string) => {
+      if (!featureModelV9Cache.has(cutoffDate)) {
+        featureModelV9Cache.set(cutoffDate, trainXGBoostRegressionV9(getTrainingSamplesV9(cutoffDate)));
+      }
+      return featureModelV9Cache.get(cutoffDate) ?? null;
+    };
+
     const buildForecasts = (targetDate: string, targetContext: FeatureContextDay): ModelForecastMap => {
       const core = getCoreForecasts(targetDate, targetContext);
       return {
@@ -1680,7 +2300,9 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         feature_regression_v1: core.featureForecastV1,
         feature_regression_v2: core.featureForecastV2,
         feature_regression_v3: core.featureForecastV3,
-        feature_regression_v7: predictFeatureRegressionV7(getFeatureModelV7(targetDate), core.featureVectorV7)
+        feature_regression_v7: predictFeatureRegressionV7(getFeatureModelV7(targetDate), core.featureVectorV7),
+        feature_regression_v8: predictFeatureRegressionV8(getFeatureModelV8(targetDate), core.featureVectorV8),
+        feature_xgboost_v9: predictXGBoostRegressionV9(getFeatureModelV9(targetDate), core.featureVectorV9)
       };
     };
 
@@ -1715,6 +2337,8 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     const targetFeatureModelV2 = getFeatureModelV2(forecastTargetDate);
     const targetFeatureModelV3 = getFeatureModelV3(forecastTargetDate);
     const targetFeatureModelV7 = getFeatureModelV7(forecastTargetDate);
+    const targetFeatureModelV8 = getFeatureModelV8(forecastTargetDate);
+    const targetFeatureModelV9 = getFeatureModelV9(forecastTargetDate);
 
     const leaderboard = MODEL_KEYS.map((key) => buildMetric(evaluationRows, key, targetForecasts[key])).sort((a, b) => {
       if (a.wape === null) return 1;
@@ -1774,15 +2398,19 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         metric.key !== 'feature_regression_v1' &&
         metric.key !== 'feature_regression_v2' &&
         metric.key !== 'feature_regression_v3' &&
-        metric.key !== 'feature_regression_v7'
+        metric.key !== 'feature_regression_v7' &&
+        metric.key !== 'feature_regression_v8' &&
+        metric.key !== 'feature_xgboost_v9'
     );
     const bestBaselineMetric = baselineMetrics[0] ?? null;
     const featureMetricV1 = leaderboard.find((metric) => metric.key === 'feature_regression_v1') ?? null;
     const featureMetricV2 = leaderboard.find((metric) => metric.key === 'feature_regression_v2') ?? null;
     const featureMetricV3 = leaderboard.find((metric) => metric.key === 'feature_regression_v3') ?? null;
     const featureMetricV7 = leaderboard.find((metric) => metric.key === 'feature_regression_v7') ?? null;
+    const featureMetricV8 = leaderboard.find((metric) => metric.key === 'feature_regression_v8') ?? null;
+    const featureMetricV9 = leaderboard.find((metric) => metric.key === 'feature_xgboost_v9') ?? null;
     const bestFeatureMetric =
-      [featureMetricV1, featureMetricV2, featureMetricV3, featureMetricV7]
+      [featureMetricV1, featureMetricV2, featureMetricV3, featureMetricV7, featureMetricV8, featureMetricV9]
         .filter((metric): metric is ModelMetric => metric !== null)
         .sort((a, b) => {
           if (a.wape === null) return 1;
@@ -1843,7 +2471,9 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
           v4_ensemble: row.v4EnsembleForecast,
           v5: v5RowsByDate.get(row.date)?.v5Forecast ?? null,
           v6: v6RowsByDate.get(row.date)?.v6Forecast ?? null,
-          v7: evaluationRowsByDate.get(row.date)?.forecasts.feature_regression_v7 ?? null
+          v7: evaluationRowsByDate.get(row.date)?.forecasts.feature_regression_v7 ?? null,
+          v8: evaluationRowsByDate.get(row.date)?.forecasts.feature_regression_v8 ?? null,
+          v9: evaluationRowsByDate.get(row.date)?.forecasts.feature_xgboost_v9 ?? null
         }
       }));
     const targetVersionForecasts: VersionForecastMap = {
@@ -1852,15 +2482,19 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       v4_ensemble: targetV4Row?.v4EnsembleForecast ?? null,
       v5: targetV5Row?.v5Forecast ?? null,
       v6: targetV6Row?.v6Forecast ?? null,
-      v7: targetForecasts.feature_regression_v7
+      v7: targetForecasts.feature_regression_v7,
+      v8: targetForecasts.feature_regression_v8,
+      v9: targetForecasts.feature_xgboost_v9
     };
     const versionLeaderboard = evaluateModels(versionEvaluationRows, targetVersionForecasts);
     const currentVersionLeaderboard = rankCurrentVersionMetrics(versionLeaderboard);
     const bestVersionMetric = currentVersionLeaderboard[0] ?? versionLeaderboard[0] ?? null;
     const v0Metric = versionLeaderboard.find((metric) => metric.key === 'v0') ?? null;
     const bestAdvancedVersionMetric = currentVersionLeaderboard.find((metric) => metric.key !== 'v0') ?? versionLeaderboard.find((metric) => metric.key !== 'v0') ?? null;
-    const adaptiveComparisonLeaderboard = currentVersionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6', 'v7'].includes(metric.key));
-    const bestAdaptiveOverallMetric = versionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6', 'v7'].includes(metric.key))[0] ?? null;
+    const adaptiveComparisonLeaderboard =
+      currentVersionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6', 'v7', 'v8', 'v9'].includes(metric.key));
+    const bestAdaptiveOverallMetric =
+      versionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6', 'v7', 'v8', 'v9'].includes(metric.key))[0] ?? null;
     const bestAdaptiveRecent14Metric =
       [...adaptiveComparisonLeaderboard].sort((a, b) => {
         if (a.recent14.wape === null) return 1;
@@ -1881,10 +2515,16 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       targetFeatureModelV3 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV3.weights, FEATURE_NAMES_V3, FEATURE_LABELS_V3);
     const featureImportanceRowsV7 =
       targetFeatureModelV7 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV7.weights, FEATURE_NAMES_V7, FEATURE_LABELS_V7);
+    const featureImportanceRowsV8 =
+      targetFeatureModelV8 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV8.weights, FEATURE_NAMES_V8, FEATURE_LABELS_V8);
+    const featureImportanceRowsV9 =
+      targetFeatureModelV9 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV9.featureGains, FEATURE_NAMES_V9, FEATURE_LABELS_V9);
     const importanceSumV1 = featureImportanceRowsV1.reduce((sum, row) => sum + row.importance, 0);
     const importanceSumV2 = featureImportanceRowsV2.reduce((sum, row) => sum + row.importance, 0);
     const importanceSumV3 = featureImportanceRowsV3.reduce((sum, row) => sum + row.importance, 0);
     const importanceSumV7 = featureImportanceRowsV7.reduce((sum, row) => sum + row.importance, 0);
+    const importanceSumV8 = featureImportanceRowsV8.reduce((sum, row) => sum + row.importance, 0);
+    const importanceSumV9 = featureImportanceRowsV9.reduce((sum, row) => sum + row.importance, 0);
 
     return {
       analysisDays,
@@ -1897,6 +2537,8 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       targetFeatureModelV2,
       targetFeatureModelV3,
       targetFeatureModelV7,
+      targetFeatureModelV8,
+      targetFeatureModelV9,
       targetV4Row,
       targetV5Row,
       targetV6Row,
@@ -1930,6 +2572,14 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         ...row,
         importanceRatio: importanceSumV7 > 0 ? row.importance / importanceSumV7 : 0
       })),
+      featureImportanceRowsV8: featureImportanceRowsV8.map((row) => ({
+        ...row,
+        importanceRatio: importanceSumV8 > 0 ? row.importance / importanceSumV8 : 0
+      })),
+      featureImportanceRowsV9: featureImportanceRowsV9.map((row) => ({
+        ...row,
+        importanceRatio: importanceSumV9 > 0 ? row.importance / importanceSumV9 : 0
+      })),
       leaderboard,
       championScoreboard,
       bestMetric,
@@ -1938,6 +2588,8 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       featureMetricV2,
       featureMetricV3,
       featureMetricV7,
+      featureMetricV8,
+      featureMetricV9,
       bestFeatureMetric,
       improvementVsBaseline: versionImprovementVsBaseline
     };
@@ -1952,27 +2604,64 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
   const statusBadgeClass = isLight ? 'border border-emerald-200 bg-emerald-50 text-emerald-800' : 'border border-emerald-400/20 bg-emerald-500/10 text-emerald-200';
   const messageClass = isLight ? 'border-slate-200 bg-slate-50 text-slate-600' : 'border-white/10 bg-white/5 text-white/65';
   const coverage = data.analysisDays.length ? data.planningCoverageDays.length / data.analysisDays.length : null;
+  const cutoffLabel = MAIN_LEADERBOARD_CUTOFF === 'preopen' ? t('明日开盘前', 'Tomorrow preopen') : MAIN_LEADERBOARD_CUTOFF;
   const targetForecastValue = data.bestVersionMetric?.targetForecast ?? null;
   const targetDiff =
     data.targetActual !== null && targetForecastValue !== null ? data.targetActual - targetForecastValue : null;
+  const preopenSnapshotItems = [
+    {
+      label: t('Capacity', 'Capacity'),
+      value: formatNumber(data.targetInput?.full_day_capacity ?? 0)
+    },
+    {
+      label: t('恶劣天气', 'Severe weather'),
+      value: data.targetInput?.severe_weather ? t('是', 'Yes') : t('否', 'No')
+    },
+    {
+      label: t('大促', 'Major promotion'),
+      value: data.targetInput?.major_promotion ? t('是', 'Yes') : t('否', 'No')
+    }
+  ];
+  const sameDaySnapshotItems = [
+    {
+      label: t('Backlog', 'Backlog'),
+      value: formatNumber(data.targetInput?.previous_day_backlog ?? 0)
+    },
+    {
+      label: t('Inventory', 'Inventory'),
+      value: formatNumber(data.targetInput?.inventory_level ?? 0)
+    },
+    {
+      label: t('Yesterday 00-14', 'Yesterday 00-14'),
+      value: formatNumber(data.targetInput?.yesterday_inflow_00_14 ?? 0)
+    },
+    {
+      label: t('12点累计量', '12:00 cumulative'),
+      value: formatNumber(data.targetInput?.current_cumulative_volume_12 ?? 0)
+    }
+  ];
   const getVersionLabel = (key: VersionKey | undefined) => {
     if (key === 'v4_ensemble') return 'V4E';
     if (key === 'v4') return 'V4';
     if (key === 'v5') return 'V5';
     if (key === 'v6') return 'V6';
     if (key === 'v7') return 'V7';
+    if (key === 'v8') return 'V8';
+    if (key === 'v9') return 'V9';
     return key?.toUpperCase() ?? 'V0';
   };
   const getLeaderboardModelName = (key: VersionKey) => {
     if (key === 'v0') return `${data.v0SourceLabel} (V0)`;
-    if (key === 'v1') return 'Feature Regression V1';
+    if (key === 'v1') return 'Feature Regression V1 (Preopen)';
     if (key === 'v2') return 'Flow + Weather + ITR';
     if (key === 'v3') return 'Stacked Context Model';
     if (key === 'v4') return 'V4 Champion';
     if (key === 'v4_ensemble') return 'V4 Ensemble';
     if (key === 'v5') return 'V5 Adaptive Blend';
     if (key === 'v6') return 'V6 Residual Blend';
-    return 'V7 Promotion-Aware Model';
+    if (key === 'v7') return 'V7 Promotion-Aware Model';
+    if (key === 'v8') return 'V8 Tomorrow Base';
+    return 'V9 XGBoost';
   };
   const bestVersionLabel = getVersionLabel(data.bestVersionMetric?.key);
   const bestFeatureVersionLabel = data.bestAdvancedVersionMetric ? getVersionLabel(data.bestAdvancedVersionMetric.key) : null;
@@ -1981,7 +2670,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
   const versionMetricsByKey = new Map(data.versionLeaderboard.map((metric) => [metric.key, metric]));
   const versionComparisonRows: Array<{ key: VersionKey; label: string; champion: string }> = [
     { key: 'v0', label: 'V0', champion: data.v0SourceLabel },
-    { key: 'v1', label: 'V1', champion: 'Feature Regression V1' },
+    { key: 'v1', label: 'V1', champion: 'Preopen-safe feature regression' },
     { key: 'v2', label: 'V2', champion: 'Flow + Weather + ITR' },
     { key: 'v3', label: 'V3', champion: 'Stacked Context Model' },
     {
@@ -2008,7 +2697,9 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
           : `${VERSION_LABELS[data.targetV6Row.championModel]} + residual calibration`
         : '-'
     },
-    { key: 'v7', label: 'V7', champion: 'Promotion-aware stacked regression' }
+    { key: 'v7', label: 'V7', champion: 'Promotion-aware stacked regression' },
+    { key: 'v8', label: 'V8', champion: 'Tomorrow-safe calendar + plan features' },
+    { key: 'v9', label: 'V9', champion: 'Gradient-boosted tree ensemble on V1/V2/V3 + preopen features' }
   ];
   const getAverageDiffHint = (key: VersionKey) => `${t('平均差异', 'Avg diff')} ${formatPercent(versionMetricsByKey.get(key)?.recent14.mape ?? null)}`;
 
@@ -2016,8 +2707,18 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     <section className="glass reveal rounded-3xl px-6 py-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <div className={['inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold tracking-[0.18em]', statusBadgeClass].join(' ')}>
-            {isLocked ? t('只读', 'Read only') : 'Phase 2'}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className={['inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold tracking-[0.18em]', statusBadgeClass].join(' ')}>
+              {isLocked ? t('只读', 'Read only') : 'Phase 2'}
+            </div>
+            <div
+              className={[
+                'inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold tracking-[0.18em]',
+                isLight ? 'border border-sky-200 bg-sky-50 text-sky-800' : 'border border-sky-400/20 bg-sky-500/10 text-sky-200'
+              ].join(' ')}
+            >
+              {t('主榜口径', 'Fair cutoff')}: {cutoffLabel}
+            </div>
           </div>
           <h2 className={['mt-4 font-display text-3xl tracking-[0.06em]', titleClass].join(' ')}>{t('预测模型', 'Prediction Model')}</h2>
         </div>
@@ -2076,6 +2777,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
               <div className={['text-sm text-right', mutedClass].join(' ')}>
                 <div>{formatNumber(data.evaluationRows.length)} {t('个历史样本日', 'historical days')}</div>
                 <div className="mt-1">{t('每日 |差异%| 最小模型 +1 分', 'Lowest daily |variance %| gets +1 point')}</div>
+                <div className="mt-1">{t('统一按明日开盘前口径评估', 'All rankings use tomorrow-preopen cutoff')}</div>
               </div>
             </div>
             <div className="mt-4 overflow-x-auto">
@@ -2126,11 +2828,11 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
               </div>
             </div>
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
-              <div className={['text-sm font-semibold', titleClass].join(' ')}>V1 Feature Regression</div>
+              <div className={['text-sm font-semibold', titleClass].join(' ')}>V1 Preopen-Safe Feature Regression</div>
               <div className={['mt-2 text-sm', mutedClass].join(' ')}>
                 {data.targetFeatureModelV1
                   ? `${formatNumber(data.targetFeatureModelV1.sampleSize)} training samples - ${getAverageDiffHint('v1')}`
-                  : 'Not enough samples to train yet.'}
+                  : 'Not enough preopen-safe samples to train yet.'}
               </div>
             </div>
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
@@ -2155,6 +2857,22 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                 {data.targetFeatureModelV7
                   ? `${formatNumber(data.targetFeatureModelV7.sampleSize)} training samples - ${getAverageDiffHint('v7')}`
                   : 'Not enough promotion-aware samples to train V7 yet.'}
+              </div>
+            </div>
+            <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
+              <div className={['text-sm font-semibold', titleClass].join(' ')}>V8 Tomorrow Base</div>
+              <div className={['mt-2 text-sm', mutedClass].join(' ')}>
+                {data.targetFeatureModelV8
+                  ? `${formatNumber(data.targetFeatureModelV8.sampleSize)} training samples - ${getAverageDiffHint('v8')}`
+                  : 'Not enough tomorrow-safe samples to train V8 yet.'}
+              </div>
+            </div>
+            <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
+              <div className={['text-sm font-semibold', titleClass].join(' ')}>V9 XGBoost</div>
+              <div className={['mt-2 text-sm', mutedClass].join(' ')}>
+                {data.targetFeatureModelV9
+                  ? `${formatNumber(data.targetFeatureModelV9.sampleSize)} training samples - ${getAverageDiffHint('v9')}`
+                  : 'Not enough xgboost-ready samples to train V9 yet.'}
               </div>
             </div>
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
@@ -2207,13 +2925,13 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         <MetricCard
           label={'Best version'}
           value={bestVersionLabel}
-          hint={data.bestVersionMetric ? `${data.bestVersionMetric.label} - 14D WAPE ${formatPercent(data.bestVersionMetric.recent14.wape)}` : '-'}
+          hint={data.bestVersionMetric ? `${cutoffLabel} - ${data.bestVersionMetric.label} - 14D WAPE ${formatPercent(data.bestVersionMetric.recent14.wape)}` : '-'}
           themeMode={themeMode}
         />
         <MetricCard
           label={'Target forecast'}
           value={formatNumber(targetForecastValue)}
-          hint={`${forecastTargetDate} - ${data.bestVersionMetric?.label ?? '-'} - 14D`}
+          hint={`${forecastTargetDate} - ${cutoffLabel} - ${data.bestVersionMetric?.label ?? '-'} - 14D`}
           themeMode={themeMode}
         />
         <MetricCard
@@ -2254,6 +2972,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                     : data.improvementVsBaseline >= 0
                       ? `${bestFeatureVersionLabel ?? 'V1'} ${t('优于 baseline', 'beats baseline')} ${formatPercent(data.improvementVsBaseline)}`
                       : `${bestFeatureVersionLabel ?? 'V1'} ${t('落后 baseline', 'trails baseline')} ${formatPercent(Math.abs(data.improvementVsBaseline))}`}
+                  <div className="mt-1">{t('公平口径', 'Fair cutoff')}: {cutoffLabel}</div>
                 </div>
               </div>
               <div className="mt-4 overflow-x-auto">
@@ -2301,26 +3020,33 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
 
             <div className={['rounded-[28px] p-5', panelClass].join(' ')}>
               <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('目标输入快照', 'Target input snapshot')}</div>
-              <div className="mt-4 grid gap-3">
-                {[
-                  { label: t('Backlog', 'Backlog'), value: data.targetInput?.previous_day_backlog ?? 0 },
-                  { label: t('Inventory', 'Inventory'), value: data.targetInput?.inventory_level ?? 0 },
-                  { label: t('Capacity', 'Capacity'), value: data.targetInput?.full_day_capacity ?? 0 },
-                  { label: t('Yesterday 00-14', 'Yesterday 00-14'), value: data.targetInput?.yesterday_inflow_00_14 ?? 0 },
-                  { label: t('恶劣天气', 'Severe weather'), value: data.targetInput?.severe_weather ? t('是', 'Yes') : t('否', 'No') },
-                  { label: t('大促', 'Major promotion'), value: data.targetInput?.major_promotion ? t('是', 'Yes') : t('否', 'No') },
-                  {
-                    label: t('12点累计量', '12:00 cumulative'),
-                    value: `${formatNumber(data.targetInput?.current_cumulative_volume_12 ?? 0)} ${t('(仅展示，不训练)', '(display only, excluded)')}`
-                  }
-                ].map((item) => (
-                  <div key={item.label} className={['flex items-center justify-between rounded-2xl px-4 py-3', subPanelClass].join(' ')}>
-                    <div className={mutedClass}>{item.label}</div>
-                    <div className={['font-semibold', titleClass].join(' ')}>
-                      {typeof item.value === 'number' ? formatNumber(item.value) : item.value}
-                    </div>
+              <div className="mt-4 space-y-4">
+                <div>
+                  <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>
+                    {t('开盘前纳入', 'Preopen included')} · {cutoffLabel}
                   </div>
-                ))}
+                  <div className="mt-3 grid gap-3">
+                    {preopenSnapshotItems.map((item) => (
+                      <div key={`preopen-${item.label}`} className={['flex items-center justify-between rounded-2xl px-4 py-3', subPanelClass].join(' ')}>
+                        <div className={mutedClass}>{item.label}</div>
+                        <div className={['font-semibold', titleClass].join(' ')}>{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>
+                    {t('同日字段', 'Same-day only')} · {t('公平榜不使用', 'Excluded from fair board')}
+                  </div>
+                  <div className="mt-3 grid gap-3">
+                    {sameDaySnapshotItems.map((item) => (
+                      <div key={`same-day-${item.label}`} className={['flex items-center justify-between rounded-2xl px-4 py-3', subPanelClass].join(' ')}>
+                        <div className={mutedClass}>{item.label}</div>
+                        <div className={['font-semibold', titleClass].join(' ')}>{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -2334,6 +3060,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                 </div>
                 <div className={['text-sm', mutedClass].join(' ')}>
                   {formatNumber(data.versionEvaluationRows.length)} {t('个可评估样本日', 'evaluation days')} - {t('按最近14天WAPE排序', 'sorted by recent 14D WAPE')}
+                  <div className="mt-1">{t('主榜口径', 'Fair cutoff')}: {cutoffLabel}</div>
                 </div>
               </div>
               <div className="mt-4 overflow-x-auto">
@@ -2391,12 +3118,24 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
               <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('特征权重快照', 'Feature weight snapshot')}</div>
               <p className={['mt-2 text-sm leading-6', mutedClass].join(' ')}>
                 {t(
-                  'V1 保留 backlog / inventory / capacity 等运营特征；V2 只看历史流入、恶劣天气与库存周转率（ITR）相关特征；V3 再把 V1 / V2、7日基线预测和最近上下文做二层融合。',
-                  'V1 keeps operational features like backlog / inventory / capacity; V2 only uses historical inflow, severe weather, and inventory turnover rate (ITR) features; V3 stacks V1, V2, the 7-day baseline, and recent context into a second-stage regression.'
+                  'V1 已重定义为明日开盘前安全版，只使用历史统计、产能、恶劣天气、大促与日历特征；V2 只看历史流入、恶劣天气与库存周转率（ITR）相关特征；V3 再把 V1 / V2、7日基线预测和最近上下文做二层融合。',
+                  'V1 has been redefined as a tomorrow-preopen-safe model using only history summaries, capacity, severe weather, promotion, and calendar signals; V2 only uses historical inflow, severe weather, and inventory turnover rate (ITR) features; V3 stacks V1, V2, the 7-day baseline, and recent context into a second-stage regression.'
                 )}
               </p>
               <p className={['mt-2 text-sm leading-6', mutedClass].join(' ')}>
                 {t('V7 在 V3 的上下文堆叠基础上额外引入大促信息。', 'V7 extends the stacked context model with major-promotion information.')}
+              </p>
+              <p className={['mt-2 text-sm leading-6', mutedClass].join(' ')}>
+                {t(
+                  'V8 是明日预测模型，只使用预测明天时已经知道的历史统计、产能、恶劣天气、大促与日历特征，不依赖明日 backlog / inventory / 00-14。',
+                  'V8 is the tomorrow-ready model. It only uses history summaries, capacity, severe weather, promotion, and calendar signals already known before tomorrow, without relying on tomorrow backlog / inventory / 00-14.'
+                )}
+              </p>
+              <p className={['mt-2 text-sm leading-6', mutedClass].join(' ')}>
+                {t(
+                  'V9 是前端内训练的轻量 XGBoost 回归树集成，基于 V1 / V2 / V3 预测和开盘前可知特征做非线性拟合。',
+                  'V9 is a browser-trained lightweight XGBoost regressor that fits non-linear interactions on top of V1 / V2 / V3 forecasts and preopen-safe features.'
+                )}
               </p>
               <div className="mt-4 space-y-4">
                 {[
@@ -2423,6 +3162,18 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                     title: 'V7 Promotion-Aware Model',
                     emptyText: 'Not enough promotion-labeled overlap yet to show V7 feature weights.',
                     rows: data.featureImportanceRowsV7
+                  },
+                  {
+                    key: 'v8',
+                    title: 'V8 Tomorrow Base',
+                    emptyText: 'Not enough tomorrow-safe samples yet to show V8 feature weights.',
+                    rows: data.featureImportanceRowsV8
+                  },
+                  {
+                    key: 'v9',
+                    title: 'V9 XGBoost',
+                    emptyText: 'Not enough xgboost-ready samples yet to show V9 split gains.',
+                    rows: data.featureImportanceRowsV9
                   }
                 ].map((section) => (
                   <div key={section.key} className={['rounded-2xl p-4', subPanelClass].join(' ')}>
@@ -2441,7 +3192,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                                 style={{ width: `${Math.max(6, row.importanceRatio * 100)}%` }}
                               />
                             </div>
-                            <div className={['mt-2 text-xs', mutedClass].join(' ')}>{t('系数', 'Weight')}: {row.weight.toFixed(2)}</div>
+                            <div className={['mt-2 text-xs', mutedClass].join(' ')}>{t('系数/增益', 'Weight / gain')}: {row.weight.toFixed(2)}</div>
                           </div>
                         ))}
                       </div>
@@ -2459,7 +3210,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('自适应模型评估', 'Adaptive model summary')}</div>
-                  <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('V0-V3 与 V5-V7 对比', 'V0-V3 and V5-V7')}</div>
+                  <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('V0-V3 与 V5-V9 对比', 'V0-V3 and V5-V9')}</div>
                 </div>
                 <div className={['text-sm text-right', mutedClass].join(' ')}>
                   <div>{t('整体最佳', 'Best overall')}: {data.bestAdaptiveOverallMetric?.label ?? '-'}</div>
@@ -2596,7 +3347,10 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
 
           <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
             <div className={['rounded-[28px] p-5', panelClass].join(' ')}>
-              <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('最近回测明细', 'Recent backtest rows')}</div>
+              <div className="flex items-center justify-between gap-3">
+                <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('最近回测明细', 'Recent backtest rows')}</div>
+                <div className={['text-sm', mutedClass].join(' ')}>{t('口径', 'Cutoff')}: {cutoffLabel}</div>
+              </div>
               <div className="mt-4 overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead>
@@ -2611,6 +3365,8 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                       <th className="px-4 py-3 text-right font-semibold">V2</th>
                       <th className="px-4 py-3 text-right font-semibold">V3</th>
                       <th className="px-4 py-3 text-right font-semibold">V7</th>
+                      <th className="px-4 py-3 text-right font-semibold">V8</th>
+                      <th className="px-4 py-3 text-right font-semibold">V9</th>
                       <th className="rounded-r-2xl px-4 py-3 text-left font-semibold">{t('最佳', 'Best')}</th>
                     </tr>
                   </thead>
@@ -2627,6 +3383,8 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v2)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v3)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v7)}</td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v8)}</td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_xgboost_v9)}</td>
                         <td className={['border-b px-4 py-3', cellClass].join(' ')}>{row.bestModel}</td>
                       </tr>
                     ))}
@@ -2639,8 +3397,11 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
               <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('建模规则', 'Modeling rules')}</div>
               <div className="mt-4 space-y-3">
                 {[
+                  t('主榜统一按明日开盘前口径评估。', 'Main leaderboard uses the tomorrow-preopen cutoff.'),
+                  t('V1 已改成开盘前安全版，不再使用目标日 backlog / inventory / 00-14。', 'V1 has been redefined as preopen-safe and no longer uses target-day backlog / inventory / 00-14.'),
                   t('只使用预测时点已经知道的数据。', 'Use only data known at prediction time.'),
                   t('12点累计量会导致 next-day 泄漏，所以只展示不训练。', '12:00 cumulative would leak next-day information, so it is displayed only and excluded from training.'),
+                  t('Backlog / Inventory / Yesterday 00-14 属于同日字段，只展示，不参与公平榜。', 'Backlog / Inventory / Yesterday 00-14 are same-day fields. They are shown for reference only and excluded from the fair leaderboard.'),
                   t('评估方式是按时间滚动回测，不做随机切分。', 'Evaluation uses rolling time-series backtests, not random splits.'),
                   t('新版本必须先稳定优于 baseline，才值得进入正式流程。', 'A new version should consistently beat the baseline before it moves into the production flow.')
                 ].map((item) => (
