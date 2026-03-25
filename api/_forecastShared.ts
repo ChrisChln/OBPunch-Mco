@@ -1,8 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.SUPABASE_URL as string | undefined;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY as string | undefined;
+const isProduction = process.env.NODE_ENV === 'production';
+const supabaseUrl =
+  (process.env.SUPABASE_URL as string | undefined) ??
+  (!isProduction ? ((process.env.VITE_SUPABASE_URL as string | undefined) ?? undefined) : undefined);
+const supabaseServiceRoleKey =
+  (process.env.SUPABASE_SERVICE_ROLE_KEY as string | undefined) ??
+  (!isProduction ? ((process.env.VITE_SUPABASE_ANON_KEY as string | undefined) ?? undefined) : undefined);
 const adminToken = process.env.ADMIN_TOKEN as string | undefined;
+const cronSecret = process.env.CRON_SECRET as string | undefined;
 
 export const DEFAULT_TIMEZONE = 'America/New_York';
 export const DEFAULT_CODE_VERSION =
@@ -19,6 +25,28 @@ export const ensureAdmin = (req: any, res: any) => {
   const authHeader = (req.headers?.authorization as string | undefined) ?? '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
   if (!adminToken || token !== adminToken) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+  return true;
+};
+
+export const ensureCron = (req: any, res: any) => {
+  const authHeader = (req.headers?.authorization as string | undefined) ?? '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+  if (adminToken && token === adminToken) return true;
+  const userAgent = String(req.headers?.['user-agent'] ?? '').toLowerCase();
+  const isCronRequest = req.headers?.['x-vercel-cron'] === '1' || userAgent.includes('vercel-cron');
+
+  if (!isCronRequest) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+  if (!cronSecret) {
+    res.status(500).json({ error: 'Missing CRON_SECRET configuration' });
+    return false;
+  }
+  if (token !== cronSecret) {
     res.status(401).json({ error: 'Unauthorized' });
     return false;
   }
