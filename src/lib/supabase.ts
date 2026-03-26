@@ -18,7 +18,7 @@ export function createSupabaseClientWithCredentials(options: {
       autoRefreshToken: options.persistSession,
       detectSessionInUrl: options.persistSession
     },
-    realtime: { params: { eventsPerSecond: 0 } }
+    realtime: { params: { eventsPerSecond: 10 } }
   });
 }
 

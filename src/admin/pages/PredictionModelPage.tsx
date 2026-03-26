@@ -1,5 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import StyledDateInput from '../components/StyledDateInput';
+import { createSupabaseClientWithCredentials } from '../../lib/supabase';
+import { useDeferredValue } from 'react';
 import { getIsoWeekday } from '../forecast';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -12,7 +14,7 @@ type PredictionModelPageProps = {
   themeMode: 'light' | 'dark';
 };
 
-type VolumeHistoryRow = {
+export type VolumeHistoryRow = {
   date: string;
   last_filled_hour?: number | null;
   h00?: number | null;
@@ -41,7 +43,7 @@ type VolumeHistoryRow = {
   h23?: number | null;
 };
 
-type ForecastInputRow = {
+export type ForecastInputRow = {
   input_date: string;
   weekday?: number | null;
   previous_day_backlog?: number | null;
@@ -53,7 +55,7 @@ type ForecastInputRow = {
   yesterday_inflow_00_14?: number | null;
 };
 
-type FeatureContextDay = {
+export type FeatureContextDay = {
   date: string;
   weekday: number;
   previous_day_backlog: number;
@@ -63,6 +65,12 @@ type FeatureContextDay = {
   major_promotion: boolean;
   full_day_capacity: number;
   yesterday_inflow_00_14: number;
+  holiday_name: string | null;
+  is_holiday: boolean;
+  is_pre_holiday: boolean;
+  is_post_holiday: boolean;
+  days_to_next_holiday: number;
+  days_from_prev_holiday: number;
 };
 
 type PreparedDay = {
@@ -74,22 +82,31 @@ type PreparedDay = {
   context: FeatureContextDay;
 };
 
-type ModelKey =
+export type ModelKey =
   | 'same_weekday_median'
   | 'rolling_mean_7'
   | 'trend_blend'
+  | 'weekly_itr_share_baseline'
+  | 'promotion_regime_baseline'
   | 'feature_regression_v1'
   | 'feature_regression_v2'
   | 'feature_regression_v3'
   | 'feature_regression_v7'
   | 'feature_regression_v8'
   | 'feature_xgboost_v9';
+type BaselineModelKey =
+  | 'same_weekday_median'
+  | 'rolling_mean_7'
+  | 'trend_blend'
+  | 'weekly_itr_share_baseline'
+  | 'promotion_regime_baseline';
 type ModelForecastMap = Record<ModelKey, number | null>;
 
 type EvaluationRow = {
   date: string;
   weekday: number;
   actual: number;
+  context: FeatureContextDay;
   forecasts: ModelForecastMap;
   bestModel: string;
 };
@@ -115,8 +132,100 @@ type ChampionScoreRow = {
   toppingRate: number | null;
 };
 
+type RegimeKey = 'stable' | 'transition_up' | 'transition_down' | 'promotion';
+
+type RegimeSnapshot = {
+  regimeKey: RegimeKey;
+  regimeLabel: string;
+  confidence: number;
+  signals: string[];
+};
+
+type SelectorMetricSlice = {
+  samples: number;
+  wape: number | null;
+  within3HitRate: number | null;
+  p90AbsVariance: number | null;
+  worstAbsVariance: number | null;
+};
+
+type SelectorCandidateMetric = SelectorMetricSlice & {
+  regimeKey: RegimeKey;
+  modelKey: BaselineModelKey;
+  label: string;
+  targetForecast: number | null;
+  recent14: SelectorMetricSlice;
+};
+
+type SelectorEvaluationRow = {
+  date: string;
+  actual: number;
+  regimeKey: RegimeKey;
+  regimeLabel: string;
+  confidence: number;
+  selectedModelKey: BaselineModelKey;
+  selectedModelLabel: string;
+  selectedForecast: number | null;
+  diff: number | null;
+  variance: number | null;
+  fallbackReason: string | null;
+};
+
+type OfficialRunRow = {
+  id: number;
+  target_date: string;
+  cutoff_mode: CutoffMode;
+  run_type: string;
+  status: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  code_version?: string | null;
+  recommendation_json?: Record<string, unknown> | null;
+};
+
+type OfficialPredictionRow = {
+  id: number;
+  run_id: number;
+  target_date: string;
+  cutoff_mode: CutoffMode;
+  candidate_scope: 'model' | 'version';
+  candidate_key: string;
+  candidate_label: string;
+  forecast_value: number;
+  training_samples: number;
+  metrics_json?: Record<string, unknown> | null;
+  is_recommended?: boolean | null;
+};
+
+type OfficialPublicationRow = {
+  id: number;
+  target_date: string;
+  cutoff_mode: CutoffMode;
+  run_id?: number | null;
+  recommended_prediction_id?: number | null;
+  selected_prediction_id?: number | null;
+  recommended_forecast?: number | null;
+  published_forecast?: number | null;
+  is_manual_override?: boolean | null;
+  override_reason?: string | null;
+  published_by?: string | null;
+  published_at?: string | null;
+  status: string;
+};
+
+type OfficialAlertRow = {
+  id: number;
+  alert_date: string;
+  target_date?: string | null;
+  alert_type: string;
+  severity: 'info' | 'warning' | 'critical';
+  details_json?: Record<string, unknown> | null;
+  status: string;
+  created_at?: string | null;
+};
+
 type BaseVersionKey = 'v0' | 'v1' | 'v2' | 'v3';
-type VersionKey = BaseVersionKey | 'v4' | 'v4_ensemble' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9';
+export type VersionKey = BaseVersionKey | 'v4' | 'v4_ensemble' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9';
 type BaseVersionForecastMap = Record<BaseVersionKey, number | null>;
 type VersionForecastMap = Record<VersionKey, number | null>;
 type BaseVersionApeMap = Record<BaseVersionKey, number | null>;
@@ -206,11 +315,11 @@ type VersionMetric = VersionMetricSlice & {
   recent14: VersionMetricSlice;
 };
 
-type CutoffMode = 'preopen';
+export type CutoffMode = 'preopen';
 
 const HISTORY_TABLE = 'volume_history';
 const INPUT_TABLE = 'volume_forecast_daily_inputs';
-const MAIN_LEADERBOARD_CUTOFF: CutoffMode = 'preopen';
+export const MAIN_LEADERBOARD_CUTOFF: CutoffMode = 'preopen';
 const HOUR_COLUMNS = Array.from({ length: 24 }, (_, idx) => `h${String(idx).padStart(2, '0')}`) as Array<
   Exclude<keyof VolumeHistoryRow, 'date' | 'last_filled_hour'>
 >;
@@ -261,6 +370,7 @@ const FEATURE_NAMES_V7 = [
   'forecast_v2',
   'forecast_v3',
   'rolling_mean_7_model',
+  'v0_selector_forecast',
   'previous_day_total_ctx',
   'previous_vs_recent14_ctx',
   'recent_itr_mean_7_ctx',
@@ -271,6 +381,14 @@ const FEATURE_NAMES_V7 = [
 const FEATURE_NAMES_V8 = [
   'forecast_v2',
   'rolling_mean_7_model',
+  'v0_selector_forecast',
+  'weekly_itr_estimated_weekly_inbound',
+  'weekly_itr_weekday_share',
+  'weekly_itr_recent_itr_mean',
+  'weekly_itr_inventory_anchor',
+  'weekly_itr_share_confidence',
+  'weekly_itr_itr_confidence',
+  'weekly_itr_soft_degraded',
   'same_weekday_mean_4_ctx',
   'previous_day_total_ctx',
   'previous_vs_recent14_ctx',
@@ -279,6 +397,11 @@ const FEATURE_NAMES_V8 = [
   'has_capacity_ctx',
   'severe_weather_ctx',
   'major_promotion_ctx',
+  'is_holiday_ctx',
+  'is_pre_holiday_ctx',
+  'is_post_holiday_ctx',
+  'days_to_next_holiday_ctx',
+  'days_from_prev_holiday_ctx',
   'week_of_month_ctx',
   'month_progress_ctx',
   'is_weekend_ctx',
@@ -291,6 +414,14 @@ const FEATURE_NAMES_V9 = [
   'forecast_v2',
   'forecast_v3',
   'rolling_mean_7_model',
+  'v0_selector_forecast',
+  'weekly_itr_estimated_weekly_inbound',
+  'weekly_itr_weekday_share',
+  'weekly_itr_recent_itr_mean',
+  'weekly_itr_inventory_anchor',
+  'weekly_itr_share_confidence',
+  'weekly_itr_itr_confidence',
+  'weekly_itr_soft_degraded',
   'same_weekday_mean_4_ctx',
   'previous_day_total_ctx',
   'previous_vs_recent14_ctx',
@@ -299,6 +430,11 @@ const FEATURE_NAMES_V9 = [
   'capacity_vs_recent14_ctx',
   'severe_weather_ctx',
   'major_promotion_ctx',
+  'is_holiday_ctx',
+  'is_pre_holiday_ctx',
+  'is_post_holiday_ctx',
+  'days_to_next_holiday_ctx',
+  'days_from_prev_holiday_ctx',
   'week_of_month_ctx',
   'month_progress_ctx',
   'is_weekend_ctx',
@@ -379,10 +515,15 @@ type TrainedFeatureModelV9 = {
   featureGains: number[];
 };
 
-const MODEL_KEYS: ModelKey[] = [
+const BASELINE_MODEL_KEYS: BaselineModelKey[] = [
   'same_weekday_median',
   'rolling_mean_7',
   'trend_blend',
+  'weekly_itr_share_baseline',
+  'promotion_regime_baseline'
+];
+const MODEL_KEYS: ModelKey[] = [
+  ...BASELINE_MODEL_KEYS,
   'feature_regression_v1',
   'feature_regression_v2',
   'feature_regression_v3',
@@ -394,6 +535,8 @@ const MODEL_LABELS: Record<ModelKey, string> = {
   same_weekday_median: 'Same Weekday Median',
   rolling_mean_7: '7-Day Mean',
   trend_blend: 'Trend Blend',
+  weekly_itr_share_baseline: 'Weekly ITR Share Baseline',
+  promotion_regime_baseline: 'Promotion Regime Baseline',
   feature_regression_v1: 'Feature Regression V1',
   feature_regression_v2: 'Feature Regression V2',
   feature_regression_v3: 'Feature Regression V3',
@@ -401,6 +544,26 @@ const MODEL_LABELS: Record<ModelKey, string> = {
   feature_regression_v8: 'Feature Regression V8',
   feature_xgboost_v9: 'XGBoost Regressor V9'
 };
+const REGIME_LABELS: Record<RegimeKey, string> = {
+  stable: 'Stable',
+  transition_up: 'Transition Up',
+  transition_down: 'Transition Down',
+  promotion: 'Promotion'
+};
+const REGIME_CANDIDATE_KEYS: Record<RegimeKey, BaselineModelKey[]> = {
+  stable: ['rolling_mean_7', 'trend_blend'],
+  transition_up: ['weekly_itr_share_baseline', 'trend_blend'],
+  transition_down: ['trend_blend', 'rolling_mean_7'],
+  promotion: ['promotion_regime_baseline', 'trend_blend', 'rolling_mean_7']
+};
+const REGIME_FALLBACK_KEYS: Record<RegimeKey, BaselineModelKey[]> = {
+  stable: ['rolling_mean_7', 'trend_blend'],
+  transition_up: ['trend_blend', 'rolling_mean_7'],
+  transition_down: ['trend_blend', 'rolling_mean_7'],
+  promotion: ['promotion_regime_baseline', 'trend_blend', 'rolling_mean_7']
+};
+const REGIME_MIN_SELECTOR_SAMPLES = 6;
+const REGIME_RECENT_WINDOW = 14;
 const BASE_VERSION_KEYS: BaseVersionKey[] = ['v0', 'v1', 'v2', 'v3'];
 const BLEND_VERSION_KEYS: BaseVersionKey[] = ['v1', 'v2', 'v3'];
 const VERSION_KEYS: VersionKey[] = [...BASE_VERSION_KEYS, 'v4', 'v4_ensemble', 'v5', 'v6', 'v7', 'v8', 'v9'];
@@ -423,6 +586,23 @@ const CURRENT_MODEL_WINDOW = 14;
 const CURRENT_MODEL_MIN_SAMPLES = 10;
 const CURRENT_BLEND_GAP = 0.01;
 const RESIDUAL_CALIBRATION_CAP = 0.04;
+const WEEKLY_ITR_LOOKBACK_DAYS = 14;
+const WEEKLY_ITR_EXTENDED_LOOKBACK_DAYS = 42;
+const WEEKLY_ITR_MIN_ITR_SAMPLES = 4;
+const WEEKLY_ITR_MAX_ITR_SAMPLES = 7;
+const WEEKLY_ITR_MIN_FULL_WEEKS = 4;
+const WEEKLY_ITR_HIGH_VOLATILITY_CV = 0.18;
+const WEEKLY_ITR_STABLE_VOLATILITY_CV = 0.1;
+const WEEKLY_ITR_INVENTORY_SHIFT_THRESHOLD = 0.2;
+const WEEKLY_ITR_SHARE_ANOMALY_MIN = 0.03;
+const WEEKLY_ITR_SHARE_ANOMALY_STD = 1.5;
+const WEEKLY_ITR_FORECAST_CLAMP_LOWER = 0.7;
+const WEEKLY_ITR_FORECAST_CLAMP_UPPER = 1.35;
+const officialClosedLoopReadClient = createSupabaseClientWithCredentials({
+  persistSession: false,
+  url: import.meta.env.VITE_SUPABASE_URL as string | undefined,
+  anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+});
 const FEATURE_LABELS: Record<FeatureName, string> = {
   same_weekday_mean_4: 'Same weekday mean (4)',
   same_weekday_median_4: 'Same weekday median (4)',
@@ -468,6 +648,7 @@ const FEATURE_LABELS_V7: Record<FeatureNameV7, string> = {
   forecast_v2: 'V2 forecast',
   forecast_v3: 'V3 forecast',
   rolling_mean_7_model: '7-day mean forecast',
+  v0_selector_forecast: 'V0 selector forecast',
   previous_day_total_ctx: 'Previous day total',
   previous_vs_recent14_ctx: 'Prev vs 14D mean',
   recent_itr_mean_7_ctx: 'Recent ITR mean 7D',
@@ -478,6 +659,14 @@ const FEATURE_LABELS_V7: Record<FeatureNameV7, string> = {
 const FEATURE_LABELS_V8: Record<FeatureNameV8, string> = {
   forecast_v2: 'V2 forecast',
   rolling_mean_7_model: '7-day mean forecast',
+  v0_selector_forecast: 'V0 selector forecast',
+  weekly_itr_estimated_weekly_inbound: 'Weekly ITR est. weekly inbound',
+  weekly_itr_weekday_share: 'Weekly ITR weekday share',
+  weekly_itr_recent_itr_mean: 'Weekly ITR recent ITR mean',
+  weekly_itr_inventory_anchor: 'Weekly ITR inventory anchor',
+  weekly_itr_share_confidence: 'Weekly ITR share confidence',
+  weekly_itr_itr_confidence: 'Weekly ITR ITR confidence',
+  weekly_itr_soft_degraded: 'Weekly ITR soft degraded',
   same_weekday_mean_4_ctx: 'Same weekday mean (4)',
   previous_day_total_ctx: 'Previous day total',
   previous_vs_recent14_ctx: 'Prev vs 14D mean',
@@ -486,6 +675,11 @@ const FEATURE_LABELS_V8: Record<FeatureNameV8, string> = {
   has_capacity_ctx: 'Has capacity',
   severe_weather_ctx: 'Severe weather',
   major_promotion_ctx: 'Major promotion',
+  is_holiday_ctx: 'Holiday',
+  is_pre_holiday_ctx: 'Pre-holiday',
+  is_post_holiday_ctx: 'Post-holiday',
+  days_to_next_holiday_ctx: 'Days to next holiday',
+  days_from_prev_holiday_ctx: 'Days from prev holiday',
   week_of_month_ctx: 'Week of month',
   month_progress_ctx: 'Month progress',
   is_weekend_ctx: 'Weekend',
@@ -498,6 +692,14 @@ const FEATURE_LABELS_V9: Record<FeatureNameV9, string> = {
   forecast_v2: 'V2 forecast',
   forecast_v3: 'V3 forecast',
   rolling_mean_7_model: '7-day mean forecast',
+  v0_selector_forecast: 'V0 selector forecast',
+  weekly_itr_estimated_weekly_inbound: 'Weekly ITR est. weekly inbound',
+  weekly_itr_weekday_share: 'Weekly ITR weekday share',
+  weekly_itr_recent_itr_mean: 'Weekly ITR recent ITR mean',
+  weekly_itr_inventory_anchor: 'Weekly ITR inventory anchor',
+  weekly_itr_share_confidence: 'Weekly ITR share confidence',
+  weekly_itr_itr_confidence: 'Weekly ITR ITR confidence',
+  weekly_itr_soft_degraded: 'Weekly ITR soft degraded',
   same_weekday_mean_4_ctx: 'Same weekday mean (4)',
   previous_day_total_ctx: 'Previous day total',
   previous_vs_recent14_ctx: 'Prev vs 14D mean',
@@ -506,6 +708,11 @@ const FEATURE_LABELS_V9: Record<FeatureNameV9, string> = {
   capacity_vs_recent14_ctx: 'Capacity / 14D mean',
   severe_weather_ctx: 'Severe weather',
   major_promotion_ctx: 'Major promotion',
+  is_holiday_ctx: 'Holiday',
+  is_pre_holiday_ctx: 'Pre-holiday',
+  is_post_holiday_ctx: 'Post-holiday',
+  days_to_next_holiday_ctx: 'Days to next holiday',
+  days_from_prev_holiday_ctx: 'Days from prev holiday',
   week_of_month_ctx: 'Week of month',
   month_progress_ctx: 'Month progress',
   is_weekend_ctx: 'Weekend',
@@ -524,6 +731,17 @@ const addDays = (dateOnly: string, shift: number) => {
   const next = new Date(`${dateOnly}T00:00:00`);
   next.setDate(next.getDate() + shift);
   return toDateOnly(next);
+};
+
+const isAbortLikeError = (error: unknown) => {
+  const message = String((error as { message?: unknown } | null)?.message ?? error ?? '').toLowerCase();
+  const name = String((error as { name?: unknown } | null)?.name ?? '');
+  return (
+    name === 'AbortError' ||
+    message.includes('aborterror') ||
+    message.includes('signal is aborted') ||
+    message.includes('aborted without reason')
+  );
 };
 
 const getDateParts = (dateOnly: string) => {
@@ -554,6 +772,94 @@ const isMonthStartWindow = (dateOnly: string, window = 3) => {
 const isMonthEndWindow = (dateOnly: string, window = 3) => {
   const { dayOfMonth, daysInMonth } = getDateParts(dateOnly);
   return daysInMonth - dayOfMonth < window;
+};
+
+type HolidayEntry = {
+  date: string;
+  name: string;
+};
+
+const US_HOLIDAY_CACHE = new Map<number, HolidayEntry[]>();
+
+const getNthWeekdayOfMonth = (year: number, monthIndex: number, isoWeekday: number, occurrence: number) => {
+  const date = new Date(year, monthIndex, 1);
+  let matchCount = 0;
+  while (date.getMonth() === monthIndex) {
+    if (getIsoWeekday(date) === isoWeekday) {
+      matchCount += 1;
+      if (matchCount === occurrence) return toDateOnly(date);
+    }
+    date.setDate(date.getDate() + 1);
+  }
+  return toDateOnly(new Date(year, monthIndex, 1));
+};
+
+const getLastWeekdayOfMonth = (year: number, monthIndex: number, isoWeekday: number) => {
+  const date = new Date(year, monthIndex + 1, 0);
+  while (getIsoWeekday(date) !== isoWeekday) {
+    date.setDate(date.getDate() - 1);
+  }
+  return toDateOnly(date);
+};
+
+const buildObservedHolidayEntries = (name: string, actualDate: string): HolidayEntry[] => {
+  const entries: HolidayEntry[] = [{ date: actualDate, name }];
+  const weekday = getIsoWeekday(new Date(`${actualDate}T00:00:00`));
+  if (weekday === 6) {
+    entries.push({ date: addDays(actualDate, -1), name: `${name} (Observed)` });
+  } else if (weekday === 7) {
+    entries.push({ date: addDays(actualDate, 1), name: `${name} (Observed)` });
+  }
+  return entries;
+};
+
+const getUSHolidayEntriesForYear = (year: number): HolidayEntry[] => {
+  const cached = US_HOLIDAY_CACHE.get(year);
+  if (cached) return cached;
+
+  const entries = [
+    ...buildObservedHolidayEntries('New Year\'s Day', toDateOnly(new Date(year, 0, 1))),
+    { date: getNthWeekdayOfMonth(year, 0, 1, 3), name: 'Martin Luther King Jr. Day' },
+    { date: getNthWeekdayOfMonth(year, 1, 1, 3), name: 'Presidents Day' },
+    { date: getLastWeekdayOfMonth(year, 4, 1), name: 'Memorial Day' },
+    ...buildObservedHolidayEntries('Juneteenth', toDateOnly(new Date(year, 5, 19))),
+    ...buildObservedHolidayEntries('Independence Day', toDateOnly(new Date(year, 6, 4))),
+    { date: getNthWeekdayOfMonth(year, 8, 1, 1), name: 'Labor Day' },
+    { date: getNthWeekdayOfMonth(year, 9, 1, 2), name: 'Columbus Day' },
+    ...buildObservedHolidayEntries('Veterans Day', toDateOnly(new Date(year, 10, 11))),
+    { date: getNthWeekdayOfMonth(year, 10, 4, 4), name: 'Thanksgiving Day' },
+    ...buildObservedHolidayEntries('Christmas Day', toDateOnly(new Date(year, 11, 25)))
+  ];
+
+  const deduped = Array.from(
+    new Map(entries.map((entry) => [`${entry.date}:${entry.name}`, entry])).values()
+  ).sort((a, b) => a.date.localeCompare(b.date));
+  US_HOLIDAY_CACHE.set(year, deduped);
+  return deduped;
+};
+
+const getDateDistanceInDays = (fromDate: string, toDate: string) =>
+  Math.round((new Date(`${toDate}T00:00:00`).getTime() - new Date(`${fromDate}T00:00:00`).getTime()) / 86400000);
+
+export const getUSHolidayContext = (dateOnly: string) => {
+  const { year } = getDateParts(dateOnly);
+  const holidays = [year - 1, year, year + 1]
+    .flatMap((holidayYear) => getUSHolidayEntriesForYear(holidayYear))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const sameDayHolidays = holidays.filter((holiday) => holiday.date === dateOnly);
+  const previousHoliday = [...holidays].reverse().find((holiday) => holiday.date < dateOnly) ?? null;
+  const nextHoliday = holidays.find((holiday) => holiday.date > dateOnly) ?? null;
+  const daysFromPrevHoliday = clamp(previousHoliday ? getDateDistanceInDays(previousHoliday.date, dateOnly) : 14, 0, 14);
+  const daysToNextHoliday = clamp(nextHoliday ? getDateDistanceInDays(dateOnly, nextHoliday.date) : 14, 0, 14);
+
+  return {
+    holidayName: sameDayHolidays.length ? sameDayHolidays.map((holiday) => holiday.name).join(' / ') : null,
+    isHoliday: sameDayHolidays.length > 0,
+    isPreHoliday: !sameDayHolidays.length && daysToNextHoliday === 1,
+    isPostHoliday: !sameDayHolidays.length && daysFromPrevHoliday === 1,
+    daysToNextHoliday,
+    daysFromPrevHoliday
+  };
 };
 
 const formatNumber = (value: number | null, digits = 0) => {
@@ -588,7 +894,63 @@ const median = (values: number[]) => {
   return (sorted[middle - 1] + sorted[middle]) / 2;
 };
 
+const standardDeviation = (values: number[]) => {
+  const avg = mean(values);
+  if (avg === null) return null;
+  const variance = mean(values.map((value) => (value - avg) ** 2)) ?? 0;
+  return Math.sqrt(Math.max(variance, 0));
+};
+
+const percentile = (values: number[], ratio: number) => {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = clamp((sorted.length - 1) * ratio, 0, sorted.length - 1);
+  const lowerIndex = Math.floor(index);
+  const upperIndex = Math.ceil(index);
+  const lowerValue = sorted[lowerIndex];
+  const upperValue = sorted[upperIndex];
+  if (lowerValue === undefined || upperValue === undefined) return sorted[sorted.length - 1] ?? null;
+  if (lowerIndex === upperIndex) return lowerValue;
+  return lowerValue + (upperValue - lowerValue) * (index - lowerIndex);
+};
+
+const winsorize = (values: number[], lowerRatio = 0.1, upperRatio = 0.9) => {
+  if (!values.length) return values;
+  const lowerBound = percentile(values, lowerRatio) ?? values[0];
+  const upperBound = percentile(values, upperRatio) ?? values[values.length - 1];
+  return values.map((value) => clamp(value, lowerBound, upperBound));
+};
+
+const coefficientOfVariation = (values: number[]) => {
+  const avg = mean(values);
+  if (avg === null || avg <= 0) return null;
+  const std = standardDeviation(values);
+  if (std === null) return null;
+  return std / avg;
+};
+
 const clamp = (value: number, lower: number, upper: number) => Math.min(Math.max(value, lower), upper);
+const normalizeWeights = (weights: number[]) => {
+  const sanitized = weights.map((weight) => Math.max(0, weight));
+  const total = sanitized.reduce((sum, weight) => sum + weight, 0);
+  if (total <= 0) return sanitized.map((_, index) => (index === sanitized.length - 1 ? 1 : 0));
+  return sanitized.map((weight) => weight / total);
+};
+
+const getWeekStartMonday = (dateOnly: string) => {
+  const date = new Date(`${dateOnly}T00:00:00`);
+  date.setDate(date.getDate() - (getIsoWeekday(date) - 1));
+  return toDateOnly(date);
+};
+
+const weightedMean = (items: Array<{ value: number; weight: number }>) => {
+  const eligible = items.filter((item) => Number.isFinite(item.value) && Number.isFinite(item.weight) && item.weight > 0);
+  if (!eligible.length) return null;
+  const totalWeight = eligible.reduce((sum, item) => sum + item.weight, 0);
+  if (totalWeight <= 0) return null;
+  return eligible.reduce((sum, item) => sum + item.value * item.weight, 0) / totalWeight;
+};
+
 const sanitizeNumber = (value: unknown) => {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -609,17 +971,52 @@ const getInventoryTurnoverRate = (day: PreparedDay) => {
   return day.total / inventoryLevel;
 };
 
-const createFeatureContext = (date: string, input: ForecastInputRow | null): FeatureContextDay => ({
-  date,
-  weekday: Number(input?.weekday ?? getIsoWeekday(new Date(`${date}T00:00:00`))),
-  previous_day_backlog: Math.max(0, sanitizeNumber(input?.previous_day_backlog)),
-  current_cumulative_volume_12: Math.max(0, sanitizeNumber(input?.current_cumulative_volume_12)),
-  inventory_level: Math.max(0, sanitizeNumber(input?.inventory_level)),
-  severe_weather: Boolean(input?.severe_weather),
-  major_promotion: Boolean(input?.major_promotion),
-  full_day_capacity: Math.max(0, sanitizeNumber(input?.full_day_capacity)),
-  yesterday_inflow_00_14: Math.max(0, sanitizeNumber(input?.yesterday_inflow_00_14))
-});
+const getFallbackInventoryAnchor = (priorDays: PreparedDay[], rollingMean7: number) => {
+  const latestPositiveInventory =
+    [...priorDays].reverse().find((day) => day.context.inventory_level > 0)?.context.inventory_level ?? null;
+  if (latestPositiveInventory !== null && latestPositiveInventory > 0) return latestPositiveInventory;
+
+  const recentPositiveInventoryMean = mean(
+    priorDays
+      .slice(-WEEKLY_ITR_LOOKBACK_DAYS)
+      .map((day) => day.context.inventory_level)
+      .filter((value) => Number.isFinite(value) && value > 0)
+  );
+  if (recentPositiveInventoryMean !== null && recentPositiveInventoryMean > 0) return recentPositiveInventoryMean;
+
+  // Keep the model emitting a forecast even if inventory signals are missing.
+  return Math.max(rollingMean7 * 7, 1);
+};
+
+const collectItrSamples = (days: PreparedDay[], { includePromotion }: { includePromotion: boolean }) =>
+  days
+    .filter((day) => includePromotion || !day.context.major_promotion)
+    .map((day) => ({
+      value: getInventoryTurnoverRate(day),
+      isPromotion: day.context.major_promotion
+    }))
+    .filter((item): item is { value: number; isPromotion: boolean } => item.value !== null && Number.isFinite(item.value) && item.value > 0);
+
+export const createFeatureContext = (date: string, input: ForecastInputRow | null): FeatureContextDay => {
+  const holidayContext = getUSHolidayContext(date);
+  return {
+    date,
+    weekday: Number(input?.weekday ?? getIsoWeekday(new Date(`${date}T00:00:00`))),
+    previous_day_backlog: Math.max(0, sanitizeNumber(input?.previous_day_backlog)),
+    current_cumulative_volume_12: Math.max(0, sanitizeNumber(input?.current_cumulative_volume_12)),
+    inventory_level: Math.max(0, sanitizeNumber(input?.inventory_level)),
+    severe_weather: Boolean(input?.severe_weather),
+    major_promotion: Boolean(input?.major_promotion),
+    full_day_capacity: Math.max(0, sanitizeNumber(input?.full_day_capacity)),
+    yesterday_inflow_00_14: Math.max(0, sanitizeNumber(input?.yesterday_inflow_00_14)),
+    holiday_name: holidayContext.holidayName,
+    is_holiday: holidayContext.isHoliday,
+    is_pre_holiday: holidayContext.isPreHoliday,
+    is_post_holiday: holidayContext.isPostHoliday,
+    days_to_next_holiday: holidayContext.daysToNextHoliday,
+    days_from_prev_holiday: holidayContext.daysFromPrevHoliday
+  };
+};
 
 const hasPreopenPlanningSignal = (context: FeatureContextDay) =>
   context.full_day_capacity > 0 || context.severe_weather || context.major_promotion;
@@ -658,12 +1055,365 @@ const buildHistorySummary = (targetWeekday: number, priorDays: PreparedDay[]) =>
   };
 };
 
-const buildBaselinePredictions = (targetDate: string, priorDays: PreparedDay[]): Pick<ModelForecastMap, 'same_weekday_median' | 'rolling_mean_7' | 'trend_blend'> => {
+type WeeklyItrShareSignal = {
+  forecast: number;
+  estimatedWeeklyInbound: number;
+  weekdayShare: number;
+  robustRecentItrMean: number;
+  inventoryAnchor: number;
+  shareConfidence: number;
+  itrConfidence: number;
+  isSoftDegraded: boolean;
+};
+
+const buildWeeklyItrShareSignal = (
+  targetDate: string,
+  targetContext: FeatureContextDay,
+  priorDays: PreparedDay[],
+  rollingMean7: number | null
+): WeeklyItrShareSignal | null => {
+  if (rollingMean7 === null || rollingMean7 <= 0) return null;
+
+  const recentDays = priorDays.slice(-WEEKLY_ITR_LOOKBACK_DAYS);
+  const extendedRecentDays = priorDays.slice(-WEEKLY_ITR_EXTENDED_LOOKBACK_DAYS);
+  const inventoryAnchor = getFallbackInventoryAnchor(priorDays, rollingMean7);
+  const impliedDailyItr = inventoryAnchor > 0 ? rollingMean7 / inventoryAnchor : null;
+  const isPromotionTarget = targetContext.major_promotion;
+
+  const strictItrSamples = collectItrSamples(recentDays, { includePromotion: false });
+  const extendedStrictItrSamples = collectItrSamples(extendedRecentDays, { includePromotion: false });
+  const extendedAllItrSamples = collectItrSamples(extendedRecentDays, { includePromotion: true });
+  const promotionItrSamples = extendedAllItrSamples.filter((item) => item.isPromotion);
+  const cappedPromotionUpper =
+    percentile(
+      [
+        ...strictItrSamples.map((item) => item.value),
+        ...extendedStrictItrSamples.map((item) => item.value)
+      ],
+      0.75
+    ) ??
+    percentile(extendedAllItrSamples.map((item) => item.value), 0.75) ??
+    impliedDailyItr ??
+    rollingMean7 / Math.max(inventoryAnchor, 1);
+
+  const promotionFirstPool =
+    isPromotionTarget && promotionItrSamples.length >= 2
+      ? [
+          ...promotionItrSamples.map((item) => ({
+            value: clamp(item.value, 0, Math.max(cappedPromotionUpper * 1.1, item.value)),
+            isPromotion: item.isPromotion
+          })),
+          ...extendedStrictItrSamples
+        ].slice(-WEEKLY_ITR_EXTENDED_LOOKBACK_DAYS)
+      : null;
+  const fallbackExtendedAllPool = extendedAllItrSamples.map((item) => ({
+    value: item.isPromotion ? clamp(item.value, 0, cappedPromotionUpper) : item.value,
+    isPromotion: item.isPromotion
+  }));
+  const itrPool =
+    promotionFirstPool ??
+    (strictItrSamples.length >= WEEKLY_ITR_MIN_ITR_SAMPLES
+      ? strictItrSamples
+      : extendedStrictItrSamples.length >= WEEKLY_ITR_MIN_ITR_SAMPLES
+        ? extendedStrictItrSamples
+        : fallbackExtendedAllPool);
+
+  const eligibleItrValues = itrPool.map((item) => item.value).slice(-WEEKLY_ITR_MAX_ITR_SAMPLES);
+  const robustRecentItrMean = mean(winsorize(eligibleItrValues)) ?? impliedDailyItr ?? rollingMean7 / Math.max(inventoryAnchor, 1);
+  if (robustRecentItrMean === null || robustRecentItrMean <= 0) return null;
+
+  const targetWeekday = getIsoWeekday(new Date(`${targetDate}T00:00:00`));
+  const targetWeekStart = getWeekStartMonday(targetDate);
+  const weekMap = new Map<string, PreparedDay[]>();
+  priorDays.forEach((day) => {
+    const weekStart = getWeekStartMonday(day.date);
+    if (weekStart >= targetWeekStart) return;
+    const bucket = weekMap.get(weekStart);
+    if (bucket) {
+      bucket.push(day);
+      return;
+    }
+    weekMap.set(weekStart, [day]);
+  });
+
+  const weeklyShares = Array.from(weekMap.entries())
+    .map(([weekStart, days]) => {
+      if (days.length !== 7) return null;
+      const weekdaySet = new Set(days.map((day) => day.weekday));
+      if (weekdaySet.size !== 7) return null;
+      const weekTotal = days.reduce((sum, day) => sum + day.total, 0);
+      const weekdayDay = days.find((day) => day.weekday === targetWeekday) ?? null;
+      if (!weekdayDay || weekTotal <= 0) return null;
+      return {
+        weekStart,
+        weekTotal,
+        weekdayShare: weekdayDay.total / weekTotal,
+        weekdayPromotion: weekdayDay.context.major_promotion,
+        weekHasPromotion: days.some((day) => day.context.major_promotion)
+      };
+    })
+    .filter(
+      (
+        item
+      ): item is { weekStart: string; weekTotal: number; weekdayShare: number; weekdayPromotion: boolean; weekHasPromotion: boolean } =>
+        item !== null
+    )
+    .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+
+  const regimeWeeks = isPromotionTarget
+    ? weeklyShares.filter((week) => week.weekdayPromotion || week.weekHasPromotion)
+    : weeklyShares.filter((week) => !week.weekdayPromotion);
+  const shareWeeks = regimeWeeks.length >= 2 ? regimeWeeks : weeklyShares;
+  const lastWeek = shareWeeks[shareWeeks.length - 1] ?? null;
+  const twoWeeksAgo = shareWeeks[shareWeeks.length - 2] ?? null;
+  const longRunWeeks = shareWeeks.slice(0, -2);
+  const weekdayTotals = priorDays.filter((day) => day.weekday === targetWeekday).map((day) => day.total);
+  const allPriorTotal = priorDays.reduce((sum, day) => sum + day.total, 0);
+  const empiricalShare =
+    allPriorTotal > 0 && weekdayTotals.length ? weekdayTotals.reduce((sum, value) => sum + value, 0) / allPriorTotal : 1 / 7;
+
+  const historicalShares =
+    longRunWeeks.length > 0 ? longRunWeeks.map((week) => week.weekdayShare) : shareWeeks.map((week) => week.weekdayShare);
+  const historicalMeanShare = mean(historicalShares) ?? empiricalShare;
+  const historicalShareStd = standardDeviation(historicalShares) ?? 0;
+  const longRunShare =
+    weightedMean(
+      (longRunWeeks.length > 0 ? longRunWeeks : shareWeeks).map((week, index) => ({ value: week.weekdayShare, weight: index + 1 }))
+    ) ?? historicalMeanShare;
+
+  const recentVolatility = coefficientOfVariation(recentDays.map((day) => day.total));
+  let shareWeights =
+    recentVolatility !== null && recentVolatility >= WEEKLY_ITR_HIGH_VOLATILITY_CV
+      ? [0.45, 0.25, 0.3]
+      : recentVolatility !== null && recentVolatility <= WEEKLY_ITR_STABLE_VOLATILITY_CV
+        ? [0.2, 0.1, 0.7]
+        : [0.3, 0.2, 0.5];
+
+  if (shareWeeks.length < WEEKLY_ITR_MIN_FULL_WEEKS) {
+    shareWeights =
+      shareWeeks.length >= 2
+        ? [0.2, 0.1, 0.7]
+        : shareWeeks.length === 1
+          ? [0.1, 0, 0.9]
+          : [0, 0, 1];
+  }
+
+  if (isPromotionTarget) {
+    shareWeights[0] *= 1.15;
+    shareWeights[1] *= 1.1;
+  }
+
+  const anomalyThreshold = Math.max(
+    WEEKLY_ITR_SHARE_ANOMALY_MIN,
+    WEEKLY_ITR_SHARE_ANOMALY_STD * historicalShareStd
+  );
+  if (lastWeek && Math.abs(lastWeek.weekdayShare - historicalMeanShare) > anomalyThreshold) {
+    shareWeights[0] *= 0.5;
+  }
+  if (twoWeeksAgo && Math.abs(twoWeeksAgo.weekdayShare - historicalMeanShare) > anomalyThreshold) {
+    shareWeights[1] *= 0.5;
+  }
+
+  const recentInventoryMean = mean(
+    recentDays
+      .map((day) => day.context.inventory_level)
+      .filter((value) => Number.isFinite(value) && value > 0)
+  );
+  if (
+    recentInventoryMean !== null &&
+    recentInventoryMean > 0 &&
+    Math.abs(inventoryAnchor / recentInventoryMean - 1) > WEEKLY_ITR_INVENTORY_SHIFT_THRESHOLD
+  ) {
+    shareWeights[0] *= 0.7;
+    shareWeights[1] *= 0.7;
+  }
+
+  const [lastWeekWeight, twoWeeksAgoWeight, longRunWeight] = normalizeWeights(shareWeights);
+  const lastWeekShare = lastWeek?.weekdayShare ?? historicalMeanShare;
+  const twoWeeksAgoShare = twoWeeksAgo?.weekdayShare ?? historicalMeanShare;
+  const weekdayShare =
+    lastWeekShare * lastWeekWeight +
+    twoWeeksAgoShare * twoWeeksAgoWeight +
+    longRunShare * longRunWeight;
+
+  const estimatedWeeklyInbound = robustRecentItrMean * inventoryAnchor * 7;
+  const rawForecast = estimatedWeeklyInbound * weekdayShare;
+  const priorDayConfidence = clamp(priorDays.length / 28, 0.25, 1);
+  const itrConfidence = clamp(eligibleItrValues.length / WEEKLY_ITR_MIN_ITR_SAMPLES, 0.25, 1);
+  const shareConfidence = clamp(shareWeeks.length / WEEKLY_ITR_MIN_FULL_WEEKS, 0.25, 1);
+  const confidence = clamp((priorDayConfidence + itrConfidence + shareConfidence) / 3, 0.25, 1);
+  const softenedForecast = rawForecast * confidence + rollingMean7 * (1 - confidence);
+  const usedExtendedPool = itrPool !== strictItrSamples;
+  const isSoftDegraded =
+    priorDays.length < 28 ||
+    eligibleItrValues.length < WEEKLY_ITR_MIN_ITR_SAMPLES ||
+    shareWeeks.length < WEEKLY_ITR_MIN_FULL_WEEKS ||
+    usedExtendedPool;
+
+  return {
+    forecast: clamp(
+      softenedForecast,
+      rollingMean7 * WEEKLY_ITR_FORECAST_CLAMP_LOWER,
+      rollingMean7 * WEEKLY_ITR_FORECAST_CLAMP_UPPER
+    ),
+    estimatedWeeklyInbound,
+    weekdayShare,
+    robustRecentItrMean,
+    inventoryAnchor,
+    shareConfidence,
+    itrConfidence,
+    isSoftDegraded
+  };
+};
+
+const buildWeeklyItrShareBaseline = (
+  targetDate: string,
+  targetContext: FeatureContextDay,
+  priorDays: PreparedDay[],
+  rollingMean7: number | null
+) => {
+  return buildWeeklyItrShareSignal(targetDate, targetContext, priorDays, rollingMean7)?.forecast ?? rollingMean7;
+};
+
+const buildPromotionRegimeBaseline = (
+  targetDate: string,
+  targetContext: FeatureContextDay,
+  priorDays: PreparedDay[],
+  rollingMean7: number | null,
+  rollingMean14: number | null
+) => {
+  if (!targetContext.major_promotion) return null;
+  if (rollingMean7 === null || rollingMean7 <= 0) return null;
+
+  const inventoryAnchor = getFallbackInventoryAnchor(priorDays, rollingMean7);
+  const impliedDailyItr = inventoryAnchor > 0 ? rollingMean7 / inventoryAnchor : null;
+  const recentPromotionDays = priorDays.filter((day) => day.context.major_promotion).slice(-WEEKLY_ITR_EXTENDED_LOOKBACK_DAYS);
+  const recentNonPromotionDays = priorDays.filter((day) => !day.context.major_promotion).slice(-WEEKLY_ITR_EXTENDED_LOOKBACK_DAYS);
+
+  const promotionItrValues = recentPromotionDays
+    .map((day) => getInventoryTurnoverRate(day))
+    .filter((value): value is number => value !== null && Number.isFinite(value) && value > 0);
+  const nonPromotionItrValues = recentNonPromotionDays
+    .map((day) => getInventoryTurnoverRate(day))
+    .filter((value): value is number => value !== null && Number.isFinite(value) && value > 0);
+
+  const promotionHighClamp =
+    percentile(promotionItrValues, 0.8) ??
+    percentile(nonPromotionItrValues, 0.8) ??
+    impliedDailyItr ??
+    rollingMean7 / Math.max(inventoryAnchor, 1);
+  const nonPromotionWeight = 0.5;
+  const promotionWeightedSamples = [
+    ...promotionItrValues.slice(-14).map((value, index, values) => ({
+      value: clamp(value, 0, Math.max(promotionHighClamp, value)),
+      weight: values.length <= 2 ? 1.6 + index * 0.1 : index >= values.length - 2 ? 1.7 : index >= values.length - 6 ? 1.2 : 0.9
+    })),
+    ...nonPromotionItrValues.slice(-14).map((value, index) => ({
+      value: clamp(value, 0, promotionHighClamp),
+      weight: nonPromotionWeight * (0.6 + index * 0.03)
+    }))
+  ];
+  const promotionItrAnchor =
+    weightedMean(
+      promotionWeightedSamples.map((item) => ({
+        value: clamp(item.value, 0, promotionHighClamp),
+        weight: item.weight
+      }))
+    ) ??
+    impliedDailyItr ??
+    rollingMean7 / Math.max(inventoryAnchor, 1);
+
+  const targetWeekday = getIsoWeekday(new Date(`${targetDate}T00:00:00`));
+  const targetWeekStart = getWeekStartMonday(targetDate);
+  const weekMap = new Map<string, PreparedDay[]>();
+  priorDays.forEach((day) => {
+    const weekStart = getWeekStartMonday(day.date);
+    if (weekStart >= targetWeekStart) return;
+    const bucket = weekMap.get(weekStart);
+    if (bucket) bucket.push(day);
+    else weekMap.set(weekStart, [day]);
+  });
+
+  const promotionWeeks = Array.from(weekMap.entries())
+    .map(([weekStart, days]) => {
+      if (days.length !== 7 || new Set(days.map((day) => day.weekday)).size !== 7) return null;
+      if (!days.some((day) => day.context.major_promotion)) return null;
+      const weekTotal = days.reduce((sum, day) => sum + day.total, 0);
+      const weekdayDay = days.find((day) => day.weekday === targetWeekday) ?? null;
+      if (!weekdayDay || weekTotal <= 0) return null;
+      return {
+        weekStart,
+        weekdayShare: weekdayDay.total / weekTotal,
+        weekdayPromotion: weekdayDay.context.major_promotion
+      };
+    })
+    .filter((item): item is { weekStart: string; weekdayShare: number; weekdayPromotion: boolean } => item !== null)
+    .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+
+  const promotionTargetWeeks = promotionWeeks.filter((week) => week.weekdayPromotion);
+  const shareWeeks = promotionTargetWeeks.length >= 2 ? promotionTargetWeeks : promotionWeeks;
+  const promotionShareHistory = shareWeeks.map((week) => week.weekdayShare);
+  const fallbackShare =
+    buildWeeklyItrShareBaseline(targetDate, targetContext, priorDays, rollingMean7) !== null && rollingMean14 !== null && rollingMean14 > 0
+      ? clamp(rollingMean7 / rollingMean14 / 2, 0.05, 0.45)
+      : 1 / 7;
+  const historicalMeanShare = mean(promotionShareHistory) ?? fallbackShare;
+  const historicalShareStd = standardDeviation(promotionShareHistory) ?? 0;
+  const lastPromotionWeek = shareWeeks[shareWeeks.length - 1] ?? null;
+  const secondPromotionWeek = shareWeeks[shareWeeks.length - 2] ?? null;
+  const longRunPromotionShare =
+    weightedMean(shareWeeks.slice(0, -2).map((week, index) => ({ value: week.weekdayShare, weight: index + 1 }))) ??
+    weightedMean(shareWeeks.map((week, index) => ({ value: week.weekdayShare, weight: index + 1 }))) ??
+    historicalMeanShare;
+
+  let shareWeights: [number, number, number] = shareWeeks.length >= 2 ? [0.4, 0.25, 0.35] : [0.15, 0.1, 0.75];
+  const anomalyThreshold = Math.max(WEEKLY_ITR_SHARE_ANOMALY_MIN, WEEKLY_ITR_SHARE_ANOMALY_STD * historicalShareStd);
+  if (lastPromotionWeek && Math.abs(lastPromotionWeek.weekdayShare - historicalMeanShare) > anomalyThreshold) shareWeights[0] *= 0.5;
+  if (secondPromotionWeek && Math.abs(secondPromotionWeek.weekdayShare - historicalMeanShare) > anomalyThreshold) shareWeights[1] *= 0.5;
+
+  const recentInventoryMean = mean(
+    priorDays
+      .slice(-WEEKLY_ITR_LOOKBACK_DAYS)
+      .map((day) => day.context.inventory_level)
+      .filter((value) => Number.isFinite(value) && value > 0)
+  );
+  if (
+    recentInventoryMean !== null &&
+    recentInventoryMean > 0 &&
+    Math.abs(inventoryAnchor / recentInventoryMean - 1) > WEEKLY_ITR_INVENTORY_SHIFT_THRESHOLD
+  ) {
+    shareWeights = [shareWeights[0] * 0.85, shareWeights[1] * 0.85, shareWeights[2] + 0.1];
+  }
+
+  const [lastWeight, secondWeight, longRunWeight] = normalizeWeights(shareWeights);
+  const weekdayShare =
+    (lastPromotionWeek?.weekdayShare ?? historicalMeanShare) * lastWeight +
+    (secondPromotionWeek?.weekdayShare ?? historicalMeanShare) * secondWeight +
+    longRunPromotionShare * longRunWeight;
+
+  const estimatedWeeklyInbound = promotionItrAnchor * inventoryAnchor * 7;
+  const rawForecast = estimatedWeeklyInbound * weekdayShare;
+  const mediumAnchor =
+    rollingMean14 !== null && rollingMean14 > 0 ? rollingMean7 * 0.45 + rollingMean14 * 0.55 : rollingMean7;
+  const sampleConfidence = clamp(promotionItrValues.length / 4, 0.2, 1);
+  const shareConfidence = clamp(shareWeeks.length / 2, 0.2, 1);
+  const confidence = clamp((sampleConfidence + shareConfidence) / 2, 0.2, 1);
+  const softenedForecast = rawForecast * confidence + mediumAnchor * (1 - confidence);
+  return clamp(softenedForecast, mediumAnchor * 0.8, mediumAnchor * 1.8);
+};
+
+const buildBaselinePredictions = (
+  targetDate: string,
+  targetContext: FeatureContextDay,
+  priorDays: PreparedDay[]
+): Pick<ModelForecastMap, BaselineModelKey> => {
   const weekday = getIsoWeekday(new Date(`${targetDate}T00:00:00`));
   const sameWeekdayTotals = priorDays.filter((day) => day.weekday === weekday).slice(-4).map((day) => day.total);
   const rolling7Totals = priorDays.slice(-7).map((day) => day.total);
+  const rolling14Totals = priorDays.slice(-14).map((day) => day.total);
   const sameWeekdayMedian = median(sameWeekdayTotals);
   const rollingMean7 = mean(rolling7Totals);
+  const rollingMean14 = mean(rolling14Totals) ?? rollingMean7;
   const trendBlend =
     sameWeekdayMedian !== null && rollingMean7 !== null
       ? sameWeekdayMedian * 0.55 + rollingMean7 * 0.45
@@ -672,7 +1422,9 @@ const buildBaselinePredictions = (targetDate: string, priorDays: PreparedDay[]):
   return {
     same_weekday_median: sameWeekdayMedian,
     rolling_mean_7: rollingMean7,
-    trend_blend: trendBlend
+    trend_blend: trendBlend,
+    weekly_itr_share_baseline: buildWeeklyItrShareBaseline(targetDate, targetContext, priorDays, rollingMean7),
+    promotion_regime_baseline: buildPromotionRegimeBaseline(targetDate, targetContext, priorDays, rollingMean7, rollingMean14)
   };
 };
 
@@ -752,6 +1504,7 @@ const buildFeatureVectorV7 = (
   priorDays: PreparedDay[],
   baseForecasts: {
     rollingMean7: number | null;
+    v0SelectorForecast: number | null;
     forecastV1: number | null;
     forecastV2: number | null;
     forecastV3: number | null;
@@ -773,6 +1526,7 @@ const buildFeatureVectorV7 = (
     forecast_v2: baseForecasts.forecastV2,
     forecast_v3: baseForecasts.forecastV3,
     rolling_mean_7_model: baseForecasts.rollingMean7,
+    v0_selector_forecast: baseForecasts.v0SelectorForecast ?? baseForecasts.rollingMean7,
     previous_day_total_ctx: summary.previousDay.total,
     previous_vs_recent14_ctx: clamp(summary.previousVsRecent14, -3, 3),
     recent_itr_mean_7_ctx: summary.recentItrMean7,
@@ -787,12 +1541,15 @@ const buildFeatureVectorV8 = (
   priorDays: PreparedDay[],
   baseForecasts: {
     rollingMean7: number | null;
+    v0SelectorForecast: number | null;
     forecastV2: number | null;
   }
 ): FeatureVectorV8 | null => {
   const summary = buildHistorySummary(targetDay.weekday, priorDays);
   if (!summary) return null;
   if (baseForecasts.rollingMean7 === null || baseForecasts.forecastV2 === null) return null;
+  const weeklyItrSignal = buildWeeklyItrShareSignal(targetDate, targetDay, priorDays, baseForecasts.rollingMean7);
+  if (!weeklyItrSignal) return null;
 
   const weekOfMonth = getWeekOfMonth(targetDate);
   const monthProgress = getMonthProgress(targetDate);
@@ -803,6 +1560,18 @@ const buildFeatureVectorV8 = (
   return {
     forecast_v2: baseForecasts.forecastV2,
     rolling_mean_7_model: baseForecasts.rollingMean7,
+    v0_selector_forecast: baseForecasts.v0SelectorForecast ?? baseForecasts.rollingMean7,
+    weekly_itr_estimated_weekly_inbound: clamp(
+      weeklyItrSignal.estimatedWeeklyInbound,
+      0,
+      Math.max(baseForecasts.rollingMean7 * 14, weeklyItrSignal.estimatedWeeklyInbound)
+    ),
+    weekly_itr_weekday_share: clamp(weeklyItrSignal.weekdayShare, 0.03, 0.5),
+    weekly_itr_recent_itr_mean: clamp(weeklyItrSignal.robustRecentItrMean, 0, 10),
+    weekly_itr_inventory_anchor: Math.max(weeklyItrSignal.inventoryAnchor, 0),
+    weekly_itr_share_confidence: weeklyItrSignal.shareConfidence,
+    weekly_itr_itr_confidence: weeklyItrSignal.itrConfidence,
+    weekly_itr_soft_degraded: weeklyItrSignal.isSoftDegraded ? 1 : 0,
     same_weekday_mean_4_ctx: summary.sameWeekdayMean4,
     previous_day_total_ctx: summary.previousDay.total,
     previous_vs_recent14_ctx: clamp(summary.previousVsRecent14, -3, 3),
@@ -811,6 +1580,11 @@ const buildFeatureVectorV8 = (
     has_capacity_ctx: cappedCapacity > 0 ? 1 : 0,
     severe_weather_ctx: targetDay.severe_weather ? 1 : 0,
     major_promotion_ctx: targetDay.major_promotion ? 1 : 0,
+    is_holiday_ctx: targetDay.is_holiday ? 1 : 0,
+    is_pre_holiday_ctx: targetDay.is_pre_holiday ? 1 : 0,
+    is_post_holiday_ctx: targetDay.is_post_holiday ? 1 : 0,
+    days_to_next_holiday_ctx: clamp(targetDay.days_to_next_holiday, 0, 14),
+    days_from_prev_holiday_ctx: clamp(targetDay.days_from_prev_holiday, 0, 14),
     week_of_month_ctx: clamp(weekOfMonth, 1, 5),
     month_progress_ctx: clamp(monthProgress, 0, 1),
     is_weekend_ctx: targetDay.weekday >= 6 ? 1 : 0,
@@ -825,6 +1599,7 @@ const buildFeatureVectorV9 = (
   priorDays: PreparedDay[],
   baseForecasts: {
     rollingMean7: number | null;
+    v0SelectorForecast: number | null;
     forecastV1: number | null;
     forecastV2: number | null;
     forecastV3: number | null;
@@ -840,6 +1615,8 @@ const buildFeatureVectorV9 = (
   ) {
     return null;
   }
+  const weeklyItrSignal = buildWeeklyItrShareSignal(targetDate, targetDay, priorDays, baseForecasts.rollingMean7);
+  if (!weeklyItrSignal) return null;
 
   const weekOfMonth = getWeekOfMonth(targetDate);
   const monthProgress = getMonthProgress(targetDate);
@@ -852,6 +1629,18 @@ const buildFeatureVectorV9 = (
     forecast_v2: baseForecasts.forecastV2,
     forecast_v3: baseForecasts.forecastV3,
     rolling_mean_7_model: baseForecasts.rollingMean7,
+    v0_selector_forecast: baseForecasts.v0SelectorForecast ?? baseForecasts.rollingMean7,
+    weekly_itr_estimated_weekly_inbound: clamp(
+      weeklyItrSignal.estimatedWeeklyInbound,
+      0,
+      Math.max(baseForecasts.rollingMean7 * 14, weeklyItrSignal.estimatedWeeklyInbound)
+    ),
+    weekly_itr_weekday_share: clamp(weeklyItrSignal.weekdayShare, 0.03, 0.5),
+    weekly_itr_recent_itr_mean: clamp(weeklyItrSignal.robustRecentItrMean, 0, 10),
+    weekly_itr_inventory_anchor: Math.max(weeklyItrSignal.inventoryAnchor, 0),
+    weekly_itr_share_confidence: weeklyItrSignal.shareConfidence,
+    weekly_itr_itr_confidence: weeklyItrSignal.itrConfidence,
+    weekly_itr_soft_degraded: weeklyItrSignal.isSoftDegraded ? 1 : 0,
     same_weekday_mean_4_ctx: summary.sameWeekdayMean4,
     previous_day_total_ctx: summary.previousDay.total,
     previous_vs_recent14_ctx: clamp(summary.previousVsRecent14, -3, 3),
@@ -860,6 +1649,11 @@ const buildFeatureVectorV9 = (
     capacity_vs_recent14_ctx: clamp(capacityVsRecent14, 0, 1.25),
     severe_weather_ctx: targetDay.severe_weather ? 1 : 0,
     major_promotion_ctx: targetDay.major_promotion ? 1 : 0,
+    is_holiday_ctx: targetDay.is_holiday ? 1 : 0,
+    is_pre_holiday_ctx: targetDay.is_pre_holiday ? 1 : 0,
+    is_post_holiday_ctx: targetDay.is_post_holiday ? 1 : 0,
+    days_to_next_holiday_ctx: clamp(targetDay.days_to_next_holiday, 0, 14),
+    days_from_prev_holiday_ctx: clamp(targetDay.days_from_prev_holiday, 0, 14),
     week_of_month_ctx: clamp(weekOfMonth, 1, 5),
     month_progress_ctx: clamp(monthProgress, 0, 1),
     is_weekend_ctx: targetDay.weekday >= 6 ? 1 : 0,
@@ -1456,6 +2250,115 @@ const buildMetric = (rows: EvaluationRow[], key: ModelKey, targetForecast: numbe
   };
 };
 
+const buildItrAverage = (days: PreparedDay[]) => {
+  const itrValues = days
+    .map((day) => (day.context.inventory_level > 0 ? day.total / day.context.inventory_level : null))
+    .filter((value): value is number => value !== null && Number.isFinite(value) && value > 0);
+  return mean(itrValues);
+};
+
+const detectRegimeSnapshot = (targetContext: FeatureContextDay, priorDays: PreparedDay[]): RegimeSnapshot => {
+  if (targetContext.major_promotion) {
+    return {
+      regimeKey: 'promotion',
+      regimeLabel: REGIME_LABELS.promotion,
+      confidence: 0.98,
+      signals: ['major_promotion=true']
+    };
+  }
+
+  const recent7 = priorDays.slice(-7);
+  const previous7 = priorDays.slice(-14, -7);
+  const recent14 = priorDays.slice(-14);
+  const recent42 = priorDays.slice(-42);
+  const latestInventory = priorDays[priorDays.length - 1]?.context.inventory_level ?? 0;
+  const recent7Mean = mean(recent7.map((day) => day.total));
+  const previous7Mean = mean(previous7.map((day) => day.total)) ?? recent7Mean;
+  const recentVolumeSlope =
+    recent7Mean !== null && previous7Mean !== null && previous7Mean > 0 ? recent7Mean / previous7Mean - 1 : 0;
+  const recentItr14 = buildItrAverage(recent14);
+  const recentItr42 = buildItrAverage(recent42) ?? recentItr14;
+  const itrDeviation = recentItr14 !== null && recentItr42 !== null && recentItr42 > 0 ? recentItr14 / recentItr42 - 1 : 0;
+  const inventoryMean14 = mean(recent14.map((day) => day.context.inventory_level).filter((value) => Number.isFinite(value) && value > 0));
+  const inventoryDeviation = inventoryMean14 !== null && inventoryMean14 > 0 && latestInventory > 0 ? latestInventory / inventoryMean14 - 1 : 0;
+  const volatility14 = coefficientOfVariation(recent14.map((day) => day.total)) ?? 0;
+  const signals = [
+    `vol7=${formatPercent(recentVolumeSlope)}`,
+    `itr14vs42=${formatPercent(itrDeviation)}`,
+    `invvs14=${formatPercent(inventoryDeviation)}`,
+    `cv14=${formatPercent(volatility14)}`
+  ];
+
+  const upSignal = recentVolumeSlope > 0.08 && (inventoryDeviation > 0.08 || itrDeviation > 0.08);
+  const downSignal = recentVolumeSlope < -0.08 && (inventoryDeviation < -0.06 || itrDeviation < -0.06);
+  const confidence = clamp(
+    Math.max(Math.abs(recentVolumeSlope), Math.abs(itrDeviation), Math.abs(inventoryDeviation), volatility14, 0.38),
+    0.38,
+    0.95
+  );
+
+  if (upSignal) {
+    return { regimeKey: 'transition_up', regimeLabel: REGIME_LABELS.transition_up, confidence, signals };
+  }
+  if (downSignal) {
+    return { regimeKey: 'transition_down', regimeLabel: REGIME_LABELS.transition_down, confidence, signals };
+  }
+  return {
+    regimeKey: 'stable',
+    regimeLabel: REGIME_LABELS.stable,
+    confidence: clamp(1 - Math.max(Math.abs(recentVolumeSlope), Math.abs(itrDeviation), Math.abs(inventoryDeviation)), 0.45, 0.88),
+    signals
+  };
+};
+
+const buildSelectorMetricSlice = (rows: EvaluationRow[], key: BaselineModelKey): SelectorMetricSlice => {
+  const validRows = rows.filter((row) => row.forecasts[key] !== null);
+  const totalActual = validRows.reduce((sum, row) => sum + row.actual, 0);
+  const totalAbsError = validRows.reduce((sum, row) => sum + Math.abs((row.forecasts[key] ?? 0) - row.actual), 0);
+  const absVariances = validRows
+    .map((row) => calculateVarianceRate(row.forecasts[key], row.actual))
+    .filter((value): value is number => value !== null)
+    .map((value) => Math.abs(value));
+  return {
+    samples: validRows.length,
+    wape: totalActual > 0 ? totalAbsError / totalActual : null,
+    within3HitRate: validRows.length ? absVariances.filter((value) => value <= 0.03).length / validRows.length : null,
+    p90AbsVariance: percentile(absVariances, 0.9),
+    worstAbsVariance: absVariances.length ? Math.max(...absVariances) : null
+  };
+};
+
+const rankSelectorCandidateMetrics = (metrics: SelectorCandidateMetric[]) =>
+  [...metrics].sort((a, b) => {
+    const aReady = a.samples >= REGIME_MIN_SELECTOR_SAMPLES && a.recent14.wape !== null;
+    const bReady = b.samples >= REGIME_MIN_SELECTOR_SAMPLES && b.recent14.wape !== null;
+    if (aReady !== bReady) return aReady ? -1 : 1;
+    return (
+      (a.recent14.wape ?? Number.POSITIVE_INFINITY) - (b.recent14.wape ?? Number.POSITIVE_INFINITY) ||
+      (b.within3HitRate ?? Number.NEGATIVE_INFINITY) - (a.within3HitRate ?? Number.NEGATIVE_INFINITY) ||
+      (a.p90AbsVariance ?? Number.POSITIVE_INFINITY) - (b.p90AbsVariance ?? Number.POSITIVE_INFINITY) ||
+      (a.wape ?? Number.POSITIVE_INFINITY) - (b.wape ?? Number.POSITIVE_INFINITY) ||
+      BASELINE_MODEL_KEYS.indexOf(a.modelKey) - BASELINE_MODEL_KEYS.indexOf(b.modelKey)
+    );
+  });
+
+const chooseSelectorModel = (
+  regimeSnapshot: RegimeSnapshot,
+  candidateMetrics: SelectorCandidateMetric[],
+  availableForecasts: Pick<ModelForecastMap, BaselineModelKey>
+) => {
+  const preferred =
+    candidateMetrics.find((metric) => metric.samples >= REGIME_MIN_SELECTOR_SAMPLES && availableForecasts[metric.modelKey] !== null) ?? null;
+  const fallbackKey =
+    REGIME_FALLBACK_KEYS[regimeSnapshot.regimeKey].find((key) => availableForecasts[key] !== null) ??
+    REGIME_CANDIDATE_KEYS[regimeSnapshot.regimeKey].find((key) => availableForecasts[key] !== null) ??
+    'rolling_mean_7';
+  return {
+    selectedModelKey: preferred?.modelKey ?? fallbackKey,
+    fallbackReason: preferred ? null : `insufficient ${regimeSnapshot.regimeKey} samples`
+  };
+};
+
 const buildFeatureImportanceRows = <T extends string>(
   weights: number[],
   featureNames: readonly T[],
@@ -1971,6 +2874,740 @@ const evaluateModels = (rows: VersionEvaluationRow[], targetForecasts: VersionFo
   });
 };
 
+export const buildPredictionWorkbenchData = ({
+  historyRows,
+  inputRows,
+  historyRangeStart,
+  historyRangeEnd,
+  forecastTargetDate
+}: {
+  historyRows: VolumeHistoryRow[];
+  inputRows: ForecastInputRow[];
+  historyRangeStart: string;
+  historyRangeEnd: string;
+  forecastTargetDate: string;
+}) => {
+  const inputByDate = new Map(inputRows.map((row) => [row.input_date, row]));
+  const fullHistoryDays = historyRows
+    .filter((row) => Number(row.last_filled_hour ?? inferLastFilledHour(row) ?? -1) >= 23)
+    .map<PreparedDay>((row) => {
+      const input = inputByDate.get(row.date) ?? null;
+      const context = createFeatureContext(row.date, input);
+      return {
+        date: row.date,
+        weekday: context.weekday,
+        total: sumHistoryRow(row),
+        history: row,
+        input,
+        context
+      };
+    });
+
+  const analysisDays = fullHistoryDays.filter((day) => day.date >= historyRangeStart && day.date <= historyRangeEnd);
+  const planningCoverageDays = analysisDays.filter((day) => hasPreopenPlanningSignal(day.context));
+
+  const priorDaysCache = new Map<string, PreparedDay[]>();
+  const trainingSamplesV1Cache = new Map<string, FeatureSample[]>();
+  const trainingSamplesV2Cache = new Map<string, FeatureSampleV2[]>();
+  const trainingSamplesV3Cache = new Map<string, FeatureSampleV3[]>();
+  const trainingSamplesV7Cache = new Map<string, FeatureSampleV7[]>();
+  const trainingSamplesV8Cache = new Map<string, FeatureSampleV8[]>();
+  const trainingSamplesV9Cache = new Map<string, FeatureSampleV9[]>();
+  const featureModelV1Cache = new Map<string, TrainedFeatureModel | null>();
+  const featureModelV2Cache = new Map<string, TrainedFeatureModelV2 | null>();
+  const featureModelV3Cache = new Map<string, TrainedFeatureModelV3 | null>();
+  const featureModelV7Cache = new Map<string, TrainedFeatureModelV7 | null>();
+  const featureModelV8Cache = new Map<string, TrainedFeatureModelV8 | null>();
+  const featureModelV9Cache = new Map<string, TrainedFeatureModelV9 | null>();
+  const baselineEvaluationRowsCache = new Map<string, Array<{
+    date: string;
+    actual: number;
+    context: FeatureContextDay;
+    regimeSnapshot: RegimeSnapshot;
+    forecasts: Pick<ModelForecastMap, BaselineModelKey>;
+  }>>();
+  const coreForecastCache = new Map<
+    string,
+    {
+      baselinePredictions: Pick<ModelForecastMap, BaselineModelKey>;
+      selectorForecast: number | null;
+      featureVectorV1: FeatureVector | null;
+      featureForecastV1: number | null;
+      featureVectorV2: FeatureVectorV2 | null;
+      featureForecastV2: number | null;
+      featureVectorV3: FeatureVectorV3 | null;
+      featureForecastV3: number | null;
+      featureVectorV7: FeatureVectorV7 | null;
+      featureVectorV8: FeatureVectorV8 | null;
+      featureVectorV9: FeatureVectorV9 | null;
+    }
+  >();
+
+  const getPriorDays = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = priorDaysCache.get(cacheKey);
+    if (cached) return cached;
+    const priorDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    priorDaysCache.set(cacheKey, priorDays);
+    return priorDays;
+  };
+
+  const getTrainingSamplesV1 = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = trainingSamplesV1Cache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const samples = candidateDays.reduce<FeatureSample[]>((rows, day) => {
+      const features = buildFeatureVector(day.date, day.context, getPriorDays(day.date, lookbackDays));
+      if (features) rows.push({ features, target: day.total });
+      return rows;
+    }, []);
+    trainingSamplesV1Cache.set(cacheKey, samples);
+    return samples;
+  };
+
+  const getTrainingSamplesV2 = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = trainingSamplesV2Cache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const samples = candidateDays.reduce<FeatureSampleV2[]>((rows, day) => {
+      const features = buildFeatureVectorV2(day.context, getPriorDays(day.date, lookbackDays));
+      if (features) rows.push({ features, target: day.total });
+      return rows;
+    }, []);
+    trainingSamplesV2Cache.set(cacheKey, samples);
+    return samples;
+  };
+
+  const getFeatureModelV1 = (cutoffDate: string) => {
+    if (!featureModelV1Cache.has(cutoffDate)) {
+      featureModelV1Cache.set(cutoffDate, trainFeatureRegression(getTrainingSamplesV1(cutoffDate)));
+    }
+    return featureModelV1Cache.get(cutoffDate) ?? null;
+  };
+
+  const getFeatureModelV2 = (cutoffDate: string) => {
+    if (!featureModelV2Cache.has(cutoffDate)) {
+      featureModelV2Cache.set(cutoffDate, trainFeatureRegressionV2(getTrainingSamplesV2(cutoffDate)));
+    }
+    return featureModelV2Cache.get(cutoffDate) ?? null;
+  };
+
+  const getBaselineEvaluationRows = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = baselineEvaluationRowsCache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const rows = candidateDays.map((day) => {
+      const priorDays = getPriorDays(day.date, lookbackDays);
+      const forecasts = buildBaselinePredictions(day.date, day.context, priorDays);
+      return {
+        date: day.date,
+        actual: day.total,
+        context: day.context,
+        regimeSnapshot: detectRegimeSnapshot(day.context, priorDays),
+        forecasts
+      };
+    });
+    baselineEvaluationRowsCache.set(cacheKey, rows);
+    return rows;
+  };
+
+  const getSelectorForecastForDate = (
+    targetDate: string,
+    targetContext: FeatureContextDay,
+    baselinePredictions: Pick<ModelForecastMap, BaselineModelKey>,
+    lookbackDays = 160
+  ) => {
+    const priorDays = getPriorDays(targetDate, lookbackDays);
+    const regimeSnapshot = detectRegimeSnapshot(targetContext, priorDays);
+    const baselineRows = getBaselineEvaluationRows(targetDate, lookbackDays);
+    const rowsForRegime = baselineRows.filter((row) => row.regimeSnapshot.regimeKey === regimeSnapshot.regimeKey);
+    const candidateMetrics = rankSelectorCandidateMetrics(
+      REGIME_CANDIDATE_KEYS[regimeSnapshot.regimeKey].map((key) => {
+        const rowsForKey = rowsForRegime.filter((row) => row.forecasts[key] !== null).map((row) => ({
+          date: row.date,
+          weekday: row.context.weekday,
+          actual: row.actual,
+          context: row.context,
+          forecasts: row.forecasts as ModelForecastMap,
+          bestModel: MODEL_LABELS[key]
+        }));
+        const recentRows = rowsForKey.slice(-REGIME_RECENT_WINDOW);
+        return {
+          regimeKey: regimeSnapshot.regimeKey,
+          modelKey: key,
+          label: MODEL_LABELS[key],
+          targetForecast: baselinePredictions[key],
+          ...buildSelectorMetricSlice(rowsForKey, key),
+          recent14: buildSelectorMetricSlice(recentRows, key)
+        };
+      })
+    );
+    const selection = chooseSelectorModel(regimeSnapshot, candidateMetrics, baselinePredictions);
+    return {
+      regimeSnapshot,
+      candidateMetrics,
+      selectedModelKey: selection.selectedModelKey,
+      forecast: baselinePredictions[selection.selectedModelKey],
+      fallbackReason: selection.fallbackReason
+    };
+  };
+
+  const getCoreForecasts = (targetDate: string, targetContext: FeatureContextDay) => {
+    const cached = coreForecastCache.get(targetDate);
+    if (cached) return cached;
+
+    const priorDays = getPriorDays(targetDate);
+    const baselinePredictions = buildBaselinePredictions(targetDate, targetContext, priorDays);
+    const selectorState = getSelectorForecastForDate(targetDate, targetContext, baselinePredictions);
+    const featureVectorV1 = buildFeatureVector(targetDate, targetContext, priorDays);
+    const featureForecastV1 = predictFeatureRegression(getFeatureModelV1(targetDate), featureVectorV1);
+    const featureVectorV2 = buildFeatureVectorV2(targetContext, priorDays);
+    const featureForecastV2 = predictFeatureRegressionV2(getFeatureModelV2(targetDate), featureVectorV2);
+    const featureVectorV3 = buildFeatureVectorV3(targetContext, priorDays, {
+      forecastV1: featureForecastV1,
+      forecastV2: featureForecastV2,
+      rollingMean7: baselinePredictions.rolling_mean_7
+    });
+    const featureForecastV3 = predictFeatureRegressionV3(getFeatureModelV3(targetDate), featureVectorV3);
+    const featureVectorV7 = buildFeatureVectorV7(targetContext, priorDays, {
+      forecastV1: featureForecastV1,
+      forecastV2: featureForecastV2,
+      forecastV3: featureForecastV3,
+      rollingMean7: baselinePredictions.rolling_mean_7,
+      v0SelectorForecast: selectorState.forecast
+    });
+    const featureVectorV8 = buildFeatureVectorV8(targetDate, targetContext, priorDays, {
+      forecastV2: featureForecastV2,
+      rollingMean7: baselinePredictions.rolling_mean_7,
+      v0SelectorForecast: selectorState.forecast
+    });
+    const featureVectorV9 = buildFeatureVectorV9(targetDate, targetContext, priorDays, {
+      forecastV1: featureForecastV1,
+      forecastV2: featureForecastV2,
+      forecastV3: featureForecastV3,
+      rollingMean7: baselinePredictions.rolling_mean_7,
+      v0SelectorForecast: selectorState.forecast
+    });
+    const next = {
+      baselinePredictions,
+      selectorForecast: selectorState.forecast,
+      featureVectorV1,
+      featureForecastV1,
+      featureVectorV2,
+      featureForecastV2,
+      featureVectorV3,
+      featureForecastV3,
+      featureVectorV7,
+      featureVectorV8,
+      featureVectorV9
+    };
+    coreForecastCache.set(targetDate, next);
+    return next;
+  };
+
+  const getTrainingSamplesV3 = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = trainingSamplesV3Cache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const samples = candidateDays.reduce<FeatureSampleV3[]>((rows, day) => {
+      const core = getCoreForecasts(day.date, day.context);
+      if (core.featureVectorV3) rows.push({ features: core.featureVectorV3, target: day.total });
+      return rows;
+    }, []);
+    trainingSamplesV3Cache.set(cacheKey, samples);
+    return samples;
+  };
+
+  const getFeatureModelV3 = (cutoffDate: string) => {
+    if (!featureModelV3Cache.has(cutoffDate)) {
+      featureModelV3Cache.set(cutoffDate, trainFeatureRegressionV3(getTrainingSamplesV3(cutoffDate)));
+    }
+    return featureModelV3Cache.get(cutoffDate) ?? null;
+  };
+
+  const getTrainingSamplesV7 = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = trainingSamplesV7Cache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const samples = candidateDays.reduce<FeatureSampleV7[]>((rows, day) => {
+      const core = getCoreForecasts(day.date, day.context);
+      if (core.featureVectorV7) rows.push({ features: core.featureVectorV7, target: day.total });
+      return rows;
+    }, []);
+    trainingSamplesV7Cache.set(cacheKey, samples);
+    return samples;
+  };
+
+  const getFeatureModelV7 = (cutoffDate: string) => {
+    if (!featureModelV7Cache.has(cutoffDate)) {
+      featureModelV7Cache.set(cutoffDate, trainFeatureRegressionV7(getTrainingSamplesV7(cutoffDate)));
+    }
+    return featureModelV7Cache.get(cutoffDate) ?? null;
+  };
+
+  const getTrainingSamplesV8 = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = trainingSamplesV8Cache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const samples = candidateDays.reduce<FeatureSampleV8[]>((rows, day) => {
+      const core = getCoreForecasts(day.date, day.context);
+      if (core.featureVectorV8) rows.push({ features: core.featureVectorV8, target: day.total });
+      return rows;
+    }, []);
+    trainingSamplesV8Cache.set(cacheKey, samples);
+    return samples;
+  };
+
+  const getFeatureModelV8 = (cutoffDate: string) => {
+    if (!featureModelV8Cache.has(cutoffDate)) {
+      featureModelV8Cache.set(cutoffDate, trainFeatureRegressionV8(getTrainingSamplesV8(cutoffDate)));
+    }
+    return featureModelV8Cache.get(cutoffDate) ?? null;
+  };
+
+  const getTrainingSamplesV9 = (cutoffDate: string, lookbackDays = 160) => {
+    const cacheKey = `${cutoffDate}:${lookbackDays}`;
+    const cached = trainingSamplesV9Cache.get(cacheKey);
+    if (cached) return cached;
+    const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
+    const samples = candidateDays.reduce<FeatureSampleV9[]>((rows, day) => {
+      const core = getCoreForecasts(day.date, day.context);
+      if (core.featureVectorV9) rows.push({ features: core.featureVectorV9, target: day.total });
+      return rows;
+    }, []);
+    trainingSamplesV9Cache.set(cacheKey, samples);
+    return samples;
+  };
+
+  const getFeatureModelV9 = (cutoffDate: string) => {
+    if (!featureModelV9Cache.has(cutoffDate)) {
+      featureModelV9Cache.set(cutoffDate, trainXGBoostRegressionV9(getTrainingSamplesV9(cutoffDate)));
+    }
+    return featureModelV9Cache.get(cutoffDate) ?? null;
+  };
+
+  const buildForecasts = (targetDate: string, targetContext: FeatureContextDay): ModelForecastMap => {
+    const core = getCoreForecasts(targetDate, targetContext);
+    return {
+      ...core.baselinePredictions,
+      feature_regression_v1: core.featureForecastV1,
+      feature_regression_v2: core.featureForecastV2,
+      feature_regression_v3: core.featureForecastV3,
+      feature_regression_v7: predictFeatureRegressionV7(getFeatureModelV7(targetDate), core.featureVectorV7),
+      feature_regression_v8: predictFeatureRegressionV8(getFeatureModelV8(targetDate), core.featureVectorV8),
+      feature_xgboost_v9: predictXGBoostRegressionV9(getFeatureModelV9(targetDate), core.featureVectorV9)
+    };
+  };
+
+  const evaluationRows = analysisDays.reduce<EvaluationRow[]>((rows, day) => {
+    const forecasts = buildForecasts(day.date, day.context);
+    if (MODEL_KEYS.every((key) => forecasts[key] === null)) return rows;
+
+    const bestModel =
+      MODEL_KEYS.map((key) => ({
+        key,
+        label: MODEL_LABELS[key],
+        error: forecasts[key] === null ? Number.POSITIVE_INFINITY : Math.abs((forecasts[key] ?? 0) - day.total)
+      }))
+        .filter((item) => Number.isFinite(item.error))
+        .sort((a, b) => a.error - b.error)[0]?.label ?? '-';
+
+    rows.push({
+      date: day.date,
+      weekday: day.weekday,
+      actual: day.total,
+      context: day.context,
+      forecasts,
+      bestModel
+    });
+    return rows;
+  }, []);
+
+  const targetInput = inputByDate.get(forecastTargetDate) ?? null;
+  const targetContext = createFeatureContext(forecastTargetDate, targetInput);
+  const targetActualDay = fullHistoryDays.find((day) => day.date === forecastTargetDate) ?? null;
+  const targetCoreForecasts = getCoreForecasts(forecastTargetDate, targetContext);
+  const targetForecasts = buildForecasts(forecastTargetDate, targetContext);
+  const targetFeatureModelV1 = getFeatureModelV1(forecastTargetDate);
+  const targetFeatureModelV2 = getFeatureModelV2(forecastTargetDate);
+  const targetFeatureModelV3 = getFeatureModelV3(forecastTargetDate);
+  const targetFeatureModelV7 = getFeatureModelV7(forecastTargetDate);
+  const targetFeatureModelV8 = getFeatureModelV8(forecastTargetDate);
+  const targetFeatureModelV9 = getFeatureModelV9(forecastTargetDate);
+
+  const leaderboard = MODEL_KEYS.map((key) => buildMetric(evaluationRows, key, targetForecasts[key])).sort((a, b) => {
+    if (a.wape === null) return 1;
+    if (b.wape === null) return -1;
+    return a.wape - b.wape;
+  });
+  const modelMetricsByKey = new Map(leaderboard.map((metric) => [metric.key, metric]));
+  const championScoreMap = new Map<ModelKey, number>(MODEL_KEYS.map((key) => [key, 0]));
+
+  evaluationRows.forEach((row) => {
+    const winner = MODEL_KEYS.map((key) => {
+      const variance = calculateVarianceRate(row.forecasts[key], row.actual);
+      return {
+        key,
+        absVariance: variance === null ? Number.POSITIVE_INFINITY : Math.abs(variance),
+        absError: row.forecasts[key] === null ? Number.POSITIVE_INFINITY : Math.abs((row.forecasts[key] ?? 0) - row.actual)
+      };
+    })
+      .filter((item) => Number.isFinite(item.absVariance))
+      .sort(
+        (a, b) =>
+          a.absVariance - b.absVariance ||
+          a.absError - b.absError ||
+          MODEL_KEYS.indexOf(a.key) - MODEL_KEYS.indexOf(b.key)
+      )[0];
+
+    if (winner) {
+      championScoreMap.set(winner.key, (championScoreMap.get(winner.key) ?? 0) + 1);
+    }
+  });
+  const championScoreboard: ChampionScoreRow[] = MODEL_KEYS.map((key) => {
+    const metric = modelMetricsByKey.get(key);
+    const targetForecast = targetForecasts[key];
+    const samples = metric?.samples ?? 0;
+    const score = championScoreMap.get(key) ?? 0;
+    return {
+      key,
+      label: MODEL_LABELS[key],
+      samples,
+      actualInbound: targetActualDay?.total ?? null,
+      targetForecast,
+      variance: calculateVarianceRate(targetForecast, targetActualDay?.total ?? null),
+      score,
+      toppingRate: samples > 0 ? score / samples : null
+    };
+  }).sort(
+    (a, b) =>
+      (b.toppingRate ?? Number.NEGATIVE_INFINITY) - (a.toppingRate ?? Number.NEGATIVE_INFINITY) ||
+      b.score - a.score ||
+      b.samples - a.samples ||
+      Math.abs(a.variance ?? Number.POSITIVE_INFINITY) - Math.abs(b.variance ?? Number.POSITIVE_INFINITY) ||
+      MODEL_KEYS.indexOf(a.key) - MODEL_KEYS.indexOf(b.key)
+  );
+
+  const baselineMetrics = leaderboard.filter((metric) => BASELINE_MODEL_KEYS.includes(metric.key as BaselineModelKey));
+  const v0EligibleBaselineMetrics = baselineMetrics.filter((metric) => metric.key !== 'promotion_regime_baseline');
+  const bestBaselineMetric = v0EligibleBaselineMetrics[0] ?? baselineMetrics[0] ?? null;
+  const featureMetricV1 = leaderboard.find((metric) => metric.key === 'feature_regression_v1') ?? null;
+  const featureMetricV2 = leaderboard.find((metric) => metric.key === 'feature_regression_v2') ?? null;
+  const featureMetricV3 = leaderboard.find((metric) => metric.key === 'feature_regression_v3') ?? null;
+  const featureMetricV7 = leaderboard.find((metric) => metric.key === 'feature_regression_v7') ?? null;
+  const featureMetricV8 = leaderboard.find((metric) => metric.key === 'feature_regression_v8') ?? null;
+  const featureMetricV9 = leaderboard.find((metric) => metric.key === 'feature_xgboost_v9') ?? null;
+  const regimeByDate = new Map(
+    analysisDays.map((day) => [day.date, detectRegimeSnapshot(day.context, getPriorDays(day.date))] as const)
+  );
+  const selectorEvaluationRows: SelectorEvaluationRow[] = [];
+  const selectorRowsByDate = new Map<string, SelectorEvaluationRow>();
+
+  evaluationRows.forEach((row) => {
+    const regimeSnapshot = regimeByDate.get(row.date) ?? detectRegimeSnapshot(row.context, getPriorDays(row.date));
+    const candidateKeys = REGIME_CANDIDATE_KEYS[regimeSnapshot.regimeKey];
+    const historicalRowsForRegime = evaluationRows.filter((candidate) => candidate.date < row.date && (regimeByDate.get(candidate.date)?.regimeKey ?? 'stable') === regimeSnapshot.regimeKey);
+    const selectorCandidateMetrics = rankSelectorCandidateMetrics(
+      candidateKeys.map((key) => {
+        const rowsForKey = historicalRowsForRegime.filter((candidate) => candidate.forecasts[key] !== null);
+        const recentRows = rowsForKey.slice(-REGIME_RECENT_WINDOW);
+        return {
+          regimeKey: regimeSnapshot.regimeKey,
+          modelKey: key,
+          label: MODEL_LABELS[key],
+          targetForecast: row.forecasts[key],
+          ...buildSelectorMetricSlice(rowsForKey, key),
+          recent14: buildSelectorMetricSlice(recentRows, key)
+        };
+      })
+    );
+    const preferred = selectorCandidateMetrics.find((metric) => metric.samples >= REGIME_MIN_SELECTOR_SAMPLES && row.forecasts[metric.modelKey] !== null) ?? null;
+    const fallbackKey =
+      REGIME_FALLBACK_KEYS[regimeSnapshot.regimeKey].find((key) => row.forecasts[key] !== null) ??
+      candidateKeys.find((key) => row.forecasts[key] !== null) ??
+      'rolling_mean_7';
+    const selectedModelKey = preferred?.modelKey ?? fallbackKey;
+    const selectedForecast = row.forecasts[selectedModelKey];
+    const diff = selectedForecast === null ? null : row.actual - selectedForecast;
+    const selectorRow: SelectorEvaluationRow = {
+      date: row.date,
+      actual: row.actual,
+      regimeKey: regimeSnapshot.regimeKey,
+      regimeLabel: regimeSnapshot.regimeLabel,
+      confidence: regimeSnapshot.confidence,
+      selectedModelKey,
+      selectedModelLabel: MODEL_LABELS[selectedModelKey],
+      selectedForecast,
+      diff,
+      variance: calculateVarianceRate(selectedForecast, row.actual),
+      fallbackReason: preferred ? null : `insufficient ${regimeSnapshot.regimeKey} samples`
+    };
+    selectorEvaluationRows.push(selectorRow);
+    selectorRowsByDate.set(row.date, selectorRow);
+  });
+
+  const targetRegimeSnapshot = detectRegimeSnapshot(targetContext, getPriorDays(forecastTargetDate));
+  const targetSelectorHistoricalRows = evaluationRows.filter(
+    (row) => (regimeByDate.get(row.date)?.regimeKey ?? 'stable') === targetRegimeSnapshot.regimeKey
+  );
+  const targetSelectorCandidateMetrics = rankSelectorCandidateMetrics(
+    REGIME_CANDIDATE_KEYS[targetRegimeSnapshot.regimeKey].map((key) => {
+      const rowsForKey = targetSelectorHistoricalRows.filter((row) => row.forecasts[key] !== null);
+      const recentRows = rowsForKey.slice(-REGIME_RECENT_WINDOW);
+      return {
+        regimeKey: targetRegimeSnapshot.regimeKey,
+        modelKey: key,
+        label: MODEL_LABELS[key],
+        targetForecast: targetForecasts[key],
+        ...buildSelectorMetricSlice(rowsForKey, key),
+        recent14: buildSelectorMetricSlice(recentRows, key)
+      };
+    })
+  );
+  const targetPreferredSelectorMetric =
+    targetSelectorCandidateMetrics.find((metric) => metric.samples >= REGIME_MIN_SELECTOR_SAMPLES && targetForecasts[metric.modelKey] !== null) ?? null;
+  const targetSelectorModelKey =
+    targetPreferredSelectorMetric?.modelKey ??
+    REGIME_FALLBACK_KEYS[targetRegimeSnapshot.regimeKey].find((key) => targetForecasts[key] !== null) ??
+    REGIME_CANDIDATE_KEYS[targetRegimeSnapshot.regimeKey].find((key) => targetForecasts[key] !== null) ??
+    'rolling_mean_7';
+  const targetSelectorForecast = targetForecasts[targetSelectorModelKey];
+  const targetSelectorFallbackReason = targetPreferredSelectorMetric ? null : `insufficient ${targetRegimeSnapshot.regimeKey} samples`;
+  const regimeSummaryRows = Object.entries(REGIME_CANDIDATE_KEYS).flatMap(([regimeKey, candidateKeys]) =>
+    candidateKeys.map((key) => {
+      const rowsForRegime = evaluationRows.filter((row) => (regimeByDate.get(row.date)?.regimeKey ?? 'stable') === regimeKey && row.forecasts[key] !== null);
+      const recentRows = rowsForRegime.slice(-REGIME_RECENT_WINDOW);
+      return {
+        regimeKey: regimeKey as RegimeKey,
+        modelKey: key,
+        label: MODEL_LABELS[key],
+        targetForecast: targetForecasts[key],
+        ...buildSelectorMetricSlice(rowsForRegime, key),
+        recent14: buildSelectorMetricSlice(recentRows, key)
+      };
+    })
+  );
+  const bestFeatureMetric =
+    [featureMetricV1, featureMetricV2, featureMetricV3, featureMetricV7, featureMetricV8, featureMetricV9]
+      .filter((metric): metric is ModelMetric => metric !== null)
+      .sort((a, b) => {
+        if (a.wape === null) return 1;
+        if (b.wape === null) return -1;
+        return a.wape - b.wape;
+      })[0] ?? null;
+  const bestMetric = leaderboard[0] ?? null;
+  const v0SourceKey: BaselineModelKey = targetSelectorModelKey;
+  const v0SourceLabel = MODEL_LABELS[v0SourceKey];
+  const versionInputRows: VersionInputRow[] = evaluationRows.map((row) => ({
+    date: row.date,
+    actual: row.actual,
+    forecasts: {
+      v0: selectorRowsByDate.get(row.date)?.selectedForecast ?? row.forecasts.rolling_mean_7,
+      v1: row.forecasts.feature_regression_v1,
+      v2: row.forecasts.feature_regression_v2,
+      v3: row.forecasts.feature_regression_v3
+    }
+  }));
+  const targetVersionInputRow: VersionInputRow = {
+    date: forecastTargetDate,
+    actual: targetActualDay?.total ?? null,
+    forecasts: {
+      v0: targetSelectorForecast,
+      v1: targetForecasts.feature_regression_v1,
+      v2: targetForecasts.feature_regression_v2,
+      v3: targetForecasts.feature_regression_v3
+    }
+  };
+  const v4Rows = buildV4Model(
+    versionInputRows.some((row) => row.date === forecastTargetDate) ? versionInputRows : [...versionInputRows, targetVersionInputRow]
+  );
+  const v5Rows = buildV5Model(
+    versionInputRows.some((row) => row.date === forecastTargetDate) ? versionInputRows : [...versionInputRows, targetVersionInputRow]
+  );
+  const v6Rows = buildV6Model(
+    versionInputRows.some((row) => row.date === forecastTargetDate) ? versionInputRows : [...versionInputRows, targetVersionInputRow]
+  );
+  const targetV4Row = v4Rows.find((row) => row.date === forecastTargetDate) ?? null;
+  const targetV5Row = v5Rows.find((row) => row.date === forecastTargetDate) ?? null;
+  const targetV6Row = v6Rows.find((row) => row.date === forecastTargetDate) ?? null;
+  const evaluationRowsByDate = new Map(evaluationRows.map((row) => [row.date, row]));
+  const v5RowsByDate = new Map(v5Rows.map((row) => [row.date, row]));
+  const v6RowsByDate = new Map(v6Rows.map((row) => [row.date, row]));
+  const versionEvaluationRows: VersionEvaluationRow[] = v4Rows
+    .filter((row): row is V4OutputRow & { actual: number } => row.actual !== null && row.date >= historyRangeStart && row.date <= historyRangeEnd)
+    .map((row) => ({
+      date: row.date,
+      actual: row.actual,
+      forecasts: {
+        ...row.forecasts,
+        v4: row.v4Forecast,
+        v4_ensemble: row.v4EnsembleForecast,
+        v5: v5RowsByDate.get(row.date)?.v5Forecast ?? null,
+        v6: v6RowsByDate.get(row.date)?.v6Forecast ?? null,
+        v7: evaluationRowsByDate.get(row.date)?.forecasts.feature_regression_v7 ?? null,
+        v8: evaluationRowsByDate.get(row.date)?.forecasts.feature_regression_v8 ?? null,
+        v9: evaluationRowsByDate.get(row.date)?.forecasts.feature_xgboost_v9 ?? null
+      }
+    }));
+  const targetVersionForecasts: VersionForecastMap = {
+    ...(targetV4Row?.forecasts ?? targetVersionInputRow.forecasts),
+    v4: targetV4Row?.v4Forecast ?? null,
+    v4_ensemble: targetV4Row?.v4EnsembleForecast ?? null,
+    v5: targetV5Row?.v5Forecast ?? null,
+    v6: targetV6Row?.v6Forecast ?? null,
+    v7: targetForecasts.feature_regression_v7,
+    v8: targetForecasts.feature_regression_v8,
+    v9: targetForecasts.feature_xgboost_v9
+  };
+  const versionLeaderboard = evaluateModels(versionEvaluationRows, targetVersionForecasts);
+  const currentVersionLeaderboard = rankCurrentVersionMetrics(versionLeaderboard);
+  const bestVersionMetric = currentVersionLeaderboard[0] ?? versionLeaderboard[0] ?? null;
+  const v0Metric = versionLeaderboard.find((metric) => metric.key === 'v0') ?? null;
+  const bestAdvancedVersionMetric = currentVersionLeaderboard.find((metric) => metric.key !== 'v0') ?? versionLeaderboard.find((metric) => metric.key !== 'v0') ?? null;
+  const adaptiveComparisonLeaderboard =
+    currentVersionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6', 'v7', 'v8', 'v9'].includes(metric.key));
+  const bestAdaptiveOverallMetric =
+    versionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6', 'v7', 'v8', 'v9'].includes(metric.key))[0] ?? null;
+  const bestAdaptiveRecent14Metric =
+    [...adaptiveComparisonLeaderboard].sort((a, b) => {
+      if (a.recent14.wape === null) return 1;
+      if (b.recent14.wape === null) return -1;
+      return a.recent14.wape - b.recent14.wape;
+    })[0] ?? null;
+  const versionImprovementVsBaseline =
+    bestAdvancedVersionMetric !== null &&
+    bestAdvancedVersionMetric.recent14.wape !== null &&
+    v0Metric !== null &&
+    v0Metric.recent14.wape !== null
+      ? v0Metric.recent14.wape - bestAdvancedVersionMetric.recent14.wape
+      : null;
+  const featureImportanceRowsV1 = targetFeatureModelV1 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV1.weights, FEATURE_NAMES, FEATURE_LABELS);
+  const featureImportanceRowsV2 =
+    targetFeatureModelV2 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV2.weights, FEATURE_NAMES_V2, FEATURE_LABELS_V2);
+  const featureImportanceRowsV3 =
+    targetFeatureModelV3 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV3.weights, FEATURE_NAMES_V3, FEATURE_LABELS_V3);
+  const featureImportanceRowsV7 =
+    targetFeatureModelV7 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV7.weights, FEATURE_NAMES_V7, FEATURE_LABELS_V7);
+  const featureImportanceRowsV8 =
+    targetFeatureModelV8 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV8.weights, FEATURE_NAMES_V8, FEATURE_LABELS_V8);
+  const featureImportanceRowsV9 =
+    targetFeatureModelV9 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV9.featureGains, FEATURE_NAMES_V9, FEATURE_LABELS_V9);
+  const importanceSumV1 = featureImportanceRowsV1.reduce((sum, row) => sum + row.importance, 0);
+  const importanceSumV2 = featureImportanceRowsV2.reduce((sum, row) => sum + row.importance, 0);
+  const importanceSumV3 = featureImportanceRowsV3.reduce((sum, row) => sum + row.importance, 0);
+  const importanceSumV7 = featureImportanceRowsV7.reduce((sum, row) => sum + row.importance, 0);
+  const importanceSumV8 = featureImportanceRowsV8.reduce((sum, row) => sum + row.importance, 0);
+  const importanceSumV9 = featureImportanceRowsV9.reduce((sum, row) => sum + row.importance, 0);
+
+  return {
+    analysisDays,
+    planningCoverageDays,
+    evaluationRows,
+    targetInput,
+    targetContext,
+    targetActual: targetActualDay?.total ?? null,
+    targetForecasts,
+    targetFeatureSnapshot: {
+      cutoffMode: MAIN_LEADERBOARD_CUTOFF,
+      preopenContext: {
+        date: targetContext.date,
+        weekday: targetContext.weekday,
+        full_day_capacity: targetContext.full_day_capacity,
+        severe_weather: targetContext.severe_weather,
+        major_promotion: targetContext.major_promotion,
+        holiday_name: targetContext.holiday_name,
+        is_holiday: targetContext.is_holiday,
+        is_pre_holiday: targetContext.is_pre_holiday,
+        is_post_holiday: targetContext.is_post_holiday,
+        days_to_next_holiday: targetContext.days_to_next_holiday,
+        days_from_prev_holiday: targetContext.days_from_prev_holiday
+      },
+      vectors: {
+        v1: targetCoreForecasts.featureVectorV1,
+        v2: targetCoreForecasts.featureVectorV2,
+        v3: targetCoreForecasts.featureVectorV3,
+        v7: targetCoreForecasts.featureVectorV7,
+        v8: targetCoreForecasts.featureVectorV8,
+        v9: targetCoreForecasts.featureVectorV9
+      }
+    },
+    targetFeatureModelV1,
+    targetFeatureModelV2,
+    targetFeatureModelV3,
+    targetFeatureModelV7,
+    targetFeatureModelV8,
+    targetFeatureModelV9,
+    targetV4Row,
+    targetV5Row,
+    targetV6Row,
+    targetVersionForecasts,
+    v0SourceKey,
+    v0SourceLabel,
+    v4Rows,
+    v5Rows,
+    v6Rows,
+    versionEvaluationRows,
+    versionLeaderboard,
+    currentVersionLeaderboard,
+    adaptiveComparisonLeaderboard,
+    bestVersionMetric,
+    bestAdaptiveOverallMetric,
+    bestAdaptiveRecent14Metric,
+    v0Metric,
+    bestAdvancedVersionMetric,
+    featureImportanceRowsV1: featureImportanceRowsV1.map((row) => ({
+      ...row,
+      importanceRatio: importanceSumV1 > 0 ? row.importance / importanceSumV1 : 0
+    })),
+    featureImportanceRowsV2: featureImportanceRowsV2.map((row) => ({
+      ...row,
+      importanceRatio: importanceSumV2 > 0 ? row.importance / importanceSumV2 : 0
+    })),
+    featureImportanceRowsV3: featureImportanceRowsV3.map((row) => ({
+      ...row,
+      importanceRatio: importanceSumV3 > 0 ? row.importance / importanceSumV3 : 0
+    })),
+    featureImportanceRowsV7: featureImportanceRowsV7.map((row) => ({
+      ...row,
+      importanceRatio: importanceSumV7 > 0 ? row.importance / importanceSumV7 : 0
+    })),
+    featureImportanceRowsV8: featureImportanceRowsV8.map((row) => ({
+      ...row,
+      importanceRatio: importanceSumV8 > 0 ? row.importance / importanceSumV8 : 0
+    })),
+    featureImportanceRowsV9: featureImportanceRowsV9.map((row) => ({
+      ...row,
+      importanceRatio: importanceSumV9 > 0 ? row.importance / importanceSumV9 : 0
+    })),
+    leaderboard,
+    championScoreboard,
+    bestMetric,
+    bestBaselineMetric,
+    regimeSnapshot: targetRegimeSnapshot,
+    regimeSummaryRows,
+    selectorCandidateMetrics: targetSelectorCandidateMetrics,
+    selectorEvaluationRows,
+    selectorTargetForecast: targetSelectorForecast,
+    selectorTargetModelKey: targetSelectorModelKey,
+    selectorTargetModelLabel: MODEL_LABELS[targetSelectorModelKey],
+    selectorTargetFallbackReason: targetSelectorFallbackReason,
+    featureMetricV1,
+    featureMetricV2,
+    featureMetricV3,
+    featureMetricV7,
+    featureMetricV8,
+    featureMetricV9,
+    bestFeatureMetric,
+    improvementVsBaseline: versionImprovementVsBaseline
+  };
+};
+
 function MetricCard({
   label,
   value,
@@ -1998,8 +3635,131 @@ function MetricCard({
   );
 }
 
+function PredictionWorkbenchFullscreenLoading({
+  t,
+  themeMode
+}: {
+  t: TranslateFn;
+  themeMode: 'light' | 'dark';
+}) {
+  const isLight = themeMode === 'light';
+
+  return (
+    <div
+      className={[
+        'fixed inset-0 z-[120] flex items-center justify-center px-6',
+        isLight ? 'bg-slate-950/12 backdrop-blur-md' : 'bg-slate-950/55 backdrop-blur-md'
+      ].join(' ')}
+    >
+      <div className="relative w-full max-w-4xl">
+        <div
+          className={[
+            'absolute inset-0 rounded-[40px] blur-3xl',
+            isLight ? 'bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.18),transparent_62%)]' : 'bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.18),transparent_62%)]'
+          ].join(' ')}
+        />
+        <div
+          className={[
+            'relative rounded-[40px] border p-6 shadow-[0_32px_120px_rgba(15,23,42,0.22)]',
+            isLight ? 'border-white/70 bg-white/88' : 'border-white/10 bg-slate-950/88'
+          ].join(' ')}
+        >
+          <div className="flex items-center justify-center">
+            <div className="relative h-24 w-24">
+              <div
+                className={[
+                  'absolute inset-0 rounded-full border-2 animate-spin',
+                  isLight ? 'border-sky-500/20 border-t-sky-500' : 'border-sky-300/20 border-t-sky-300'
+                ].join(' ')}
+                style={{ animationDuration: '1.2s' }}
+              />
+              <div
+                className={[
+                  'absolute inset-[10px] rounded-full border animate-spin',
+                  isLight ? 'border-emerald-500/20 border-r-emerald-500' : 'border-emerald-300/20 border-r-emerald-300'
+                ].join(' ')}
+                style={{ animationDirection: 'reverse', animationDuration: '1.8s' }}
+              />
+              <div
+                className={[
+                  'absolute inset-[24px] rounded-full',
+                  isLight ? 'bg-sky-100 shadow-[0_0_40px_rgba(14,165,233,0.26)]' : 'bg-sky-400/20 shadow-[0_0_40px_rgba(56,189,248,0.28)]'
+                ].join(' ')}
+              />
+            </div>
+          </div>
+          <div className="mt-6 text-center">
+            <div className={['text-[11px] uppercase tracking-[0.28em]', isLight ? 'text-slate-500' : 'text-white/55'].join(' ')}>
+              {t('预测工作台', 'Prediction workbench')}
+            </div>
+            <div className={['mt-3 font-display text-2xl tracking-[0.08em]', isLight ? 'text-slate-900' : 'text-white'].join(' ')}>
+              {t('模型引擎启动中', 'Forecast engine warming up')}
+            </div>
+            <div className={['mt-3 text-sm', isLight ? 'text-slate-500' : 'text-white/65'].join(' ')}>
+              {t('正在同步历史数据、构建特征并完成版本评分', 'Syncing history, building features, and scoring versions')}
+            </div>
+          </div>
+          <div className="mt-6 grid gap-3 md:grid-cols-[repeat(5,minmax(0,1fr))]">
+            {[t('同步数据', 'Sync data'), t('构建特征', 'Build features'), t('模型评分', 'Score models'), t('版本比较', 'Compare versions'), t('发布就绪', 'Publish ready')].map(
+              (step, index) => (
+                <div
+                  key={step}
+                  className={[
+                    'rounded-full border px-3 py-2 text-center text-xs tracking-[0.18em] animate-pulse',
+                    isLight ? 'border-slate-200 bg-white/80 text-slate-600' : 'border-white/10 bg-white/5 text-white/70'
+                  ].join(' ')}
+                  style={{ animationDelay: `${index * 120}ms` }}
+                >
+                  {step}
+                </div>
+              )
+            )}
+          </div>
+          <div className="mt-6 grid gap-4 xl:grid-cols-4">
+            {[0, 1, 2, 3].map((card) => (
+              <div
+                key={card}
+                className={[
+                  'rounded-[22px] border px-4 py-4',
+                  isLight ? 'border-slate-200 bg-slate-50/80' : 'border-white/10 bg-slate-950/30'
+                ].join(' ')}
+              >
+                <div className={['h-3 w-24 rounded-full animate-pulse', isLight ? 'bg-slate-200/85' : 'bg-white/10'].join(' ')} />
+                <div className={['mt-4 h-8 w-20 rounded-full animate-pulse', isLight ? 'bg-slate-200/85' : 'bg-white/10'].join(' ')} />
+                <div className={['mt-3 h-3 w-32 rounded-full animate-pulse', isLight ? 'bg-slate-200/85' : 'bg-white/10'].join(' ')} />
+              </div>
+            ))}
+          </div>
+          <div
+            className={[
+              'mt-6 rounded-[24px] border p-4',
+              isLight ? 'border-slate-200 bg-slate-50/80' : 'border-white/10 bg-slate-950/30'
+            ].join(' ')}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className={['h-4 w-32 rounded-full animate-pulse', isLight ? 'bg-slate-200/85' : 'bg-white/10'].join(' ')} />
+              <div className={['h-3 w-24 rounded-full animate-pulse', isLight ? 'bg-slate-200/85' : 'bg-white/10'].join(' ')} />
+            </div>
+            <div className="mt-4 space-y-3">
+              {[0, 1, 2, 3].map((row) => (
+                <div key={row} className="grid grid-cols-[1.2fr_0.7fr_0.7fr_0.7fr] gap-3">
+                  <div className={['h-10 rounded-2xl animate-pulse', isLight ? 'bg-slate-200/85' : 'bg-white/10'].join(' ')} />
+                  <div className={['h-10 rounded-2xl animate-pulse', isLight ? 'bg-slate-200/85' : 'bg-white/10'].join(' ')} />
+                  <div className={['h-10 rounded-2xl animate-pulse', isLight ? 'bg-slate-200/85' : 'bg-white/10'].join(' ')} />
+                  <div className={['h-10 rounded-2xl animate-pulse', isLight ? 'bg-slate-200/85' : 'bg-white/10'].join(' ')} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PredictionModelPage({ t, isLocked, serverTime, supabase, themeMode }: PredictionModelPageProps) {
   const isLight = themeMode === 'light';
+  const officialReadSupabase = officialClosedLoopReadClient ?? supabase;
   const today = toDateOnly(serverTime);
   const [historyRangeStart, setHistoryRangeStart] = useState(addDays(today, -119));
   const [historyRangeEnd, setHistoryRangeEnd] = useState(today);
@@ -2008,6 +3768,33 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
   const [inputRows, setInputRows] = useState<ForecastInputRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [officialLoading, setOfficialLoading] = useState(false);
+  const [officialError, setOfficialError] = useState<string | null>(null);
+  const [officialRun, setOfficialRun] = useState<OfficialRunRow | null>(null);
+  const [officialPredictions, setOfficialPredictions] = useState<OfficialPredictionRow[]>([]);
+  const [officialPublication, setOfficialPublication] = useState<OfficialPublicationRow | null>(null);
+  const [officialAlerts, setOfficialAlerts] = useState<OfficialAlertRow[]>([]);
+  const [publishSaving, setPublishSaving] = useState(false);
+  const [selectedPublishPredictionId, setSelectedPublishPredictionId] = useState('');
+  const [manualPublishedForecast, setManualPublishedForecast] = useState('');
+  const [manualOverrideReason, setManualOverrideReason] = useState('');
+  const deferredHistoryRows = useDeferredValue(historyRows);
+  const deferredInputRows = useDeferredValue(inputRows);
+  const deferredHistoryRangeStart = useDeferredValue(historyRangeStart);
+  const deferredHistoryRangeEnd = useDeferredValue(historyRangeEnd);
+  const deferredForecastTargetDate = useDeferredValue(forecastTargetDate);
+  const futurePrefetchDate = useMemo(() => addDays(today, 14), [today]);
+  const rawDataMinDate = historyRangeStart < forecastTargetDate ? historyRangeStart : forecastTargetDate;
+  const rawDataMaxDate = useMemo(() => {
+    const sortedMaxDates = [historyRangeEnd, futurePrefetchDate, forecastTargetDate].sort();
+    return sortedMaxDates[sortedMaxDates.length - 1] ?? historyRangeEnd;
+  }, [forecastTargetDate, futurePrefetchDate, historyRangeEnd]);
+  const workbenchRefreshing =
+    deferredForecastTargetDate !== forecastTargetDate ||
+    deferredHistoryRangeStart !== historyRangeStart ||
+    deferredHistoryRangeEnd !== historyRangeEnd ||
+    deferredHistoryRows !== historyRows ||
+    deferredInputRows !== inputRows;
 
   useEffect(() => {
     let cancelled = false;
@@ -2015,9 +3802,8 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     const load = async () => {
       setLoading(true);
       setError(null);
-      const minDate = [historyRangeStart, forecastTargetDate].sort()[0];
-      const sortedMaxDates = [historyRangeEnd, forecastTargetDate].sort();
-      const maxDate = sortedMaxDates[sortedMaxDates.length - 1] ?? historyRangeEnd;
+      const minDate = rawDataMinDate;
+      const maxDate = rawDataMaxDate;
       const preloadStart = addDays(minDate, -200);
 
       const [historyResult, inputResult] = await Promise.all([
@@ -2058,542 +3844,163 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     return () => {
       cancelled = true;
     };
-  }, [forecastTargetDate, historyRangeEnd, historyRangeStart, supabase]);
+  }, [rawDataMaxDate, rawDataMinDate, supabase]);
 
-  const data = useMemo(() => {
-    const inputByDate = new Map(inputRows.map((row) => [row.input_date, row]));
-    const fullHistoryDays = historyRows
-      .filter((row) => Number(row.last_filled_hour ?? inferLastFilledHour(row) ?? -1) >= 23)
-      .map<PreparedDay>((row) => {
-        const input = inputByDate.get(row.date) ?? null;
-        const context = createFeatureContext(row.date, input);
-        return {
-          date: row.date,
-          weekday: context.weekday,
-          total: sumHistoryRow(row),
-          history: row,
-          input,
-          context
-        };
-      });
+  useEffect(() => {
+    let cancelled = false;
 
-    const analysisDays = fullHistoryDays.filter((day) => day.date >= historyRangeStart && day.date <= historyRangeEnd);
-    const planningCoverageDays = analysisDays.filter((day) => hasPreopenPlanningSignal(day.context));
+    const loadOfficialData = async () => {
+      if (!officialReadSupabase) return;
+      setOfficialLoading(true);
+      setOfficialError(null);
+      const alertWindowStart = addDays(forecastTargetDate, -14);
+      try {
+        const [runResult, publicationResult, alertResult] = await Promise.all([
+          officialReadSupabase
+            .from('volume_forecast_runs')
+            .select('id,target_date,cutoff_mode,run_type,status,started_at,finished_at,code_version,recommendation_json')
+            .eq('target_date', forecastTargetDate)
+            .eq('cutoff_mode', MAIN_LEADERBOARD_CUTOFF)
+            .order('started_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+          officialReadSupabase
+            .from('volume_forecast_publications')
+            .select(
+              'id,target_date,cutoff_mode,run_id,recommended_prediction_id,selected_prediction_id,recommended_forecast,published_forecast,is_manual_override,override_reason,published_by,published_at,status'
+            )
+            .eq('target_date', forecastTargetDate)
+            .eq('cutoff_mode', MAIN_LEADERBOARD_CUTOFF)
+            .limit(1)
+            .maybeSingle(),
+          officialReadSupabase
+            .from('volume_forecast_alerts')
+            .select('id,alert_date,target_date,alert_type,severity,details_json,status,created_at')
+            .gte('alert_date', alertWindowStart)
+            .lte('alert_date', forecastTargetDate)
+            .order('alert_date', { ascending: false })
+            .limit(20)
+        ]);
 
-    const priorDaysCache = new Map<string, PreparedDay[]>();
-    const trainingSamplesV1Cache = new Map<string, FeatureSample[]>();
-    const trainingSamplesV2Cache = new Map<string, FeatureSampleV2[]>();
-    const trainingSamplesV3Cache = new Map<string, FeatureSampleV3[]>();
-    const trainingSamplesV7Cache = new Map<string, FeatureSampleV7[]>();
-    const trainingSamplesV8Cache = new Map<string, FeatureSampleV8[]>();
-    const trainingSamplesV9Cache = new Map<string, FeatureSampleV9[]>();
-    const featureModelV1Cache = new Map<string, TrainedFeatureModel | null>();
-    const featureModelV2Cache = new Map<string, TrainedFeatureModelV2 | null>();
-    const featureModelV3Cache = new Map<string, TrainedFeatureModelV3 | null>();
-    const featureModelV7Cache = new Map<string, TrainedFeatureModelV7 | null>();
-    const featureModelV8Cache = new Map<string, TrainedFeatureModelV8 | null>();
-    const featureModelV9Cache = new Map<string, TrainedFeatureModelV9 | null>();
-    const coreForecastCache = new Map<
-      string,
-      {
-        baselinePredictions: Pick<ModelForecastMap, 'same_weekday_median' | 'rolling_mean_7' | 'trend_blend'>;
-        featureVectorV1: FeatureVector | null;
-        featureForecastV1: number | null;
-        featureVectorV2: FeatureVectorV2 | null;
-        featureForecastV2: number | null;
-        featureVectorV3: FeatureVectorV3 | null;
-        featureForecastV3: number | null;
-        featureVectorV7: FeatureVectorV7 | null;
-        featureVectorV8: FeatureVectorV8 | null;
-        featureVectorV9: FeatureVectorV9 | null;
-      }
-    >();
-
-    const getPriorDays = (cutoffDate: string, lookbackDays = 160) => {
-      const cacheKey = `${cutoffDate}:${lookbackDays}`;
-      const cached = priorDaysCache.get(cacheKey);
-      if (cached) return cached;
-      const priorDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
-      priorDaysCache.set(cacheKey, priorDays);
-      return priorDays;
-    };
-
-    const getTrainingSamplesV1 = (cutoffDate: string, lookbackDays = 160) => {
-      const cacheKey = `${cutoffDate}:${lookbackDays}`;
-      const cached = trainingSamplesV1Cache.get(cacheKey);
-      if (cached) return cached;
-      const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
-      const samples = candidateDays.reduce<FeatureSample[]>((rows, day) => {
-        const features = buildFeatureVector(day.date, day.context, getPriorDays(day.date, lookbackDays));
-        if (features) rows.push({ features, target: day.total });
-        return rows;
-      }, []);
-      trainingSamplesV1Cache.set(cacheKey, samples);
-      return samples;
-    };
-
-    const getTrainingSamplesV2 = (cutoffDate: string, lookbackDays = 160) => {
-      const cacheKey = `${cutoffDate}:${lookbackDays}`;
-      const cached = trainingSamplesV2Cache.get(cacheKey);
-      if (cached) return cached;
-      const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
-      const samples = candidateDays.reduce<FeatureSampleV2[]>((rows, day) => {
-        const features = buildFeatureVectorV2(day.context, getPriorDays(day.date, lookbackDays));
-        if (features) rows.push({ features, target: day.total });
-        return rows;
-      }, []);
-      trainingSamplesV2Cache.set(cacheKey, samples);
-      return samples;
-    };
-
-    const getFeatureModelV1 = (cutoffDate: string) => {
-      if (!featureModelV1Cache.has(cutoffDate)) {
-        featureModelV1Cache.set(cutoffDate, trainFeatureRegression(getTrainingSamplesV1(cutoffDate)));
-      }
-      return featureModelV1Cache.get(cutoffDate) ?? null;
-    };
-
-    const getFeatureModelV2 = (cutoffDate: string) => {
-      if (!featureModelV2Cache.has(cutoffDate)) {
-        featureModelV2Cache.set(cutoffDate, trainFeatureRegressionV2(getTrainingSamplesV2(cutoffDate)));
-      }
-      return featureModelV2Cache.get(cutoffDate) ?? null;
-    };
-
-    const getCoreForecasts = (targetDate: string, targetContext: FeatureContextDay) => {
-      const cached = coreForecastCache.get(targetDate);
-      if (cached) return cached;
-
-      const priorDays = getPriorDays(targetDate);
-      const baselinePredictions = buildBaselinePredictions(targetDate, priorDays);
-      const featureVectorV1 = buildFeatureVector(targetDate, targetContext, priorDays);
-      const featureForecastV1 = predictFeatureRegression(getFeatureModelV1(targetDate), featureVectorV1);
-      const featureVectorV2 = buildFeatureVectorV2(targetContext, priorDays);
-      const featureForecastV2 = predictFeatureRegressionV2(getFeatureModelV2(targetDate), featureVectorV2);
-      const featureVectorV3 = buildFeatureVectorV3(targetContext, priorDays, {
-        rollingMean7: baselinePredictions.rolling_mean_7,
-        forecastV1: featureForecastV1,
-        forecastV2: featureForecastV2
-      });
-      const featureForecastV3 = predictFeatureRegressionV3(getFeatureModelV3(targetDate), featureVectorV3);
-      const featureVectorV7 = buildFeatureVectorV7(targetContext, priorDays, {
-        rollingMean7: baselinePredictions.rolling_mean_7,
-        forecastV1: featureForecastV1,
-        forecastV2: featureForecastV2,
-        forecastV3: featureForecastV3
-      });
-      const featureVectorV8 = buildFeatureVectorV8(targetDate, targetContext, priorDays, {
-        rollingMean7: baselinePredictions.rolling_mean_7,
-        forecastV2: featureForecastV2
-      });
-      const featureVectorV9 = buildFeatureVectorV9(targetDate, targetContext, priorDays, {
-        rollingMean7: baselinePredictions.rolling_mean_7,
-        forecastV1: featureForecastV1,
-        forecastV2: featureForecastV2,
-        forecastV3: featureForecastV3
-      });
-
-      const result = {
-        baselinePredictions,
-        featureVectorV1,
-        featureForecastV1,
-        featureVectorV2,
-        featureForecastV2,
-        featureVectorV3,
-        featureForecastV3,
-        featureVectorV7,
-        featureVectorV8,
-        featureVectorV9
-      };
-      coreForecastCache.set(targetDate, result);
-      return result;
-    };
-
-    const getTrainingSamplesV3 = (cutoffDate: string, lookbackDays = 160) => {
-      const cacheKey = `${cutoffDate}:${lookbackDays}`;
-      const cached = trainingSamplesV3Cache.get(cacheKey);
-      if (cached) return cached;
-      const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
-      const samples = candidateDays.reduce<FeatureSampleV3[]>((rows, day) => {
-        const features = getCoreForecasts(day.date, day.context).featureVectorV3;
-        if (features) rows.push({ features, target: day.total });
-        return rows;
-      }, []);
-      trainingSamplesV3Cache.set(cacheKey, samples);
-      return samples;
-    };
-
-    const getFeatureModelV3 = (cutoffDate: string) => {
-      if (!featureModelV3Cache.has(cutoffDate)) {
-        featureModelV3Cache.set(cutoffDate, trainFeatureRegressionV3(getTrainingSamplesV3(cutoffDate)));
-      }
-      return featureModelV3Cache.get(cutoffDate) ?? null;
-    };
-
-    const getTrainingSamplesV7 = (cutoffDate: string, lookbackDays = 160) => {
-      const cacheKey = `${cutoffDate}:${lookbackDays}`;
-      const cached = trainingSamplesV7Cache.get(cacheKey);
-      if (cached) return cached;
-      const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
-      const samples = candidateDays.reduce<FeatureSampleV7[]>((rows, day) => {
-        const features = getCoreForecasts(day.date, day.context).featureVectorV7;
-        if (features) rows.push({ features, target: day.total });
-        return rows;
-      }, []);
-      trainingSamplesV7Cache.set(cacheKey, samples);
-      return samples;
-    };
-
-    const getFeatureModelV7 = (cutoffDate: string) => {
-      if (!featureModelV7Cache.has(cutoffDate)) {
-        featureModelV7Cache.set(cutoffDate, trainFeatureRegressionV7(getTrainingSamplesV7(cutoffDate)));
-      }
-      return featureModelV7Cache.get(cutoffDate) ?? null;
-    };
-
-    const getTrainingSamplesV8 = (cutoffDate: string, lookbackDays = 160) => {
-      const cacheKey = `${cutoffDate}:${lookbackDays}`;
-      const cached = trainingSamplesV8Cache.get(cacheKey);
-      if (cached) return cached;
-      const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
-      const samples = candidateDays.reduce<FeatureSampleV8[]>((rows, day) => {
-        const features = getCoreForecasts(day.date, day.context).featureVectorV8;
-        if (features) rows.push({ features, target: day.total });
-        return rows;
-      }, []);
-      trainingSamplesV8Cache.set(cacheKey, samples);
-      return samples;
-    };
-
-    const getFeatureModelV8 = (cutoffDate: string) => {
-      if (!featureModelV8Cache.has(cutoffDate)) {
-        featureModelV8Cache.set(cutoffDate, trainFeatureRegressionV8(getTrainingSamplesV8(cutoffDate)));
-      }
-      return featureModelV8Cache.get(cutoffDate) ?? null;
-    };
-
-    const getTrainingSamplesV9 = (cutoffDate: string, lookbackDays = 160) => {
-      const cacheKey = `${cutoffDate}:${lookbackDays}`;
-      const cached = trainingSamplesV9Cache.get(cacheKey);
-      if (cached) return cached;
-      const candidateDays = fullHistoryDays.filter((day) => day.date < cutoffDate).slice(-lookbackDays);
-      const samples = candidateDays.reduce<FeatureSampleV9[]>((rows, day) => {
-        const features = getCoreForecasts(day.date, day.context).featureVectorV9;
-        if (features) rows.push({ features, target: day.total });
-        return rows;
-      }, []);
-      trainingSamplesV9Cache.set(cacheKey, samples);
-      return samples;
-    };
-
-    const getFeatureModelV9 = (cutoffDate: string) => {
-      if (!featureModelV9Cache.has(cutoffDate)) {
-        featureModelV9Cache.set(cutoffDate, trainXGBoostRegressionV9(getTrainingSamplesV9(cutoffDate)));
-      }
-      return featureModelV9Cache.get(cutoffDate) ?? null;
-    };
-
-    const buildForecasts = (targetDate: string, targetContext: FeatureContextDay): ModelForecastMap => {
-      const core = getCoreForecasts(targetDate, targetContext);
-      return {
-        ...core.baselinePredictions,
-        feature_regression_v1: core.featureForecastV1,
-        feature_regression_v2: core.featureForecastV2,
-        feature_regression_v3: core.featureForecastV3,
-        feature_regression_v7: predictFeatureRegressionV7(getFeatureModelV7(targetDate), core.featureVectorV7),
-        feature_regression_v8: predictFeatureRegressionV8(getFeatureModelV8(targetDate), core.featureVectorV8),
-        feature_xgboost_v9: predictXGBoostRegressionV9(getFeatureModelV9(targetDate), core.featureVectorV9)
-      };
-    };
-
-    const evaluationRows = analysisDays.reduce<EvaluationRow[]>((rows, day) => {
-      const forecasts = buildForecasts(day.date, day.context);
-      if (MODEL_KEYS.every((key) => forecasts[key] === null)) return rows;
-
-      const bestModel =
-        MODEL_KEYS.map((key) => ({
-          key,
-          label: MODEL_LABELS[key],
-          error: forecasts[key] === null ? Number.POSITIVE_INFINITY : Math.abs((forecasts[key] ?? 0) - day.total)
-        }))
-          .filter((item) => Number.isFinite(item.error))
-          .sort((a, b) => a.error - b.error)[0]?.label ?? '-';
-
-      rows.push({
-        date: day.date,
-        weekday: day.weekday,
-        actual: day.total,
-        forecasts,
-        bestModel
-      });
-      return rows;
-    }, []);
-
-    const targetInput = inputByDate.get(forecastTargetDate) ?? null;
-    const targetContext = createFeatureContext(forecastTargetDate, targetInput);
-    const targetActualDay = fullHistoryDays.find((day) => day.date === forecastTargetDate) ?? null;
-    const targetForecasts = buildForecasts(forecastTargetDate, targetContext);
-    const targetFeatureModelV1 = getFeatureModelV1(forecastTargetDate);
-    const targetFeatureModelV2 = getFeatureModelV2(forecastTargetDate);
-    const targetFeatureModelV3 = getFeatureModelV3(forecastTargetDate);
-    const targetFeatureModelV7 = getFeatureModelV7(forecastTargetDate);
-    const targetFeatureModelV8 = getFeatureModelV8(forecastTargetDate);
-    const targetFeatureModelV9 = getFeatureModelV9(forecastTargetDate);
-
-    const leaderboard = MODEL_KEYS.map((key) => buildMetric(evaluationRows, key, targetForecasts[key])).sort((a, b) => {
-      if (a.wape === null) return 1;
-      if (b.wape === null) return -1;
-      return a.wape - b.wape;
-    });
-    const modelMetricsByKey = new Map(leaderboard.map((metric) => [metric.key, metric]));
-    const championScoreMap = new Map<ModelKey, number>(MODEL_KEYS.map((key) => [key, 0]));
-
-    evaluationRows.forEach((row) => {
-      const winner = MODEL_KEYS.map((key) => {
-        const variance = calculateVarianceRate(row.forecasts[key], row.actual);
-        return {
-          key,
-          absVariance: variance === null ? Number.POSITIVE_INFINITY : Math.abs(variance),
-          absError: row.forecasts[key] === null ? Number.POSITIVE_INFINITY : Math.abs((row.forecasts[key] ?? 0) - row.actual)
-        };
-      })
-        .filter((item) => Number.isFinite(item.absVariance))
-        .sort(
-          (a, b) =>
-            a.absVariance - b.absVariance ||
-            a.absError - b.absError ||
-            MODEL_KEYS.indexOf(a.key) - MODEL_KEYS.indexOf(b.key)
-        )[0];
-
-      if (winner) {
-        championScoreMap.set(winner.key, (championScoreMap.get(winner.key) ?? 0) + 1);
-      }
-    });
-    const championScoreboard: ChampionScoreRow[] = MODEL_KEYS.map((key) => {
-      const metric = modelMetricsByKey.get(key);
-      const targetForecast = targetForecasts[key];
-      const samples = metric?.samples ?? 0;
-      const score = championScoreMap.get(key) ?? 0;
-      return {
-        key,
-        label: MODEL_LABELS[key],
-        samples,
-        actualInbound: targetActualDay?.total ?? null,
-        targetForecast,
-        variance: calculateVarianceRate(targetForecast, targetActualDay?.total ?? null),
-        score,
-        toppingRate: samples > 0 ? score / samples : null
-      };
-    }).sort(
-      (a, b) =>
-        (b.toppingRate ?? Number.NEGATIVE_INFINITY) - (a.toppingRate ?? Number.NEGATIVE_INFINITY) ||
-        b.score - a.score ||
-        (b.samples - a.samples) ||
-        Math.abs(a.variance ?? Number.POSITIVE_INFINITY) - Math.abs(b.variance ?? Number.POSITIVE_INFINITY) ||
-        MODEL_KEYS.indexOf(a.key) - MODEL_KEYS.indexOf(b.key)
-    );
-
-    const baselineMetrics = leaderboard.filter(
-      (metric) =>
-        metric.key !== 'feature_regression_v1' &&
-        metric.key !== 'feature_regression_v2' &&
-        metric.key !== 'feature_regression_v3' &&
-        metric.key !== 'feature_regression_v7' &&
-        metric.key !== 'feature_regression_v8' &&
-        metric.key !== 'feature_xgboost_v9'
-    );
-    const bestBaselineMetric = baselineMetrics[0] ?? null;
-    const featureMetricV1 = leaderboard.find((metric) => metric.key === 'feature_regression_v1') ?? null;
-    const featureMetricV2 = leaderboard.find((metric) => metric.key === 'feature_regression_v2') ?? null;
-    const featureMetricV3 = leaderboard.find((metric) => metric.key === 'feature_regression_v3') ?? null;
-    const featureMetricV7 = leaderboard.find((metric) => metric.key === 'feature_regression_v7') ?? null;
-    const featureMetricV8 = leaderboard.find((metric) => metric.key === 'feature_regression_v8') ?? null;
-    const featureMetricV9 = leaderboard.find((metric) => metric.key === 'feature_xgboost_v9') ?? null;
-    const bestFeatureMetric =
-      [featureMetricV1, featureMetricV2, featureMetricV3, featureMetricV7, featureMetricV8, featureMetricV9]
-        .filter((metric): metric is ModelMetric => metric !== null)
-        .sort((a, b) => {
-          if (a.wape === null) return 1;
-          if (b.wape === null) return -1;
-          return a.wape - b.wape;
-        })[0] ?? null;
-    const bestMetric = leaderboard[0] ?? null;
-    const v0SourceKey =
-      bestBaselineMetric?.key === 'same_weekday_median' ||
-      bestBaselineMetric?.key === 'rolling_mean_7' ||
-      bestBaselineMetric?.key === 'trend_blend'
-        ? bestBaselineMetric.key
-        : 'rolling_mean_7';
-    const v0SourceLabel = MODEL_LABELS[v0SourceKey];
-    const versionInputRows: VersionInputRow[] = evaluationRows.map((row) => ({
-      date: row.date,
-      actual: row.actual,
-      forecasts: {
-        v0: row.forecasts[v0SourceKey],
-        v1: row.forecasts.feature_regression_v1,
-        v2: row.forecasts.feature_regression_v2,
-        v3: row.forecasts.feature_regression_v3
-      }
-    }));
-    const targetVersionInputRow: VersionInputRow = {
-      date: forecastTargetDate,
-      actual: targetActualDay?.total ?? null,
-      forecasts: {
-        v0: targetForecasts[v0SourceKey],
-        v1: targetForecasts.feature_regression_v1,
-        v2: targetForecasts.feature_regression_v2,
-        v3: targetForecasts.feature_regression_v3
-      }
-    };
-    const v4Rows = buildV4Model(
-      versionInputRows.some((row) => row.date === forecastTargetDate) ? versionInputRows : [...versionInputRows, targetVersionInputRow]
-    );
-    const v5Rows = buildV5Model(
-      versionInputRows.some((row) => row.date === forecastTargetDate) ? versionInputRows : [...versionInputRows, targetVersionInputRow]
-    );
-    const v6Rows = buildV6Model(
-      versionInputRows.some((row) => row.date === forecastTargetDate) ? versionInputRows : [...versionInputRows, targetVersionInputRow]
-    );
-    const targetV4Row = v4Rows.find((row) => row.date === forecastTargetDate) ?? null;
-    const targetV5Row = v5Rows.find((row) => row.date === forecastTargetDate) ?? null;
-    const targetV6Row = v6Rows.find((row) => row.date === forecastTargetDate) ?? null;
-    const evaluationRowsByDate = new Map(evaluationRows.map((row) => [row.date, row]));
-    const v5RowsByDate = new Map(v5Rows.map((row) => [row.date, row]));
-    const v6RowsByDate = new Map(v6Rows.map((row) => [row.date, row]));
-    const versionEvaluationRows: VersionEvaluationRow[] = v4Rows
-      .filter((row): row is V4OutputRow & { actual: number } => row.actual !== null && row.date >= historyRangeStart && row.date <= historyRangeEnd)
-      .map((row) => ({
-        date: row.date,
-        actual: row.actual,
-        forecasts: {
-          ...row.forecasts,
-          v4: row.v4Forecast,
-          v4_ensemble: row.v4EnsembleForecast,
-          v5: v5RowsByDate.get(row.date)?.v5Forecast ?? null,
-          v6: v6RowsByDate.get(row.date)?.v6Forecast ?? null,
-          v7: evaluationRowsByDate.get(row.date)?.forecasts.feature_regression_v7 ?? null,
-          v8: evaluationRowsByDate.get(row.date)?.forecasts.feature_regression_v8 ?? null,
-          v9: evaluationRowsByDate.get(row.date)?.forecasts.feature_xgboost_v9 ?? null
+        if (cancelled) return;
+        const primaryError = runResult.error ?? publicationResult.error ?? alertResult.error;
+        if (primaryError) {
+          if (isAbortLikeError(primaryError)) {
+            setOfficialLoading(false);
+            return;
+          }
+          setOfficialError(String(primaryError.message ?? 'Failed to load official forecast records.'));
+          setOfficialRun(null);
+          setOfficialPredictions([]);
+          setOfficialPublication(null);
+          setOfficialAlerts([]);
+          setOfficialLoading(false);
+          return;
         }
-      }));
-    const targetVersionForecasts: VersionForecastMap = {
-      ...(targetV4Row?.forecasts ?? targetVersionInputRow.forecasts),
-      v4: targetV4Row?.v4Forecast ?? null,
-      v4_ensemble: targetV4Row?.v4EnsembleForecast ?? null,
-      v5: targetV5Row?.v5Forecast ?? null,
-      v6: targetV6Row?.v6Forecast ?? null,
-      v7: targetForecasts.feature_regression_v7,
-      v8: targetForecasts.feature_regression_v8,
-      v9: targetForecasts.feature_xgboost_v9
-    };
-    const versionLeaderboard = evaluateModels(versionEvaluationRows, targetVersionForecasts);
-    const currentVersionLeaderboard = rankCurrentVersionMetrics(versionLeaderboard);
-    const bestVersionMetric = currentVersionLeaderboard[0] ?? versionLeaderboard[0] ?? null;
-    const v0Metric = versionLeaderboard.find((metric) => metric.key === 'v0') ?? null;
-    const bestAdvancedVersionMetric = currentVersionLeaderboard.find((metric) => metric.key !== 'v0') ?? versionLeaderboard.find((metric) => metric.key !== 'v0') ?? null;
-    const adaptiveComparisonLeaderboard =
-      currentVersionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6', 'v7', 'v8', 'v9'].includes(metric.key));
-    const bestAdaptiveOverallMetric =
-      versionLeaderboard.filter((metric) => ['v0', 'v1', 'v2', 'v3', 'v5', 'v6', 'v7', 'v8', 'v9'].includes(metric.key))[0] ?? null;
-    const bestAdaptiveRecent14Metric =
-      [...adaptiveComparisonLeaderboard].sort((a, b) => {
-        if (a.recent14.wape === null) return 1;
-        if (b.recent14.wape === null) return -1;
-        return a.recent14.wape - b.recent14.wape;
-      })[0] ?? null;
-    const versionImprovementVsBaseline =
-      bestAdvancedVersionMetric !== null &&
-      bestAdvancedVersionMetric.recent14.wape !== null &&
-      v0Metric !== null &&
-      v0Metric.recent14.wape !== null
-        ? v0Metric.recent14.wape - bestAdvancedVersionMetric.recent14.wape
-        : null;
-    const featureImportanceRowsV1 = targetFeatureModelV1 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV1.weights, FEATURE_NAMES, FEATURE_LABELS);
-    const featureImportanceRowsV2 =
-      targetFeatureModelV2 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV2.weights, FEATURE_NAMES_V2, FEATURE_LABELS_V2);
-    const featureImportanceRowsV3 =
-      targetFeatureModelV3 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV3.weights, FEATURE_NAMES_V3, FEATURE_LABELS_V3);
-    const featureImportanceRowsV7 =
-      targetFeatureModelV7 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV7.weights, FEATURE_NAMES_V7, FEATURE_LABELS_V7);
-    const featureImportanceRowsV8 =
-      targetFeatureModelV8 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV8.weights, FEATURE_NAMES_V8, FEATURE_LABELS_V8);
-    const featureImportanceRowsV9 =
-      targetFeatureModelV9 === null ? [] : buildFeatureImportanceRows(targetFeatureModelV9.featureGains, FEATURE_NAMES_V9, FEATURE_LABELS_V9);
-    const importanceSumV1 = featureImportanceRowsV1.reduce((sum, row) => sum + row.importance, 0);
-    const importanceSumV2 = featureImportanceRowsV2.reduce((sum, row) => sum + row.importance, 0);
-    const importanceSumV3 = featureImportanceRowsV3.reduce((sum, row) => sum + row.importance, 0);
-    const importanceSumV7 = featureImportanceRowsV7.reduce((sum, row) => sum + row.importance, 0);
-    const importanceSumV8 = featureImportanceRowsV8.reduce((sum, row) => sum + row.importance, 0);
-    const importanceSumV9 = featureImportanceRowsV9.reduce((sum, row) => sum + row.importance, 0);
 
-    return {
-      analysisDays,
-      planningCoverageDays,
-      evaluationRows,
-      targetInput,
-      targetActual: targetActualDay?.total ?? null,
-      targetForecasts,
-      targetFeatureModelV1,
-      targetFeatureModelV2,
-      targetFeatureModelV3,
-      targetFeatureModelV7,
-      targetFeatureModelV8,
-      targetFeatureModelV9,
-      targetV4Row,
-      targetV5Row,
-      targetV6Row,
-      v0SourceKey,
-      v0SourceLabel,
-      v4Rows,
-      v5Rows,
-      v6Rows,
-      versionEvaluationRows,
-      versionLeaderboard,
-      currentVersionLeaderboard,
-      adaptiveComparisonLeaderboard,
-      bestVersionMetric,
-      bestAdaptiveOverallMetric,
-      bestAdaptiveRecent14Metric,
-      v0Metric,
-      bestAdvancedVersionMetric,
-      featureImportanceRowsV1: featureImportanceRowsV1.map((row) => ({
-        ...row,
-        importanceRatio: importanceSumV1 > 0 ? row.importance / importanceSumV1 : 0
-      })),
-      featureImportanceRowsV2: featureImportanceRowsV2.map((row) => ({
-        ...row,
-        importanceRatio: importanceSumV2 > 0 ? row.importance / importanceSumV2 : 0
-      })),
-      featureImportanceRowsV3: featureImportanceRowsV3.map((row) => ({
-        ...row,
-        importanceRatio: importanceSumV3 > 0 ? row.importance / importanceSumV3 : 0
-      })),
-      featureImportanceRowsV7: featureImportanceRowsV7.map((row) => ({
-        ...row,
-        importanceRatio: importanceSumV7 > 0 ? row.importance / importanceSumV7 : 0
-      })),
-      featureImportanceRowsV8: featureImportanceRowsV8.map((row) => ({
-        ...row,
-        importanceRatio: importanceSumV8 > 0 ? row.importance / importanceSumV8 : 0
-      })),
-      featureImportanceRowsV9: featureImportanceRowsV9.map((row) => ({
-        ...row,
-        importanceRatio: importanceSumV9 > 0 ? row.importance / importanceSumV9 : 0
-      })),
-      leaderboard,
-      championScoreboard,
-      bestMetric,
-      bestBaselineMetric,
-      featureMetricV1,
-      featureMetricV2,
-      featureMetricV3,
-      featureMetricV7,
-      featureMetricV8,
-      featureMetricV9,
-      bestFeatureMetric,
-      improvementVsBaseline: versionImprovementVsBaseline
+        const rawRun = ((runResult.data as OfficialRunRow | null) ?? null) as OfficialRunRow | null;
+        const nextRun = rawRun
+          ? {
+              ...rawRun,
+              id: Number(rawRun.id ?? 0)
+            }
+          : null;
+        const rawPublication = ((publicationResult.data as OfficialPublicationRow | null) ?? null) as OfficialPublicationRow | null;
+        const nextPublication = rawPublication
+          ? {
+              ...rawPublication,
+              id: Number(rawPublication.id ?? 0),
+              run_id: rawPublication.run_id == null ? null : Number(rawPublication.run_id),
+              recommended_prediction_id:
+                rawPublication.recommended_prediction_id == null ? null : Number(rawPublication.recommended_prediction_id),
+              selected_prediction_id: rawPublication.selected_prediction_id == null ? null : Number(rawPublication.selected_prediction_id),
+              recommended_forecast:
+                rawPublication.recommended_forecast == null ? null : Number(rawPublication.recommended_forecast),
+              published_forecast: rawPublication.published_forecast == null ? null : Number(rawPublication.published_forecast)
+            }
+          : null;
+        const nextAlerts = (((alertResult.data as OfficialAlertRow[] | null) ?? []) as OfficialAlertRow[]).map((row) => ({ ...row }));
+        let nextPredictions: OfficialPredictionRow[] = [];
+
+        if (nextRun?.id) {
+          const predictionResult = await officialReadSupabase
+            .from('volume_forecast_predictions')
+            .select(
+              'id,run_id,target_date,cutoff_mode,candidate_scope,candidate_key,candidate_label,forecast_value,training_samples,metrics_json,is_recommended'
+            )
+            .eq('run_id', nextRun.id)
+            .order('candidate_scope', { ascending: true })
+            .order('is_recommended', { ascending: false })
+            .order('candidate_key', { ascending: true });
+          if (cancelled) return;
+          if (predictionResult.error) {
+            if (isAbortLikeError(predictionResult.error)) {
+              setOfficialLoading(false);
+              return;
+            }
+            setOfficialError(String(predictionResult.error.message ?? 'Failed to load official predictions.'));
+            setOfficialRun(nextRun);
+            setOfficialPredictions([]);
+            setOfficialPublication(nextPublication);
+            setOfficialAlerts(nextAlerts);
+            setOfficialLoading(false);
+            return;
+          }
+          nextPredictions = (((predictionResult.data as OfficialPredictionRow[] | null) ?? []) as OfficialPredictionRow[]).map((row) => ({
+            ...row,
+            forecast_value: Number(row.forecast_value ?? 0),
+            training_samples: Number(row.training_samples ?? 0)
+          }));
+        }
+
+        setOfficialRun(nextRun);
+        setOfficialPredictions(nextPredictions);
+        setOfficialPublication(nextPublication);
+        setOfficialAlerts(nextAlerts);
+        const nextSelectedId =
+          nextPublication?.selected_prediction_id != null
+            ? String(nextPublication.selected_prediction_id)
+            : nextPredictions.find((row) => row.is_recommended)?.id != null
+              ? String(nextPredictions.find((row) => row.is_recommended)?.id ?? '')
+              : nextPredictions[0]?.id != null
+                ? String(nextPredictions[0].id)
+                : '';
+        setSelectedPublishPredictionId(nextSelectedId);
+        setManualPublishedForecast(String(nextPublication?.published_forecast ?? nextPublication?.recommended_forecast ?? ''));
+        setManualOverrideReason(String(nextPublication?.override_reason ?? ''));
+        setOfficialLoading(false);
+      } catch (error) {
+        if (cancelled || isAbortLikeError(error)) {
+          setOfficialLoading(false);
+          return;
+        }
+        setOfficialError(String((error as { message?: unknown } | null)?.message ?? 'Failed to load official forecast records.'));
+        setOfficialRun(null);
+        setOfficialPredictions([]);
+        setOfficialPublication(null);
+        setOfficialAlerts([]);
+        setSelectedPublishPredictionId('');
+        setOfficialLoading(false);
+      }
     };
-  }, [forecastTargetDate, historyRangeEnd, historyRangeStart, historyRows, inputRows]);
+
+    void loadOfficialData();
+    return () => {
+      cancelled = true;
+    };
+  }, [forecastTargetDate, officialReadSupabase]);
+
+  const data = useMemo(
+    () =>
+      buildPredictionWorkbenchData({
+        historyRows: deferredHistoryRows,
+        inputRows: deferredInputRows,
+        historyRangeStart: deferredHistoryRangeStart,
+        historyRangeEnd: deferredHistoryRangeEnd,
+        forecastTargetDate: deferredForecastTargetDate
+      }),
+    [deferredForecastTargetDate, deferredHistoryRangeEnd, deferredHistoryRangeStart, deferredHistoryRows, deferredInputRows]
+  );
 
   const panelClass = isLight ? 'border border-slate-200 bg-white shadow-[0_16px_36px_rgba(15,23,42,0.06)]' : 'border border-white/10 bg-black/20';
   const subPanelClass = isLight ? 'border border-slate-200 bg-white/90' : 'border border-white/10 bg-slate-950/30';
@@ -2608,6 +4015,14 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
   const targetForecastValue = data.bestVersionMetric?.targetForecast ?? null;
   const targetDiff =
     data.targetActual !== null && targetForecastValue !== null ? data.targetActual - targetForecastValue : null;
+  const targetHolidayContext = getUSHolidayContext(forecastTargetDate);
+  const holidayWindowValue = targetHolidayContext.isHoliday
+    ? targetHolidayContext.holidayName ?? t('节假日', 'Holiday')
+    : targetHolidayContext.isPreHoliday
+      ? `${t('节前', 'Pre-holiday')} · ${targetHolidayContext.daysToNextHoliday}${t('天', 'd')}`
+      : targetHolidayContext.isPostHoliday
+        ? `${t('节后', 'Post-holiday')} · ${targetHolidayContext.daysFromPrevHoliday}${t('天', 'd')}`
+        : `${t('距下个节假日', 'Next holiday in')} ${targetHolidayContext.daysToNextHoliday}${t('天', 'd')}`;
   const preopenSnapshotItems = [
     {
       label: t('Capacity', 'Capacity'),
@@ -2620,6 +4035,14 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     {
       label: t('大促', 'Major promotion'),
       value: data.targetInput?.major_promotion ? t('是', 'Yes') : t('否', 'No')
+    },
+    {
+      label: t('节假日', 'Holiday'),
+      value: targetHolidayContext.isHoliday ? targetHolidayContext.holidayName ?? t('是', 'Yes') : t('否', 'No')
+    },
+    {
+      label: t('节假日窗口', 'Holiday window'),
+      value: holidayWindowValue
     }
   ];
   const sameDaySnapshotItems = [
@@ -2651,7 +4074,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     return key?.toUpperCase() ?? 'V0';
   };
   const getLeaderboardModelName = (key: VersionKey) => {
-    if (key === 'v0') return `${data.v0SourceLabel} (V0)`;
+    if (key === 'v0') return `${data.regimeSnapshot.regimeLabel} -> ${data.v0SourceLabel} (V0)`;
     if (key === 'v1') return 'Feature Regression V1 (Preopen)';
     if (key === 'v2') return 'Flow + Weather + ITR';
     if (key === 'v3') return 'Stacked Context Model';
@@ -2666,10 +4089,36 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
   const bestVersionLabel = getVersionLabel(data.bestVersionMetric?.key);
   const bestFeatureVersionLabel = data.bestAdvancedVersionMetric ? getVersionLabel(data.bestAdvancedVersionMetric.key) : null;
   const recentRows = data.evaluationRows.slice(-14).reverse();
+  const recentSelectorRows = data.selectorEvaluationRows.slice(-14).reverse();
   const recentV5Rows = data.v5Rows.filter((row) => row.actual !== null).slice(-14).reverse();
+  const modelLeaderboardByKey = new Map(data.leaderboard.map((metric) => [metric.key, metric]));
   const versionMetricsByKey = new Map(data.versionLeaderboard.map((metric) => [metric.key, metric]));
+  const regimeSummaryDisplayRows = (Object.keys(REGIME_LABELS) as RegimeKey[]).map((regimeKey) => {
+    const ranked = rankSelectorCandidateMetrics(data.regimeSummaryRows.filter((row) => row.regimeKey === regimeKey));
+    return { regimeKey, regimeLabel: REGIME_LABELS[regimeKey], best: ranked[0] ?? null };
+  });
+  const baselinePackRows = BASELINE_MODEL_KEYS.map((key) => {
+    const metric = modelLeaderboardByKey.get(key);
+    const targetForecast = metric?.targetForecast ?? null;
+    const promotionOnly = key === 'promotion_regime_baseline';
+    return {
+      key,
+      label: MODEL_LABELS[key],
+      samples: metric?.samples ?? 0,
+      wape: metric?.wape ?? null,
+      targetForecast,
+      variance:
+        data.targetActual !== null && targetForecast !== null && targetForecast > 0
+          ? (data.targetActual - targetForecast) / targetForecast
+          : null,
+      isPoolLeader: key === data.bestBaselineMetric?.key,
+      isSelectedBySelector: key === data.selectorTargetModelKey,
+      promotionOnly,
+      unavailableForTarget: promotionOnly && !data.targetContext.major_promotion
+    };
+  });
   const versionComparisonRows: Array<{ key: VersionKey; label: string; champion: string }> = [
-    { key: 'v0', label: 'V0', champion: data.v0SourceLabel },
+    { key: 'v0', label: 'V0', champion: `${data.regimeSnapshot.regimeLabel} -> ${data.v0SourceLabel}` },
     { key: 'v1', label: 'V1', champion: 'Preopen-safe feature regression' },
     { key: 'v2', label: 'V2', champion: 'Flow + Weather + ITR' },
     { key: 'v3', label: 'V3', champion: 'Stacked Context Model' },
@@ -2702,9 +4151,207 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
     { key: 'v9', label: 'V9', champion: 'Gradient-boosted tree ensemble on V1/V2/V3 + preopen features' }
   ];
   const getAverageDiffHint = (key: VersionKey) => `${t('平均差异', 'Avg diff')} ${formatPercent(versionMetricsByKey.get(key)?.recent14.mape ?? null)}`;
+  const officialVersionPredictions = officialPredictions.filter((row) => row.candidate_scope === 'version');
+  const recommendedOfficialPrediction =
+    officialVersionPredictions.find((row) => row.id === officialPublication?.recommended_prediction_id) ??
+    officialVersionPredictions.find((row) => row.is_recommended) ??
+    officialVersionPredictions[0] ??
+    null;
+  const selectedOfficialPrediction =
+    officialVersionPredictions.find((row) => row.id === officialPublication?.selected_prediction_id) ??
+    recommendedOfficialPrediction;
+  const selectedPublishPrediction =
+    officialVersionPredictions.find((row) => String(row.id) === String(selectedPublishPredictionId)) ??
+    selectedOfficialPrediction ??
+    recommendedOfficialPrediction;
+  const latestOfficialAlert = officialAlerts[0] ?? null;
+  const officialRecommendationReason = String(officialRun?.recommendation_json?.reason ?? 'historical_metrics');
+  const officialRecommendationFeedback =
+    officialRun?.recommendation_json && typeof officialRun.recommendation_json.feedback === 'object' && officialRun.recommendation_json.feedback
+      ? (officialRun.recommendation_json.feedback as Record<string, unknown>)
+      : null;
+  const officialRecommendationReasonLabel =
+    officialRecommendationReason === 'human_feedback_boost'
+      ? t('人工选择反馈加权', 'Human feedback boost')
+      : t('历史指标推荐', 'Historical metrics');
+  const showFullscreenLoading = loading || workbenchRefreshing;
+  const formatTimestamp = (value: string | null | undefined) =>
+    value
+      ? new Date(value).toLocaleString('en-US', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+      : '-';
+  const handlePublishRecommendation = async () => {
+    if (!supabase || !officialRun || !recommendedOfficialPrediction) return;
+    setPublishSaving(true);
+    setOfficialError(null);
+    const nowIso = new Date().toISOString();
+    const res = await supabase.from('volume_forecast_publications').upsert(
+      [
+        {
+          target_date: forecastTargetDate,
+          cutoff_mode: MAIN_LEADERBOARD_CUTOFF,
+          run_id: officialRun.id,
+          recommended_prediction_id: recommendedOfficialPrediction.id,
+          selected_prediction_id: recommendedOfficialPrediction.id,
+          recommended_forecast: recommendedOfficialPrediction.forecast_value,
+          published_forecast: recommendedOfficialPrediction.forecast_value,
+          is_manual_override: false,
+          override_reason: null,
+          published_by: 'admin_console',
+          published_at: nowIso,
+          status: 'published',
+          updated_at: nowIso
+        }
+      ],
+      { onConflict: 'target_date,cutoff_mode' }
+    );
+    if (res.error) {
+      setOfficialError(String(res.error.message ?? 'Failed to publish recommended forecast.'));
+      setPublishSaving(false);
+      return;
+    }
+    setPublishSaving(false);
+    setOfficialPublication((prev) => ({
+      id: Number(prev?.id ?? 0),
+      target_date: forecastTargetDate,
+      cutoff_mode: MAIN_LEADERBOARD_CUTOFF,
+      run_id: officialRun.id,
+      recommended_prediction_id: recommendedOfficialPrediction.id,
+      selected_prediction_id: recommendedOfficialPrediction.id,
+      recommended_forecast: recommendedOfficialPrediction.forecast_value,
+      published_forecast: recommendedOfficialPrediction.forecast_value,
+      is_manual_override: false,
+      override_reason: null,
+      published_by: 'admin_console',
+      published_at: nowIso,
+      status: 'published'
+    }));
+    setSelectedPublishPredictionId(String(recommendedOfficialPrediction.id));
+    setManualPublishedForecast(String(recommendedOfficialPrediction.forecast_value));
+    setManualOverrideReason('');
+  };
+  const handlePublishSelectedVersion = async () => {
+    if (!supabase || !officialRun || !selectedPublishPrediction) return;
+    const isRecommendedSelection = selectedPublishPrediction.id === recommendedOfficialPrediction?.id;
+    const overrideReason = String(manualOverrideReason ?? '').trim();
+    if (!isRecommendedSelection && !overrideReason) {
+      setOfficialError(t('切换到其他推荐模型时必须填写原因。', 'Selecting a different version requires a reason.'));
+      return;
+    }
+    setPublishSaving(true);
+    setOfficialError(null);
+    const nowIso = new Date().toISOString();
+    const res = await supabase.from('volume_forecast_publications').upsert(
+      [
+        {
+          target_date: forecastTargetDate,
+          cutoff_mode: MAIN_LEADERBOARD_CUTOFF,
+          run_id: officialRun.id,
+          recommended_prediction_id: recommendedOfficialPrediction?.id ?? null,
+          selected_prediction_id: selectedPublishPrediction.id,
+          recommended_forecast: recommendedOfficialPrediction?.forecast_value ?? null,
+          published_forecast: selectedPublishPrediction.forecast_value,
+          is_manual_override: !isRecommendedSelection,
+          override_reason: isRecommendedSelection ? null : overrideReason,
+          published_by: 'admin_console',
+          published_at: nowIso,
+          status: 'published',
+          updated_at: nowIso
+        }
+      ],
+      { onConflict: 'target_date,cutoff_mode' }
+    );
+    if (res.error) {
+      setOfficialError(String(res.error.message ?? 'Failed to publish selected version.'));
+      setPublishSaving(false);
+      return;
+    }
+    setPublishSaving(false);
+    setOfficialPublication((prev) => ({
+      id: Number(prev?.id ?? 0),
+      target_date: forecastTargetDate,
+      cutoff_mode: MAIN_LEADERBOARD_CUTOFF,
+      run_id: officialRun.id,
+      recommended_prediction_id: recommendedOfficialPrediction?.id ?? null,
+      selected_prediction_id: selectedPublishPrediction.id,
+      recommended_forecast: recommendedOfficialPrediction?.forecast_value ?? null,
+      published_forecast: selectedPublishPrediction.forecast_value,
+      is_manual_override: !isRecommendedSelection,
+      override_reason: isRecommendedSelection ? null : overrideReason,
+      published_by: 'admin_console',
+      published_at: nowIso,
+      status: 'published'
+    }));
+    setManualPublishedForecast(String(selectedPublishPrediction.forecast_value));
+    if (isRecommendedSelection) setManualOverrideReason('');
+  };
+  const handlePublishManualOverride = async () => {
+    if (!supabase || !officialRun) return;
+    const manualValue = Number(String(manualPublishedForecast ?? '').trim());
+    if (!Number.isFinite(manualValue) || manualValue < 0) {
+      setOfficialError(t('请输入有效的正式预测值。', 'Please enter a valid published forecast.'));
+      return;
+    }
+    const overrideReason = String(manualOverrideReason ?? '').trim();
+    if (!overrideReason) {
+      setOfficialError(t('手工覆盖必须填写原因。', 'Manual override requires a reason.'));
+      return;
+    }
+    setPublishSaving(true);
+    setOfficialError(null);
+    const nowIso = new Date().toISOString();
+    const res = await supabase.from('volume_forecast_publications').upsert(
+      [
+        {
+          target_date: forecastTargetDate,
+          cutoff_mode: MAIN_LEADERBOARD_CUTOFF,
+          run_id: officialRun.id,
+          recommended_prediction_id: recommendedOfficialPrediction?.id ?? null,
+          selected_prediction_id: selectedOfficialPrediction?.id ?? null,
+          recommended_forecast: recommendedOfficialPrediction?.forecast_value ?? null,
+          published_forecast: manualValue,
+          is_manual_override: true,
+          override_reason: overrideReason,
+          published_by: 'admin_console',
+          published_at: nowIso,
+          status: 'published',
+          updated_at: nowIso
+        }
+      ],
+      { onConflict: 'target_date,cutoff_mode' }
+    );
+    if (res.error) {
+      setOfficialError(String(res.error.message ?? 'Failed to save manual override.'));
+      setPublishSaving(false);
+      return;
+    }
+    setPublishSaving(false);
+    setOfficialPublication((prev) => ({
+      id: Number(prev?.id ?? 0),
+      target_date: forecastTargetDate,
+      cutoff_mode: MAIN_LEADERBOARD_CUTOFF,
+      run_id: officialRun.id,
+      recommended_prediction_id: recommendedOfficialPrediction?.id ?? null,
+      selected_prediction_id: selectedOfficialPrediction?.id ?? null,
+      recommended_forecast: recommendedOfficialPrediction?.forecast_value ?? null,
+      published_forecast: manualValue,
+      is_manual_override: true,
+      override_reason: overrideReason,
+      published_by: 'admin_console',
+      published_at: nowIso,
+      status: 'published'
+    }));
+  };
 
   return (
-    <section className="glass reveal rounded-3xl px-6 py-8">
+    <>
+      {showFullscreenLoading ? <PredictionWorkbenchFullscreenLoading t={t} themeMode={themeMode} /> : null}
+      <section className="glass reveal rounded-3xl px-6 py-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -2771,6 +4418,269 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
           <div className="mt-8">
             <div className="flex items-center justify-between gap-3">
               <div>
+                <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('正式闭环', 'Official closed loop')}</div>
+                <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('正式预测发布', 'Official forecast publication')}</div>
+              </div>
+              <div className={['text-sm text-right', mutedClass].join(' ')}>
+                <div>{t('唯一口径', 'Cutoff')}: {cutoffLabel}</div>
+                <div className="mt-1">{t('结果以落库 run/publication 为准', 'Runs and publications are the source of truth')}</div>
+              </div>
+            </div>
+            {officialError ? (
+              <div className={['mt-4 rounded-2xl border px-4 py-3 text-sm', messageClass].join(' ')}>
+                {t('正式闭环加载失败', 'Official closed-loop load failed')}: {officialError}
+              </div>
+            ) : null}
+            <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+              <div className={['rounded-[24px] p-5', subPanelClass].join(' ')}>
+                <div className="grid gap-4 md:grid-cols-3">
+                  <MetricCard
+                    label={t('候选推荐', 'Recommended candidate')}
+                    value={recommendedOfficialPrediction ? formatNumber(recommendedOfficialPrediction.forecast_value) : '-'}
+                    hint={
+                      recommendedOfficialPrediction
+                        ? `${recommendedOfficialPrediction.candidate_label} · ${t('14天WAPE', '14D WAPE')} ${formatPercent(
+                            Number((recommendedOfficialPrediction.metrics_json as any)?.recent14Wape ?? NaN)
+                          )}`
+                        : t('还没有正式 run', 'No official run yet')
+                    }
+                    themeMode={themeMode}
+                  />
+                  <MetricCard
+                    label={t('推荐正式值', 'Recommended official')}
+                    value={officialPublication?.recommended_forecast != null ? formatNumber(officialPublication.recommended_forecast) : '-'}
+                    hint={officialPublication ? `${t('状态', 'Status')}: ${officialPublication.status}` : t('等待官方预测任务', 'Waiting for official run')}
+                    themeMode={themeMode}
+                  />
+                  <MetricCard
+                    label={t('已发布正式值', 'Published official')}
+                    value={officialPublication?.published_forecast != null ? formatNumber(officialPublication.published_forecast) : '-'}
+                    hint={
+                      officialPublication?.published_at
+                        ? `${officialPublication.is_manual_override ? t('人工覆盖', 'Manual override') : t('接受推荐', 'Accepted recommendation')} · ${formatTimestamp(
+                            officialPublication.published_at
+                          )}`
+                        : t('尚未发布', 'Not published yet')
+                    }
+                    themeMode={themeMode}
+                  />
+                </div>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className={tableHeaderClass}>
+                        <th className="rounded-l-2xl px-4 py-3 text-left font-semibold">Version</th>
+                        <th className="px-4 py-3 text-right font-semibold">{t('预测值', 'Forecast')}</th>
+                        <th className="px-4 py-3 text-right font-semibold">{t('样本数', 'Samples')}</th>
+                        <th className="px-4 py-3 text-right font-semibold">{t('1%命中', 'Within 1%')}</th>
+                        <th className="px-4 py-3 text-right font-semibold">{t('3%命中', 'Within 3%')}</th>
+                        <th className="px-4 py-3 text-right font-semibold">14D WAPE</th>
+                        <th className="px-4 py-3 text-right font-semibold">P90 |Var|</th>
+                        <th className="rounded-r-2xl px-4 py-3 text-right font-semibold">{t('最差日', 'Worst day')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {officialVersionPredictions.length === 0 ? (
+                        <tr>
+                          <td className={['px-4 py-4 text-sm', messageClass].join(' ')} colSpan={8}>
+                            {officialLoading ? t('正式 run 加载中...', 'Loading official run...') : t('还没有落库的正式 version 预测。', 'No persisted official version forecasts yet.')}
+                          </td>
+                        </tr>
+                      ) : (
+                        officialVersionPredictions.map((row, index) => {
+                          const metrics = (row.metrics_json ?? {}) as Record<string, unknown>;
+                          const rowClass = [
+                            index < officialVersionPredictions.length - 1 ? 'border-b px-4 py-3' : 'px-4 py-3',
+                            cellClass
+                          ].join(' ');
+                          const isSelected = row.id === selectedPublishPrediction?.id;
+                          return (
+                            <tr key={`official-version-${row.id}`} className={isSelected ? (isLight ? 'bg-sky-50/70' : 'bg-sky-500/10') : undefined}>
+                              <td className={rowClass}>
+                                <div className="font-semibold">{row.candidate_label}</div>
+                                <div className={['mt-1 text-xs', mutedClass].join(' ')}>
+                                  {row.is_recommended ? t('系统推荐', 'System recommendation') : row.id === officialPublication?.selected_prediction_id ? t('当前发布引用', 'Selected for publication') : row.candidate_key}
+                                </div>
+                              </td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatNumber(row.forecast_value)}</td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatNumber(row.training_samples)}</td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatPercent(Number(metrics.within1HitRate ?? NaN))}</td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatPercent(Number(metrics.within3HitRate ?? NaN))}</td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatPercent(Number(metrics.recent14Wape ?? NaN))}</td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatPercent(Number(metrics.p90AbsVariance ?? NaN))}</td>
+                              <td className={[rowClass, 'text-right'].join(' ')}>{formatPercent(Number(metrics.worstAbsVariance ?? NaN))}</td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div className={['rounded-[24px] p-5', subPanelClass].join(' ')}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('发布动作', 'Publication actions')}</div>
+                    <div className={['mt-2 text-lg font-semibold', titleClass].join(' ')}>{t('人工确认或覆盖', 'Accept or override')}</div>
+                  </div>
+                  <div className={['text-xs text-right', mutedClass].join(' ')}>
+                    <div>{t('Run 状态', 'Run status')}: {officialRun?.status ?? '-'}</div>
+                    <div className="mt-1">{t('开始时间', 'Started')}: {formatTimestamp(officialRun?.started_at)}</div>
+                  </div>
+                </div>
+                <div className={['mt-4 rounded-2xl border px-4 py-3 text-sm leading-6', messageClass].join(' ')}>
+                  <div>{t('推荐版本', 'Recommended version')}: {recommendedOfficialPrediction?.candidate_label ?? '-'}</div>
+                  <div>{t('推荐原因', 'Recommendation reason')}: {officialRecommendationReasonLabel}</div>
+                  {officialRecommendationFeedback ? (
+                    <div>
+                      {t('反馈占比', 'Feedback share')}: {formatPercent(Number(officialRecommendationFeedback.selectedShare ?? NaN))} ·
+                      {t('状态', 'Regime')} {String(officialRecommendationFeedback.regimeKey ?? '-')} ·
+                      {t('样本', 'Samples')} {formatNumber(Number(officialRecommendationFeedback.regimeSamples ?? NaN))}
+                    </div>
+                  ) : null}
+                  <div>{t('当前选定版本', 'Selected version')}: {selectedPublishPrediction?.candidate_label ?? '-'}</div>
+                  <div>{t('已发布状态', 'Publication status')}: {officialPublication?.status ?? t('未创建', 'Not created')}</div>
+                  <div>{t('发布人', 'Published by')}: {officialPublication?.published_by ?? '-'}</div>
+                </div>
+                <div className="mt-4 space-y-3">
+                  <label className="block">
+                    <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.18em]', mutedClass].join(' ')}>
+                      {t('采用版本', 'Use version')}
+                    </div>
+                    <select
+                      value={selectedPublishPredictionId}
+                      onChange={(event) => {
+                        const nextId = event.target.value;
+                        setSelectedPublishPredictionId(nextId);
+                        const nextPrediction = officialVersionPredictions.find((row) => String(row.id) === nextId);
+                        if (nextPrediction) {
+                          setManualPublishedForecast(String(nextPrediction.forecast_value));
+                        }
+                      }}
+                      disabled={isLocked || publishSaving || !officialRun || officialVersionPredictions.length === 0}
+                      className={[
+                        'w-full rounded-2xl border px-4 py-3 text-sm outline-none',
+                        isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-slate-950/40 text-white'
+                      ].join(' ')}
+                    >
+                      {officialVersionPredictions.map((row) => (
+                        <option key={`publish-option-${row.id}`} value={String(row.id)}>
+                          {row.candidate_label} · {formatNumber(row.forecast_value)}
+                          {row.id === recommendedOfficialPrediction?.id ? ` · ${t('系统推荐', 'Recommended')}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className={['rounded-2xl border px-4 py-3 text-sm', messageClass].join(' ')}>
+                    {selectedPublishPrediction ? (
+                      <>
+                        <div>{t('选定版本预测值', 'Selected version forecast')}: {formatNumber(selectedPublishPrediction.forecast_value)}</div>
+                        <div>
+                          14D WAPE: {formatPercent(Number((selectedPublishPrediction.metrics_json as any)?.recent14Wape ?? NaN))}
+                        </div>
+                      </>
+                    ) : (
+                      <div>{t('暂无可用版本候选。', 'No available version candidates.')}</div>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    className={[
+                      'rounded-full px-4 py-2 text-sm font-semibold',
+                      isLight ? 'bg-slate-900 text-white disabled:bg-slate-300' : 'bg-white text-slate-900 disabled:bg-white/30'
+                    ].join(' ')}
+                    disabled={isLocked || publishSaving || !recommendedOfficialPrediction}
+                    onClick={() => void handlePublishRecommendation()}
+                  >
+                    {publishSaving ? t('保存中...', 'Saving...') : t('接受推荐', 'Accept recommendation')}
+                  </button>
+                  <button
+                    type="button"
+                    className={[
+                      'rounded-full px-4 py-2 text-sm font-semibold',
+                      isLight ? 'border border-slate-300 text-slate-900 disabled:text-slate-400' : 'border border-white/20 text-white disabled:text-white/40'
+                    ].join(' ')}
+                    disabled={isLocked || publishSaving || !officialRun || !selectedPublishPrediction}
+                    onClick={() => void handlePublishSelectedVersion()}
+                  >
+                    {t('发布选定版本', 'Publish selected version')}
+                  </button>
+                </div>
+                <div className="mt-4 space-y-3">
+                  <label className="block">
+                    <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.18em]', mutedClass].join(' ')}>{t('正式预测值', 'Published forecast')}</div>
+                    <input
+                      value={manualPublishedForecast}
+                      onChange={(event) => setManualPublishedForecast(event.target.value)}
+                      disabled={isLocked || publishSaving || !officialRun}
+                      className={[
+                        'w-full rounded-2xl border px-4 py-3 text-sm outline-none',
+                        isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-slate-950/40 text-white'
+                      ].join(' ')}
+                      placeholder="0"
+                    />
+                  </label>
+                  <label className="block">
+                    <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.18em]', mutedClass].join(' ')}>{t('覆盖原因', 'Override reason')}</div>
+                    <textarea
+                      value={manualOverrideReason}
+                      onChange={(event) => setManualOverrideReason(event.target.value)}
+                      disabled={isLocked || publishSaving || !officialRun}
+                      rows={3}
+                      className={[
+                        'w-full rounded-2xl border px-4 py-3 text-sm outline-none',
+                        isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-slate-950/40 text-white'
+                      ].join(' ')}
+                      placeholder={t('例如：结合临时业务判断上调/下调。', 'For example: adjusted up/down based on operator judgment.')}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className={[
+                      'rounded-full px-4 py-2 text-sm font-semibold',
+                      isLight ? 'border border-slate-300 text-slate-900 disabled:text-slate-400' : 'border border-white/20 text-white disabled:text-white/40'
+                    ].join(' ')}
+                    disabled={isLocked || publishSaving || !officialRun}
+                    onClick={() => void handlePublishManualOverride()}
+                  >
+                    {t('手工覆盖正式值', 'Save manual override')}
+                  </button>
+                </div>
+                <div className="mt-5">
+                  <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('告警', 'Alerts')}</div>
+                  <div className="mt-3 space-y-2">
+                    {officialAlerts.length === 0 ? (
+                      <div className={['rounded-2xl border px-4 py-3 text-sm', messageClass].join(' ')}>
+                        {t('最近14天没有落库告警。', 'No persisted alerts in the last 14 days.')}
+                      </div>
+                    ) : (
+                      officialAlerts.slice(0, 5).map((alert) => (
+                        <div key={`official-alert-${alert.id}`} className={['rounded-2xl border px-4 py-3 text-sm', messageClass].join(' ')}>
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="font-semibold">{alert.alert_type}</div>
+                            <div className={mutedClass}>{alert.alert_date}</div>
+                          </div>
+                          <div className={['mt-1 text-xs', mutedClass].join(' ')}>
+                            {t('严重级别', 'Severity')}: {alert.severity} · {t('状态', 'Status')}: {alert.status}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+                {latestOfficialAlert ? (
+                  <div className={['mt-4 rounded-2xl border px-4 py-3 text-sm', messageClass].join(' ')}>
+                    {t('最新告警', 'Latest alert')}: {latestOfficialAlert.alert_type}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+          <div className="mt-8">
+            <div className="flex items-center justify-between gap-3">
+              <div>
                 <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('冠军榜', 'Champion board')}</div>
                 <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('历史日冠军积分', 'Historical daily winners')}</div>
               </div>
@@ -2822,9 +4732,112 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
           <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('当前版本', 'Current versions')}</div>
           <div className="mt-4 grid gap-3">
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
+              <div className={['text-sm font-semibold', titleClass].join(' ')}>V0 Selector</div>
+              <div className={['mt-2 text-sm', mutedClass].join(' ')}>
+                {`${data.regimeSnapshot.regimeLabel} · ${formatPercent(data.regimeSnapshot.confidence)} confidence · ${data.selectorTargetModelLabel}`}
+              </div>
+              <div className="mt-3 grid gap-2">
+                <div className={['rounded-2xl px-4 py-3', isLight ? 'bg-slate-50' : 'bg-white/5'].join(' ')}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className={['text-xs uppercase tracking-[0.18em]', mutedClass].join(' ')}>{t('识别状态', 'Detected regime')}</div>
+                      <div className={['mt-1 text-sm font-semibold', titleClass].join(' ')}>{data.regimeSnapshot.regimeLabel}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className={['text-xs uppercase tracking-[0.18em]', mutedClass].join(' ')}>{t('最终选择', 'Selected model')}</div>
+                      <div className={['mt-1 text-sm font-semibold', titleClass].join(' ')}>{data.selectorTargetModelLabel}</div>
+                    </div>
+                  </div>
+                  <div className={['mt-2 text-xs leading-5', mutedClass].join(' ')}>{data.regimeSnapshot.signals.join(' · ')}</div>
+                  {data.selectorTargetFallbackReason ? (
+                    <div className={['mt-2 text-[11px] uppercase tracking-[0.18em]', mutedClass].join(' ')}>
+                      {t('兜底原因', 'Fallback reason')}: {data.selectorTargetFallbackReason}
+                    </div>
+                  ) : null}
+                </div>
+                {data.selectorCandidateMetrics.map((metric) => (
+                  <div
+                    key={`selector-candidate-${metric.modelKey}`}
+                    className={[
+                      'rounded-2xl border px-4 py-3',
+                      metric.modelKey === data.selectorTargetModelKey
+                        ? isLight
+                          ? 'border-sky-200 bg-sky-50/80'
+                          : 'border-sky-400/20 bg-sky-500/10'
+                        : isLight
+                          ? 'border-slate-200 bg-slate-50/70'
+                          : 'border-white/10 bg-white/5'
+                    ].join(' ')}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className={['text-sm font-semibold', titleClass].join(' ')}>{metric.label}</div>
+                        <div className={['mt-1 text-xs', mutedClass].join(' ')}>
+                          {t('样本', 'Samples')}: {formatNumber(metric.samples)} · 14D WAPE: {formatPercent(metric.recent14.wape)}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className={['text-sm font-semibold', titleClass].join(' ')}>{formatNumber(metric.targetForecast)}</div>
+                        <div className={['mt-1 text-xs', mutedClass].join(' ')}>
+                          3% {t('命中', 'hit')}: {formatPercent(metric.within3HitRate)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
               <div className={['text-sm font-semibold', titleClass].join(' ')}>V0 Baseline Pack</div>
               <div className={['mt-2 text-sm', mutedClass].join(' ')}>
-                {data.bestBaselineMetric ? `${data.v0SourceLabel} champion - ${getAverageDiffHint('v0')}` : t('样本不足', 'Not enough samples')}
+                {data.bestBaselineMetric ? `${data.bestBaselineMetric.label} ${t('全窗口最强', 'best overall in pool')} · ${getAverageDiffHint('v0')}` : t('样本不足', 'Not enough samples')}
+              </div>
+              <div className="mt-4 space-y-2">
+                {baselinePackRows.map((row) => (
+                  <div
+                    key={`baseline-pack-${row.key}`}
+                    className={[
+                      'rounded-2xl border px-4 py-3',
+                      row.isSelectedBySelector
+                        ? isLight
+                          ? 'border-sky-200 bg-sky-50/80'
+                          : 'border-sky-400/20 bg-sky-500/10'
+                        : isLight
+                          ? 'border-slate-200 bg-slate-50/70'
+                          : 'border-white/10 bg-white/5'
+                    ].join(' ')}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className={['truncate text-sm font-semibold', titleClass].join(' ')}>{row.label}</div>
+                        <div className={['mt-1 text-xs', mutedClass].join(' ')}>
+                          {t('样本', 'Samples')}: {formatNumber(row.samples)} · WAPE: {formatPercent(row.wape)}
+                        </div>
+                        {row.unavailableForTarget ? (
+                          <div className={['mt-1 text-[11px] uppercase tracking-[0.18em]', mutedClass].join(' ')}>
+                            {t('仅大促日启用', 'Promotion-only model')}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="text-right">
+                        <div className={['text-sm font-semibold', titleClass].join(' ')}>{formatNumber(row.targetForecast)}</div>
+                        <div className={['mt-1 text-xs', mutedClass].join(' ')}>
+                          {t('差异', 'Variance')}: {formatPercent(row.variance)}
+                        </div>
+                      </div>
+                    </div>
+                    {row.isSelectedBySelector ? (
+                      <div className={['mt-2 text-xs font-semibold uppercase tracking-[0.18em]', mutedClass].join(' ')}>
+                        {t('今日 selector 选中', 'Selected by today selector')}
+                      </div>
+                    ) : null}
+                    {row.isPoolLeader ? (
+                      <div className={['mt-2 text-xs font-semibold uppercase tracking-[0.18em]', mutedClass].join(' ')}>
+                        {t('基线池全窗口最强', 'Best overall in baseline pool')}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
               </div>
             </div>
             <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
@@ -2953,11 +4966,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         </div>
       ) : null}
 
-      {loading ? (
-        <div className={['mt-6 rounded-[28px] border px-5 py-10 text-center text-sm', messageClass].join(' ')}>
-          {t('正在加载模型工作台...', 'Loading model workbench...')}
-        </div>
-      ) : (
+      {loading ? null : (
         <>
           <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
             <div className={['rounded-[28px] p-5', panelClass].join(' ')}>
@@ -3127,14 +5136,14 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
               </p>
               <p className={['mt-2 text-sm leading-6', mutedClass].join(' ')}>
                 {t(
-                  'V8 是明日预测模型，只使用预测明天时已经知道的历史统计、产能、恶劣天气、大促与日历特征，不依赖明日 backlog / inventory / 00-14。',
-                  'V8 is the tomorrow-ready model. It only uses history summaries, capacity, severe weather, promotion, and calendar signals already known before tomorrow, without relying on tomorrow backlog / inventory / 00-14.'
+                  'V8 是明日预测模型，只使用预测明天时已经知道的历史统计、产能、恶劣天气、大促、节假日与日历特征，不依赖明日 backlog / inventory / 00-14。',
+                  'V8 is the tomorrow-ready model. It only uses history summaries, capacity, severe weather, promotion, holiday, and calendar signals already known before tomorrow, without relying on tomorrow backlog / inventory / 00-14.'
                 )}
               </p>
               <p className={['mt-2 text-sm leading-6', mutedClass].join(' ')}>
                 {t(
-                  'V9 是前端内训练的轻量 XGBoost 回归树集成，基于 V1 / V2 / V3 预测和开盘前可知特征做非线性拟合。',
-                  'V9 is a browser-trained lightweight XGBoost regressor that fits non-linear interactions on top of V1 / V2 / V3 forecasts and preopen-safe features.'
+                  'V9 是前端内训练的轻量 XGBoost 回归树集成，基于 V1 / V2 / V3 预测和开盘前可知的容量、天气、大促、节假日等特征做非线性拟合。',
+                  'V9 is a browser-trained lightweight XGBoost regressor that fits non-linear interactions on top of V1 / V2 / V3 forecasts and preopen-safe capacity, weather, promotion, and holiday features.'
                 )}
               </p>
               <div className="mt-4 space-y-4">
@@ -3345,6 +5354,83 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
             </div>
           </div>
 
+          <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+            <div className={['rounded-[28px] p-5', panelClass].join(' ')}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('状态汇总', 'Regime summary')}</div>
+                  <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('各状态最强基线', 'Best baseline by regime')}</div>
+                </div>
+              </div>
+              <div className="mt-4 overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className={tableHeaderClass}>
+                      <th className="rounded-l-2xl px-4 py-3 text-left font-semibold">{t('状态', 'Regime')}</th>
+                      <th className="px-4 py-3 text-left font-semibold">{t('最佳模型', 'Best model')}</th>
+                      <th className="px-4 py-3 text-right font-semibold">{t('样本数', 'Samples')}</th>
+                      <th className="px-4 py-3 text-right font-semibold">14D WAPE</th>
+                      <th className="px-4 py-3 text-right font-semibold">Within 3%</th>
+                      <th className="rounded-r-2xl px-4 py-3 text-right font-semibold">P90 |Var|</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {regimeSummaryDisplayRows.map((row) => (
+                      <tr key={`regime-summary-${row.regimeKey}`}>
+                        <td className={['border-b px-4 py-3 font-semibold', cellClass].join(' ')}>{row.regimeLabel}</td>
+                        <td className={['border-b px-4 py-3', cellClass].join(' ')}>{row.best?.label ?? '-'}</td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.best?.samples ?? null)}</td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatPercent(row.best?.recent14.wape ?? null)}</td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatPercent(row.best?.within3HitRate ?? null)}</td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatPercent(row.best?.p90AbsVariance ?? null)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className={['rounded-[28px] p-5', panelClass].join(' ')}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className={['text-[11px] uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('选择器回测', 'Selector backtest')}</div>
+                  <div className={['mt-2 text-xl font-semibold', titleClass].join(' ')}>{t('最近14天选择明细', 'Recent 14-day selector rows')}</div>
+                </div>
+              </div>
+              <div className="mt-4 overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className={tableHeaderClass}>
+                      <th className="rounded-l-2xl px-4 py-3 text-left font-semibold">{t('日期', 'Date')}</th>
+                      <th className="px-4 py-3 text-left font-semibold">{t('状态', 'Regime')}</th>
+                      <th className="px-4 py-3 text-left font-semibold">{t('选中模型', 'Selected')}</th>
+                      <th className="px-4 py-3 text-right font-semibold">{t('实际', 'Actual')}</th>
+                      <th className="px-4 py-3 text-right font-semibold">{t('预测', 'Forecast')}</th>
+                      <th className="px-4 py-3 text-right font-semibold">{t('差异值', 'Diff')}</th>
+                      <th className="rounded-r-2xl px-4 py-3 text-right font-semibold">{t('差异比', 'Variance %')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentSelectorRows.map((row) => (
+                      <tr key={`selector-row-${row.date}`}>
+                        <td className={['border-b px-4 py-3', cellClass].join(' ')}>{row.date}</td>
+                        <td className={['border-b px-4 py-3', cellClass].join(' ')}>{row.regimeLabel}</td>
+                        <td className={['border-b px-4 py-3', cellClass].join(' ')}>
+                          <div className="font-semibold">{row.selectedModelLabel}</div>
+                          {row.fallbackReason ? <div className={['mt-1 text-xs', mutedClass].join(' ')}>{row.fallbackReason}</div> : null}
+                        </td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.actual)}</td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.selectedForecast)}</td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatSignedNumber(row.diff)}</td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatPercent(row.variance)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
           <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
             <div className={['rounded-[28px] p-5', panelClass].join(' ')}>
               <div className="flex items-center justify-between gap-3">
@@ -3357,37 +5443,49 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                     <tr className={tableHeaderClass}>
                       <th className="rounded-l-2xl px-4 py-3 text-left font-semibold">{t('日期', 'Date')}</th>
                       <th className="px-4 py-3 text-left font-semibold">{t('星期', 'Weekday')}</th>
+                      <th className="px-4 py-3 text-left font-semibold">{t('状态', 'Regime')}</th>
                       <th className="px-4 py-3 text-right font-semibold">{t('实际', 'Actual')}</th>
                       <th className="px-4 py-3 text-right font-semibold">SWM</th>
                       <th className="px-4 py-3 text-right font-semibold">7D</th>
                       <th className="px-4 py-3 text-right font-semibold">Blend</th>
+                      <th className="px-4 py-3 text-right font-semibold">ITR Share</th>
+                      <th className="px-4 py-3 text-right font-semibold">Promo</th>
                       <th className="px-4 py-3 text-right font-semibold">V1</th>
                       <th className="px-4 py-3 text-right font-semibold">V2</th>
                       <th className="px-4 py-3 text-right font-semibold">V3</th>
                       <th className="px-4 py-3 text-right font-semibold">V7</th>
                       <th className="px-4 py-3 text-right font-semibold">V8</th>
                       <th className="px-4 py-3 text-right font-semibold">V9</th>
+                      <th className="px-4 py-3 text-left font-semibold">{t('Selector', 'Selector')}</th>
+                      <th className="px-4 py-3 text-left font-semibold">{t('兜底', 'Fallback')}</th>
                       <th className="rounded-r-2xl px-4 py-3 text-left font-semibold">{t('最佳', 'Best')}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {recentRows.map((row) => (
+                    {recentRows.map((row) => {
+                      const selectorRow = data.selectorEvaluationRows.find((item) => item.date === row.date);
+                      return (
                       <tr key={row.date}>
                         <td className={['border-b px-4 py-3', cellClass].join(' ')}>{row.date}</td>
                         <td className={['border-b px-4 py-3', cellClass].join(' ')}>{row.weekday}</td>
+                        <td className={['border-b px-4 py-3', cellClass].join(' ')}>{selectorRow?.regimeLabel ?? '-'}</td>
                         <td className={['border-b px-4 py-3 text-right font-semibold', cellClass].join(' ')}>{formatNumber(row.actual)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.same_weekday_median)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.rolling_mean_7)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.trend_blend)}</td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.weekly_itr_share_baseline)}</td>
+                        <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.promotion_regime_baseline)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v1)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v2)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v3)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v7)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_regression_v8)}</td>
                         <td className={['border-b px-4 py-3 text-right', cellClass].join(' ')}>{formatNumber(row.forecasts.feature_xgboost_v9)}</td>
+                        <td className={['border-b px-4 py-3', cellClass].join(' ')}>{selectorRow?.selectedModelLabel ?? '-'}</td>
+                        <td className={['border-b px-4 py-3', cellClass].join(' ')}>{selectorRow?.fallbackReason ?? '-'}</td>
                         <td className={['border-b px-4 py-3', cellClass].join(' ')}>{row.bestModel}</td>
                       </tr>
-                    ))}
+                    )})}
                   </tbody>
                 </table>
               </div>
@@ -3398,7 +5496,20 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
               <div className="mt-4 space-y-3">
                 {[
                   t('主榜统一按明日开盘前口径评估。', 'Main leaderboard uses the tomorrow-preopen cutoff.'),
+                  t(
+                    'V0 现已改成两阶段选择器：先识别 stable / transition_up / transition_down / promotion，再在该状态的基线候选池里选当天模型。',
+                    'V0 now uses a two-stage selector: detect stable / transition_up / transition_down / promotion first, then choose from the regime-scoped baseline pool.'
+                  ),
                   t('V1 已改成开盘前安全版，不再使用目标日 backlog / inventory / 00-14。', 'V1 has been redefined as preopen-safe and no longer uses target-day backlog / inventory / 00-14.'),
+                  t(
+                    'V0 基线包新增 Weekly ITR Share Baseline，使用上一完整日库存、最近稳健 ITR 和完整历史周内 weekday share，并带异常降权保护。',
+                    'V0 now includes a Weekly ITR Share Baseline built from the previous complete inventory, robust recent ITR, and full-week weekday shares with anomaly downweighting.'
+                  ),
+                  t(
+                    'Promotion Regime Baseline 仅在目标日标记为大促时启用，使用历史大促 ITR 和大促周 weekday share 估算，不参与普通日 V0 冠军选择。',
+                    'Promotion Regime Baseline only activates on promotion-labeled target days, using historical promotion ITR and promotion-week weekday shares. It does not participate in ordinary-day V0 champion selection.'
+                  ),
+                  t('美国节假日与 observed holiday 会按日期自动识别，不需要人工录入。', 'US holidays and observed holidays are detected automatically from the date, with no manual input required.'),
                   t('只使用预测时点已经知道的数据。', 'Use only data known at prediction time.'),
                   t('12点累计量会导致 next-day 泄漏，所以只展示不训练。', '12:00 cumulative would leak next-day information, so it is displayed only and excluded from training.'),
                   t('Backlog / Inventory / Yesterday 00-14 属于同日字段，只展示，不参与公平榜。', 'Backlog / Inventory / Yesterday 00-14 are same-day fields. They are shown for reference only and excluded from the fair leaderboard.'),
@@ -3414,6 +5525,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
           </div>
         </>
       )}
-    </section>
+      </section>
+    </>
   );
 }
