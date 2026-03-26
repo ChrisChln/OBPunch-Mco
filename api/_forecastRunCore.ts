@@ -1,4 +1,4 @@
-import { buildPredictionWorkbenchData, MAIN_LEADERBOARD_CUTOFF } from '../src/admin/pages/PredictionModelPage.tsx';
+import { buildPredictionWorkbenchData, MAIN_LEADERBOARD_CUTOFF } from '../src/admin/forecasting/predictionWorkbenchShared';
 import { DEFAULT_CODE_VERSION, addDaysDateOnly, readEnabledModels } from './_forecastShared';
 
 type RunType = 'official' | 'manual' | 'backfill';
