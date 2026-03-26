@@ -139,7 +139,8 @@ const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | 
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
-const DEVICE_LOANS_FETCH_LIMIT = 50000;
+const DEVICE_LOANS_FETCH_LIMIT = 500; // Paginated fetch: 500 records per page
+const DEVICE_LOANS_LOOKBACK_DAYS = 30; // Only fetch loans from last 30 days
 const TEMP_ACCOUNT_TABLE = (import.meta.env.VITE_TEMP_ACCOUNT_TABLE as string | undefined) ?? 'ob_temp_accounts';
 const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
   (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
@@ -1249,6 +1250,8 @@ export default function AdminAppPage() {
   const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [deviceLoans, setDeviceLoans] = useState<DeviceLoanRow[]>([]);
+  const [_deviceLoansPage, setDeviceLoansPage] = useState(0);
+  const [_deviceLoansHasMore, setDeviceLoansHasMore] = useState(true);
   const [deviceSearch, setDeviceSearch] = useState('');
   const [deviceFilterPosition, setDeviceFilterPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [deviceFilterType, setDeviceFilterType] = useState<DeviceType | ''>('');
@@ -2776,23 +2779,41 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     }
   };
 
-  const fetchDeviceLoans = async ({ lockUi = true }: { lockUi?: boolean } = {}) => {
+  const fetchDeviceLoans = async ({ lockUi = true, pageNumber = 0, isLoadMore = false }: { lockUi?: boolean; pageNumber?: number; isLoadMore?: boolean } = {}) => {
     if (!supabase) {
       setDeviceLoans([]);
       return;
     }
     const exec = async () => {
+      // Calculate date range (last 30 days)
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - DEVICE_LOANS_LOOKBACK_DAYS);
+      const dateStr = thirtyDaysAgo.toISOString();
+      
+      const offset = pageNumber * DEVICE_LOANS_FETCH_LIMIT;
       const res = await supabase
         .from(DEVICE_LOANS_TABLE)
         .select('id, created_at, operator, staff_id, device_sn, action, note')
+        .gte('created_at', dateStr) // Only fetch loans from last 30 days
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
-        .limit(DEVICE_LOANS_FETCH_LIMIT);
+        .range(offset, offset + DEVICE_LOANS_FETCH_LIMIT - 1); // Pagination with range
       if (res.error) {
-        setDeviceLoans([]);
+        setDeviceLoans(isLoadMore ? deviceLoans : []);
+        setDeviceLoansHasMore(false);
         return;
       }
-      setDeviceLoans(((res.data as any[]) ?? []) as DeviceLoanRow[]);
+      
+      const data = ((res.data as any[]) ?? []) as DeviceLoanRow[];
+      const hasMore = (data ?? []).length >= DEVICE_LOANS_FETCH_LIMIT;
+      
+      if (isLoadMore) {
+        setDeviceLoans([...deviceLoans, ...data]);
+      } else {
+        setDeviceLoans(data);
+      }
+      setDeviceLoansPage(pageNumber);
+      setDeviceLoansHasMore(hasMore);
     };
     if (lockUi) {
       await runLocked('device_loans', exec);
@@ -2804,13 +2825,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const refreshDevicePanel = async ({ lockUi = true }: { lockUi?: boolean } = {}) => {
     if (lockUi) {
       await runLocked('devices_refresh', async () => {
+        setDeviceLoansPage(0); // Reset pagination
+        setDeviceLoansHasMore(true);
         await fetchDevices({ lockUi: false });
-        await fetchDeviceLoans({ lockUi: false });
+        await fetchDeviceLoans({ lockUi: false, pageNumber: 0 });
       });
       return;
     }
+    setDeviceLoansPage(0); // Reset pagination
+    setDeviceLoansHasMore(true);
     await fetchDevices({ lockUi: false });
-    await fetchDeviceLoans({ lockUi: false });
+    await fetchDeviceLoans({ lockUi: false, pageNumber: 0 });
   };
 
   const onDeviceFileSelected = async (file: File | null) => {
@@ -10357,14 +10382,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     [employees, employeeEditPosition]
   );
 
-  const employeesFiltered = useMemo(() => {
+  // Step 1: Prepare filter needles (only depends on filter strings)
+  const employeeFilterNeedles = useMemo(() => {
+    return {
+      search: deferredEmployeeSearch.trim().toLowerCase(),
+      agency: employeeAgency.trim().toLowerCase(),
+      position: employeePosition.trim().toLowerCase(),
+      shift: employeeShiftFilter,
+      labels: employeeLabels.map((item) => item.trim().toLowerCase()).filter(Boolean)
+    };
+  }, [deferredEmployeeSearch, employeeAgency, employeePosition, employeeShiftFilter, employeeLabels]);
+
+  // Step 2: Filter employees (depends on employee data + filter needles)
+  const employeesAfterFilter = useMemo(() => {
     if (page !== 'employees') return [];
-    const searchNeedle = deferredEmployeeSearch.trim().toLowerCase();
-    const agencyNeedle = employeeAgency.trim().toLowerCase();
-    const positionNeedle = employeePosition.trim().toLowerCase();
-    const shiftNeedle = employeeShiftFilter;
-    const labelNeedles = employeeLabels.map((item) => item.trim().toLowerCase()).filter(Boolean);
-    const rows = employees.filter((e) => {
+    const { search: searchNeedle, agency: agencyNeedle, position: positionNeedle, shift: shiftNeedle, labels: labelNeedles } = employeeFilterNeedles;
+    return employees.filter((e) => {
       const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
       const name = String(e.name ?? '').trim();
       const agency = String(e.agency ?? e.Agency ?? '').trim();
@@ -10384,20 +10417,26 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (!searchNeedle) return true;
       return [staff, name, label, workAccount].join(' ').toLowerCase().includes(searchNeedle);
     });
-    if (employeeSortByHireDateDesc) {
-      return [...rows].sort((a, b) => {
-        const atA = Date.parse(String(a.created_at ?? ''));
-        const atB = Date.parse(String(b.created_at ?? ''));
-        const valA = Number.isFinite(atA) ? atA : -1;
-        const valB = Number.isFinite(atB) ? atB : -1;
-        if (valA !== valB) return valB - valA;
-        const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
-        const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
-        return staffA.localeCompare(staffB, 'en-US');
-      });
-    }
-    if (!employeeSortByLastPunchDesc) return rows;
+  }, [page, employees, employeeFilterNeedles, employeeShiftByStaffId]);
 
+  // Step 3: Apply hire date sorting (optional, depends on filtered rows + sort flag)
+  const employeesAfterHireDateSort = useMemo(() => {
+    if (!employeeSortByHireDateDesc) return employeesAfterFilter;
+    return [...employeesAfterFilter].sort((a, b) => {
+      const atA = Date.parse(String(a.created_at ?? ''));
+      const atB = Date.parse(String(b.created_at ?? ''));
+      const valA = Number.isFinite(atA) ? atA : -1;
+      const valB = Number.isFinite(atB) ? atB : -1;
+      if (valA !== valB) return valB - valA;
+      const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
+      const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
+      return staffA.localeCompare(staffB, 'en-US');
+    });
+  }, [employeesAfterFilter, employeeSortByHireDateDesc]);
+
+  // Step 4: Apply punch time sorting (optional, depends on hire-date sorted rows + sort flag)
+  const employeesFiltered = useMemo(() => {
+    if (!employeeSortByLastPunchDesc) return employeesAfterHireDateSort;
     const dayMs = 24 * 60 * 60 * 1000;
     const nowMs = serverTime.getTime();
     const daysAgoForStaff = (staff: string) => {
@@ -10407,8 +10446,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (Number.isNaN(dt.getTime())) return null;
       return Math.max(0, Math.floor((nowMs - dt.getTime()) / dayMs));
     };
-
-    return [...rows].sort((a, b) => {
+    return [...employeesAfterHireDateSort].sort((a, b) => {
       const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
       const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
       const daysA = daysAgoForStaff(staffA);
@@ -10418,20 +10456,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (valA !== valB) return valB - valA;
       return staffA.localeCompare(staffB, 'en-US');
     });
-  }, [
-    page,
-    employees,
-    deferredEmployeeSearch,
-    employeeAgency,
-    employeePosition,
-    employeeShiftFilter,
-    employeeLabels,
-    employeeSortByHireDateDesc,
-    employeeSortByLastPunchDesc,
-    employeeLastPunchAtByStaffId,
-    serverTime,
-    employeeShiftByStaffId
-  ]);
+  }, [employeesAfterHireDateSort, employeeSortByLastPunchDesc, employeeLastPunchAtByStaffId, serverTime]);
   const accountRowsAll = useMemo(() => {
     const tempRows = tempAccounts.map((row) => ({
       staff: normalizeStaffId(String(row.staff_id ?? '').trim()),
@@ -13753,7 +13778,7 @@ ${rowsToHtml(late)}
                           ? 'border border-slate-300 bg-white/95 shadow-[0_18px_40px_rgba(15,23,42,0.18)]'
                           : 'border border-white/10 bg-slate-950/95'
                       ].join(' ')}
-                      style={{ left: `${schedulePicker.anchorLeft}px`, top: `${schedulePicker.anchorTop}px` }}
+                      style={{ '--picker-left': `${schedulePicker.anchorLeft}px`, '--picker-top': `${schedulePicker.anchorTop}px`, left: 'var(--picker-left)', top: 'var(--picker-top)' } as React.CSSProperties}
                     >
                       {schedulePickerOptions.map((item) => (
                         <button
