@@ -3775,6 +3775,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
   const [officialPublication, setOfficialPublication] = useState<OfficialPublicationRow | null>(null);
   const [officialAlerts, setOfficialAlerts] = useState<OfficialAlertRow[]>([]);
   const [publishSaving, setPublishSaving] = useState(false);
+  const [selectedPublishPredictionId, setSelectedPublishPredictionId] = useState('');
   const [manualPublishedForecast, setManualPublishedForecast] = useState('');
   const [manualOverrideReason, setManualOverrideReason] = useState('');
   const deferredHistoryRows = useDeferredValue(historyRows);
@@ -3956,6 +3957,15 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         setOfficialPredictions(nextPredictions);
         setOfficialPublication(nextPublication);
         setOfficialAlerts(nextAlerts);
+        const nextSelectedId =
+          nextPublication?.selected_prediction_id != null
+            ? String(nextPublication.selected_prediction_id)
+            : nextPredictions.find((row) => row.is_recommended)?.id != null
+              ? String(nextPredictions.find((row) => row.is_recommended)?.id ?? '')
+              : nextPredictions[0]?.id != null
+                ? String(nextPredictions[0].id)
+                : '';
+        setSelectedPublishPredictionId(nextSelectedId);
         setManualPublishedForecast(String(nextPublication?.published_forecast ?? nextPublication?.recommended_forecast ?? ''));
         setManualOverrideReason(String(nextPublication?.override_reason ?? ''));
         setOfficialLoading(false);
@@ -3969,6 +3979,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
         setOfficialPredictions([]);
         setOfficialPublication(null);
         setOfficialAlerts([]);
+        setSelectedPublishPredictionId('');
         setOfficialLoading(false);
       }
     };
@@ -4149,7 +4160,20 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
   const selectedOfficialPrediction =
     officialVersionPredictions.find((row) => row.id === officialPublication?.selected_prediction_id) ??
     recommendedOfficialPrediction;
+  const selectedPublishPrediction =
+    officialVersionPredictions.find((row) => String(row.id) === String(selectedPublishPredictionId)) ??
+    selectedOfficialPrediction ??
+    recommendedOfficialPrediction;
   const latestOfficialAlert = officialAlerts[0] ?? null;
+  const officialRecommendationReason = String(officialRun?.recommendation_json?.reason ?? 'historical_metrics');
+  const officialRecommendationFeedback =
+    officialRun?.recommendation_json && typeof officialRun.recommendation_json.feedback === 'object' && officialRun.recommendation_json.feedback
+      ? (officialRun.recommendation_json.feedback as Record<string, unknown>)
+      : null;
+  const officialRecommendationReasonLabel =
+    officialRecommendationReason === 'human_feedback_boost'
+      ? t('人工选择反馈加权', 'Human feedback boost')
+      : t('历史指标推荐', 'Historical metrics');
   const showFullscreenLoading = loading || workbenchRefreshing;
   const formatTimestamp = (value: string | null | undefined) =>
     value
@@ -4207,6 +4231,64 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
       published_at: nowIso,
       status: 'published'
     }));
+    setSelectedPublishPredictionId(String(recommendedOfficialPrediction.id));
+    setManualPublishedForecast(String(recommendedOfficialPrediction.forecast_value));
+    setManualOverrideReason('');
+  };
+  const handlePublishSelectedVersion = async () => {
+    if (!supabase || !officialRun || !selectedPublishPrediction) return;
+    const isRecommendedSelection = selectedPublishPrediction.id === recommendedOfficialPrediction?.id;
+    const overrideReason = String(manualOverrideReason ?? '').trim();
+    if (!isRecommendedSelection && !overrideReason) {
+      setOfficialError(t('切换到其他推荐模型时必须填写原因。', 'Selecting a different version requires a reason.'));
+      return;
+    }
+    setPublishSaving(true);
+    setOfficialError(null);
+    const nowIso = new Date().toISOString();
+    const res = await supabase.from('volume_forecast_publications').upsert(
+      [
+        {
+          target_date: forecastTargetDate,
+          cutoff_mode: MAIN_LEADERBOARD_CUTOFF,
+          run_id: officialRun.id,
+          recommended_prediction_id: recommendedOfficialPrediction?.id ?? null,
+          selected_prediction_id: selectedPublishPrediction.id,
+          recommended_forecast: recommendedOfficialPrediction?.forecast_value ?? null,
+          published_forecast: selectedPublishPrediction.forecast_value,
+          is_manual_override: !isRecommendedSelection,
+          override_reason: isRecommendedSelection ? null : overrideReason,
+          published_by: 'admin_console',
+          published_at: nowIso,
+          status: 'published',
+          updated_at: nowIso
+        }
+      ],
+      { onConflict: 'target_date,cutoff_mode' }
+    );
+    if (res.error) {
+      setOfficialError(String(res.error.message ?? 'Failed to publish selected version.'));
+      setPublishSaving(false);
+      return;
+    }
+    setPublishSaving(false);
+    setOfficialPublication((prev) => ({
+      id: Number(prev?.id ?? 0),
+      target_date: forecastTargetDate,
+      cutoff_mode: MAIN_LEADERBOARD_CUTOFF,
+      run_id: officialRun.id,
+      recommended_prediction_id: recommendedOfficialPrediction?.id ?? null,
+      selected_prediction_id: selectedPublishPrediction.id,
+      recommended_forecast: recommendedOfficialPrediction?.forecast_value ?? null,
+      published_forecast: selectedPublishPrediction.forecast_value,
+      is_manual_override: !isRecommendedSelection,
+      override_reason: isRecommendedSelection ? null : overrideReason,
+      published_by: 'admin_console',
+      published_at: nowIso,
+      status: 'published'
+    }));
+    setManualPublishedForecast(String(selectedPublishPrediction.forecast_value));
+    if (isRecommendedSelection) setManualOverrideReason('');
   };
   const handlePublishManualOverride = async () => {
     if (!supabase || !officialRun) return;
@@ -4411,7 +4493,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                             index < officialVersionPredictions.length - 1 ? 'border-b px-4 py-3' : 'px-4 py-3',
                             cellClass
                           ].join(' ');
-                          const isSelected = row.id === selectedOfficialPrediction?.id;
+                          const isSelected = row.id === selectedPublishPrediction?.id;
                           return (
                             <tr key={`official-version-${row.id}`} className={isSelected ? (isLight ? 'bg-sky-50/70' : 'bg-sky-500/10') : undefined}>
                               <td className={rowClass}>
@@ -4448,8 +4530,59 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                 </div>
                 <div className={['mt-4 rounded-2xl border px-4 py-3 text-sm leading-6', messageClass].join(' ')}>
                   <div>{t('推荐版本', 'Recommended version')}: {recommendedOfficialPrediction?.candidate_label ?? '-'}</div>
+                  <div>{t('推荐原因', 'Recommendation reason')}: {officialRecommendationReasonLabel}</div>
+                  {officialRecommendationFeedback ? (
+                    <div>
+                      {t('反馈占比', 'Feedback share')}: {formatPercent(Number(officialRecommendationFeedback.selectedShare ?? NaN))} ·
+                      {t('状态', 'Regime')} {String(officialRecommendationFeedback.regimeKey ?? '-')} ·
+                      {t('样本', 'Samples')} {formatNumber(Number(officialRecommendationFeedback.regimeSamples ?? NaN))}
+                    </div>
+                  ) : null}
+                  <div>{t('当前选定版本', 'Selected version')}: {selectedPublishPrediction?.candidate_label ?? '-'}</div>
                   <div>{t('已发布状态', 'Publication status')}: {officialPublication?.status ?? t('未创建', 'Not created')}</div>
                   <div>{t('发布人', 'Published by')}: {officialPublication?.published_by ?? '-'}</div>
+                </div>
+                <div className="mt-4 space-y-3">
+                  <label className="block">
+                    <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.18em]', mutedClass].join(' ')}>
+                      {t('采用版本', 'Use version')}
+                    </div>
+                    <select
+                      value={selectedPublishPredictionId}
+                      onChange={(event) => {
+                        const nextId = event.target.value;
+                        setSelectedPublishPredictionId(nextId);
+                        const nextPrediction = officialVersionPredictions.find((row) => String(row.id) === nextId);
+                        if (nextPrediction) {
+                          setManualPublishedForecast(String(nextPrediction.forecast_value));
+                        }
+                      }}
+                      disabled={isLocked || publishSaving || !officialRun || officialVersionPredictions.length === 0}
+                      className={[
+                        'w-full rounded-2xl border px-4 py-3 text-sm outline-none',
+                        isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-slate-950/40 text-white'
+                      ].join(' ')}
+                    >
+                      {officialVersionPredictions.map((row) => (
+                        <option key={`publish-option-${row.id}`} value={String(row.id)}>
+                          {row.candidate_label} · {formatNumber(row.forecast_value)}
+                          {row.id === recommendedOfficialPrediction?.id ? ` · ${t('系统推荐', 'Recommended')}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className={['rounded-2xl border px-4 py-3 text-sm', messageClass].join(' ')}>
+                    {selectedPublishPrediction ? (
+                      <>
+                        <div>{t('选定版本预测值', 'Selected version forecast')}: {formatNumber(selectedPublishPrediction.forecast_value)}</div>
+                        <div>
+                          14D WAPE: {formatPercent(Number((selectedPublishPrediction.metrics_json as any)?.recent14Wape ?? NaN))}
+                        </div>
+                      </>
+                    ) : (
+                      <div>{t('暂无可用版本候选。', 'No available version candidates.')}</div>
+                    )}
+                  </div>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-3">
                   <button
@@ -4462,6 +4595,17 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
                     onClick={() => void handlePublishRecommendation()}
                   >
                     {publishSaving ? t('保存中...', 'Saving...') : t('接受推荐', 'Accept recommendation')}
+                  </button>
+                  <button
+                    type="button"
+                    className={[
+                      'rounded-full px-4 py-2 text-sm font-semibold',
+                      isLight ? 'border border-slate-300 text-slate-900 disabled:text-slate-400' : 'border border-white/20 text-white disabled:text-white/40'
+                    ].join(' ')}
+                    disabled={isLocked || publishSaving || !officialRun || !selectedPublishPrediction}
+                    onClick={() => void handlePublishSelectedVersion()}
+                  >
+                    {t('发布选定版本', 'Publish selected version')}
                   </button>
                 </div>
                 <div className="mt-4 space-y-3">

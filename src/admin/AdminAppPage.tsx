@@ -34,6 +34,7 @@ import ForecastPage from './pages/ForecastPage';
 import PredictionModelPage from './pages/PredictionModelPage';
 import EfficiencyPage from './pages/EfficiencyPage';
 import AppDialog from '../components/AppDialog';
+import { useScheduleRealtime } from './useScheduleRealtime';
 import {
   activatePlannedScheduleNote,
   buildDailyPlannedActivationUpserts,
@@ -60,6 +61,11 @@ import {
   type LateRoundingFamily,
   type LateSample
 } from './lateMarks';
+import {
+  loadDailyCapacityStaffStats,
+  type DailyCapacityProcKey,
+  type DailyCapacityStaffStats
+} from './dailyCapacity';
 import type {
   AdminPage,
   AllowedPosition,
@@ -107,6 +113,14 @@ type LateMarkView = {
   finalExpectedStart: string;
   firstIn: string;
   sampleCount: number;
+};
+type DailyListCapacitySource = 'recent14' | 'template_fallback' | 'excluded' | 'transfer' | 'unmapped';
+type DailyListCapacityView = {
+  capacity: number | null;
+  source: DailyListCapacitySource;
+  procKey: DailyCapacityProcKey | null;
+  uph: number | null;
+  ewh: number | null;
 };
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
@@ -242,6 +256,38 @@ const isRestLikeScheduleBaseState = (state: ScheduleBaseState) =>
 const isWorkingScheduleRow = (row: ScheduleRow | null | undefined) =>
   Boolean(row && isWorkingScheduleBaseState(getScheduleBaseStateFromNote(row.note)));
 
+const toSortEpochMs = (value: unknown) => {
+  const ms = Date.parse(String(value ?? '').trim());
+  return Number.isFinite(ms) ? ms : 0;
+};
+
+const toSortId = (value: unknown) => {
+  const id = Number(value);
+  return Number.isFinite(id) ? id : 0;
+};
+
+const isScheduleRowNewer = (candidate: ScheduleRow, current: ScheduleRow) => {
+  const candidateMs = Math.max(toSortEpochMs(candidate.updated_at), toSortEpochMs(candidate.created_at));
+  const currentMs = Math.max(toSortEpochMs(current.updated_at), toSortEpochMs(current.created_at));
+  if (candidateMs !== currentMs) return candidateMs > currentMs;
+  return toSortId(candidate.id) > toSortId(current.id);
+};
+
+const pickLatestScheduleRowsByStaffDate = (rows: ScheduleRow[]) => {
+  const byKey = new Map<string, ScheduleRow>();
+  for (const row of rows) {
+    const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+    const workDate = String(row.date ?? '').trim();
+    if (!staff || !/^\d{4}-\d{2}-\d{2}$/.test(workDate)) continue;
+    const key = `${staff}__${workDate}`;
+    const existing = byKey.get(key);
+    if (!existing || isScheduleRowNewer(row, existing)) {
+      byKey.set(key, row);
+    }
+  }
+  return Array.from(byKey.values());
+};
+
 const getScheduleDisplayState = (
   row: ScheduleRow | undefined,
   hasPunch: boolean,
@@ -294,6 +340,8 @@ const isMissingTableError = (message: unknown, table: string) => {
 };
 
 const formatUph = (value: number | null | undefined) => (value === null || value === undefined ? '-' : value.toFixed(1));
+const formatCapacityValue = (value: number | null | undefined) =>
+  value === null || value === undefined ? '-' : Math.round(value).toLocaleString('en-US');
 const isEmployeeActive = (employee: EmployeeRow | null | undefined) => {
   if (!employee) return true;
   const raw = (employee as any).active;
@@ -468,6 +516,55 @@ const effCalcRequirement = (workload: number, proc: EffProcRowLite | undefined, 
   const lead = effToNum(proc.lead);
   if (!uph || !ewh || workload <= 0) return lead;
   return effRoundRule(workload / (uph * ewh), mode) + lead;
+};
+const effGetProcRowForShift = (
+  payload: EffPayloadLite,
+  shift: 'early' | 'late',
+  procKey: DailyCapacityProcKey
+): EffProcRowLite | undefined => (shift === 'early' ? payload.areaEfficiencyDs[procKey] : payload.areaEfficiencyNs[procKey]);
+const resolveDailyListCapacityForRow = (
+  row: DailyListRow,
+  staffStatsByStaffId: Record<string, DailyCapacityStaffStats>,
+  templatePayload: EffPayloadLite
+): DailyListCapacityView => {
+  const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+  const position = normalizeAllowedPosition(String(row.position ?? '').trim());
+  if (!staff || !position) {
+    return { capacity: null, source: 'unmapped', procKey: null, uph: null, ewh: null };
+  }
+  if (position === 'Transfer') {
+    return { capacity: null, source: 'transfer', procKey: null, uph: null, ewh: null };
+  }
+  const stats = staffStatsByStaffId[staff];
+  if (!stats) {
+    return { capacity: null, source: 'unmapped', procKey: null, uph: null, ewh: null };
+  }
+  if (stats.excluded) {
+    return { capacity: null, source: 'excluded', procKey: null, uph: null, ewh: null };
+  }
+  if (!stats.procKey) {
+    return { capacity: null, source: 'unmapped', procKey: null, uph: null, ewh: null };
+  }
+  const proc = effGetProcRowForShift(templatePayload, row.shift, stats.procKey);
+  const ewh = effToNum(proc?.ewh);
+  const templateUph = effToNum(proc?.uph);
+  const resolvedUph = stats.recent14Uph ?? (templateUph > 0 ? templateUph : null);
+  if (!resolvedUph || !ewh) {
+    return {
+      capacity: null,
+      source: stats.recent14Uph !== null ? 'recent14' : 'template_fallback',
+      procKey: stats.procKey,
+      uph: resolvedUph,
+      ewh: ewh || null
+    };
+  }
+  return {
+    capacity: resolvedUph * ewh,
+    source: stats.recent14Uph !== null ? 'recent14' : 'template_fallback',
+    procKey: stats.procKey,
+    uph: resolvedUph,
+    ewh
+  };
 };
 
 const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
@@ -899,10 +996,13 @@ export default function AdminAppPage() {
   type EmployeeColumnMode = 'lower' | 'cased';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
+  const dailyCapacityRequestRef = useRef(0);
   const scheduleMistakeRequestRef = useRef(0);
   const scheduleLateRequestRef = useRef(0);
   const scheduleMonthlyAbsentRequestRef = useRef(0);
   const schedulePunchPresenceRequestRef = useRef(0);
+  const fetchScheduleRef = useRef<((options?: { weekOffsetOverride?: number; lockUi?: boolean }) => Promise<any>) | null>(null);
+  const scheduleRealtimeDebounceTimerRef = useRef<number | null>(null);
 
   const [page, setPage] = useState<AdminPage>('home');
 
@@ -1162,6 +1262,10 @@ export default function AdminAppPage() {
   const [schedulePunchPresenceWeekOffset, setSchedulePunchPresenceWeekOffset] = useState<number | null>(null);
   const [scheduleFirstInByStaffDayKey, setScheduleFirstInByStaffDayKey] = useState<Record<string, string>>({});
   const [scheduleUphByStaffId, setScheduleUphByStaffId] = useState<Record<string, number | null>>({});
+  const [dailyCapacityStaffStatsByStaffId, setDailyCapacityStaffStatsByStaffId] = useState<Record<string, DailyCapacityStaffStats>>({});
+  const [dailyCapacityTemplatePayload, setDailyCapacityTemplatePayload] = useState<EffPayloadLite>(() => effDefaultPayload());
+  const [dailyCapacityLoading, setDailyCapacityLoading] = useState(false);
+  const [dailyCapacityError, setDailyCapacityError] = useState<string | null>(null);
   const [scheduleMistakeByStaffId, setScheduleMistakeByStaffId] = useState<Record<string, number>>({});
   const [scheduleMistakeDetailsByStaffId, setScheduleMistakeDetailsByStaffId] = useState<Record<string, ScheduleMistakeDetail[]>>({});
   const [scheduleMonthlyAbsentDatesByStaffId, setScheduleMonthlyAbsentDatesByStaffId] = useState<Record<string, string[]>>({});
@@ -1225,6 +1329,14 @@ export default function AdminAppPage() {
   const [dailyListFilterPositions, setDailyListFilterPositions] = useState<Record<AllowedPosition, boolean>>(
     createEmptyPositionFlags
   );
+  const dailyListTargetDateKey = useMemo(() => {
+    const parsedTarget =
+      /^\d{4}-\d{2}-\d{2}$/.test(dailyListDateInput)
+        ? new Date(`${dailyListDateInput}T00:00:00`)
+        : addDays(new Date(serverTime), 1);
+    const targetDay = Number.isNaN(parsedTarget.getTime()) ? addDays(new Date(serverTime), 1) : parsedTarget;
+    return toDateOnly(targetDay);
+  }, [dailyListDateInput, serverTime]);
   const schedulePositionDetailsRef = useRef<HTMLDetailsElement | null>(null);
   const scheduleLabelDetailsRef = useRef<HTMLDetailsElement | null>(null);
   const deferredScheduleSearch = useDeferredValue(scheduleSearch);
@@ -1234,6 +1346,27 @@ export default function AdminAppPage() {
   const deferredSchedulePosition = useDeferredValue(schedulePosition);
   const deferredScheduleShift = useDeferredValue(scheduleShift);
   const deferredScheduleLabels = useDeferredValue(scheduleLabels);
+
+  // Real-time schedule synchronization across devices
+  useScheduleRealtime({
+    supabase,
+    scheduleTableName: SCHEDULE_TABLE,
+    onScheduleChange: (event) => {
+      console.log(`[Schedule Realtime] Change detected: staff_id=${event.staffId}, date=${event.date}, type=${event.type}`);
+      // Debounce rapid consecutive changes to avoid excessive fetches
+      if (scheduleRealtimeDebounceTimerRef.current !== null) {
+        window.clearTimeout(scheduleRealtimeDebounceTimerRef.current);
+      }
+      scheduleRealtimeDebounceTimerRef.current = window.setTimeout(() => {
+        scheduleRealtimeDebounceTimerRef.current = null;
+        if (fetchScheduleRef.current) {
+          void fetchScheduleRef.current({ lockUi: false });
+        }
+      }, 300); // Debounce for 300ms
+    },
+    enabled: page === 'schedule' && !!supabase
+  });
+
   useEffect(() => {
     if (page !== 'schedule') return;
     if (!supabase) {
@@ -2917,9 +3050,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         if (rows.length < pageSize) break;
       }
 
-      setScheduleRows(allRows);
+      const latestRows = pickLatestScheduleRowsByStaffDate(allRows).sort((a, b) => {
+        const dateDelta = String(b.date ?? '').localeCompare(String(a.date ?? ''));
+        if (dateDelta !== 0) return dateDelta;
+        const staffDelta = String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''));
+        if (staffDelta !== 0) return staffDelta;
+        if (isScheduleRowNewer(a, b)) return -1;
+        if (isScheduleRowNewer(b, a)) return 1;
+        return 0;
+      });
+
+      setScheduleRows(latestRows);
       setScheduleRowsWeekOffset(weekOffset);
-      return allRows;
+      return latestRows;
     };
 
     if (!lockUi) {
@@ -2931,6 +3074,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     });
     return loadedRows;
   };
+  
+  // Save fetchSchedule reference for use in realtime callbacks
+  fetchScheduleRef.current = fetchSchedule;
 
   const fetchSchedulePublishSetting = async () => {
     if (!supabase) return;
@@ -3026,23 +3172,40 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     await runLocked('schedule_toggle', async () => {
       setScheduleError(null);
       const syncAttendanceMark = async () => {
+        const latestScheduleRes = await supabase
+          .from(SCHEDULE_TABLE)
+          .select('id, staff_id, date, note, updated_at, created_at')
+          .eq('staff_id', staff)
+          .eq('date', templateDate)
+          .limit(10);
+        if (latestScheduleRes.error) {
+          setScheduleError(latestScheduleRes.error.message);
+          return false;
+        }
+        const latestScheduleRows = pickLatestScheduleRowsByStaffDate((((latestScheduleRes.data as any[]) ?? []) as ScheduleRow[]));
+        const effectiveScheduleRow = latestScheduleRows[0] ?? null;
+        const effectiveState: 'empty' | ScheduleBaseState = effectiveScheduleRow
+          ? getScheduleBaseStateFromNote(effectiveScheduleRow.note)
+          : 'empty';
+
+        // Only clear marks from schedule automation (source='schedule'), not manual marks
         const clearRes = await supabase
           .from(ATTENDANCE_MARKS_TABLE)
           .delete()
           .eq('staff_id', staff)
           .eq('work_date', targetWorkDate)
-          .in('mark_type', ATTENDANCE_MARK_TYPES as any);
+          .eq('source', 'schedule');
         if (clearRes.error) {
           setScheduleError(clearRes.error.message);
           return false;
         }
 
         const marksToWrite: Array<'absent' | 'excuse' | 'temporary_leave'> = [];
-        if (nextState === 'leave' || nextState === 'planned_leave') {
+        if (effectiveState === 'leave' || effectiveState === 'planned_leave') {
           marksToWrite.push('excuse');
-        } else if (nextState === 'temp_rest' || nextState === 'planned_temp_rest') {
+        } else if (effectiveState === 'temp_rest' || effectiveState === 'planned_temp_rest') {
           marksToWrite.push('temporary_leave');
-        } else if (nextState === 'work' || nextState === 'temp_work' || nextState === 'planned_temp_work') {
+        } else if (effectiveState === 'work' || effectiveState === 'temp_work' || effectiveState === 'planned_temp_work') {
           const workRange = getWorkDateRange(targetWorkDate);
           if (workRange) {
             const now = new Date(serverTime);
@@ -3071,7 +3234,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             mark_type: markType,
             source: 'schedule',
             operator: user?.email ?? null,
-            payload: { state: nextState, template_date: templateDate, weekday: dayIndex + 1 },
+            payload: { state: effectiveState, template_date: templateDate, weekday: dayIndex + 1 },
             updated_at: new Date(serverTime).toISOString()
           }));
           const upsertRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert(payload as any, {
@@ -9502,6 +9665,48 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   }, [page, employees, scheduleRows, scheduleRowsWeekOffset, scheduleWeekOffset, toDateOnly(serverTime)]);
 
   useEffect(() => {
+    if (page !== 'schedule' || !dailyListOpen) return;
+    const requestId = dailyCapacityRequestRef.current + 1;
+    dailyCapacityRequestRef.current = requestId;
+    setDailyCapacityLoading(true);
+    setDailyCapacityError(null);
+
+    void (async () => {
+      let nextTemplatePayload = effDefaultPayload();
+      let templateError: string | null = null;
+
+      if (supabase) {
+        const latestTemplateRes = await supabase
+          .from(EFFICIENCY_TEMPLATE_TABLE)
+          .select('payload, updated_at')
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (latestTemplateRes.error && !isMissingTableError(latestTemplateRes.error.message, EFFICIENCY_TEMPLATE_TABLE)) {
+          templateError = String(latestTemplateRes.error.message ?? 'Failed to load efficiency template.');
+        } else {
+          nextTemplatePayload = effNormalizePayload(latestTemplateRes.data?.payload ?? effDefaultPayload());
+        }
+      } else {
+        templateError = 'Missing Supabase configuration.';
+      }
+
+      const result = await loadDailyCapacityStaffStats({
+        supabase,
+        employees,
+        targetDate: dailyListTargetDateKey,
+        serverTime
+      });
+
+      if (requestId !== dailyCapacityRequestRef.current) return;
+      setDailyCapacityTemplatePayload(nextTemplatePayload);
+      setDailyCapacityStaffStatsByStaffId(result.byStaffId);
+      setDailyCapacityError(result.error ?? templateError);
+      setDailyCapacityLoading(false);
+    })();
+  }, [page, dailyListOpen, dailyListTargetDateKey, employees, toDateOnly(serverTime)]);
+
+  useEffect(() => {
     if (page !== 'schedule') return;
     void maybeRolloverScheduleWeek();
     void activatePlannedScheduleStatesForToday({ lockUi: false });
@@ -11018,7 +11223,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       const dayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim(), scheduleRowsWeekOffset);
       if (!staff || dayIndex === null) continue;
-      map.set(`${staff}__${dayIndex}`, row);
+      const key = `${staff}__${dayIndex}`;
+      const existing = map.get(key);
+      if (!existing || isScheduleRowNewer(row, existing)) {
+        map.set(key, row);
+      }
     }
     return map;
   }, [scheduleRows, scheduleRowsWeekOffset]);
@@ -11094,6 +11303,30 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       lateRows
     };
   }, [serverTime, dailyListDateInput, employees, scheduleRowsByStaffDayIndex, employeeProfileByStaffId, employeeShiftByStaffId]);
+  const dailyListCapacityByRowKey = useMemo(() => {
+    const map = new Map<string, DailyListCapacityView>();
+    const addRow = (row: DailyListRow) => {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) return;
+      map.set(`${row.shift}__${staff}`, resolveDailyListCapacityForRow(row, dailyCapacityStaffStatsByStaffId, dailyCapacityTemplatePayload));
+    };
+    for (const row of tomorrowDailyList.earlyRows) addRow(row);
+    for (const row of tomorrowDailyList.lateRows) addRow(row);
+    return map;
+  }, [tomorrowDailyList, dailyCapacityStaffStatsByStaffId, dailyCapacityTemplatePayload]);
+  const sumDailyListCapacityRows = (rows: DailyListRow[]) => {
+    let total = 0;
+    let hasValue = false;
+    for (const row of rows) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) continue;
+      const view = dailyListCapacityByRowKey.get(`${row.shift}__${staff}`);
+      if (!view || view.capacity === null || view.capacity === undefined) continue;
+      total += view.capacity;
+      hasValue = true;
+    }
+    return hasValue ? total : null;
+  };
   const tomorrowAttendanceCards = useMemo(() => {
     const countByKey: Record<string, number> = {};
     const addRows = (rows: DailyListRow[], shift: 'early' | 'late') => {
@@ -11124,13 +11357,34 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const recommended = recommendedRows.find((item) => item.key === position);
         const earlyRecommended = recommended ? recommended.ds : null;
         const lateRecommended = recommended ? recommended.ns : null;
+        const earlyCapacity = sumDailyListCapacityRows(
+          tomorrowDailyList.earlyRows.filter((row) => normalizePositionKey(String(row.position ?? '').trim()) === position)
+        );
+        const lateCapacity = sumDailyListCapacityRows(
+          tomorrowDailyList.lateRows.filter((row) => normalizePositionKey(String(row.position ?? '').trim()) === position)
+        );
+        const totalCapacity =
+          earlyCapacity === null && lateCapacity === null
+            ? null
+            : Number(earlyCapacity ?? 0) + Number(lateCapacity ?? 0);
         const totalRecommended =
           earlyRecommended === null && lateRecommended === null
             ? null
             : Number(earlyRecommended ?? 0) + Number(lateRecommended ?? 0);
-        return { position, early, late, earlyRecommended, lateRecommended, totalRecommended, total: early + late };
+        return {
+          position,
+          early,
+          late,
+          earlyRecommended,
+          lateRecommended,
+          earlyCapacity,
+          lateCapacity,
+          totalCapacity,
+          totalRecommended,
+          total: early + late
+        };
     }),
-    [tomorrowAttendanceCards, scheduleRecommendedByDate, tomorrowDailyList.targetDate]
+    [tomorrowAttendanceCards, scheduleRecommendedByDate, tomorrowDailyList, dailyListCapacityByRowKey]
   );
   const selectedDailyFilterPositions = useMemo(
     () => ALLOWED_POSITIONS.filter((position) => Boolean(dailyListFilterPositions[position])),
@@ -11150,6 +11404,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       lateRows: tomorrowDailyList.lateRows.filter(match)
     };
   }, [tomorrowDailyList, selectedDailyFilterPositions]);
+  const dailyListDisplayedCapacities = useMemo(
+    () => ({
+      early: sumDailyListCapacityRows(tomorrowDailyRowsDisplayed.earlyRows),
+      late: sumDailyListCapacityRows(tomorrowDailyRowsDisplayed.lateRows)
+    }),
+    [tomorrowDailyRowsDisplayed, dailyListCapacityByRowKey]
+  );
   const canCopyDailyListAll = tomorrowDailyList.earlyRows.length + tomorrowDailyList.lateRows.length > 0;
   const canCopyDailyListEarly = tomorrowDailyRowsDisplayed.earlyRows.length > 0;
   const canCopyDailyListLate = tomorrowDailyRowsDisplayed.lateRows.length > 0;
@@ -13629,6 +13890,44 @@ ${rowsToHtml(late)}
                                   <div className="mt-1 whitespace-nowrap text-[11px] font-semibold leading-tight opacity-95">
                                     {t('推荐', 'Rec')}: {card.totalRecommended ?? '-'}<span className="ml-3">{t('排班', 'Sch')}: {card.total}</span>
                                   </div>
+                                  <div className="mt-1 whitespace-nowrap text-[10px] leading-tight opacity-90 tabular-nums">
+                                    <span className="inline-flex items-center gap-1">
+                                      <svg
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="1.8"
+                                        className={[
+                                          'h-3.5 w-3.5',
+                                          themeMode === 'light' ? 'text-amber-600' : 'text-amber-300'
+                                        ].join(' ')}
+                                        aria-hidden="true"
+                                      >
+                                        <circle cx="12" cy="12" r="4" />
+                                        <path d="M12 2.5v2.2M12 19.3v2.2M4.7 4.7l1.6 1.6M17.7 17.7l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.7 19.3l1.6-1.6M17.7 6.3l1.6-1.6" strokeLinecap="round" />
+                                      </svg>
+                                      <span>{dailyCapacityLoading ? '...' : formatCapacityValue(card.earlyCapacity)}</span>
+                                    </span>
+                                    <span className="ml-3 inline-flex items-center gap-1">
+                                      <svg
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="1.8"
+                                        className={[
+                                          'h-3.5 w-3.5',
+                                          themeMode === 'light' ? 'text-indigo-600' : 'text-indigo-300'
+                                        ].join(' ')}
+                                        aria-hidden="true"
+                                      >
+                                        <path d="M20 14.2A8.5 8.5 0 119.8 4a7.1 7.1 0 0010.2 10.2z" strokeLinecap="round" strokeLinejoin="round" />
+                                      </svg>
+                                      <span>{dailyCapacityLoading ? '...' : formatCapacityValue(card.lateCapacity)}</span>
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 whitespace-nowrap text-[11px] font-semibold leading-tight opacity-95">
+                                    总产能: {dailyCapacityLoading ? '...' : formatCapacityValue(card.totalCapacity)}
+                                  </div>
                                 </button>
                               ))}
                             </div>
@@ -13745,6 +14044,11 @@ ${rowsToHtml(late)}
                                 {t('新人需求', 'New Request')}
                               </button>
                             </div>
+                            {dailyCapacityError ? (
+                              <div className={['mt-2 text-xs', themeMode === 'light' ? 'text-amber-700' : 'text-amber-200'].join(' ')}>
+                                {t('预计产能已回退到模板值。', 'Capacity has fallen back to template values.')}
+                              </div>
+                            ) : null}
                           </div>
                           <div className={['rounded-2xl border p-4', themeMode === 'light' ? 'border-emerald-200 bg-emerald-50/50' : 'border-emerald-400/30 bg-emerald-500/[0.04]'].join(' ')}>
                             <div className="mb-3 flex items-center justify-between">
@@ -13766,6 +14070,17 @@ ${rowsToHtml(late)}
                                   ].join(' ')}
                                 >
                                   {lang === 'en' ? `Total ${tomorrowDailyRowsDisplayed.earlyRows.length}` : `共${tomorrowDailyRowsDisplayed.earlyRows.length}人`}
+                                </span>
+                                <span
+                                  title={t('基于最近14个有数据日UPH，无历史时回退模板UPH。', 'Based on the last 14 data days of UPH, with template UPH as fallback.')}
+                                  className={[
+                                    'rounded-full border px-2 py-0.5 text-xs font-semibold',
+                                    themeMode === 'light'
+                                      ? 'border-emerald-200 bg-white text-emerald-700'
+                                      : 'border-emerald-400/30 bg-black/20 text-emerald-200'
+                                  ].join(' ')}
+                                >
+                                  {dailyCapacityLoading ? '...' : formatCapacityValue(dailyListDisplayedCapacities.early)}
                                 </span>
                               </div>
                               <button
@@ -13841,6 +14156,17 @@ ${rowsToHtml(late)}
                                   ].join(' ')}
                                 >
                                   {lang === 'en' ? `Total ${tomorrowDailyRowsDisplayed.lateRows.length}` : `共${tomorrowDailyRowsDisplayed.lateRows.length}人`}
+                                </span>
+                                <span
+                                  title={t('基于最近14个有数据日UPH，无历史时回退模板UPH。', 'Based on the last 14 data days of UPH, with template UPH as fallback.')}
+                                  className={[
+                                    'rounded-full border px-2 py-0.5 text-xs font-semibold',
+                                    themeMode === 'light'
+                                      ? 'border-indigo-200 bg-white text-indigo-700'
+                                      : 'border-indigo-400/30 bg-black/20 text-indigo-200'
+                                  ].join(' ')}
+                                >
+                                  {dailyCapacityLoading ? '...' : formatCapacityValue(dailyListDisplayedCapacities.late)}
                                 </span>
                               </div>
                               <button
