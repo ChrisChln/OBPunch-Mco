@@ -1,5 +1,5 @@
-import { MAIN_LEADERBOARD_CUTOFF } from '../src/admin/pages/PredictionModelPage.tsx';
 import {
+  MAIN_LEADERBOARD_CUTOFF,
   addDaysDateOnly,
   createServiceSupabase,
   ensureCron,
