@@ -986,6 +986,41 @@ export default function AdminAppPage() {
   const attendanceFetchSeqRef = useRef(0);
   const timecardPunchFetchSeqRef = useRef(0);
   const timecardRecomputeLastRunByWeekRef = useRef<Record<string, number>>({});
+  const timecardWeekCacheRef = useRef<{
+    weekKey: string;
+    allEmployees: Array<{
+      staff_id: string;
+      name: string;
+      agency: string;
+      position: string;
+      shift: '' | 'early' | 'late';
+      terminatedAt: string | null;
+    }>;
+    eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT'; manual: boolean }>>;
+    scheduledByStaff: Record<string, boolean[]>;
+    scheduleStateByStaff: Record<string, ScheduleBaseState[]>;
+    scheduleKnownByStaff: Record<string, boolean[]>;
+    marksByStaff: Record<
+      string,
+      {
+        absentByDay: boolean[];
+        leaveByDay: boolean[];
+        tempRestByDay: boolean[];
+        lateByDay: boolean[];
+        lateMinutesByDay: number[];
+        lateSourceByDay: string[];
+        lateRoundingFamilyByDay: string[];
+        lateLearnedExpectedStartRawByDay: string[];
+        lateLearnedExpectedStartRoundedByDay: string[];
+        lateGuardrailExpectedStartByDay: string[];
+        lateFinalExpectedStartByDay: string[];
+        lateFirstInByDay: string[];
+        lateSampleCountByDay: number[];
+      }
+    >;
+    lateByStaffDayKey: Record<string, LateMarkView>;
+    lateMarksSynced: boolean;
+  } | null>(null);
   const scheduleLabelToneReadyRef = useRef(false);
   const scheduleLabelToneHydratingRef = useRef(false);
   const scheduleLabelToneLastSavedJsonRef = useRef('');
@@ -1209,6 +1244,7 @@ export default function AdminAppPage() {
 
   const [timecardRows, setTimecardRows] = useState<TimecardRow[]>([]);
   const [timecardError, setTimecardError] = useState<string | null>(null);
+  const [timecardLoading, setTimecardLoading] = useState(false);
   const [timecardSearch, setTimecardSearch] = useState('');
   const [timecardAgency, setTimecardAgency] = useState('');
   const [timecardAgencySort, setTimecardAgencySort] = useState<'' | 'asc' | 'desc'>('');
@@ -7605,7 +7641,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     agency,
     position,
     missingEmployeeOnly,
-    lockUi
+    lockUi,
+    deferLateSync
   }: {
     reset: boolean;
     weekOffset?: number;
@@ -7614,6 +7651,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     position?: string;
     missingEmployeeOnly?: boolean;
     lockUi?: boolean;
+    deferLateSync?: boolean;
   }) => {
     if (!supabase) {
       setTimecardError('缺少 Supabase 配置。');
@@ -7635,22 +7673,66 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const agencyValue = (agency ?? timecardAgency).trim();
     const positionValue = (position ?? timecardPosition).trim();
     const missingOnly = missingEmployeeOnly ?? timecardMissingEmployeeOnly;
+    const shouldDeferLateSync = deferLateSync ?? true;
+    setTimecardLoading(true);
+    const finishLoading = () => {
+      if (requestId === timecardFetchSeqRef.current) {
+        setTimecardLoading(false);
+      }
+    };
+
+    try {
     const nowMs = serverTime.getTime();
     const closedDayByIndex = Array.from({ length: 7 }, (_, dayIndex) => {
       const { end } = getDayRange(weekStart, dayIndex);
       return end.getTime() <= nowMs;
     });
 
-    const pageSize = 200;
+    const weekStartDate = toDateOnly(weekStart);
+    const weekEndDate = toDateOnly(addDays(weekStart, 6));
+    const filterEmployeesForView = (
+      employees: Array<{ staff_id: string; name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }>
+    ) => {
+      const normalizedPositionNeedle = normalizePositionKey(positionValue);
+      const normalizedSearchStaff = normalizeStaffId(searchValue);
+      const searchTerms = searchValue
+        .split(/\s+/g)
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+
+      return employees.filter((employee) => {
+        if (agencyValue && String(employee.agency ?? '').trim().toLowerCase() !== agencyValue.toLowerCase()) return false;
+        if (positionValue) {
+          const rowPos = String(employee.position ?? '').trim();
+          const rowPosNormalized = normalizePositionKey(rowPos);
+          if (normalizedPositionNeedle) {
+            if (rowPosNormalized !== normalizedPositionNeedle) return false;
+          } else if (!rowPos.toLowerCase().includes(positionValue.toLowerCase())) {
+            return false;
+          }
+        }
+        if (searchTerms.length > 0 || normalizedSearchStaff) {
+          const hay = [employee.staff_id, employee.name].map((x) => String(x ?? '').toLowerCase()).join(' ');
+          const staffHay = normalizeStaffId(String(employee.staff_id ?? ''));
+          if (normalizedSearchStaff && !staffHay.includes(normalizedSearchStaff)) {
+            const allTermsHit = searchTerms.every((term) => hay.includes(term));
+            if (!allTermsHit) return false;
+          } else if (searchTerms.length > 0 && !searchTerms.every((term) => hay.includes(term))) {
+            return false;
+          }
+        }
+        return true;
+      });
+    };
 
     const fetchProfilesByStaffId = async (staffIds: string[]) => {
       if (isStale()) {
         return {
-          staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>(),
+          staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }>(),
           error: STALE_TIMECARD_REQUEST
         };
       }
-      const staffToProfile = new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>();
+      const staffToProfile = new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }>();
       if (!supabase) {
         return { staffToProfile, error: 'Missing Supabase config.' };
       }
@@ -7661,21 +7743,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const mode = await resolveEmployeeColumnMode();
       if (isStale()) {
         return {
-          staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>(),
+          staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }>(),
           error: STALE_TIMECARD_REQUEST
         };
       }
       const batches = chunk(staffIds, 200);
       for (const batch of batches) {
         const run = async (m: EmployeeColumnMode) => {
-          const select = m === 'cased' ? 'staff_id, name, "Agency", "Position", shift' : 'staff_id, name, agency, position, shift';
+          const select = m === 'cased'
+            ? 'staff_id, name, "Agency", "Position", shift, terminated_at'
+            : 'staff_id, name, agency, position, shift, terminated_at';
           return await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch);
         };
 
         let res = await run(mode);
         if (isStale()) {
           return {
-            staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>(),
+            staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }>(),
             error: STALE_TIMECARD_REQUEST
           };
         }
@@ -7686,7 +7770,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         }
         if (res.error) {
           return {
-            staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late' }>(),
+            staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }>(),
             error: res.error.message
           };
         }
@@ -7698,12 +7782,66 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             name: String(r.name ?? '').trim(),
             agency: String(r.agency ?? r.Agency ?? '').trim(),
             position: String(r.position ?? r.Position ?? '').trim(),
-            shift: normalizeShiftValue(String(r.shift ?? '').trim())
+            shift: normalizeShiftValue(String(r.shift ?? '').trim()),
+            terminatedAt: String((r as any).terminated_at ?? '').trim() || null
           });
         }
       }
 
       return { staffToProfile, error: null as string | null };
+    };
+
+    const fetchActiveStaffIdsForWeek = async () => {
+      const set = new Set<string>();
+      if (!supabase) {
+        return { staffIds: [] as string[], error: 'Missing Supabase config.' };
+      }
+
+      const maxPages = 80;
+      const pageSizeRows = 1000;
+
+      const collectFromPaged = async (
+        run: (from: number, to: number) => any
+      ) => {
+        for (let page = 0; page < maxPages; page += 1) {
+          if (isStale()) return STALE_TIMECARD_REQUEST;
+          const from = page * pageSizeRows;
+          const to = from + pageSizeRows - 1;
+          const res = (await run(from, to)) as { data?: any[] | null; error?: { message?: string } | null };
+          if (res.error?.message) return res.error.message;
+          const rows = (res.data ?? []) as any[];
+          if (rows.length === 0) break;
+          for (const row of rows) {
+            const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+            if (staff) set.add(staff);
+          }
+          if (rows.length < pageSizeRows) break;
+        }
+        return null;
+      };
+
+      const scheduleError = await collectFromPaged(async (from, to) =>
+        await supabase
+          .from(SCHEDULE_TABLE)
+          .select('staff_id')
+          .gte('date', weekStartDate)
+          .lte('date', weekEndDate)
+          .range(from, to)
+      );
+      if (scheduleError) return { staffIds: [] as string[], error: scheduleError };
+
+      const marksError = await collectFromPaged(async (from, to) =>
+        await supabase
+          .from(ATTENDANCE_MARKS_TABLE)
+          .select('staff_id')
+          .gte('work_date', weekStartDate)
+          .lte('work_date', weekEndDate)
+          .in('mark_type', ATTENDANCE_MARK_TYPES as any)
+          .range(from, to)
+      );
+      if (marksError) return { staffIds: [] as string[], error: marksError };
+
+      return { staffIds: Array.from(set), error: null as string | null };
     };
 
     const fetchScheduledByStaff = async (staffIds: string[]) => {
@@ -7808,8 +7946,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         return { marksByStaff, error: null as string | null };
       }
 
-      const weekStartDate = toDateOnly(weekStart);
-      const weekEndDate = toDateOnly(addDays(weekStart, 6));
       const batches = chunk(staffIds, 200);
       for (const batch of batches) {
         const { data, error } = await supabase
@@ -8202,7 +8338,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       };
     };
 
-    const exec = async (from: number) => {
+    const exec = async () => {
       if (isStale()) {
         return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
       }
@@ -8296,140 +8432,35 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         return { rows, hasMore: false, error: null as string | null };
       }
 
-      const to = from + pageSize - 1;
-
-      const mode = await resolveEmployeeColumnMode();
-      const buildEmployees = (m: EmployeeColumnMode) => {
-        const agencyCol = m === 'cased' ? 'Agency' : 'agency';
-        const positionCol = m === 'cased' ? 'Position' : 'position';
-        const select = '*';
-
-        let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
-        if (agencyValue) q = q.ilike(agencyCol as any, agencyValue);
-        if (positionValue) {
-          const normalized = normalizePositionKey(positionValue);
-          q = normalized ? q.ilike(positionCol as any, normalized) : q.ilike(positionCol as any, `%${positionValue}%`);
-        }
-        if (searchValue) {
-          const term = `%${searchValue}%`;
-          q = q.or(`staff_id.ilike.${term},name.ilike.${term}`);
-        }
-        return q;
-      };
-
-      let employeesAttempt = await buildEmployees(mode);
-      if (employeesAttempt.error && /active/i.test(String(employeesAttempt.error.message ?? ''))) {
-        const buildEmployeesNoActive = (m: EmployeeColumnMode) => {
-          const agencyCol = m === 'cased' ? 'Agency' : 'agency';
-          const positionCol = m === 'cased' ? 'Position' : 'position';
-          const select = '*';
-          let q = supabase.from(EMPLOYEE_TABLE).select(select).order('staff_id', { ascending: true }).range(from, to);
-          if (agencyValue) q = q.ilike(agencyCol as any, agencyValue);
-          if (positionValue) {
-            const normalized = normalizePositionKey(positionValue);
-            q = normalized ? q.ilike(positionCol as any, normalized) : q.ilike(positionCol as any, `%${positionValue}%`);
-          }
-          if (searchValue) {
-            const term = `%${searchValue}%`;
-            q = q.or(`staff_id.ilike.${term},name.ilike.${term}`);
-          }
-          return q;
-        };
-        employeesAttempt = await buildEmployeesNoActive(mode);
-      }
-      if (isStale()) {
-        return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
-      }
-      let employeeRows: EmployeeRow[] | null = null;
-      if (employeesAttempt.error) {
-        const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-        employeeColumnModeRef.current = flipped;
-        const retry = await buildEmployees(flipped);
-        if (retry.error) {
-          return { rows: [] as TimecardRow[], hasMore: false, error: retry.error.message };
-        }
-        employeeRows = (retry.data as EmployeeRow[] | null) ?? [];
-      } else {
-        employeeRows = (employeesAttempt.data as EmployeeRow[] | null) ?? [];
+      const cachedWeek = timecardWeekCacheRef.current;
+      if (cachedWeek && cachedWeek.weekKey === weekStartDate) {
+        const viewEmployees = filterEmployeesForView(cachedWeek.allEmployees);
+        const now = new Date(serverTime);
+        const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
+        const rows: TimecardRow[] = viewEmployees.map((e) =>
+          buildTimecardRow({
+            staff: e.staff_id,
+            name: e.name,
+            agency: e.agency,
+            position: e.position,
+            profileShift: e.shift,
+            terminatedAt: e.terminatedAt,
+            eventsByStaff: cachedWeek.eventsByStaff,
+            scheduledByStaff: cachedWeek.scheduledByStaff,
+            scheduleStateByStaff: cachedWeek.scheduleStateByStaff,
+            scheduleKnownByStaff: cachedWeek.scheduleKnownByStaff,
+            marksByStaff: cachedWeek.marksByStaff,
+            lateByStaffDayKey: cachedWeek.lateByStaffDayKey,
+            lateMarksSynced: cachedWeek.lateMarksSynced,
+            capEnd
+          })
+        );
+        return { rows, hasMore: false, error: null as string | null };
       }
 
-      const employees = employeeRows ?? [];
-      const employeeByStaffId = new Map<
-        string,
-        { staff_id: string; name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }
-      >();
-      for (const e of employees) {
-        const staff = String(e.staff_id ?? '').trim();
-        if (!staff) continue;
-        const name = String(e.name ?? '').trim();
-        const agency = String(e.agency ?? e.Agency ?? '').trim();
-        const position = String(e.position ?? e.Position ?? '').trim();
-        const shift = normalizeShiftValue(String(e.shift ?? '').trim());
-        const terminatedAt = String((e as any).terminated_at ?? '').trim() || null;
-        const existing = employeeByStaffId.get(staff);
-        if (!existing) {
-          employeeByStaffId.set(staff, { staff_id: staff, name, agency, position, shift, terminatedAt });
-          continue;
-        }
-        // Keep first row order, but fill missing fields from duplicate rows.
-        if (!existing.name && name) existing.name = name;
-        if (!existing.agency && agency) existing.agency = agency;
-        if (!existing.position && position) existing.position = position;
-        if (!existing.shift && shift) existing.shift = shift;
-        if (!existing.terminatedAt && terminatedAt) existing.terminatedAt = terminatedAt;
-      }
-      const uniqueEmployees = Array.from(employeeByStaffId.values());
-      const staffIds = uniqueEmployees.map((e) => e.staff_id);
-      if (staffIds.length === 0) {
-        return { rows: [] as TimecardRow[], hasMore: false, error: null as string | null };
-      }
-
-      const fetchPunchesForStaff = async (ids: string[]) => {
-        // chunk + paginate to avoid PostgREST row truncation when viewing all staff
-        const batches = chunk(ids, 200);
-        const all: Array<{ staff_id: string; action: string; created_at: string | null; id?: any }> = [];
-        for (const batch of batches) {
-          const pageSize = 1000;
-          const maxPages = 80;
-          const base = () =>
-            supabase
-              .from('ob_punches')
-              .select('id, staff_id, action, created_at')
-              .in('staff_id', batch)
-              .gte('created_at', rangeStart.toISOString())
-              .lt('created_at', rangeEnd.toISOString());
-
-          for (let page = 0; page < maxPages; page += 1) {
-            if (isStale()) {
-              return { rows: [] as any[], error: STALE_TIMECARD_REQUEST };
-            }
-            const from = page * pageSize;
-            const to = from + pageSize - 1;
-            const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
-            const attempt = attemptCreatedAt.error
-              ? await base().order('id', { ascending: true }).range(from, to)
-              : attemptCreatedAt;
-            if (attempt.error) {
-              return { rows: null as any, error: attempt.error.message };
-            }
-            const rows = (((attempt.data as any[]) ?? []) as any[]) as Array<{
-              staff_id: string;
-              action: string;
-              created_at: string | null;
-              id?: any;
-            }>;
-            if (rows.length === 0) break;
-            all.push(...rows);
-            if (rows.length < pageSize) break;
-          }
-        }
-        return { rows: all, error: null as string | null };
-      };
-
-      const [punchesRes, scheduledRes, marksRes] = await Promise.all([
-        fetchPunchesForStaff(staffIds),
-        fetchScheduledByStaff(staffIds),
-        fetchAttendanceMarksByStaff(staffIds)
+      const [punchesRes, activeStaffRes] = await Promise.all([
+        fetchPunchesInRange(),
+        fetchActiveStaffIdsForWeek()
       ]);
       if (isStale()) {
         return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
@@ -8437,24 +8468,61 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (punchesRes.error) {
         return { rows: [] as TimecardRow[], hasMore: false, error: punchesRes.error };
       }
+      if (activeStaffRes.error) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: activeStaffRes.error };
+      }
 
       const eventsByStaff: Record<string, Array<{ at: Date; action: 'IN' | 'OUT'; manual: boolean }>> = {};
+      const activeStaffSet = new Set<string>(activeStaffRes.staffIds);
       for (const p of punchesRes.rows ?? []) {
-        const staff = String(p.staff_id ?? '').trim();
+        const staff = normalizeStaffId(String(p.staff_id ?? '').trim());
         const action = String(p.action ?? '').toUpperCase();
         const atRaw = String(p.created_at ?? '').trim();
         if (!staff || (action !== 'IN' && action !== 'OUT') || !atRaw) continue;
         const at = new Date(atRaw);
         if (Number.isNaN(at.getTime())) continue;
         const manual = false;
+        activeStaffSet.add(staff);
         (eventsByStaff[staff] ??= []).push({ at, action, manual });
       }
-      for (const staff of Object.keys(eventsByStaff)) {
-        eventsByStaff[staff]!.sort((a, b) => a.at.getTime() - b.at.getTime());
+
+      const activeStaffIds = Array.from(activeStaffSet).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+      if (activeStaffIds.length === 0) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: null as string | null };
       }
 
-      const now = new Date(serverTime);
-      const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
+      const profilesRes = await fetchProfilesByStaffId(activeStaffIds);
+      if (profilesRes.error) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: profilesRes.error };
+      }
+
+      const allEmployees = activeStaffIds
+        .map((staff) => {
+          const profile = profilesRes.staffToProfile.get(staff);
+          return {
+            staff_id: staff,
+            name: profile?.name ?? '',
+            agency: profile?.agency ?? '',
+            position: profile?.position ?? '',
+            shift: profile?.shift ?? ('' as '' | 'early' | 'late'),
+            terminatedAt: profile?.terminatedAt ?? null
+          };
+        });
+
+      const uniqueEmployees = filterEmployeesForView(allEmployees);
+
+      const staffIds = uniqueEmployees.map((e) => e.staff_id);
+      if (staffIds.length === 0) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: null as string | null };
+      }
+
+      const [scheduledRes, marksRes] = await Promise.all([
+        fetchScheduledByStaff(activeStaffIds),
+        fetchAttendanceMarksByStaff(activeStaffIds)
+      ]);
+      if (isStale()) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
+      }
       if (scheduledRes.error) {
         return { rows: [] as TimecardRow[], hasMore: false, error: scheduledRes.error };
       }
@@ -8462,26 +8530,47 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         return { rows: [] as TimecardRow[], hasMore: false, error: marksRes.error };
       }
 
+      for (const staff of Object.keys(eventsByStaff)) {
+        eventsByStaff[staff]!.sort((a, b) => a.at.getTime() - b.at.getTime());
+      }
+
+      const now = new Date(serverTime);
+      const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
+
       let lateByStaffDayKey: Record<string, LateMarkView> = {};
       let lateMarksSynced = false;
-      try {
-        lateByStaffDayKey = (
-          await syncLateMarksForWeek({
-            weekStart,
-            targetEmployees: uniqueEmployees.map((employee) => ({
-              staff_id: employee.staff_id,
-              name: employee.name,
-              agency: employee.agency,
-              position: employee.position,
-              shift: employee.shift,
-              terminated_at: employee.terminatedAt
-            }))
-          })
-        ).lateByStaffDayKey;
-        lateMarksSynced = true;
-      } catch (error) {
-        console.warn('[timecard] sync late marks failed:', error);
+      if (!shouldDeferLateSync) {
+        try {
+          lateByStaffDayKey = (
+            await syncLateMarksForWeek({
+              weekStart,
+              targetEmployees: allEmployees.map((employee) => ({
+                staff_id: employee.staff_id,
+                name: employee.name,
+                agency: employee.agency,
+                position: employee.position,
+                shift: employee.shift,
+                terminated_at: employee.terminatedAt
+              }))
+            })
+          ).lateByStaffDayKey;
+          lateMarksSynced = true;
+        } catch (error) {
+          console.warn('[timecard] sync late marks failed:', error);
+        }
       }
+
+      timecardWeekCacheRef.current = {
+        weekKey: weekStartDate,
+        allEmployees,
+        eventsByStaff,
+        scheduledByStaff: scheduledRes.scheduledByStaff,
+        scheduleStateByStaff: scheduledRes.scheduleStateByStaff,
+        scheduleKnownByStaff: scheduledRes.scheduleKnownByStaff ?? {},
+        marksByStaff: marksRes.marksByStaff,
+        lateByStaffDayKey,
+        lateMarksSynced
+      };
 
       const rows: TimecardRow[] = uniqueEmployees.map((e) => {
         const staff = e.staff_id;
@@ -8507,24 +8596,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         });
       });
 
-      return { rows, hasMore: employees.length === pageSize, error: null as string | null };
+      return { rows, hasMore: false, error: null as string | null };
     };
 
     const fetchAll = async () => {
       const all: TimecardRow[] = [];
-      let from = 0;
       let hasMore = true;
       while (hasMore) {
         if (isStale()) {
           return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
         }
-        const result = await exec(from);
+        const result = await exec();
         if (result.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: result.error };
         }
         all.push(...result.rows);
         hasMore = result.hasMore;
-        from += pageSize;
         if (result.rows.length === 0) {
           hasMore = false;
         }
@@ -8533,6 +8620,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     };
 
     const shouldLockUi = lockUi ?? true;
+    const queueLateSyncPass = () => {
+      if (!shouldDeferLateSync || missingOnly) return;
+      const cachedWeek = timecardWeekCacheRef.current;
+      if (cachedWeek && cachedWeek.weekKey === weekStartDate && cachedWeek.lateMarksSynced) return;
+      if (requestId !== timecardFetchSeqRef.current) return;
+      window.setTimeout(() => {
+        if (requestId !== timecardFetchSeqRef.current) return;
+        void fetchTimecard({
+          reset: true,
+          weekOffset: offset,
+          search: searchValue,
+          agency: agencyValue,
+          position: positionValue,
+          missingEmployeeOnly: missingOnly,
+          lockUi: false,
+          deferLateSync: false
+        });
+      }, 0);
+    };
     if (!shouldLockUi) {
       // Only support reset in soft mode to avoid pagination races.
       if (!reset) {
@@ -8555,6 +8661,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       setTimecardError(isAbortLikeError(result.error) ? null : result.error);
       setTimecardRows(dedupedRows);
       setTimecardHasMore(false);
+      queueLateSyncPass();
       return;
     }
 
@@ -8579,7 +8686,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       })();
       setTimecardRows(dedupedRows);
       setTimecardHasMore(false);
+      queueLateSyncPass();
     });
+    } finally {
+      finishLoading();
+    }
   };
 
   const recomputeTimecardAttendanceMarks = async () => {
@@ -14497,6 +14608,7 @@ ${rowsToHtml(late)}
                 <TimecardTableSection
                   t={t}
                   isLocked={isLocked}
+                  timecardLoading={timecardLoading}
                   serverTime={serverTime}
                   timecardWeekOffset={timecardWeekOffset}
                   timecardWeekStart={timecardWeekStart}
