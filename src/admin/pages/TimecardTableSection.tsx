@@ -6,6 +6,7 @@ import { getTimecardCellHoursText, getTimecardTotalHoursText } from '../timecard
 type TimecardTableSectionProps = {
   t: TranslateFn;
   isLocked: boolean;
+  timecardLoading: boolean;
   serverTime: Date;
   timecardWeekOffset: number;
   timecardWeekStart: Date;
@@ -36,6 +37,7 @@ const OVERSCAN = 12;
 export default function TimecardTableSection({
   t,
   isLocked,
+  timecardLoading,
   serverTime,
   timecardWeekOffset,
   timecardWeekStart,
@@ -282,7 +284,7 @@ export default function TimecardTableSection({
   return (
     <div
       ref={containerRef}
-      className="no-scrollbar mt-5 min-h-[320px] max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30"
+      className="no-scrollbar relative mt-5 min-h-[320px] max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30"
       onScroll={handleBodyScroll}
     >
       <table className="min-w-[1500px] w-full table-fixed text-left text-xs leading-tight">
@@ -350,6 +352,39 @@ export default function TimecardTableSection({
           )}
         </tbody>
       </table>
+
+      {timecardLoading && (
+        <div className="pointer-events-none absolute inset-0 z-30 overflow-hidden rounded-2xl border border-white/10 bg-slate-950/70 backdrop-blur-sm">
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-pulse" />
+          <div className="relative h-full w-full p-3 sm:p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="h-3 w-36 rounded bg-white/20 animate-pulse" />
+              <div className="h-3 w-24 rounded bg-white/15 animate-pulse" />
+            </div>
+            <div className="space-y-2">
+              {Array.from({ length: 8 }).map((_, idx) => (
+                <div
+                  key={`timecard-skeleton-row-${idx}`}
+                  className="grid grid-cols-12 gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-2"
+                >
+                  <div className="col-span-2 h-4 rounded bg-white/20 animate-pulse" />
+                  <div className="col-span-3 h-4 rounded bg-white/15 animate-pulse" />
+                  <div className="col-span-2 h-4 rounded bg-white/10 animate-pulse" />
+                  <div className="col-span-5 flex gap-2">
+                    <span className="h-4 flex-1 rounded bg-teal-400/20 animate-pulse" />
+                    <span className="h-4 flex-1 rounded bg-indigo-400/20 animate-pulse" />
+                    <span className="h-4 flex-1 rounded bg-amber-400/20 animate-pulse" />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex items-center gap-2 text-[11px] tracking-[0.12em] text-slate-300/80">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-sky-300 animate-pulse" />
+              <span>{t('时间卡加载中', 'Loading timecard')}</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
