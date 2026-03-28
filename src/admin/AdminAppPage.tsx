@@ -168,6 +168,7 @@ const DAILY_LIST_LIGHTS_KEY = 'daily_list_position_lights';
 const SCHEDULE_LABEL_TONES_KEY = 'schedule_label_tones_v1';
 const SCHEDULE_POSITION_TONES_KEY = 'schedule_position_tones_v1';
 const SCHEDULE_REST_NOTE = '__rest__';
+const SCHEDULE_FIXED_WORK_NOTE = '__fixed_work__';
 const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
 const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
@@ -228,6 +229,7 @@ type ScheduleRecommendedByDate = Record<string, ScheduleRecommendedPosition[]>;
 
 const getScheduleBaseStateFromNote = (note: unknown): ScheduleBaseState => {
   const value = String(note ?? '').trim();
+  if (value === SCHEDULE_FIXED_WORK_NOTE) return 'fixed_work';
   if (value === SCHEDULE_TEMP_WORK_NOTE) return 'temp_work';
   if (value === SCHEDULE_LEAVE_NOTE) return 'leave';
   if (value === SCHEDULE_TEMP_REST_NOTE) return 'temp_rest';
@@ -240,6 +242,7 @@ const getScheduleBaseStateFromNote = (note: unknown): ScheduleBaseState => {
 
 const getScheduleNoteFromBaseState = (state: ScheduleBaseState): string | null => {
   if (state === 'work') return null;
+  if (state === 'fixed_work') return SCHEDULE_FIXED_WORK_NOTE;
   if (state === 'temp_work') return SCHEDULE_TEMP_WORK_NOTE;
   if (state === 'leave') return SCHEDULE_LEAVE_NOTE;
   if (state === 'temp_rest') return SCHEDULE_TEMP_REST_NOTE;
@@ -250,7 +253,7 @@ const getScheduleNoteFromBaseState = (state: ScheduleBaseState): string | null =
 };
 
 const isWorkingScheduleBaseState = (state: ScheduleBaseState) =>
-  state === 'work' || state === 'temp_work' || state === 'planned_temp_work';
+  state === 'work' || state === 'fixed_work' || state === 'temp_work' || state === 'planned_temp_work';
 const isRestLikeScheduleBaseState = (state: ScheduleBaseState) =>
   state === 'rest' || state === 'temp_rest' || state === 'leave' || state === 'planned_temp_rest' || state === 'planned_leave';
 
@@ -2545,6 +2548,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     setAuditRows((prev) => [row, ...prev].slice(0, 200));
     if (
       action === 'schedule_work' ||
+      action === 'schedule_fixed_work' ||
       action === 'schedule_temp_work' ||
       action === 'schedule_planned_temp_work' ||
       action === 'schedule_leave' ||
@@ -2665,6 +2669,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       punch_manual_delete: t('删打卡', 'Punch Delete'),
       punch_count_verified: t('次数核实', 'Punch Verified'),
       schedule_work: t('排班工作', 'Schedule Work'),
+      schedule_fixed_work: t('固定排班', 'Fixed Shift'),
       schedule_temp_work: t('临时工作', 'Temp Work'),
       schedule_planned_temp_work: t('计划临时工作', 'Planned Temp Work'),
       schedule_leave: t('请假', 'Leave'),
@@ -2756,6 +2761,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     }
     const actions = [
       'schedule_work',
+      'schedule_fixed_work',
       'schedule_temp_work',
       'schedule_planned_temp_work',
       'schedule_leave',
@@ -3266,7 +3272,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           marksToWrite.push('excuse');
         } else if (effectiveState === 'temp_rest' || effectiveState === 'planned_temp_rest') {
           marksToWrite.push('temporary_leave');
-        } else if (effectiveState === 'work' || effectiveState === 'temp_work' || effectiveState === 'planned_temp_work') {
+        } else if (
+          effectiveState === 'work' ||
+          effectiveState === 'fixed_work' ||
+          effectiveState === 'temp_work' ||
+          effectiveState === 'planned_temp_work'
+        ) {
           const workRange = getWorkDateRange(targetWorkDate);
           if (workRange) {
             const now = new Date(serverTime);
@@ -3427,6 +3438,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         action:
           nextState === 'work'
             ? 'schedule_work'
+            : nextState === 'fixed_work'
+              ? 'schedule_fixed_work'
             : nextState === 'temp_work'
               ? 'schedule_temp_work'
               : nextState === 'planned_temp_work'
@@ -3924,7 +3937,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
   const schedulePickerOptions = useMemo(() => {
     const base = [
-      { key: 'work', labelZh: '工作', labelEn: 'Work', cls: 'bg-neon text-white', mode: 'all' },
+      {
+        key: 'work',
+        labelZh: '工作',
+        labelEn: 'Work',
+        cls: themeMode === 'light' ? 'bg-slate-900 text-white' : 'bg-neon text-white shadow-glow',
+        mode: 'all'
+      },
+      {
+        key: 'fixed_work',
+        labelZh: '固定排班',
+        labelEn: 'Fixed Shift',
+        cls:
+          themeMode === 'light'
+            ? 'border-2 border-[#d4a017] bg-[#000000] text-[#ffd24d]'
+            : 'border-2 border-[#d4a017] bg-[#0f3f2b] text-[#ffd24d]',
+        mode: 'all'
+      },
       { key: 'temp_work', labelZh: '临时工作', labelEn: 'Tem Work', cls: 'bg-emerald-700 text-white', mode: 'current' },
       { key: 'planned_temp_work', labelZh: '计划临时工作', labelEn: 'Planned Tem Work', cls: 'bg-emerald-500 text-white', mode: 'future' },
       { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white', mode: 'current' },
@@ -3937,7 +3966,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const preferred = base.filter((item) => item.mode === 'all' || item.mode === schedulePickerMode);
     const secondary = base.filter((item) => item.mode !== 'all' && item.mode !== schedulePickerMode);
     return [...preferred, ...secondary];
-  }, [schedulePickerMode]);
+  }, [schedulePickerMode, themeMode]);
 
   useEffect(() => {
     if (!schedulePicker.open) return;
@@ -6632,6 +6661,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         return t('休息', 'Off');
       }
       if (state === 'work') return t('工作', 'Work');
+      if (state === 'fixed_work') return t('固定排班', 'Fixed Shift');
       if (state === 'temp_work') return t('临时工作', 'Temporary Work');
       if (state === 'planned_temp_work') return t('计划临时工作', 'Planned Temporary Work');
       if (state === 'leave') return t('请假', 'Excuse');
@@ -6643,6 +6673,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (state === 'absent') return t('缺勤', 'Absent');
       if (state === 'empty') return t('休息', 'Off');
       if (state === '工作') return t('工作', 'Work');
+      if (state === '固定排班') return t('固定排班', 'Fixed Shift');
       if (state === '临时工作') return t('临时工作', 'Temporary Work');
       if (state === '计划临时工作') return t('计划临时工作', 'Planned Temporary Work');
       if (state === '请假') return t('请假', 'Excuse');
@@ -6752,6 +6783,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const fromState = getScheduleFromState('empty');
       const toState = getScheduleToState('work');
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
+    } else if (action === 'schedule_fixed_work') {
+      const fromState = getScheduleFromState('empty');
+      const toState = getScheduleToState('fixed_work');
+      summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
     } else if (action === 'schedule_temp_work') {
       const fromState = getScheduleFromState('empty');
       const toState = getScheduleToState('temp_work');
@@ -6834,6 +6869,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     return (
       action === 'employee_delete' ||
       action === 'schedule_work' ||
+      action === 'schedule_fixed_work' ||
       action === 'schedule_rest' ||
       action === 'schedule_temp_work' ||
       action === 'schedule_planned_temp_work' ||
@@ -7059,6 +7095,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const validState = (value: string): value is 'empty' | ScheduleBaseState =>
       value === 'empty' ||
       value === 'work' ||
+      value === 'fixed_work' ||
       value === 'temp_work' ||
       value === 'planned_temp_work' ||
       value === 'leave' ||
@@ -11277,6 +11314,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const map = new Map<string, AuditRow[]>();
     const scheduleActions = new Set([
       'schedule_work',
+      'schedule_fixed_work',
       'schedule_temp_work',
       'schedule_planned_temp_work',
       'schedule_leave',
@@ -12392,6 +12430,7 @@ ${rowsToHtml(late)}
               if (!row) return '休息';
               const state = getScheduleBaseStateFromNote(row.note);
               if (state === 'work') return shift === 'late' ? '晚1' : '早1';
+              if (state === 'fixed_work') return '固定排班';
               if (state === 'temp_work') return '临时工作';
               if (state === 'planned_temp_work') return '计划临时工作';
               if (state === 'leave') return '请假';
@@ -13757,6 +13796,10 @@ ${rowsToHtml(late)}
                                             'h-7 min-w-[36px] rounded-md px-0.5 text-[9px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55',
                                             state === 'work'
                                               ? 'bg-neon text-white shadow-glow'
+                                              : state === 'fixed_work'
+                                                ? themeMode === 'light'
+                                                  ? 'border-2 border-[#d4a017] bg-[#000000] text-[#ffd24d]'
+                                                  : 'border-2 border-[#d4a017] bg-[#0f3f2b] text-[#ffd24d]'
                                               : state === 'temp_work'
                                                 ? 'bg-emerald-700 text-white'
                                               : state === 'planned_temp_work'
@@ -13781,6 +13824,8 @@ ${rowsToHtml(late)}
                                         >
                                           {state === 'work'
                                             ? t('工作', 'Work')
+                                            : state === 'fixed_work'
+                                              ? t('固定排班', 'Fixed Shift')
                                             : state === 'temp_work'
                                               ? t('临时工作', 'Tem Work')
                                             : state === 'planned_temp_work'
@@ -14607,6 +14652,7 @@ ${rowsToHtml(late)}
 
                 <TimecardTableSection
                   t={t}
+                  themeMode={themeMode}
                   isLocked={isLocked}
                   timecardLoading={timecardLoading}
                   serverTime={serverTime}
