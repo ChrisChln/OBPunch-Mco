@@ -45,11 +45,13 @@ export type EmployeeRow = {
   label?: string | null;
   work_account?: string | null;
   work_password?: string | null;
+  shift_time?: string | null;
   Agency?: string | null;
   Position?: string | null;
   Label?: string | null;
   WorkAccount?: string | null;
   WorkPassword?: string | null;
+  ShiftTime?: string | null;
   active?: boolean | null;
   terminated_at?: string | null;
   created_at?: string | null;
@@ -134,6 +136,7 @@ export type DailyListRow = {
   agency: string;
   position: string;
   shift: 'early' | 'late';
+  start_time: string;
 };
 
 export type DeviceRow = {
