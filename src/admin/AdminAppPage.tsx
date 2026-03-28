@@ -8896,7 +8896,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         .delete()
         .gte('work_date', weekDateByIndex[0] ?? '')
         .lte('work_date', weekDateByIndex[6] ?? '')
-        .in('mark_type', NON_LATE_ATTENDANCE_MARK_TYPES as any);
+        .in('mark_type', NON_LATE_ATTENDANCE_MARK_TYPES as any)
+        .in('source', ['schedule', 'recompute'] as any);
       if (clearRes.error) {
         setStatus({ tone: 'error', message: `重算失败：${clearRes.error.message}` });
         return;
