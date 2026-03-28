@@ -1,10 +1,11 @@
 type TranslateFn = (zh: string, en: string) => string;
 
-import { useRef, useState, useMemo, useCallback } from 'react';
+import { useRef, useState, useMemo, useCallback, useEffect } from 'react';
 import { getTimecardCellHoursText, getTimecardTotalHoursText } from '../timecardDisplay';
 
 type TimecardTableSectionProps = {
   t: TranslateFn;
+  themeMode: 'light' | 'dark';
   isLocked: boolean;
   timecardLoading: boolean;
   serverTime: Date;
@@ -36,6 +37,7 @@ const OVERSCAN = 12;
 
 export default function TimecardTableSection({
   t,
+  themeMode,
   isLocked,
   timecardLoading,
   serverTime,
@@ -60,23 +62,42 @@ export default function TimecardTableSection({
   normalizeAuditActor,
   renderAuditSummary
 }: TimecardTableSectionProps) {
+  const isLight = themeMode === 'light';
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [scrollOffset, setScrollOffset] = useState(0);
+  const scrollRafRef = useRef<number | null>(null);
+  const [visibleStartIndex, setVisibleStartIndex] = useState(0);
+  const [containerHeightPx, setContainerHeightPx] = useState(() => Math.round(window.innerHeight * 0.68));
 
-  // 计算可见范围 (虚拟滚动)
-  const containerHeightPx = useMemo(() => {
-    if (!containerRef.current) return window.innerHeight * 0.68;
-    return containerRef.current.clientHeight;
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+    const updateHeight = () => {
+      setContainerHeightPx((prev) => {
+        const next = element.clientHeight || Math.round(window.innerHeight * 0.68);
+        return next === prev ? prev : next;
+      });
+    };
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
   }, []);
 
   const visibleRange = useMemo(() => {
-    const start = Math.max(0, Math.floor(scrollOffset / ROW_HEIGHT) - OVERSCAN);
+    const visibleCount = Math.ceil(containerHeightPx / ROW_HEIGHT) + OVERSCAN * 2;
+    const start = Math.max(0, visibleStartIndex - OVERSCAN);
     const end = Math.min(
       timecardRowsRendered.length,
-      Math.ceil((scrollOffset + containerHeightPx) / ROW_HEIGHT) + OVERSCAN
+      start + visibleCount
     );
     return { start, end };
-  }, [scrollOffset, containerHeightPx, timecardRowsRendered.length]);
+  }, [visibleStartIndex, containerHeightPx, timecardRowsRendered.length]);
 
   // 仅渲染可见的行
   const visibleRows = useMemo(
@@ -86,7 +107,12 @@ export default function TimecardTableSection({
 
   const handleBodyScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
-    setScrollOffset(target.scrollTop);
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const nextStart = Math.floor(target.scrollTop / ROW_HEIGHT);
+      setVisibleStartIndex((prev) => (prev === nextStart ? prev : nextStart));
+    });
   }, []);
 
   const baseWeekStart = startOfWeekMonday(serverTime);
@@ -354,32 +380,54 @@ export default function TimecardTableSection({
       </table>
 
       {timecardLoading && (
-        <div className="pointer-events-none absolute inset-0 z-30 overflow-hidden rounded-2xl border border-white/10 bg-slate-950/70 backdrop-blur-sm">
-          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-pulse" />
+        <div
+          className={[
+            'pointer-events-none absolute inset-0 z-30 overflow-hidden rounded-2xl border backdrop-blur-sm',
+            isLight ? 'border-slate-200/90 bg-white/80' : 'border-white/10 bg-slate-950/70'
+          ].join(' ')}
+        >
+          <div
+            className={[
+              'absolute inset-0 animate-pulse',
+              isLight
+                ? 'bg-gradient-to-r from-transparent via-sky-100/80 to-transparent'
+                : 'bg-gradient-to-r from-transparent via-white/10 to-transparent'
+            ].join(' ')}
+          />
+          {isLight && (
+            <div className="absolute inset-0 opacity-90" aria-hidden="true">
+              <div className="absolute -left-[15%] top-[-35%] h-[72%] w-[55%] animate-[spin_16s_linear_infinite] rounded-full bg-[radial-gradient(circle,rgba(56,189,248,0.2)_0%,rgba(14,165,233,0.06)_45%,transparent_70%)]" />
+              <div className="absolute -right-[8%] bottom-[-42%] h-[78%] w-[52%] animate-[spin_20s_linear_infinite_reverse] rounded-full bg-[radial-gradient(circle,rgba(59,130,246,0.16)_0%,rgba(37,99,235,0.05)_46%,transparent_70%)]" />
+              <div className="absolute inset-x-0 top-0 h-full bg-[repeating-linear-gradient(180deg,rgba(148,163,184,0.08)_0px,rgba(148,163,184,0.08)_1px,transparent_1px,transparent_6px)]" />
+            </div>
+          )}
           <div className="relative h-full w-full p-3 sm:p-4">
             <div className="mb-3 flex items-center justify-between">
-              <div className="h-3 w-36 rounded bg-white/20 animate-pulse" />
-              <div className="h-3 w-24 rounded bg-white/15 animate-pulse" />
+              <div className={['h-3 w-36 rounded animate-pulse', isLight ? 'bg-slate-300/60' : 'bg-white/20'].join(' ')} />
+              <div className={['h-3 w-24 rounded animate-pulse', isLight ? 'bg-slate-300/50' : 'bg-white/15'].join(' ')} />
             </div>
             <div className="space-y-2">
               {Array.from({ length: 8 }).map((_, idx) => (
                 <div
                   key={`timecard-skeleton-row-${idx}`}
-                  className="grid grid-cols-12 gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-2"
+                  className={[
+                    'grid grid-cols-12 gap-2 rounded-lg border px-2 py-2',
+                    isLight ? 'border-slate-200/80 bg-white/65' : 'border-white/10 bg-white/[0.04]'
+                  ].join(' ')}
                 >
-                  <div className="col-span-2 h-4 rounded bg-white/20 animate-pulse" />
-                  <div className="col-span-3 h-4 rounded bg-white/15 animate-pulse" />
-                  <div className="col-span-2 h-4 rounded bg-white/10 animate-pulse" />
+                  <div className={['col-span-2 h-4 rounded animate-pulse', isLight ? 'bg-slate-300/70' : 'bg-white/20'].join(' ')} />
+                  <div className={['col-span-3 h-4 rounded animate-pulse', isLight ? 'bg-slate-300/60' : 'bg-white/15'].join(' ')} />
+                  <div className={['col-span-2 h-4 rounded animate-pulse', isLight ? 'bg-slate-300/50' : 'bg-white/10'].join(' ')} />
                   <div className="col-span-5 flex gap-2">
-                    <span className="h-4 flex-1 rounded bg-teal-400/20 animate-pulse" />
-                    <span className="h-4 flex-1 rounded bg-indigo-400/20 animate-pulse" />
-                    <span className="h-4 flex-1 rounded bg-amber-400/20 animate-pulse" />
+                    <span className={['h-4 flex-1 rounded animate-pulse', isLight ? 'bg-teal-300/45' : 'bg-teal-400/20'].join(' ')} />
+                    <span className={['h-4 flex-1 rounded animate-pulse', isLight ? 'bg-indigo-300/45' : 'bg-indigo-400/20'].join(' ')} />
+                    <span className={['h-4 flex-1 rounded animate-pulse', isLight ? 'bg-amber-300/45' : 'bg-amber-400/20'].join(' ')} />
                   </div>
                 </div>
               ))}
             </div>
-            <div className="mt-4 flex items-center gap-2 text-[11px] tracking-[0.12em] text-slate-300/80">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-sky-300 animate-pulse" />
+            <div className={['mt-4 flex items-center gap-2 text-[11px] tracking-[0.12em]', isLight ? 'text-slate-600' : 'text-slate-300/80'].join(' ')}>
+              <span className={['inline-block h-1.5 w-1.5 rounded-full animate-pulse', isLight ? 'bg-sky-500' : 'bg-sky-300'].join(' ')} />
               <span>{t('时间卡加载中', 'Loading timecard')}</span>
             </div>
           </div>

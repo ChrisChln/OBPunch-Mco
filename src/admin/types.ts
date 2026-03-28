@@ -25,6 +25,7 @@ export type DeviceType = 'PDA' | 'CART';
 
 export type ScheduleBaseState =
   | 'work'
+  | 'fixed_work'
   | 'temp_work'
   | 'leave'
   | 'temp_rest'
