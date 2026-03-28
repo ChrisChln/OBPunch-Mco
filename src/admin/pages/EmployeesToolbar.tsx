@@ -369,17 +369,6 @@ export default function EmployeesToolbar({
           </details>
         </div>
       </div>
-
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          disabled={isLocked}
-          onClick={() => void fetchEmployees({ reset: true })}
-          className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {t('搜索', 'Search')}
-        </button>
-      </div>
     </>
   );
 }

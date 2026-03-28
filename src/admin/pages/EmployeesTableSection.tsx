@@ -54,6 +54,7 @@ type EmployeesTableSectionProps = {
     agency: string;
     position: string;
     shift: '' | 'early' | 'late';
+    shiftTime: string;
     label: string;
     workAccount: string;
     workPassword: string;
@@ -147,7 +148,7 @@ export default function EmployeesTableSection({
         className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30"
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
       >
-        <table className="min-w-[1600px] w-full text-left text-sm">
+        <table className="min-w-[1570px] w-full text-left text-sm">
           <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-xs uppercase tracking-[0.2em] text-slate-400 backdrop-blur">
             <tr>
               <th className="w-[150px] px-4 py-3 whitespace-nowrap">Employee ID</th>
@@ -156,7 +157,6 @@ export default function EmployeesTableSection({
               <th className="w-[120px] px-4 py-3 whitespace-nowrap">Position</th>
               <th className="w-[130px] px-4 py-3 whitespace-nowrap">{t('标签', 'Label')}</th>
               <th className="w-[150px] px-4 py-3 whitespace-nowrap">{t('账号', 'Account')}</th>
-              <th className="w-[150px] px-4 py-3 whitespace-nowrap">{t('密码', 'Password')}</th>
               <th className="w-[130px] px-4 py-3 whitespace-nowrap">
                 <button
                   type="button"
@@ -169,6 +169,7 @@ export default function EmployeesTableSection({
                 </button>
               </th>
               <th className="w-[100px] px-4 py-3 whitespace-nowrap">{t('班次', 'Shift')}</th>
+              <th className="w-[120px] px-4 py-3 whitespace-nowrap">{t('班次时间', 'Shift time')}</th>
               <th className="w-[130px] px-4 py-3 whitespace-nowrap">
                 <button
                   type="button"
@@ -211,6 +212,7 @@ export default function EmployeesTableSection({
               const scheduleRow = scheduleRowsByStaffDayIndex.get(`${normalizeStaffId(staff)}__${homeOperationalDayIndex}`);
               const scheduledShift = normalizeShiftValue(String(scheduleRow?.shift ?? '').trim());
               const dbShift = normalizeShiftValue(String(e.shift ?? '').trim());
+              const shiftTime = String((e as any).shift_time ?? (e as any).ShiftTime ?? '').trim();
               let weeklyScheduledShift: '' | 'early' | 'late' = '';
               if (!scheduledShift) {
                 const normalizedStaff = normalizeStaffId(staff);
@@ -301,7 +303,6 @@ export default function EmployeesTableSection({
                     )}
                   </td>
                   <td className="w-[150px] px-4 py-3 text-slate-200 whitespace-nowrap">{workAccount || '-'}</td>
-                  <td className="w-[150px] px-4 py-3 text-slate-200 whitespace-nowrap">{workPassword || '-'}</td>
                   <td className="w-[130px] px-4 py-3 text-slate-200 whitespace-nowrap">{hireDate}</td>
                   <td className="w-[100px] px-4 py-3 text-slate-200 whitespace-nowrap">
                     <span
@@ -314,6 +315,7 @@ export default function EmployeesTableSection({
                       {shiftLabel}
                     </span>
                   </td>
+                  <td className="w-[120px] px-4 py-3 font-mono text-slate-200 whitespace-nowrap">{shiftTime || '-'}</td>
                   <td className="w-[130px] px-4 py-3 text-slate-200 whitespace-nowrap">{lastPunchDaysText}</td>
                   <td className="w-[240px] px-4 py-3 text-right whitespace-nowrap">
                     <button
@@ -348,7 +350,17 @@ export default function EmployeesTableSection({
                       disabled={isLocked}
                       onClick={(evt) => {
                         evt.stopPropagation();
-                        openEmployeeEdit({ staff, name, agency, position, shift: (shift as '' | 'early' | 'late'), label, workAccount, workPassword });
+                        openEmployeeEdit({
+                          staff,
+                          name,
+                          agency,
+                          position,
+                          shift: shift as '' | 'early' | 'late',
+                          shiftTime,
+                          label,
+                          workAccount,
+                          workPassword
+                        });
                       }}
                       className={[
                         'mr-2 rounded-xl px-4 py-1.5 text-xs font-semibold transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60',

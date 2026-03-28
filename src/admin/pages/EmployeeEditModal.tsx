@@ -23,6 +23,8 @@ type EmployeeEditModalProps = {
   setEmployeeEditPosition: (value: string) => void;
   employeeEditShift: '' | 'early' | 'late';
   setEmployeeEditShift: (value: '' | 'early' | 'late') => void;
+  employeeEditShiftTime: string;
+  setEmployeeEditShiftTime: (value: string) => void;
   employeeEditLabel: string;
   setEmployeeEditLabel: (value: string) => void;
   employeeEditWorkAccount: string;
@@ -56,6 +58,8 @@ export default function EmployeeEditModal({
   setEmployeeEditPosition,
   employeeEditShift,
   setEmployeeEditShift,
+  employeeEditShiftTime,
+  setEmployeeEditShiftTime,
   employeeEditLabel,
   setEmployeeEditLabel,
   employeeEditWorkAccount,
@@ -195,6 +199,16 @@ export default function EmployeeEditModal({
                     </button>
                   ))}
                 </div>
+              </div>
+              <div>
+                <label className={['text-xs uppercase tracking-[0.25em]', labelClass].join(' ')}>{t('班次时间', 'Shift time')}</label>
+                <input
+                  value={employeeEditShiftTime}
+                  onChange={(e) => setEmployeeEditShiftTime(e.target.value)}
+                  disabled={isLocked}
+                  placeholder={t('例如 07:00', 'e.g. 07:00')}
+                  className={fieldClass}
+                />
               </div>
               <div>
                 <label className={['text-xs uppercase tracking-[0.25em]', labelClass].join(' ')}>{t('标签', 'Label')}</label>

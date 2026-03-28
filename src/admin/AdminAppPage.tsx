@@ -922,7 +922,14 @@ const EMPLOYEE_KEY_ALIASES: Record<string, string> = {
   work_password: 'work_password',
   workpassword: 'work_password',
   '工作密码': 'work_password',
-  '密码': 'work_password'
+  '密码': 'work_password',
+  shift_time: 'shift_time',
+  shifttime: 'shift_time',
+  start_time: 'shift_time',
+  starttime: 'shift_time',
+  '班次时间': 'shift_time',
+  '上班时间': 'shift_time',
+  '开始时间': 'shift_time'
 };
 
 const DEVICE_KEY_ALIASES: Record<string, string> = {
@@ -1203,6 +1210,7 @@ export default function AdminAppPage() {
   const [employeeNewAgency, setEmployeeNewAgency] = useState('');
   const [employeeNewPosition, setEmployeeNewPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [employeeNewShift, setEmployeeNewShift] = useState<'' | 'early' | 'late'>('');
+  const [employeeNewShiftTime, setEmployeeNewShiftTime] = useState('');
   const [employeeNewLabel, setEmployeeNewLabel] = useState('');
   const [employeeNewWorkAccount, setEmployeeNewWorkAccount] = useState('');
   const [employeeNewWorkPassword, setEmployeeNewWorkPassword] = useState('');
@@ -1214,6 +1222,7 @@ export default function AdminAppPage() {
   const [employeeEditAgency, setEmployeeEditAgency] = useState('');
   const [employeeEditPosition, setEmployeeEditPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
   const [employeeEditShift, setEmployeeEditShift] = useState<'' | 'early' | 'late'>('');
+  const [employeeEditShiftTime, setEmployeeEditShiftTime] = useState('');
   const [employeeEditLabel, setEmployeeEditLabel] = useState('');
   const [employeeEditWorkAccount, setEmployeeEditWorkAccount] = useState('');
   const [employeeEditWorkPassword, setEmployeeEditWorkPassword] = useState('');
@@ -1983,12 +1992,23 @@ const normalizeShiftValue = (value: string): '' | 'early' | 'late' => {
   if (v === 'late' || v === 'night' || v === 'evening') return 'late';
   return '';
 };
-const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
-  const pos = normalizePositionKey(position) ?? '';
-  const isSevenThirtyTrack = pos === 'Pick' || pos === 'Transfer';
-  if (shift === 'early') return isSevenThirtyTrack ? '07:00' : '08:00';
-  return isSevenThirtyTrack ? '15:30' : '16:30';
+const normalizeShiftTimeValue = (value: unknown) => {
+  const parsed = parseClockTextToMinutes(String(value ?? '').trim());
+  if (!Number.isFinite(parsed)) return '';
+  return formatClockMinutes(parsed as number);
 };
+const getDefaultShiftStartTime = (shift: 'early' | 'late', position: string) => {
+  const pos = normalizePositionKey(position) ?? '';
+  const isPickTrack = pos === 'Pick';
+  if (shift === 'early') return isPickTrack ? '07:00' : '08:00';
+  return isPickTrack ? '15:30' : '16:30';
+};
+const resolveShiftStartTime = (shift: 'early' | 'late', position: string, shiftTimeRaw?: unknown) => {
+  const normalized = normalizeShiftTimeValue(shiftTimeRaw);
+  if (normalized) return normalized;
+  return getDefaultShiftStartTime(shift, position);
+};
+const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDefaultShiftStartTime(shift, position);
 
   const fetchRealtimeAttendance = async () => {
     if (!supabase) {
@@ -4891,9 +4911,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           .map((row) => {
             const workAccount = String((row as any)?.work_account ?? (row as any)?.WorkAccount ?? '').trim();
             const workPassword = String((row as any)?.work_password ?? (row as any)?.WorkPassword ?? '').trim();
+            const shiftTime = normalizeShiftTimeValue((row as any)?.shift_time ?? (row as any)?.ShiftTime ?? '');
             return {
               ...row,
-              work_password: resolveDefaultWorkPassword(workAccount, workPassword)
+              work_password: resolveDefaultWorkPassword(workAccount, workPassword),
+              shift_time: shiftTime || null
             } as EmployeeRow;
           })
           .filter((row) => isEmployeeActive(row));
@@ -5062,6 +5084,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const agency = employeeNewAgency.trim();
     const position = employeeNewPosition.trim();
     const shift = employeeNewShift;
+    const shiftTime = normalizeShiftTimeValue(employeeNewShiftTime);
     const label = employeeNewLabel.trim();
     const workAccount = employeeNewWorkAccount.trim();
     const workPassword = resolveDefaultWorkPassword(workAccount, employeeNewWorkPassword.trim());
@@ -5090,6 +5113,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       setEmployeesError(`Position 只能是：${ALLOWED_POSITIONS.join(', ')}`);
       return;
     }
+    const resolvedShiftTime = resolveShiftStartTime(shift, normalizedPos, shiftTime);
 
     await runLocked('employee_add', async () => {
       setEmployeesError(null);
@@ -5103,6 +5127,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
               Agency: agency,
               Position: normalizedPos,
               shift: shift || null,
+              shift_time: resolvedShiftTime || null,
               label: label || null,
               work_account: workAccount || null,
               work_password: workPassword || null,
@@ -5115,6 +5140,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
               agency,
               position: normalizedPos,
               shift: shift || null,
+              shift_time: resolvedShiftTime || null,
               label: label || null,
               work_account: workAccount || null,
               work_password: workPassword || null,
@@ -5147,13 +5173,24 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         action: 'employee_upsert',
         staffId: staff,
         target: EMPLOYEE_TABLE,
-        payload: { staff_id: staff, name, agency, position: normalizedPos, shift, label, work_account: workAccount, work_password: workPassword }
+        payload: {
+          staff_id: staff,
+          name,
+          agency,
+          position: normalizedPos,
+          shift,
+          shift_time: resolvedShiftTime,
+          label,
+          work_account: workAccount,
+          work_password: workPassword
+        }
       });
       setEmployeeNewStaffId('');
       setEmployeeNewName('');
       setEmployeeNewAgency('');
       setEmployeeNewPosition('');
       setEmployeeNewShift('');
+      setEmployeeNewShiftTime('');
       setEmployeeNewLabel('');
       setEmployeeNewWorkAccount('');
       setEmployeeNewWorkPassword('');
@@ -6321,6 +6358,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     agency: string;
     position: string;
     shift: '' | 'early' | 'late';
+    shiftTime: string;
     label: string;
     workAccount: string;
     workPassword: string;
@@ -6333,6 +6371,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const normalized = normalizePositionKey(payload.position);
     setEmployeeEditPosition((normalized ?? '') as (typeof ALLOWED_POSITIONS)[number] | '');
     setEmployeeEditShift(payload.shift);
+    setEmployeeEditShiftTime(normalizeShiftTimeValue(payload.shiftTime));
     setEmployeeEditLabel(payload.label);
     setEmployeeEditWorkAccount(payload.workAccount);
     setEmployeeEditWorkPassword(payload.workPassword);
@@ -6347,6 +6386,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     setEmployeeEditAgency('');
     setEmployeeEditPosition('');
     setEmployeeEditShift('');
+    setEmployeeEditShiftTime('');
     setEmployeeEditLabel('');
     setEmployeeEditWorkAccount('');
     setEmployeeEditWorkPassword('');
@@ -6359,6 +6399,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     setEmployeeNewAgency('');
     setEmployeeNewPosition('');
     setEmployeeNewShift('');
+    setEmployeeNewShiftTime('');
     setEmployeeNewLabel('');
     setEmployeeNewWorkAccount('');
     setEmployeeNewWorkPassword('');
@@ -6396,7 +6437,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     const label = employeeEditLabel.trim();
     const workAccount = employeeEditWorkAccount.trim();
     const workPassword = resolveDefaultWorkPassword(workAccount, employeeEditWorkPassword.trim());
+    const shiftTimeInput = normalizeShiftTimeValue(employeeEditShiftTime);
     const normalizedPos = positionRaw ? normalizePositionKey(positionRaw) : null;
+    const resolvedShiftTime =
+      normalizedPos && employeeEditShift ? resolveShiftStartTime(employeeEditShift, normalizedPos, shiftTimeInput) : shiftTimeInput;
     if (positionRaw && !normalizedPos) {
       setEmployeesError('Position must be one of: ' + ALLOWED_POSITIONS.join(', '));
       return;
@@ -6462,8 +6506,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         .from(EMPLOYEE_TABLE)
         .select(
           mode === 'cased'
-            ? 'staff_id,name,"Agency","Position",label,work_account,work_password'
-            : 'staff_id,name,agency,position,label,work_account,work_password'
+            ? 'staff_id,name,"Agency","Position",shift,shift_time,label,work_account,work_password'
+            : 'staff_id,name,agency,position,shift,shift_time,label,work_account,work_password'
         )
         .eq('staff_id', originalStaff)
         .maybeSingle();
@@ -6485,6 +6529,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
               Agency: agency || null,
               Position: normalizedPos,
               shift: employeeEditShift || null,
+              shift_time: resolvedShiftTime || null,
               label: label || null,
               work_account: workAccount || null,
               work_password: workPassword || null,
@@ -6497,6 +6542,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
               agency: agency || null,
               position: normalizedPos,
               shift: employeeEditShift || null,
+              shift_time: resolvedShiftTime || null,
               label: label || null,
               work_account: workAccount || null,
               work_password: workPassword || null,
@@ -6525,6 +6571,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                   name: originalEmployeeRow.name ?? null,
                   Agency: originalEmployeeRow.Agency ?? null,
                   Position: originalEmployeeRow.Position ?? null,
+                  shift: originalEmployeeRow.shift ?? null,
+                  shift_time: originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime ?? null,
                   label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null,
                   work_account: originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? null,
                   work_password: originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? null
@@ -6534,6 +6582,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                   name: originalEmployeeRow.name ?? null,
                   agency: originalEmployeeRow.agency ?? null,
                   position: originalEmployeeRow.position ?? null,
+                  shift: originalEmployeeRow.shift ?? null,
+                  shift_time: originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime ?? null,
                   label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null,
                   work_account: originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? null,
                   work_password: originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? null
@@ -6577,6 +6627,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           name,
           agency,
           position: normalizedPos,
+          shift: employeeEditShift,
+          shift_time: resolvedShiftTime,
           label,
           work_account: workAccount,
           work_password: workPassword,
@@ -6587,6 +6639,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             name: String(originalEmployeeRow.name ?? '').trim(),
             agency: String(originalEmployeeRow.agency ?? originalEmployeeRow.Agency ?? '').trim(),
             position: String(originalEmployeeRow.position ?? originalEmployeeRow.Position ?? '').trim(),
+            shift: normalizeShiftValue(String(originalEmployeeRow.shift ?? '').trim()),
+            shift_time: normalizeShiftTimeValue(originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime),
             label: String(originalEmployeeRow.label ?? originalEmployeeRow.Label ?? '').trim(),
             work_account: String(originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? '').trim(),
             work_password: String(originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? '').trim()
@@ -6596,6 +6650,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             name,
             agency,
             position: normalizedPos ?? '',
+            shift: employeeEditShift,
+            shift_time: resolvedShiftTime,
             label,
             work_account: workAccount,
             work_password: workPassword
@@ -6704,6 +6760,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       push(t('姓名', 'Name'), payload?.name);
       push('Agency', payload?.agency);
       push(t('岗位', 'Position'), payload?.position);
+      push(t('班次', 'Shift'), payload?.shift);
+      push(t('班次时间', 'Shift time'), payload?.shift_time);
       push(t('工作账号', 'Work account'), payload?.work_account);
       push(t('工作密码', 'Work password'), payload?.work_password);
     } else if (action === 'employee_update') {
@@ -6715,6 +6773,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         pushChanged(t('姓名', 'Name'), before?.name, after?.name ?? payload?.name);
         pushChanged('Agency', before?.agency, after?.agency ?? payload?.agency);
         pushChanged(t('岗位', 'Position'), before?.position, after?.position ?? payload?.position);
+        pushChanged(t('班次', 'Shift'), before?.shift, after?.shift ?? payload?.shift);
+        pushChanged(t('班次时间', 'Shift time'), before?.shift_time, after?.shift_time ?? payload?.shift_time);
         pushChanged(t('标签', 'Label'), before?.label, after?.label ?? payload?.label);
         pushChanged(t('工作账号', 'Work account'), before?.work_account, after?.work_account ?? payload?.work_account);
         pushChanged(t('工作密码', 'Work password'), before?.work_password, after?.work_password ?? payload?.work_password);
@@ -6725,6 +6785,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         push(t('姓名', 'Name'), payload?.name);
         push('Agency', payload?.agency);
         push(t('岗位', 'Position'), payload?.position);
+        push(t('班次', 'Shift'), payload?.shift);
+        push(t('班次时间', 'Shift time'), payload?.shift_time);
         push(t('标签', 'Label'), payload?.label);
         push(t('工作账号', 'Work account'), payload?.work_account);
         push(t('工作密码', 'Work password'), payload?.work_password);
@@ -7231,7 +7293,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const syncLateMarksForWeek = async (options: {
     weekStart: Date;
     targetEmployees: Array<
-      Pick<EmployeeRow, 'staff_id' | 'position' | 'shift' | 'terminated_at' | 'name' | 'agency'> & {
+      Pick<EmployeeRow, 'staff_id' | 'position' | 'shift' | 'shift_time' | 'terminated_at' | 'name' | 'agency'> & {
+        ShiftTime?: string | null;
         terminatedAt?: string | null;
       }
     >;
@@ -7249,7 +7312,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
     const profileByStaff = new Map<
       string,
-      { position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null; name: string; agency: string }
+      {
+        position: string;
+        shift: '' | 'early' | 'late';
+        shiftTime: string;
+        terminatedAt: string | null;
+        name: string;
+        agency: string;
+      }
     >();
     for (const employee of options.targetEmployees ?? []) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
@@ -7257,6 +7327,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       profileByStaff.set(staff, {
         position: String(employee.position ?? '').trim(),
         shift: normalizeShiftValue(String(employee.shift ?? '').trim()),
+        shiftTime: normalizeShiftTimeValue((employee as any).shift_time ?? (employee as any).ShiftTime ?? ''),
         terminatedAt: String(employee.terminated_at ?? employee.terminatedAt ?? '').trim() || null,
         name: String(employee.name ?? '').trim(),
         agency: String(employee.agency ?? '').trim()
@@ -7290,7 +7361,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (staffIds.length === 0) return shiftByStaff;
       const mode = await resolveEmployeeColumnMode();
       for (const batch of chunk(staffIds, 200)) {
-        const select = mode === 'cased' ? 'staff_id, shift, "Position", name, "Agency", terminated_at' : 'staff_id, shift, position, name, agency, terminated_at';
+        const select =
+          mode === 'cased'
+            ? 'staff_id, shift, shift_time, "Position", name, "Agency", terminated_at'
+            : 'staff_id, shift, shift_time, position, name, agency, terminated_at';
         const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch as any);
         if (res.error) throw new Error(res.error.message);
         for (const row of ((res.data as any[]) ?? [])) {
@@ -7301,6 +7375,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             profileByStaff.set(staff, {
               position: String(row?.position ?? row?.Position ?? '').trim(),
               shift: normalizeShiftValue(String(row?.shift ?? '').trim()),
+              shiftTime: normalizeShiftTimeValue(row?.shift_time ?? ''),
               terminatedAt: String(row?.terminated_at ?? '').trim() || null,
               name: String(row?.name ?? '').trim(),
               agency: String(row?.agency ?? row?.Agency ?? '').trim()
@@ -7336,7 +7411,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       weekScheduleByKey.set(`${staff}__${workDate}`, row);
     }
 
-    const targetWorkDays: Array<{ staff: string; workDate: string; shift: 'early' | 'late'; position: string }> = [];
+    const targetWorkDays: Array<{ staff: string; workDate: string; shift: 'early' | 'late'; position: string; shiftTime: string }> = [];
     for (const workDate of weekDateKeys) {
       for (const staff of targetStaffIds) {
         const row = weekScheduleByKey.get(`${staff}__${workDate}`);
@@ -7352,7 +7427,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           const terminatedDate = toDateOnly(new Date(terminatedAt));
           if (terminatedDate && workDate >= terminatedDate) continue;
         }
-        targetWorkDays.push({ staff, workDate, shift, position });
+        targetWorkDays.push({ staff, workDate, shift, position, shiftTime: profile?.shiftTime ?? '' });
       }
     }
 
@@ -7517,7 +7592,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           const terminatedDate = toDateOnly(new Date(terminatedAt));
           if (terminatedDate && workDate >= terminatedDate) continue;
         }
-        targetWorkDays.push({ staff, workDate, shift, position });
+        targetWorkDays.push({ staff, workDate, shift, position, shiftTime: profile?.shiftTime ?? '' });
         targetWorkDayKeySet.add(dayKey);
       }
     }
@@ -7585,23 +7660,30 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         ).values()
       );
       const teamSamples = (teamSamplesByKey.get(teamKey) ?? []).filter((sample) => sample.workDate < item.workDate);
-      const fallbackPlannedStartMinutes = parseClockTextToMinutes(getPlannedStartTime(item.shift, item.position));
+      const hasCustomShiftTime = Boolean(normalizeShiftTimeValue(item.shiftTime));
+      const effectivePersonalSamples = hasCustomShiftTime ? [] : personalSamples;
+      const effectiveTeamSamples = hasCustomShiftTime ? [] : teamSamples;
+      const fallbackPlannedStartMinutes = parseClockTextToMinutes(
+        resolveShiftStartTime(item.shift, item.position, item.shiftTime)
+      );
       if (!Number.isFinite(fallbackPlannedStartMinutes)) continue;
-      const plannedStartMinutes = resolvePlannedStartMinutes({
-        shift: item.shift,
-        position: item.position,
-        fallbackPlannedStartMinutes: fallbackPlannedStartMinutes as number,
-        personalSamples,
-        teamSamples,
-        sampleTarget: LATE_BASELINE_SAMPLE_TARGET,
-        minPersonalSamples: LATE_BASELINE_MIN_PERSONAL_SAMPLES,
-        minTeamSamples: LATE_BASELINE_MIN_TEAM_SAMPLES,
-        outlierMaxDeltaMinutes: LATE_OUTLIER_MAX_DELTA_MINUTES
-      });
+      const plannedStartMinutes = hasCustomShiftTime
+        ? (fallbackPlannedStartMinutes as number)
+        : resolvePlannedStartMinutes({
+            shift: item.shift,
+            position: item.position,
+            fallbackPlannedStartMinutes: fallbackPlannedStartMinutes as number,
+            personalSamples,
+            teamSamples,
+            sampleTarget: LATE_BASELINE_SAMPLE_TARGET,
+            minPersonalSamples: LATE_BASELINE_MIN_PERSONAL_SAMPLES,
+            minTeamSamples: LATE_BASELINE_MIN_TEAM_SAMPLES,
+            outlierMaxDeltaMinutes: LATE_OUTLIER_MAX_DELTA_MINUTES
+          });
       const decision = evaluateLateDecision({
         firstInMinutes: getClockMinutesFromDate(firstIn),
-        personalSamples,
-        teamSamples,
+        personalSamples: effectivePersonalSamples,
+        teamSamples: effectiveTeamSamples,
         shift: item.shift,
         plannedStartMinutes: plannedStartMinutes as number,
         graceMinutes: LATE_GRACE_MINUTES,
@@ -7630,7 +7712,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         source: 'late_auto',
         operator: user?.email ?? null,
         payload: {
-          reason: 'historical_baseline',
+          reason: hasCustomShiftTime ? 'employee_shift_time' : 'historical_baseline',
           learned_expected_start_raw: view.learnedExpectedStartRaw,
           learned_expected_start_rounded: view.learnedExpectedStartRounded,
           guardrail_expected_start: view.guardrailExpectedStart,
@@ -8896,7 +8978,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         .delete()
         .gte('work_date', weekDateByIndex[0] ?? '')
         .lte('work_date', weekDateByIndex[6] ?? '')
-        .in('mark_type', NON_LATE_ATTENDANCE_MARK_TYPES as any);
+        .in('mark_type', NON_LATE_ATTENDANCE_MARK_TYPES as any)
+        .in('source', ['schedule', 'recompute'] as any);
       if (clearRes.error) {
         setStatus({ tone: 'error', message: `重算失败：${clearRes.error.message}` });
         return;
@@ -9976,7 +10059,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
     const uniqueByStaff = new Map<
       string,
-      { staff_id: string; name?: string; agency?: string; position?: string; label?: string; work_account?: string; work_password?: string }
+      {
+        staff_id: string;
+        name?: string;
+        agency?: string;
+        position?: string;
+        shift_time?: string;
+        label?: string;
+        work_account?: string;
+        work_password?: string;
+      }
     >();
     let duplicateInFileCount = 0;
 
@@ -10003,6 +10095,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       const positionRaw = canonical.position?.trim();
       const position = positionRaw ? normalizePosition(positionRaw) : null;
       const label = canonical.label?.trim();
+      const shiftTime = normalizeShiftTimeValue(canonical.shift_time ?? '');
       const workAccount = canonical.work_account?.trim();
       const workPassword = canonical.work_password?.trim();
 
@@ -10011,6 +10104,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         name?: string;
         agency?: string;
         position?: string;
+        shift_time?: string;
         label?: string;
         work_account?: string;
         work_password?: string;
@@ -10019,6 +10113,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
       if (agency) record.agency = agency;
       if (position) record.position = position;
       if (positionRaw && !position) record.position = positionRaw;
+      if (shiftTime) record.shift_time = shiftTime;
       if (label) record.label = label;
       if (workAccount) record.work_account = workAccount;
       if (workPassword) record.work_password = workPassword;
@@ -10142,8 +10237,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         const run = async (m: EmployeeColumnMode) => {
           const select =
             m === 'cased'
-              ? 'staff_id, name, "Agency", "Position", label, work_account, work_password'
-              : 'staff_id, name, agency, position, label, work_account, work_password';
+              ? 'staff_id, name, "Agency", "Position", shift_time, label, work_account, work_password'
+              : 'staff_id, name, agency, position, shift_time, label, work_account, work_password';
           const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batchStaffIds);
           return { mode: m, res };
         };
@@ -10187,6 +10282,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                 name: row.name ?? null,
                 Agency: row.agency ?? null,
                 Position: row.position ?? null,
+                shift_time: row.shift_time ?? null,
                 label: row.label ?? null,
                 work_account: row.work_account ?? null,
                 work_password: row.work_password ?? null
@@ -10196,6 +10292,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
                 name: row.name ?? null,
                 agency: row.agency ?? null,
                 position: row.position ?? null,
+                shift_time: row.shift_time ?? null,
                 label: row.label ?? null,
                 work_account: row.work_account ?? null,
                 work_password: row.work_password ?? null
@@ -10230,6 +10327,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
               name: row.name ?? '',
               agency: row.agency ?? '',
               position: row.position ?? '',
+              shift_time: row.shift_time ?? '',
               label: row.label ?? '',
               work_account: row.work_account ?? '',
               work_password: row.work_password ?? '',
@@ -10241,7 +10339,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 
       const existingByStaff = new Map<
         string,
-        { name: string; agency: string; position: string; label: string; work_account: string; work_password: string }
+        {
+          name: string;
+          agency: string;
+          position: string;
+          shift_time: string;
+          label: string;
+          work_account: string;
+          work_password: string;
+        }
       >();
       for (const r of existingDetailsRes.rows) {
         const staff = String(r.staff_id ?? '').trim();
@@ -10250,6 +10356,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           name: String(r.name ?? '').trim(),
           agency: String(r.agency ?? r.Agency ?? '').trim(),
           position: String(r.position ?? r.Position ?? '').trim(),
+          shift_time: normalizeShiftTimeValue(r.shift_time),
           label: String(r.label ?? r.Label ?? '').trim(),
           work_account: String(r.work_account ?? r.WorkAccount ?? '').trim(),
           work_password: String(r.work_password ?? r.WorkPassword ?? '').trim()
@@ -10273,6 +10380,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           name: '',
           agency: '',
           position: '',
+          shift_time: '',
           label: '',
           work_account: '',
           work_password: ''
@@ -10288,6 +10396,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
           if (existingDetailsRes.mode === 'cased') payload.Position = String(row.position).trim();
           else payload.position = String(row.position).trim();
         }
+        if (row.shift_time && normalizeShiftTimeValue(row.shift_time) && normalizeShiftTimeValue(row.shift_time) !== existing.shift_time) {
+          payload.shift_time = normalizeShiftTimeValue(row.shift_time);
+        }
         if (row.label && String(row.label).trim() && String(row.label).trim() !== existing.label) payload.label = String(row.label).trim();
         if (row.work_account && String(row.work_account).trim() && String(row.work_account).trim() !== existing.work_account) {
           payload.work_account = String(row.work_account).trim();
@@ -10302,6 +10413,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             name: existing.name,
             agency: existing.agency,
             position: existing.position,
+            shift_time: existing.shift_time,
             label: existing.label,
             work_account: existing.work_account,
             work_password: existing.work_password
@@ -10311,6 +10423,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             name: payload.name ?? existing.name,
             agency: payload.agency ?? payload.Agency ?? existing.agency,
             position: payload.position ?? payload.Position ?? existing.position,
+            shift_time: payload.shift_time ?? existing.shift_time,
             label: payload.label ?? existing.label,
             work_account: payload.work_account ?? existing.work_account,
             work_password: payload.work_password ?? existing.work_password
@@ -10338,6 +10451,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
             name: u.after.name,
             agency: u.after.agency,
             position: u.after.position,
+            shift_time: u.after.shift_time,
             label: u.after.label,
             work_account: u.after.work_account,
             work_password: u.after.work_password,
@@ -10418,13 +10532,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
   const downloadEmployeeTemplate = async () => {
     try {
       const XLSX = await import('xlsx');
-      const headers = ['staff_id', 'name', 'agency', 'position', 'label', 'work_account', 'work_password'];
+      const headers = ['staff_id', 'name', 'agency', 'position', 'shift_time', 'label', 'work_account', 'work_password'];
       const ws = XLSX.utils.aoa_to_sheet([headers]);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'template');
       XLSX.writeFile(wb, 'ob_employees_template.xlsx');
     } catch {
-      const headers = ['staff_id', 'name', 'agency', 'position', 'label', 'work_account', 'work_password'];
+      const headers = ['staff_id', 'name', 'agency', 'position', 'shift_time', 'label', 'work_account', 'work_password'];
       const csv = `${headers.join(',')}\n`;
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
@@ -10529,6 +10643,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     () => collectEmployeeLabelOptionsByPosition(employeeEditPosition),
     [employees, employeeEditPosition]
   );
+  useEffect(() => {
+    if (!employeeAddOpen) return;
+    if (normalizeShiftTimeValue(employeeNewShiftTime)) return;
+    const position = normalizePositionKey(employeeNewPosition);
+    const shift = employeeNewShift;
+    if (!position || (shift !== 'early' && shift !== 'late')) return;
+    setEmployeeNewShiftTime(getDefaultShiftStartTime(shift, position));
+  }, [employeeAddOpen, employeeNewPosition, employeeNewShift, employeeNewShiftTime]);
+  useEffect(() => {
+    if (!employeeEditOpen) return;
+    if (normalizeShiftTimeValue(employeeEditShiftTime)) return;
+    const position = normalizePositionKey(employeeEditPosition);
+    const shift = employeeEditShift;
+    if (!position || (shift !== 'early' && shift !== 'late')) return;
+    setEmployeeEditShiftTime(getDefaultShiftStartTime(shift, position));
+  }, [employeeEditOpen, employeeEditPosition, employeeEditShift, employeeEditShiftTime]);
 
   // Step 1: Prepare filter needles (only depends on filter strings)
   const employeeFilterNeedles = useMemo(() => {
@@ -10940,6 +11070,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         'NAME',
         'AGENCY',
         'POSITION',
+        t('班次时间', 'Shift time'),
         t('标签', 'Label'),
         t('工作账号', 'Work account'),
         t('工作密码', 'Work password'),
@@ -10959,12 +11090,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         );
         const shiftInfo = employeeShiftByStaffId[staff];
         const shift = shiftInfo?.shift || '';
+        const shiftTime = normalizeShiftTimeValue((e as any).shift_time ?? (e as any).ShiftTime ?? '');
         const shiftLabel = shift === 'early' ? t('白班', 'Day') : shift === 'late' ? t('晚班', 'Night') : '-';
         return [
           displayStaffId(staff),
           name || '-',
           agency || '-',
           position || '-',
+          shiftTime || '-',
           label || '-',
           workAccount || '-',
           workPassword || '-',
@@ -11406,14 +11539,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
     return map;
   }, [scheduleRows, scheduleRowsWeekOffset]);
   const employeeProfileByStaffId = useMemo(() => {
-    const map = new Map<string, { name: string; agency: string; position: string }>();
+    const map = new Map<string, { name: string; agency: string; position: string; shiftTime: string }>();
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff) continue;
       map.set(staff, {
         name: String(employee.name ?? '').trim(),
         agency: String(employee.agency ?? employee.Agency ?? '').trim(),
-        position: String(employee.position ?? employee.Position ?? '').trim()
+        position: String(employee.position ?? employee.Position ?? '').trim(),
+        shiftTime: normalizeShiftTimeValue((employee as any).shift_time ?? (employee as any).ShiftTime ?? '')
       });
     }
     return map;
@@ -11444,7 +11578,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
         name: profile?.name || '',
         agency: profile?.agency || '',
         position: profile?.position || String(row.position ?? '').trim() || '',
-        shift
+        shift,
+        start_time: resolveShiftStartTime(shift, profile?.position || String(row.position ?? '').trim() || '', profile?.shiftTime || '')
       };
       if (shift === 'late') lateRows.push(item);
       else earlyRows.push(item);
@@ -12099,7 +12234,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => {
 const makeDailyListTsv = (rows: DailyListRow[]) =>
   rows
       .map((row, idx) =>
-        [idx + 1, formatDailyListStaffId(row), row.name, row.agency, '', row.position, getPlannedStartTime(row.shift, row.position)]
+        [idx + 1, formatDailyListStaffId(row), row.name, row.agency, '', row.position, row.start_time]
           .map((c) => String(c ?? ''))
           .join('\t')
       )
@@ -12136,7 +12271,7 @@ const makeDailyListTsv = (rows: DailyListRow[]) =>
             String(row.agency ?? ''),
             '',
             String(row.position ?? ''),
-            getPlannedStartTime(row.shift, row.position)
+            String(row.start_time ?? '')
           ];
           return `<tr>${cells.map((cell) => `<td style="border:1px solid #d1d5db;padding:4px 6px;white-space:pre-wrap;">${escapeHtml(String(cell ?? ''))}</td>`).join('')}</tr>`;
         })
@@ -12822,9 +12957,10 @@ ${rowsToHtml(late)}
       if (!staff) continue;
       const shift = normalizeShiftValue(String(employee.shift ?? '').trim()) || 'early';
       const position = String(employee.position ?? employee.Position ?? '').trim();
+      const shiftTime = normalizeShiftTimeValue((employee as any).shift_time ?? (employee as any).ShiftTime ?? '');
       if (!position) continue;
       if (shift === 'early' && normalizePositionKey(position) === 'Pick') continue;
-      const plannedStartMinutes = parseClockTextToMinutes(getPlannedStartTime(shift, position));
+      const plannedStartMinutes = parseClockTextToMinutes(resolveShiftStartTime(shift, position, shiftTime));
       if (!Number.isFinite(plannedStartMinutes)) continue;
       for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
         const dateKey = toDateOnly(scheduleDays[dayIndex] as Date);
@@ -14308,7 +14444,7 @@ ${rowsToHtml(late)}
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.name || '-'}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.agency || '-'}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.position || '-'}</td>
-                                        <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{getPlannedStartTime('early', row.position)}</td>
+                                        <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.start_time}</td>
                                       </tr>
                                     ))
                                   )}
@@ -14394,7 +14530,7 @@ ${rowsToHtml(late)}
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.name || '-'}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.agency || '-'}</td>
                                         <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.position || '-'}</td>
-                                        <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{getPlannedStartTime('late', row.position)}</td>
+                                        <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.start_time}</td>
                                       </tr>
                                     ))
                                   )}
@@ -14486,6 +14622,8 @@ ${rowsToHtml(late)}
                   setEmployeeNewPosition={setEmployeeNewPosition}
                   employeeNewShift={employeeNewShift}
                   setEmployeeNewShift={setEmployeeNewShift}
+                  employeeNewShiftTime={employeeNewShiftTime}
+                  setEmployeeNewShiftTime={setEmployeeNewShiftTime}
                   employeeNewLabel={employeeNewLabel}
                   setEmployeeNewLabel={setEmployeeNewLabel}
                   employeeNewWorkAccount={employeeNewWorkAccount}
@@ -14572,6 +14710,8 @@ ${rowsToHtml(late)}
                   setEmployeeEditPosition={setEmployeeEditPosition as unknown as (value: string) => void}
                   employeeEditShift={employeeEditShift}
                   setEmployeeEditShift={setEmployeeEditShift}
+                  employeeEditShiftTime={employeeEditShiftTime}
+                  setEmployeeEditShiftTime={setEmployeeEditShiftTime}
                   employeeEditLabel={employeeEditLabel}
                   setEmployeeEditLabel={setEmployeeEditLabel}
                   employeeEditWorkAccount={employeeEditWorkAccount}
