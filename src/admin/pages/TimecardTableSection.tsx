@@ -121,7 +121,13 @@ export default function TimecardTableSection({
 
   // 提取行渲染逻辑为独立函数
   const renderRow = (r: any, realIndex: number) => (
-    <tr key={`${r.staff_id}__${r.position}__${r.agency}__${realIndex}`} className="border-b border-white/5 transition hover:bg-white/5 last:border-0">
+    <tr
+      key={`${r.staff_id}__${r.position}__${r.agency}__${realIndex}`}
+      className={[
+        'border-b transition last:border-0',
+        isLight ? 'border-slate-200 hover:bg-slate-100' : 'border-white/5 hover:bg-white/5'
+      ].join(' ')}
+    >
       <td className="px-2 py-1.5 font-mono text-slate-200">{r.staff_id}</td>
       <td className="px-2 py-1.5 text-slate-200 truncate">{r.name || '-'}</td>
       <td className="px-2 py-1.5 text-slate-200 truncate">{r.agency || '-'}</td>

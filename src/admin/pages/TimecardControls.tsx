@@ -4,6 +4,7 @@ type TranslateFn = (zh: string, en: string) => string;
 
 type TimecardControlsProps = {
   t: TranslateFn;
+  themeMode: 'light' | 'dark';
   isLocked: boolean;
   serverTime: Date;
   startOfWeekMonday: (date: Date) => Date;
@@ -38,6 +39,7 @@ type TimecardControlsProps = {
 
 export default function TimecardControls({
   t,
+  themeMode,
   isLocked,
   serverTime,
   startOfWeekMonday,
@@ -69,6 +71,18 @@ export default function TimecardControls({
   timecardInProgressOnly,
   timecardError
 }: TimecardControlsProps) {
+  const isLight = themeMode === 'light';
+  const ghostButtonClass = [
+    'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+    isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+  ].join(' ');
+  const controlInputClass = [
+    'mt-2 w-full rounded-2xl border px-4 py-3 text-base outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+    isLight
+      ? 'border-slate-300 bg-white text-slate-900 focus:border-neon/60'
+      : 'border-white/10 bg-black/30 text-white focus:border-neon focus:shadow-glow'
+  ].join(' ');
+
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -79,9 +93,10 @@ export default function TimecardControls({
             const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
             const weekEnd = addDays(weekStart, 6);
             return (
-              <p className="mt-2 text-xs text-slate-400">
+              <p className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                 {t('周期：', 'Week: ')}
-                <span className="text-slate-200">{toDateOnly(weekStart)}</span> ～ <span className="text-slate-200">{toDateOnly(weekEnd)}</span>
+                <span className={isLight ? 'text-slate-800' : 'text-slate-200'}>{toDateOnly(weekStart)}</span> ～{' '}
+                <span className={isLight ? 'text-slate-800' : 'text-slate-200'}>{toDateOnly(weekEnd)}</span>
               </p>
             );
           })()}
@@ -90,10 +105,10 @@ export default function TimecardControls({
           {(() => {
             const baseWeekStart = startOfWeekMonday(serverTime);
             return (
-              <div className="flex items-center gap-2 rounded-2xl bg-white/5 px-4 py-2">
-                <span className="text-xs uppercase tracking-[0.25em] text-slate-400">Week</span>
+              <div className={['flex items-center gap-2 rounded-2xl px-4 py-2', isLight ? 'border border-slate-200 bg-slate-100' : 'bg-white/5'].join(' ')}>
+                <span className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Week</span>
                 <StyledDateInput
-                  themeMode="dark"
+                  themeMode={themeMode}
                   disabled={isLocked}
                   value={timecardWeekInput}
                   onChange={(raw) => {
@@ -121,7 +136,7 @@ export default function TimecardControls({
               setTimecardWeekInput(toDateOnly(addDays(baseWeekStart, next * 7)));
               void fetchTimecard({ reset: true, weekOffset: next, lockUi: false });
             }}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className={ghostButtonClass}
           >
             {t('上一周', 'Prev')}
           </button>
@@ -134,7 +149,7 @@ export default function TimecardControls({
               setTimecardWeekInput(toDateOnly(baseWeekStart));
               void fetchTimecard({ reset: true, weekOffset: 0, lockUi: false });
             }}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className={ghostButtonClass}
           >
             {t('本周', 'This week')}
           </button>
@@ -148,7 +163,7 @@ export default function TimecardControls({
               setTimecardWeekInput(toDateOnly(addDays(baseWeekStart, next * 7)));
               void fetchTimecard({ reset: true, weekOffset: next, lockUi: false });
             }}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className={ghostButtonClass}
           >
             {t('下一周', 'Next')}
           </button>
@@ -164,7 +179,7 @@ export default function TimecardControls({
             type="button"
             disabled={isLocked || timecardRowsFilteredCount === 0}
             onClick={() => void exportTimecard()}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className={ghostButtonClass}
           >
             {t('导出', 'Export')}
           </button>
@@ -172,7 +187,7 @@ export default function TimecardControls({
             type="button"
             disabled={isLocked}
             onClick={() => void exportDailyPunches()}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className={ghostButtonClass}
           >
             {t('导出流水', 'Export punches')}
           </button>
@@ -191,7 +206,13 @@ export default function TimecardControls({
             }}
             className={[
               'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-              timecardMissingEmployeeOnly ? 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/25' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+              timecardMissingEmployeeOnly
+                ? isLight
+                  ? 'border border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200'
+                  : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/25'
+                : isLight
+                  ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                  : 'bg-white/10 text-slate-200 hover:bg-white/15'
             ].join(' ')}
           >
             {timecardMissingEmployeeOnly ? t('显示全部时间卡', 'Show all timecards') : t('三无员工', 'Missing employee info')}
@@ -209,7 +230,7 @@ export default function TimecardControls({
               setTimecardMissingEmployeeOnly(false);
               void fetchTimecard({ reset: true, search: '', agency: '', position: '', lockUi: false });
             }}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className={ghostButtonClass}
           >
             {t('清空筛选', 'Clear filters')}
           </button>
@@ -218,22 +239,22 @@ export default function TimecardControls({
 
       <div className="mt-5 grid gap-4 md:grid-cols-6">
         <div className="md:col-span-2">
-          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Search</label>
+          <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Search</label>
           <input
             value={timecardSearch}
             onChange={(e) => setTimecardSearch(e.target.value)}
             disabled={isLocked}
             placeholder={t('通过名字和USid搜索', 'Search by name or staff id')}
-            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+            className={controlInputClass}
           />
         </div>
         <div>
-          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Agency</label>
+          <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Agency</label>
           <select
             value={timecardAgency}
             onChange={(e) => setTimecardAgency(e.target.value)}
             disabled={isLocked || timecardMissingEmployeeOnly}
-            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+            className={controlInputClass}
           >
             <option value="">{t('全部Agency', 'All agencies')}</option>
             {timecardAgencyOptions.map((a) => (
@@ -244,12 +265,12 @@ export default function TimecardControls({
           </select>
         </div>
         <div>
-          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Position</label>
+          <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Position</label>
           <select
             value={timecardPosition}
             onChange={(e) => setTimecardPosition(e.target.value)}
             disabled={isLocked || timecardMissingEmployeeOnly}
-            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+            className={controlInputClass}
           >
             <option value="">{t('全部岗位', 'All positions')}</option>
             {timecardPositionOptions.map((p) => (
@@ -260,12 +281,12 @@ export default function TimecardControls({
           </select>
         </div>
         <div>
-          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Shift</label>
+          <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Shift</label>
           <select
             value={timecardShift}
             onChange={(e) => setTimecardShift((e.target.value as '' | 'early' | 'late') ?? '')}
             disabled={isLocked}
-            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+            className={controlInputClass}
           >
             <option value="">{t('全部班次', 'All shifts')}</option>
             <option value="early">{t('早班', 'Morning')}</option>
@@ -273,7 +294,14 @@ export default function TimecardControls({
           </select>
         </div>
         <div className="flex items-end">
-          <label className="flex w-full cursor-pointer items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-200 transition hover:border-white/20">
+          <label
+            className={[
+              'flex w-full cursor-pointer items-center gap-2 rounded-2xl border px-4 py-3 text-sm transition',
+              isLight
+                ? 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'
+                : 'border-white/10 bg-black/30 text-slate-200 hover:border-white/20'
+            ].join(' ')}
+          >
             <input
               type="checkbox"
               checked={timecardInProgressOnly}

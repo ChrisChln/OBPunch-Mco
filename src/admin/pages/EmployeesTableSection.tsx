@@ -93,6 +93,7 @@ export default function EmployeesTableSection({
   openEmployeeEdit,
   deleteEmployeeRow
 }: EmployeesTableSectionProps) {
+  const isLight = themeMode === 'light';
   const ROW_HEIGHT = 56;
   const OVERSCAN = 12;
   const TABLE_COLS = 11;
@@ -149,7 +150,12 @@ export default function EmployeesTableSection({
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
       >
         <table className="min-w-[1570px] w-full text-left text-sm">
-          <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-xs uppercase tracking-[0.2em] text-slate-400 backdrop-blur">
+          <thead
+            className={[
+              'sticky top-0 z-20 border-b text-xs uppercase tracking-[0.2em] backdrop-blur',
+              isLight ? 'border-slate-200 bg-white/95 text-slate-500' : 'border-white/10 bg-slate-950/95 text-slate-400'
+            ].join(' ')}
+          >
             <tr>
               <th className="w-[150px] px-4 py-3 whitespace-nowrap">Employee ID</th>
               <th className="w-[240px] px-4 py-3">Name</th>
@@ -161,7 +167,10 @@ export default function EmployeesTableSection({
                 <button
                   type="button"
                   onClick={onToggleHireDateSort}
-                  className="inline-flex items-center gap-1 whitespace-nowrap text-xs uppercase tracking-[0.2em] text-slate-400 transition hover:text-slate-200"
+                  className={[
+                    'inline-flex items-center gap-1 whitespace-nowrap text-xs uppercase tracking-[0.2em] transition',
+                    isLight ? 'text-slate-500 hover:text-slate-700' : 'text-slate-400 hover:text-slate-200'
+                  ].join(' ')}
                   title={t('按入职日期从新到旧排序', 'Sort by hire date newest to oldest')}
                 >
                   {t('入职日期', 'Hire date')}
@@ -174,7 +183,10 @@ export default function EmployeesTableSection({
                 <button
                   type="button"
                   onClick={onToggleSort}
-                  className="inline-flex items-center gap-1 whitespace-nowrap text-xs uppercase tracking-[0.2em] text-slate-400 transition hover:text-slate-200"
+                  className={[
+                    'inline-flex items-center gap-1 whitespace-nowrap text-xs uppercase tracking-[0.2em] transition',
+                    isLight ? 'text-slate-500 hover:text-slate-700' : 'text-slate-400 hover:text-slate-200'
+                  ].join(' ')}
                   title={t('按天数从高到低排序', 'Sort by days high to low')}
                 >
                   {t('最后打卡', 'Last punch')}

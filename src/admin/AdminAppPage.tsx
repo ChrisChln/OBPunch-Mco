@@ -14803,6 +14803,7 @@ ${rowsToHtml(late)}
               <section className="glass reveal rounded-3xl px-6 py-8">
                 <TimecardControls
                   t={t}
+                  themeMode={themeMode}
                   isLocked={isLocked}
                   serverTime={serverTime}
                   startOfWeekMonday={startOfWeekMonday}

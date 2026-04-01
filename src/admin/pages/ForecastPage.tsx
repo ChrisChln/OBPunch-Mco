@@ -2649,7 +2649,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                     );
                                   }}
                                   disabled={manualInputSaving}
-                                  className="h-4 w-4 rounded border-slate-300"
+                                  className={['h-4 w-4 rounded', isLight ? 'border-slate-300' : 'border-slate-600'].join(' ')}
                                 />
                                 <span>{t('恶劣', 'Severe')}</span>
                               </label>
@@ -2666,7 +2666,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                     );
                                   }}
                                   disabled={manualInputSaving}
-                                  className="h-4 w-4 rounded border-slate-300"
+                                  className={['h-4 w-4 rounded', isLight ? 'border-slate-300' : 'border-slate-600'].join(' ')}
                                 />
                                 <span>{t('大促', 'Promo')}</span>
                               </label>
