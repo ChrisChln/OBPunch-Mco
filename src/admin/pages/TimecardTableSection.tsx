@@ -246,20 +246,35 @@ export default function TimecardTableSection({
                   <span className="pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full bg-rose-500 shadow-[0_0_0_1px_rgba(244,63,94,0.55)]" />
                 )}
                 {timecardCellAudit.length > 0 && (
-                  <div className="pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-2 text-[11px] text-slate-700 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100">
-                    <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-neon">{t('最近操作', 'Recent changes')}</div>
+                  <div
+                    className={[
+                      'pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border p-2 text-[11px] opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100',
+                      isLight
+                        ? 'border-slate-200 bg-white text-slate-700'
+                        : 'border-slate-700 bg-[#16181c] text-slate-100'
+                    ].join(' ')}
+                  >
+                    <div className={['mb-1 text-[10px] uppercase tracking-[0.14em]', isLight ? 'text-neon' : 'text-emerald-300'].join(' ')}>
+                      {t('最近操作', 'Recent changes')}
+                    </div>
                     <div className="space-y-1">
                       {timecardCellAudit.slice(0, 1).map((item: any) => {
                         const detail = formatAuditDetail(item);
                         return (
-                          <div key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)} className="rounded-md bg-slate-100 px-1.5 py-1 text-left">
-                            <div className="text-[10px] text-slate-500">
+                          <div
+                            key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)}
+                            className={['rounded-md px-1.5 py-1 text-left', isLight ? 'bg-slate-100' : 'bg-slate-800'].join(' ')}
+                          >
+                            <div className={['text-[10px]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                               {formatCellAuditTime(item.created_at)} · {normalizeAuditActor((item as any).actor) || '-'}
                             </div>
-                            <div>{renderAuditSummary(detail.summary)}</div>
+                            <div className={isLight ? 'text-slate-800' : 'text-slate-100'}>{renderAuditSummary(detail.summary)}</div>
                             {detail.details.slice(0, 2).map((d: any, idx2: number) => (
-                              <div key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`} className="mt-0.5 text-[10px] text-slate-600">
-                                <span className="text-slate-500">{d.label}: </span>
+                              <div
+                                key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`}
+                                className={['mt-0.5 text-[10px]', isLight ? 'text-slate-600' : 'text-slate-300'].join(' ')}
+                              >
+                                <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{d.label}: </span>
                                 <span className="whitespace-normal break-words">{d.value}</span>
                               </div>
                             ))}
