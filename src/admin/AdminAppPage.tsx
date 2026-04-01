@@ -2575,6 +2575,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       action === 'schedule_planned_leave' ||
       action === 'schedule_temp_rest' ||
       action === 'schedule_planned_temp_rest' ||
+      action === 'schedule_auto_week_reset' ||
+      action === 'schedule_auto_daily_activation' ||
       action === 'schedule_rest' ||
       action === 'schedule_clear' ||
       action === 'punch_manual_add' ||
@@ -2696,6 +2698,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       schedule_planned_leave: t('计划请假', 'Planned Leave'),
       schedule_temp_rest: t('临时排休', 'Temp Off'),
       schedule_planned_temp_rest: t('计划临时排休', 'Planned Temp Off'),
+      schedule_auto_week_reset: t('自动周重置', 'Auto Weekly Reset'),
+      schedule_auto_daily_activation: t('自动计划激活', 'Auto Daily Activation'),
       schedule_rest: t('排班休息', 'Schedule Off'),
       schedule_clear: t('清空排班', 'Schedule Clear'),
       device_add: t('新增设备', 'Device Add'),
@@ -2788,6 +2792,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       'schedule_planned_leave',
       'schedule_temp_rest',
       'schedule_planned_temp_rest',
+      'schedule_auto_week_reset',
+      'schedule_auto_daily_activation',
       'schedule_rest',
       'schedule_clear',
       'punch_manual_add',
@@ -3496,8 +3502,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const scheduleWeekResetDoneKeyRef = useRef('');
   const resetScheduleTransientStatesForWeek = async (options?: { lockUi?: boolean }) => {
     if (!supabase) return;
-    const now = new Date(Date.now() + offsetMs);
-    const thisMonday = startOfWeekMonday(now);
+    const localNow = new Date(Date.now() + offsetMs);
+    let gateNow = localNow;
+    const serverNowRes = await supabase.rpc('now');
+    if (!serverNowRes.error && serverNowRes.data) {
+      const parsed = new Date(serverNowRes.data as string);
+      if (!Number.isNaN(parsed.getTime())) {
+        gateNow = parsed;
+      }
+    }
+    const thisMonday = startOfWeekMonday(gateNow);
     const weekStart = toDateOnly(thisMonday);
     const lockUi = options?.lockUi ?? true;
 
@@ -3515,7 +3529,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const existing = (((settingRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
     const existingWeek = String(existing?.value?.week_start ?? '');
     const gate = shouldRunWeeklyScheduleReset({
-      now,
+      now: gateNow,
       inFlight: scheduleWeekResetInFlightRef.current,
       doneWeek: scheduleWeekResetDoneKeyRef.current,
       existingWeek
@@ -3528,13 +3542,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     const exec = async () => {
       setScheduleError(null);
-      const nowIso = new Date(serverTime).toISOString();
+      const nowIso = gateNow.toISOString();
       const op = user?.email ?? null;
       // 临时排休 -> 工作 (note=null); 临时工作 -> 休息 (note=__rest__)
       const toWorkRes = await supabase
         .from(SCHEDULE_TABLE)
         .update({ note: null, operator: op, updated_at: nowIso } as any)
-        .in('note', [SCHEDULE_TEMP_REST_NOTE] as any);
+        .in('note', [SCHEDULE_TEMP_REST_NOTE] as any)
+        .select('staff_id, date');
       if (toWorkRes.error) {
         setScheduleError(toWorkRes.error.message);
         return;
@@ -3542,20 +3557,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const toRestRes = await supabase
         .from(SCHEDULE_TABLE)
         .update({ note: SCHEDULE_REST_NOTE, operator: op, updated_at: nowIso } as any)
-        .eq('note', SCHEDULE_TEMP_WORK_NOTE);
+        .eq('note', SCHEDULE_TEMP_WORK_NOTE)
+        .select('staff_id, date');
       if (toRestRes.error) {
         setScheduleError(toRestRes.error.message);
         return;
       }
+      const tempRestToWorkCount = Array.isArray(toWorkRes.data) ? toWorkRes.data.length : 0;
+      const tempWorkToRestCount = Array.isArray(toRestRes.data) ? toRestRes.data.length : 0;
 
       const payload = {
         key: SCHEDULE_WEEK_RESET_KEY,
         value: {
           week_start: weekStart,
-          updated_at: new Date(serverTime).toISOString(),
+          updated_at: nowIso,
           operator: user?.email ?? null
         },
-        updated_at: new Date(serverTime).toISOString()
+        updated_at: nowIso
       };
       const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
       if (upsertRes.error) {
@@ -3580,6 +3598,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           return nextNote === row.note ? row : { ...row, note: nextNote };
         })
       );
+      await writeAudit({
+        action: 'schedule_auto_week_reset',
+        target: SCHEDULE_TABLE,
+        payload: {
+          week_start: weekStart,
+          temp_rest_to_work_count: tempRestToWorkCount,
+          temp_work_to_rest_count: tempWorkToRestCount
+        }
+      });
       scheduleWeekResetDoneKeyRef.current = weekStart;
     };
 
@@ -3709,6 +3736,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           setScheduleError(upsertRes.error.message);
           return;
         }
+        await writeAudit({
+          action: 'schedule_auto_daily_activation',
+          target: SCHEDULE_TABLE,
+          payload: {
+            date: dateKey,
+            activated_count: payload.length
+          }
+        });
       }
 
       const markerPayload = {
@@ -6881,6 +6916,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const fromState = getScheduleFromState('rest');
       const toState = getScheduleToState('empty');
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
+    } else if (action === 'schedule_auto_week_reset') {
+      summary = t('自动周重置已执行', 'Automatic weekly reset applied');
+      push(t('重置周起始', 'Reset week start'), payload?.week_start);
+      push(t('临时排休->工作', 'Temp off -> work'), payload?.temp_rest_to_work_count);
+      push(t('临时工作->休息', 'Temp work -> off'), payload?.temp_work_to_rest_count);
+    } else if (action === 'schedule_auto_daily_activation') {
+      summary = t('自动计划激活已执行', 'Automatic daily plan activation applied');
+      push(t('激活日期', 'Activation date'), payload?.date);
+      push(t('激活条数', 'Activated rows'), payload?.activated_count);
     }
 
     return { summary, details };
