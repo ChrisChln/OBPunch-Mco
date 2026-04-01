@@ -9513,6 +9513,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const dayDateForAudit = dayRangeForAudit ? toDateOnly(dayRangeForAudit.start) : '';
     const queueTimecardRefresh = () => {
       const run = () => {
+        timecardWeekCacheRef.current = null;
         void fetchTimecard({ reset: true, lockUi: false });
       };
       if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
