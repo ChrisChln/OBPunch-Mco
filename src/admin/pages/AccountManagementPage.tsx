@@ -245,11 +245,19 @@ export default function AccountManagementPage({
             type="button"
             disabled={isLocked}
             onClick={() => void onDownloadTemplate()}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className={[
+              'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+              isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+            ].join(' ')}
           >
             {t('下载模板', 'Download template')}
           </button>
-          <label className="cursor-pointer rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15">
+          <label
+            className={[
+              'cursor-pointer rounded-2xl px-4 py-2 text-sm font-medium transition',
+              isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+            ].join(' ')}
+          >
             {t('导入临时账号', 'Import Temp Accounts')}
             <input
               type="file"
@@ -267,7 +275,10 @@ export default function AccountManagementPage({
             type="button"
             disabled={isLocked}
             onClick={() => void onExportAccounts()}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className={[
+              'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+              isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+            ].join(' ')}
           >
             {t('导出临时账号', 'Export Temp Accounts')}
           </button>
@@ -275,7 +286,10 @@ export default function AccountManagementPage({
             type="button"
             disabled={isLocked}
             onClick={() => void onRefreshEmployees()}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className={[
+              'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+              isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+            ].join(' ')}
           >
             {t('刷新', 'Refresh')}
           </button>
