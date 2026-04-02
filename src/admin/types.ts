@@ -21,7 +21,9 @@ export type Status = {
 
 export type AllowedPosition = 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer';
 
-export type DeviceType = 'PDA' | 'CART';
+// DeviceType 现在支持任意自定义值，允许用户在导入时定义新类型
+// 不再限制为固定的 'PDA' | 'CART'
+export type DeviceType = string;
 
 export type ScheduleBaseState =
   | 'work'

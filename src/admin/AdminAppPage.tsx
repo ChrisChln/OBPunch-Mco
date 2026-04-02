@@ -176,7 +176,9 @@ const SCHEDULE_PLANNED_TEMP_WORK_NOTE = '__planned_temp_work__';
 const SCHEDULE_PLANNED_LEAVE_NOTE = '__planned_leave__';
 const SCHEDULE_PLANNED_TEMP_REST_NOTE = '__planned_temp_rest__';
 const STALE_TIMECARD_REQUEST = '__stale_timecard_request__';
-const DEVICE_TYPES = ['PDA', 'CART'] as const;
+// 预定义的默认设备类型（用于向后兼容和作为初始化默认值）
+// 实际可用的设备类型会在运行时从导入的数据中动态生成
+const DEFAULT_DEVICE_TYPES = ['PDA', 'CART'] as const;
 const EFFICIENCY_TEMPLATE_TABLE = 'efficiency_templates';
 const EFFICIENCY_FORECAST_INPUT_TABLE = 'volume_forecast_daily_inputs';
 const EFFICIENCY_HISTORY_TABLE = 'volume_history';
@@ -715,9 +717,15 @@ const isNewHirePlaceholderName = (value: string) => /^\d{2}\/\d{2}NEW\s+[A-Z]+(\
 const displayStaffId = (value: string) => String(value ?? '').trim();
 const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperCase();
 const normalizeDeviceType = (value: string): DeviceType => {
-  const raw = String(value ?? '').trim().toUpperCase();
-  if (raw === 'CAR' || raw === 'CART' || raw === '车') return 'CART';
-  return 'PDA';
+  const raw = String(value ?? '').trim();
+  if (!raw) return 'PDA'; // 空值默认为 PDA
+  
+  // 别名兼容性：保留对旧数据的支持
+  const upper = raw.toUpperCase();
+  if (upper === 'CAR' || raw === '车') return 'CART';
+  
+  // 返回规范化后的值（去除前后空白，保留原始大小写）
+  return raw;
 };
 
 const getDefaultPositionToneKey = (value: string): LabelToneKey => {
@@ -1298,6 +1306,7 @@ export default function AdminAppPage() {
   const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [deviceLoans, setDeviceLoans] = useState<DeviceLoanRow[]>([]);
+  const [availableDeviceTypes, setAvailableDeviceTypes] = useState<string[]>([]);
   const [_deviceLoansPage, setDeviceLoansPage] = useState(0);
   const [_deviceLoansHasMore, setDeviceLoansHasMore] = useState(true);
   const [deviceSearch, setDeviceSearch] = useState('');
@@ -1679,6 +1688,29 @@ export default function AdminAppPage() {
     }
     return map;
   }, [canonicalDeviceLoans, employeeNameByStaffId]);
+  
+  // 动态计算所有可用的设备类型（从导入的数据中提取）
+  const computedAvailableDeviceTypes = useMemo(() => {
+    const types = new Set<string>();
+    
+    // 添加默认预定义类型以保持向后兼容
+    (DEFAULT_DEVICE_TYPES as readonly string[]).forEach(t => types.add(t));
+    
+    // 从现有设备数据中提取所有不同的类型
+    canonicalDeviceRows.forEach(dev => {
+      const type = String(dev.device_type ?? '').trim();
+      if (type) types.add(type);
+    });
+    
+    // 返回排序后的类型列表
+    return Array.from(types).sort();
+  }, [canonicalDeviceRows]);
+  
+  // 同步更新 availableDeviceTypes 状态
+  useEffect(() => {
+    setAvailableDeviceTypes(computedAvailableDeviceTypes);
+  }, [computedAvailableDeviceTypes]);
+  
   const deviceRowsFiltered = useMemo(() => {
     const search = deviceSearch.trim().toLowerCase();
     return canonicalDeviceRows
@@ -2084,8 +2116,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           supabase
             .from('ob_punches')
             .select('staff_id, created_at, id')
-            .eq('action', 'IN')
-            .gte('created_at', rangeStart.toISOString())
+            // 移除device_type的自动转换/fallback映射
+            // 允许自定义类型值直接保存到数据库
             .order('created_at', { ascending: true })
             .range(from, to)
         );
@@ -3029,35 +3061,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const upsertRows = async (payloadRows: any[]) =>
         supabase.from(DEVICE_TABLE).upsert(payloadRows as any[], { onConflict: 'device_sn' });
 
-      const isTypeConstraintError = (message: string) => {
-        const text = String(message ?? '').toLowerCase();
-        return text.includes('device_type_check') || (text.includes('device_type') && text.includes('check constraint'));
-      };
-
-      let usedFallbackTypeMapper: string | null = null;
       let res = await upsertRows(rows as any[]);
-      if (res.error && isTypeConstraintError(res.error.message)) {
-        const fallbackCandidates: Array<{
-          name: string;
-          mapType: (value: DeviceType) => string;
-        }> = [
-          { name: 'lowercase', mapType: (value) => value.toLowerCase() },
-          { name: 'legacy_car_upper', mapType: (value) => (value === 'CART' ? 'CAR' : 'PDA') },
-          { name: 'legacy_car_lower', mapType: (value) => (value === 'CART' ? 'car' : 'pda') }
-        ];
-        for (const candidate of fallbackCandidates) {
-          const payloadRows = rows.map((row) => ({
-            ...row,
-            device_type: candidate.mapType(row.device_type)
-          }));
-          const attempt = await upsertRows(payloadRows);
-          if (!attempt.error) {
-            res = attempt;
-            usedFallbackTypeMapper = candidate.name;
-            break;
-          }
-        }
-      }
       if (res.error) {
         setDeviceUploadError(t(`导入失败：${res.error.message}`, `Import failed: ${res.error.message}`));
         return;
@@ -3069,7 +3073,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           file_name: file.name,
           total_rows: rows.length,
           duplicate_in_file: duplicateInFileCount,
-          device_type_fallback: usedFallbackTypeMapper
+          device_type_fallback: null
         }
       });
       setDeviceUploadError(null);
@@ -3077,8 +3081,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setStatus({
         tone: 'success',
         message: t(
-          `设备导入成功：${rows.length} 条。${usedFallbackTypeMapper ? '（已自动兼容设备类型格式）' : ''}`,
-          `Devices imported: ${rows.length}.${usedFallbackTypeMapper ? ' (device type format auto-adapted)' : ''}`
+          `设备导入成功：${rows.length} 条。`,
+          `Devices imported: ${rows.length}.`
         )
       });
       await refreshDevicePanel({ lockUi: false });
@@ -10891,11 +10895,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const toStaffToken = (value: string) =>
         String(value ?? '')
           .trim()
-          .toUpperCase()
-          .replace(/[^A-Z0-9]+/g, '');
+          .toUpperCase();
+
       const buildTempStaffId = (canonical: Record<string, string>, rowIndex: number) => {
-        const staffRaw = normalizeStaffId(String(canonical.staff_id ?? '').trim());
-        if (staffRaw) return staffRaw;
+        const explicitStaff = normalizeStaffId(String(canonical.staff_id ?? canonical.employee_id ?? '').trim());
+        if (explicitStaff) return explicitStaff;
         const accountToken = toStaffToken(String(canonical.work_account ?? ''));
         if (accountToken) return `TMPACC-${accountToken}`;
         const nameToken = toStaffToken(String(canonical.name ?? '')).slice(0, 10);
@@ -13212,7 +13216,7 @@ ${rowsToHtml(late)}
                 deviceBorrowedOnly={deviceBorrowedOnly}
                 setDeviceBorrowedOnly={setDeviceBorrowedOnly}
                 devicesError={devicesError}
-                DEVICE_TYPES={DEVICE_TYPES}
+                DEVICE_TYPES={availableDeviceTypes}
                 ALLOWED_POSITIONS={ALLOWED_POSITIONS}
                 normalizeDeviceType={normalizeDeviceType}
                 deviceCurrentBorrowBySn={deviceCurrentBorrowBySn}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createSupabaseClient } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
 
-type DeviceType = 'PDA' | 'CART';
+type DeviceType = string; // 现在支持任意自定义设备类型值
 type LoanAction = 'borrow' | 'return';
 type StatusTone = 'idle' | 'pending' | 'success' | 'error';
 type DeviceOpLog = {
@@ -51,8 +51,15 @@ const supabase = createSupabaseClient({ persistSession: false });
 
 const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperCase();
 const normalizeDeviceType = (value: unknown): DeviceType => {
-  const raw = String(value ?? '').trim().toUpperCase();
-  return raw === 'CAR' || raw === 'CART' ? 'CART' : 'PDA';
+  const raw = String(value ?? '').trim();
+  if (!raw) return 'PDA'; // 空值默认为 PDA
+  
+  // 兼容旧别名
+  const upper = raw.toUpperCase();
+  if (upper === 'CAR' || raw === '车') return 'CART';
+  
+  // 返回规范化后的值
+  return raw;
 };
 const parseCountedAtFromNote = (note: unknown) => {
   const text = String(note ?? '');

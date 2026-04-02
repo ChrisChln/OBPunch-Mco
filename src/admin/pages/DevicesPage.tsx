@@ -28,7 +28,7 @@ type DevicesPageProps = {
   deviceBorrowedOnly: boolean;
   setDeviceBorrowedOnly: (value: boolean) => void;
   devicesError: string | null;
-  DEVICE_TYPES: readonly DeviceType[];
+  DEVICE_TYPES: readonly string[]; // 现在是动态生成的可用类型列表
   ALLOWED_POSITIONS: readonly AllowedPosition[];
   normalizeDeviceType: (value: string) => DeviceType;
   deviceCurrentBorrowBySn: Map<string, any>;
