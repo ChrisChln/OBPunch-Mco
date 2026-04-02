@@ -15,7 +15,8 @@
     "test:unit:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
-    "test:all": "npm run test:unit && npm run test:e2e"
+    "test:all": "npm run test:unit && npm run test:e2e",
+    "backfill:late:march": "node scripts/backfill-late-marks-march.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.0",
