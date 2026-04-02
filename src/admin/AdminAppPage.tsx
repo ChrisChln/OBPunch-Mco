@@ -49,14 +49,9 @@ import {
   evaluateLateDecision,
   formatClockMinutes,
   getClockMinutesFromDate,
-  LATE_BASELINE_MIN_PERSONAL_SAMPLES,
-  LATE_BASELINE_MIN_TEAM_SAMPLES,
-  LATE_BASELINE_SAMPLE_TARGET,
   LATE_GUARDRAIL_BUFFER_MINUTES,
   LATE_GRACE_MINUTES,
-  LATE_OUTLIER_MAX_DELTA_MINUTES,
   parseClockTextToMinutes,
-  resolvePlannedStartMinutes,
   type LateBaselineSource,
   type LateRoundingFamily,
   type LateSample
@@ -7696,49 +7691,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const dayKey = `${item.staff}__${item.workDate}`;
       const firstIn = firstInByStaffDay.get(dayKey);
       if (!firstIn) continue;
-      const personalKey = `${item.staff}__${item.shift}__${item.position}`;
-      const teamKey = `${item.shift}__${item.position}`;
-      // Manual punch edits should not pollute the learned baseline,
-      // but the corrected day itself still needs late detection.
-      const personalSamples = Array.from(
-        new Map(
-          [...(personalSamplesByKey.get(personalKey) ?? []), ...(punchOnlyPersonalSamplesByStaff.get(item.staff) ?? [])]
-            .filter((sample) => sample.workDate < item.workDate)
-            .map((sample) => [sample.workDate, sample] as const)
-        ).values()
-      );
-      const teamSamples = (teamSamplesByKey.get(teamKey) ?? []).filter((sample) => sample.workDate < item.workDate);
-      const hasCustomShiftTime = Boolean(normalizeShiftTimeValue(item.shiftTime));
-      const effectivePersonalSamples = hasCustomShiftTime ? [] : personalSamples;
-      const effectiveTeamSamples = hasCustomShiftTime ? [] : teamSamples;
+      const normalizedShiftTime = normalizeShiftTimeValue(item.shiftTime);
+      const shiftTimeMinutes = parseClockTextToMinutes(normalizedShiftTime);
       const fallbackPlannedStartMinutes = parseClockTextToMinutes(
         resolveShiftStartTime(item.shift, item.position, item.shiftTime)
       );
       if (!Number.isFinite(fallbackPlannedStartMinutes)) continue;
-      const plannedStartMinutes = hasCustomShiftTime
-        ? (fallbackPlannedStartMinutes as number)
-        : resolvePlannedStartMinutes({
-            shift: item.shift,
-            position: item.position,
-            fallbackPlannedStartMinutes: fallbackPlannedStartMinutes as number,
-            personalSamples,
-            teamSamples,
-            sampleTarget: LATE_BASELINE_SAMPLE_TARGET,
-            minPersonalSamples: LATE_BASELINE_MIN_PERSONAL_SAMPLES,
-            minTeamSamples: LATE_BASELINE_MIN_TEAM_SAMPLES,
-            outlierMaxDeltaMinutes: LATE_OUTLIER_MAX_DELTA_MINUTES
-          });
+      const usesEmployeeShiftTime = Number.isFinite(shiftTimeMinutes);
+      const plannedStartMinutes = usesEmployeeShiftTime ? (shiftTimeMinutes as number) : (fallbackPlannedStartMinutes as number);
       const decision = evaluateLateDecision({
         firstInMinutes: getClockMinutesFromDate(firstIn),
-        personalSamples: effectivePersonalSamples,
-        teamSamples: effectiveTeamSamples,
+        personalSamples: [],
+        teamSamples: [],
         shift: item.shift,
         plannedStartMinutes: plannedStartMinutes as number,
         graceMinutes: LATE_GRACE_MINUTES,
-        sampleTarget: LATE_BASELINE_SAMPLE_TARGET,
-        minPersonalSamples: LATE_BASELINE_MIN_PERSONAL_SAMPLES,
-        minTeamSamples: LATE_BASELINE_MIN_TEAM_SAMPLES,
-        outlierMaxDeltaMinutes: LATE_OUTLIER_MAX_DELTA_MINUTES
+        guardrailBufferMinutes: LATE_GUARDRAIL_BUFFER_MINUTES
       });
       if (!decision.isLate) continue;
       const view: LateMarkView = {
@@ -7760,7 +7728,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         source: 'late_auto',
         operator: user?.email ?? null,
         payload: {
-          reason: hasCustomShiftTime ? 'employee_shift_time' : 'historical_baseline',
+          reason: usesEmployeeShiftTime ? 'employee_shift_time' : 'schedule_fallback',
           learned_expected_start_raw: view.learnedExpectedStartRaw,
           learned_expected_start_rounded: view.learnedExpectedStartRounded,
           guardrail_expected_start: view.guardrailExpectedStart,
