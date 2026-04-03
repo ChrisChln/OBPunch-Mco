@@ -1258,7 +1258,7 @@ export default function WorkHourComparisonPage({
                 <div>
                   <div className="text-xl font-semibold">{t('打卡流水', 'Punch flow')}</div>
                   <div className={['mt-1 text-sm', isLight ? 'text-slate-600' : 'text-white/70'].join(' ')}>
-                    {t('运营日', 'Operational day')}: {selectedDate} (05:00 - +24h) | {punchFlowTarget?.staffId ?? '-'} {punchFlowTarget?.name ?? ''}
+                    {t('运营日', 'Operational day')}: {selectedDate} | {punchFlowTarget?.staffId ?? '-'} {punchFlowTarget?.name ?? ''}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
