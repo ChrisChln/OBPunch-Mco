@@ -33,6 +33,7 @@ import PunchesPage from './pages/PunchesPage';
 import ForecastPage from './pages/ForecastPage';
 import PredictionModelPage from './pages/PredictionModelPage';
 import EfficiencyPage from './pages/EfficiencyPage';
+import WorkHourComparisonPage from './pages/WorkHourComparisonPage';
 import AppDialog from '../components/AppDialog';
 import { useScheduleRealtime } from './useScheduleRealtime';
 import {
@@ -9854,6 +9855,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (page === 'timecard') {
       void fetchTimecard({ reset: true, lockUi: false });
     }
+    if (page === 'work_hour_comparison') {
+      setStatus({ tone: 'idle', message: t('工时对比：请选择日期后上传 iAMS 文件。', 'Work hour comparison: select a date and upload iAMS file.') });
+    }
     if (page === 'audit') {
       void fetchAudit({ search: auditSearch });
     }
@@ -13206,6 +13210,17 @@ ${rowsToHtml(late)}
               <PredictionModelPage t={t} isLocked={isLocked} themeMode={themeMode} serverTime={serverTime} supabase={supabase} />
             )}
             {page === 'efficiency' && <EfficiencyPage t={t} isLocked={isLocked} supabase={supabase} themeMode={themeMode} serverTime={serverTime} />}
+            {page === 'work_hour_comparison' && (
+              <WorkHourComparisonPage
+                t={t}
+                isLocked={isLocked}
+                supabase={supabase}
+                themeMode={themeMode}
+                serverTime={serverTime}
+                userEmail={String(user?.email ?? '')}
+                userDisplayName={String(userDisplayName ?? '')}
+              />
+            )}
             {page === 'punches' && (
               <PunchesPage
                 t={t}
