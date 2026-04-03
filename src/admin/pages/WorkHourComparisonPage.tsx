@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import StyledDateInput from '../components/StyledDateInput';
 import { isValidStaffId, normalizeStaffId } from '../../lib/staffId';
@@ -54,6 +54,7 @@ type PunchFlowRow = {
 type UploadSummary = {
   fileName: string;
   workDate: string;
+  dateCount: number;
   sourceRows: number;
   matchedRows: number;
   skippedRows: number;
@@ -82,6 +83,7 @@ const IAMS_IMPORT_TABLE =
   (import.meta.env.VITE_IAMS_WORK_HOURS_IMPORT_TABLE as string | undefined) ?? 'ob_iams_work_hours_imports';
 const IAMS_UPLOAD_BATCH_TABLE =
   (import.meta.env.VITE_IAMS_WORK_HOUR_UPLOAD_BATCH_TABLE as string | undefined) ?? 'ob_iams_work_hour_upload_batches';
+const MISTAKE_REPORT_TABLE = (import.meta.env.VITE_MISTAKE_REPORT_TABLE as string | undefined) ?? 'ob_mistake_reports';
 const DISCREPANCY_THRESHOLD = 0.5;
 const EPSILON = 0.005;
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
@@ -320,7 +322,6 @@ const parseUploadRows = (rows: any[][], selectedDate: string) => {
       throw new Error(`Row ${index + 1}: invalid attendance date.`);
     }
     if (!isValidDateOnly(workDate)) throw new Error(`Row ${index + 1}: invalid attendance date format.`);
-    if (workDate !== selectedDate) throw new Error(`Row ${index + 1}: date ${workDate} does not match selected date ${selectedDate}.`);
     if (!hasValidStaffId) continue;
     if (hours === null) continue;
 
@@ -420,7 +421,7 @@ const getStatusView = (row: ComparisonRow, resolveFixer: (value: string) => stri
   }
   if (row.fixedBy) {
     const fixer = resolveFixer(row.fixedBy) || '-';
-    return { labelZh: `已修复：修复人：${fixer}`, labelEn: `Resolved: ${fixer}`, tone: 'resolved' as const };
+    return { labelZh: `已修复：${fixer}`, labelEn: `Resolved: ${fixer}`, tone: 'resolved' as const };
   }
   return { labelZh: '异常', labelEn: 'Abnormal', tone: 'abnormal' as const };
 };
@@ -457,6 +458,7 @@ export default function WorkHourComparisonPage({
   const [shiftFilter, setShiftFilter] = useState<'' | 'early' | 'late'>('');
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('');
   const [discrepancyOnly, setDiscrepancyOnly] = useState(false);
+  const [hideTransfer, setHideTransfer] = useState(false);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -472,6 +474,7 @@ export default function WorkHourComparisonPage({
   const [punchFlowTarget, setPunchFlowTarget] = useState<{
     staffId: string;
     name: string;
+    position: string;
     diffHours: number;
     fixedBy: string;
     fixedAt: string;
@@ -499,6 +502,7 @@ export default function WorkHourComparisonPage({
         shift?: '' | 'early' | 'late';
         direction?: DirectionFilter;
         discrepancyOnly?: boolean;
+        hideTransfer?: boolean;
       };
       setSearch(String(parsed.search ?? ''));
       setAgencyFilter(String(parsed.agency ?? ''));
@@ -506,6 +510,7 @@ export default function WorkHourComparisonPage({
       setShiftFilter(parsed.shift === 'early' || parsed.shift === 'late' ? parsed.shift : '');
       setDirectionFilter(parsed.direction === 'system_less' || parsed.direction === 'iams_less' ? parsed.direction : '');
       setDiscrepancyOnly(Boolean(parsed.discrepancyOnly));
+      setHideTransfer(Boolean(parsed.hideTransfer));
     } catch {
       // ignore broken cache
     }
@@ -518,10 +523,11 @@ export default function WorkHourComparisonPage({
       position: positionFilter,
       shift: shiftFilter,
       direction: directionFilter,
-      discrepancyOnly
+      discrepancyOnly,
+      hideTransfer
     };
     window.localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(payload));
-  }, [selectedDate, search, agencyFilter, positionFilter, shiftFilter, directionFilter, discrepancyOnly]);
+  }, [selectedDate, search, agencyFilter, positionFilter, shiftFilter, directionFilter, discrepancyOnly, hideTransfer]);
 
   const loadEmployees = async () => {
     if (!supabase) return {} as Record<string, EmployeeLite>;
@@ -724,7 +730,7 @@ export default function WorkHourComparisonPage({
           ? employeesByStaffId
           : await loadEmployees();
 
-      const dedupByStaff = new Map<string, ParsedUploadRow>();
+      const dedupByStaffAndDate = new Map<string, ParsedUploadRow>();
       const skipReasons: string[] = [];
       for (const row of parsedRows) {
         if (!row.staffId) {
@@ -735,14 +741,16 @@ export default function WorkHourComparisonPage({
           skipReasons.push(`Row ${row.rowNumber}: ${row.staffId} not found in OBPUNCH employees.`);
           continue;
         }
-        dedupByStaff.set(row.staffId, row);
+        dedupByStaffAndDate.set(`${row.workDate}__${row.staffId}`, row);
       }
 
-      const matchedRows = Array.from(dedupByStaff.values());
+      const matchedRows = Array.from(dedupByStaffAndDate.values());
       if (!matchedRows.length) {
+        const uniqueDates = Array.from(new Set(parsedRows.map((row) => row.workDate)));
         setUploadSummary({
           fileName: file.name,
           workDate: selectedDate,
+          dateCount: uniqueDates.length,
           sourceRows: parsedRows.length,
           matchedRows: 0,
           skippedRows: parsedRows.length,
@@ -753,16 +761,26 @@ export default function WorkHourComparisonPage({
         return;
       }
 
-      const staffIds = matchedRows.map((row) => row.staffId);
+      const staffIds = Array.from(new Set(matchedRows.map((row) => row.staffId)));
+      const workDates = Array.from(new Set(matchedRows.map((row) => row.workDate)));
       const { data: existingRows, error: existingError } = await supabase
         .from(IAMS_IMPORT_TABLE)
-        .select('staff_id')
-        .eq('work_date', selectedDate)
+        .select('staff_id, work_date')
+        .in('work_date', workDates)
         .in('staff_id', staffIds);
       if (existingError) throw new Error(String(existingError.message ?? 'Failed to inspect existing imports.'));
 
-      const existingSet = new Set(((existingRows ?? []) as Array<{ staff_id?: string | null }>).map((row) => normalizeStaffId(row.staff_id ?? '')));
-      const replacedRows = matchedRows.reduce((count, row) => count + (existingSet.has(row.staffId) ? 1 : 0), 0);
+      const existingSet = new Set(
+        ((existingRows ?? []) as Array<{ staff_id?: string | null; work_date?: string | null }>)
+          .map((row) => {
+            const staff = normalizeStaffId(row.staff_id ?? '');
+            const date = String(row.work_date ?? '').trim();
+            if (!staff || !date) return '';
+            return `${date}__${staff}`;
+          })
+          .filter(Boolean)
+      );
+      const replacedRows = matchedRows.reduce((count, row) => count + (existingSet.has(`${row.workDate}__${row.staffId}`) ? 1 : 0), 0);
 
       const batchPayload = {
         work_date: selectedDate,
@@ -782,7 +800,7 @@ export default function WorkHourComparisonPage({
       const batchId = Number((batchRows ?? [])[0]?.id ?? 0);
 
       const upsertPayload = matchedRows.map((row) => ({
-        work_date: selectedDate,
+        work_date: row.workDate,
         staff_id: row.staffId,
         source_user_code: row.sourceUserCode,
         iams_hours: row.iamsHours,
@@ -812,6 +830,7 @@ export default function WorkHourComparisonPage({
       setUploadSummary({
         fileName: file.name,
         workDate: selectedDate,
+        dateCount: workDates.length,
         sourceRows: parsedRows.length,
         matchedRows: matchedRows.length,
         skippedRows: parsedRows.length - matchedRows.length,
@@ -843,6 +862,7 @@ export default function WorkHourComparisonPage({
         if (agencyFilter && row.agency !== agencyFilter) return false;
         if (positionFilter && row.position !== positionFilter) return false;
         if (shiftFilter && row.shift !== shiftFilter) return false;
+        if (hideTransfer && row.position === 'Transfer') return false;
         if (directionFilter === 'system_less' && !(row.diffHours < -EPSILON)) return false;
         if (directionFilter === 'iams_less' && !(row.diffHours > EPSILON)) return false;
         if (discrepancyOnly && Math.abs(row.diffHours) + EPSILON < DISCREPANCY_THRESHOLD) return false;
@@ -851,7 +871,7 @@ export default function WorkHourComparisonPage({
         return haystack.includes(q);
       })
       .sort((a, b) => Math.abs(b.diffHours) - Math.abs(a.diffHours));
-  }, [rows, search, agencyFilter, positionFilter, shiftFilter, directionFilter, discrepancyOnly]);
+  }, [rows, search, agencyFilter, positionFilter, shiftFilter, directionFilter, discrepancyOnly, hideTransfer]);
 
   const summary = useMemo(() => {
     const totalSystem = filteredRows.reduce((sum, row) => sum + row.systemHours, 0);
@@ -872,6 +892,7 @@ export default function WorkHourComparisonPage({
     setShiftFilter('');
     setDirectionFilter('');
     setDiscrepancyOnly(false);
+    setHideTransfer(false);
   };
 
   const closePunchFlow = () => {
@@ -893,6 +914,7 @@ export default function WorkHourComparisonPage({
     setPunchFlowTarget({
       staffId: row.staffId,
       name: row.name,
+      position: row.position,
       diffHours: row.diffHours,
       fixedBy: row.fixedBy,
       fixedAt: row.fixedAt
@@ -938,6 +960,33 @@ export default function WorkHourComparisonPage({
         resolveFixerName(String(userEmail ?? '').trim()) ||
         'unknown';
       const fixedAt = new Date().toISOString();
+
+      const { data: existingMistakeRows, error: existingMistakeError } = await supabase
+        .from(MISTAKE_REPORT_TABLE)
+        .select('id')
+        .eq('employee_staff_id', punchFlowTarget.staffId)
+        .eq('operational_date', selectedDate)
+        .limit(1);
+      if (existingMistakeError) {
+        throw new Error(String(existingMistakeError.message ?? 'Failed to check existing mistake report.'));
+      }
+
+      if (!Array.isArray(existingMistakeRows) || existingMistakeRows.length === 0) {
+        const reason = `工时对比异常已修复: 系统工时与iAMS存在差异，修复人 ${fixedBy}`;
+        const { error: createMistakeError } = await supabase
+          .from(MISTAKE_REPORT_TABLE)
+          .insert({
+            position: String(punchFlowTarget.position ?? '').trim() || 'Unknown',
+            employee_staff_id: punchFlowTarget.staffId,
+            reason,
+            reporter_staff_id: fixedBy,
+            operational_date: selectedDate
+          });
+        if (createMistakeError) {
+          throw new Error(String(createMistakeError.message ?? 'Failed to create mistake report.'));
+        }
+      }
+
       const { error: updateError } = await supabase
         .from(IAMS_IMPORT_TABLE)
         .update({ fixed_by: fixedBy, fixed_at: fixedAt, updated_at: fixedAt })
@@ -1011,7 +1060,7 @@ export default function WorkHourComparisonPage({
             <div className={['mt-3 rounded-2xl border px-3 py-2 text-sm', isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-100'].join(' ')}>
               <div>{t('上传成功', 'Upload success')}: {uploadSummary.fileName}</div>
               <div className="mt-1 text-xs opacity-90">
-                {t('总行数', 'Total')}: {uploadSummary.sourceRows} | {t('匹配导入', 'Imported')}: {uploadSummary.matchedRows} | {t('跳过', 'Skipped')}: {uploadSummary.skippedRows} | {t('覆盖更新', 'Replaced')}: {uploadSummary.replacedRows}
+                {t('总行数', 'Total')}: {uploadSummary.sourceRows} | {t('覆盖日期数', 'Dates')}: {uploadSummary.dateCount} | {t('匹配导入', 'Imported')}: {uploadSummary.matchedRows} | {t('跳过', 'Skipped')}: {uploadSummary.skippedRows} | {t('覆盖更新', 'Replaced')}: {uploadSummary.replacedRows}
               </div>
             </div>
           )}
@@ -1035,14 +1084,14 @@ export default function WorkHourComparisonPage({
         </div>
 
         <div className={pagePanelClass}>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap">
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={t('搜索 ID/名字/Agency/岗位', 'Search ID/name/agency/position')}
-              className={[inputClass, 'min-w-[280px] flex-1'].join(' ')}
+              className={[inputClass, 'w-[280px] shrink-0'].join(' ')}
             />
-            <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)} className={[inputClass, 'w-[170px]'].join(' ')}>
+            <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)} className={[inputClass, 'w-[150px] shrink-0'].join(' ')}>
               <option value="">{t('全部 Agency', 'All agencies')}</option>
               {agencyOptions.map((option) => (
                 <option key={option} value={option}>
@@ -1050,7 +1099,7 @@ export default function WorkHourComparisonPage({
                 </option>
               ))}
             </select>
-            <select value={positionFilter} onChange={(e) => setPositionFilter(e.target.value)} className={[inputClass, 'w-[170px]'].join(' ')}>
+            <select value={positionFilter} onChange={(e) => setPositionFilter(e.target.value)} className={[inputClass, 'w-[150px] shrink-0'].join(' ')}>
               <option value="">{t('全部岗位', 'All positions')}</option>
               {positionOptions.map((option) => (
                 <option key={option} value={option}>
@@ -1058,23 +1107,31 @@ export default function WorkHourComparisonPage({
                 </option>
               ))}
             </select>
-            <select value={shiftFilter} onChange={(e) => setShiftFilter((e.target.value as '' | 'early' | 'late') || '')} className={[inputClass, 'w-[160px]'].join(' ')}>
+            <select value={shiftFilter} onChange={(e) => setShiftFilter((e.target.value as '' | 'early' | 'late') || '')} className={[inputClass, 'w-[140px] shrink-0'].join(' ')}>
               <option value="">{t('全部班次', 'All shifts')}</option>
               <option value="early">{t('早班', 'Early')}</option>
               <option value="late">{t('晚班', 'Late')}</option>
             </select>
-            <select value={directionFilter} onChange={(e) => setDirectionFilter((e.target.value as DirectionFilter) || '')} className={[inputClass, 'w-[180px]'].join(' ')}>
+            <select value={directionFilter} onChange={(e) => setDirectionFilter((e.target.value as DirectionFilter) || '')} className={[inputClass, 'w-[160px] shrink-0'].join(' ')}>
               <option value="">{t('差异方向: 全部', 'Direction: All')}</option>
               <option value="system_less">{t('系统工时少了', 'System less')}</option>
               <option value="iams_less">{t('iAMS 工时少了', 'iAMS less')}</option>
             </select>
-            <label className="inline-flex h-10 items-center gap-2 text-sm">
+            <label className="inline-flex h-10 shrink-0 items-center gap-2 text-sm">
               <input
                 type="checkbox"
                 checked={discrepancyOnly}
                 onChange={(e) => setDiscrepancyOnly(e.target.checked)}
               />
               {t('仅看差异大', 'Large discrepancy only')}
+            </label>
+            <label className="inline-flex h-10 shrink-0 items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={hideTransfer}
+                onChange={(e) => setHideTransfer(e.target.checked)}
+              />
+              {t('不看Transfer', 'Hide Transfer')}
             </label>
             <button type="button" onClick={clearFilters} className={buttonSecondaryClass}>
               {t('清空筛选', 'Clear filters')}
@@ -1217,7 +1274,7 @@ export default function WorkHourComparisonPage({
                   )}
                   {punchFlowTarget?.fixedBy && (
                     <span className={['text-sm font-semibold', isLight ? 'text-sky-700' : 'text-sky-300'].join(' ')}>
-                      {t('已修复：修复人：', 'Resolved by: ')}{resolveFixerDisplay(punchFlowTarget.fixedBy)}
+                      {t('已修复：', 'Resolved: ')}{resolveFixerDisplay(punchFlowTarget.fixedBy)}
                     </span>
                   )}
                   <button type="button" onClick={closePunchFlow} className={buttonSecondaryClass}>

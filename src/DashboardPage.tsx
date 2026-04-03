@@ -1267,10 +1267,11 @@ export default function DashboardPage() {
   }, [rows, cardPositions, cardStatsByKey]);
   const outboundShiftCards = useMemo(() => {
     const shifts: Array<'early' | 'late'> = ['early', 'late'];
+    const summaryPositions = cardPositions.filter((position) => normalizePositionKey(position) !== 'Transfer');
     return shifts.map((shift) => {
       let expected = 0;
       let present = 0;
-      for (const position of cardPositions) {
+      for (const position of summaryPositions) {
         const stat = cardStatsByKey[`${shift}:${position}`] ?? { expected: 0, present: 0, onClock: 0, offWorked: 0 };
         expected += Number(stat.expected || 0);
         present += Number(stat.present || 0);
