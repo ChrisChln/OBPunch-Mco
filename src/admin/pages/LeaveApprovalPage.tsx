@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import StyledDateInput from '../components/StyledDateInput';
 import { isValidStaffId, normalizeStaffId } from '../../lib/staffId';
 
@@ -13,6 +13,7 @@ type Props = {
   serverTime: Date;
   userEmail?: string;
   userDisplayName?: string;
+  onPendingCountChange?: (count: number) => void;
 };
 
 type EmployeeLite = {
@@ -55,11 +56,16 @@ const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefine
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const LEAVE_REQUEST_TABLE = (import.meta.env.VITE_LEAVE_REQUEST_TABLE as string | undefined) ?? 'ob_leave_requests';
+const SCHEDULE_REST_NOTE = '__rest__';
+const SCHEDULE_FIXED_WORK_NOTE = '__fixed_work__';
+const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
+const SCHEDULE_LEAVE_NOTE = '__leave__';
+const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
+const SCHEDULE_PLANNED_TEMP_WORK_NOTE = '__planned_temp_work__';
+const SCHEDULE_PLANNED_LEAVE_NOTE = '__planned_leave__';
+const SCHEDULE_PLANNED_TEMP_REST_NOTE = '__planned_temp_rest__';
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? Math.max(0, Math.min(23, DAY_CUTOFF_HOUR_RAW)) : 5;
-const CSV_ACCEPT_TYPES =
-  '.csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
-
 const isValidDateOnly = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '').trim());
 const toDateOnly = (value: Date) =>
   `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
@@ -68,6 +74,7 @@ const addDays = (value: Date, days: number) => {
   next.setDate(next.getDate() + days);
   return next;
 };
+const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
 const startOfWeekMonday = (value: Date) => {
   const next = new Date(value);
   next.setHours(0, 0, 0, 0);
@@ -76,55 +83,28 @@ const startOfWeekMonday = (value: Date) => {
   next.setDate(next.getDate() + diff);
   return next;
 };
-
-const parseCsvRows = (text: string) => {
-  const rows: string[][] = [];
-  let cell = '';
-  let row: string[] = [];
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    const next = text[i + 1];
-    if (ch === '"') {
-      if (inQuotes && next === '"') {
-        cell += '"';
-        i += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-    if (!inQuotes && ch === ',') {
-      row.push(cell.trim());
-      cell = '';
-      continue;
-    }
-    if (!inQuotes && (ch === '\n' || ch === '\r')) {
-      if (ch === '\r' && next === '\n') i += 1;
-      row.push(cell.trim());
-      if (row.some((part) => part)) rows.push(row);
-      row = [];
-      cell = '';
-      continue;
-    }
-    cell += ch;
-  }
-  row.push(cell.trim());
-  if (row.some((part) => part)) rows.push(row);
-  return rows;
+const getTemplateDateByActualDate = (actualDateOnly: string, actualWeekStartDateOnly: string) => {
+  const actualDate = new Date(`${actualDateOnly}T00:00:00`);
+  const actualWeekStart = new Date(`${actualWeekStartDateOnly}T00:00:00`);
+  if (Number.isNaN(actualDate.getTime()) || Number.isNaN(actualWeekStart.getTime())) return '';
+  const diffDays = Math.round((actualDate.getTime() - actualWeekStart.getTime()) / (24 * 60 * 60 * 1000));
+  if (diffDays < 0 || diffDays > 13) return '';
+  return toDateOnly(addDays(SCHEDULE_TEMPLATE_WEEK_START, diffDays));
 };
-
-const readTabularFile = async (file: File) => {
-  const lower = String(file.name ?? '').toLowerCase();
-  if (lower.endsWith('.csv') || file.type === 'text/csv') return parseCsvRows(await file.text());
-  const XLSX = await import('xlsx');
-  const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-  const firstSheet = workbook.SheetNames[0];
-  if (!firstSheet) return [] as any[][];
-  return ((XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { header: 1 }) as any[][]) ?? []).map((row) =>
-    Array.isArray(row) ? row.map((cell) => String(cell ?? '').trim()) : []
-  );
+const getScheduleBaseStateFromNote = (note: unknown) => {
+  const value = String(note ?? '').trim();
+  if (value === SCHEDULE_FIXED_WORK_NOTE) return 'fixed_work';
+  if (value === SCHEDULE_TEMP_WORK_NOTE) return 'temp_work';
+  if (value === SCHEDULE_LEAVE_NOTE) return 'leave';
+  if (value === SCHEDULE_TEMP_REST_NOTE) return 'temp_rest';
+  if (value === SCHEDULE_PLANNED_TEMP_WORK_NOTE) return 'planned_temp_work';
+  if (value === SCHEDULE_PLANNED_LEAVE_NOTE) return 'planned_leave';
+  if (value === SCHEDULE_PLANNED_TEMP_REST_NOTE) return 'planned_temp_rest';
+  if (value === SCHEDULE_REST_NOTE) return 'rest';
+  return 'work';
 };
+const isLeaveWritableScheduleState = (state: string) =>
+  state === 'work' || state === 'fixed_work' || state === 'temp_work' || state === 'planned_temp_work';
 
 const normalizeHeaderKey = (value: unknown) =>
   String(value ?? '')
@@ -255,16 +235,25 @@ const getApproveWindow = (serverTime: Date) => {
   };
 };
 
-export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, serverTime, userEmail = '', userDisplayName = '' }: Props) {
+const getEffectiveLeaveStatus = (status: LeaveStatus, leaveDate: string, serverTime: Date): LeaveStatus => {
+  if (status !== 'pending') return status;
+  const approveWindow = getApproveWindow(serverTime);
+  return leaveDate < approveWindow.editableStart ? 'expired' : 'pending';
+};
+
+// Kept temporarily to avoid churn while the old upload path is being retired.
+void buildHeaderMap;
+void parseDateCell;
+void parseSubmittedAtCell;
+void parseBooleanCell;
+
+export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, serverTime, userEmail = '', userDisplayName = '', onPendingCountChange }: Props) {
   const isLight = themeMode === 'light';
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [employeesByStaffId, setEmployeesByStaffId] = useState<Record<string, EmployeeLite>>({});
   const [rows, setRows] = useState<LeaveRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [savingRowId, setSavingRowId] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [uploadMessage, setUploadMessage] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | LeaveStatus>('pending');
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState('');
@@ -308,9 +297,19 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
         reviewed_by: String(item.reviewed_by ?? '').trim(),
         reviewed_at: item.reviewed_at ? String(item.reviewed_at) : null
       })));
+      onPendingCountChange?.(
+        (((data ?? []) as any[]) ?? []).filter((item) =>
+          getEffectiveLeaveStatus(
+            ((String(item?.status ?? 'pending').trim() as LeaveStatus) || 'pending'),
+            String(item?.leave_date ?? '').trim(),
+            serverTime
+          ) === 'pending'
+        ).length
+      );
     } catch (err) {
       setError(String((err as any)?.message ?? err ?? 'Failed to load leave requests.'));
       setRows([]);
+      onPendingCountChange?.(0);
     } finally {
       setLoading(false);
     }
@@ -342,81 +341,16 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
     if (best && best.score >= 82) return { staffId: best.staffId, employeeName: best.name, method: 'name_token', score: best.score };
     return { staffId: '', employeeName: '', method: 'unmatched', score: best?.score ?? null };
   };
+  void resolveEmployeeMatch;
 
-  const importFile = async (file: File | null) => {
-    if (!file || !supabase) return;
-    setUploading(true);
-    setError(null);
-    setUploadMessage('');
-    try {
-      const tableRows = await readTabularFile(file);
-      if (!tableRows.length) throw new Error('The file is empty.');
-      let headerRowIndex = -1;
-      let headerMap: HeaderMap | null = null;
-      for (let i = 0; i < Math.min(tableRows.length, 10); i += 1) {
-        const found = buildHeaderMap(tableRows[i] ?? []);
-        if (found) {
-          headerRowIndex = i;
-          headerMap = found;
-          break;
-        }
-      }
-      if (!headerMap || headerRowIndex < 0) throw new Error('Missing required columns: Name / Off Date / Type of leave.');
-
-      const { submittedAtIndex, nameIndex, staffIdIndex, positionIndex, scheduleAdjustedIndex, leaveDateIndex, leaveTypeIndex } = headerMap;
-      const payload: Record<string, unknown>[] = [];
-      let importedCount = 0;
-      let matchedCount = 0;
-      for (let index = headerRowIndex + 1; index < tableRows.length; index += 1) {
-        const row = tableRows[index] ?? [];
-        const employeeNameRaw = String(row[nameIndex] ?? '').trim();
-        const employeeStaffIdRaw = staffIdIndex >= 0 ? String(row[staffIdIndex] ?? '').trim() : '';
-        const leaveDate = parseDateCell(row[leaveDateIndex]);
-        const leaveType = String(row[leaveTypeIndex] ?? '').trim();
-        if (!employeeNameRaw && !leaveDate && !leaveType) continue;
-        if (!employeeNameRaw || !leaveDate || !leaveType || !isValidDateOnly(leaveDate)) continue;
-        const submittedAtRaw = submittedAtIndex >= 0 ? String(row[submittedAtIndex] ?? '').trim() : '';
-        const submittedAt = parseSubmittedAtCell(submittedAtRaw);
-        const positionRaw = positionIndex >= 0 ? String(row[positionIndex] ?? '').trim() : '';
-        const scheduleAdjusted = scheduleAdjustedIndex >= 0 ? parseBooleanCell(row[scheduleAdjustedIndex]) : false;
-        const match = resolveEmployeeMatch(employeeNameRaw, employeeStaffIdRaw);
-        if (match.staffId) matchedCount += 1;
-        importedCount += 1;
-        payload.push({
-          source: 'google_form',
-          source_row_key: [submittedAtRaw, employeeNameRaw, employeeStaffIdRaw, leaveDate, leaveType].join('||').toLowerCase(),
-          submitted_at: submittedAt,
-          submitted_at_raw: submittedAtRaw || null,
-          employee_name_raw: employeeNameRaw,
-          employee_staff_id_raw: employeeStaffIdRaw || null,
-          matched_staff_id: match.staffId || null,
-          matched_employee_name: match.employeeName || null,
-          matching_method: match.method,
-          matching_score: match.score,
-          position_raw: positionRaw || null,
-          leave_date: leaveDate,
-          leave_type: leaveType,
-          schedule_adjusted: scheduleAdjusted,
-          raw_payload: { employee_name_raw: employeeNameRaw, employee_staff_id_raw: employeeStaffIdRaw, position_raw: positionRaw, leave_date: leaveDate, leave_type: leaveType, schedule_adjusted: scheduleAdjusted },
-          updated_at: new Date(serverTime).toISOString()
-        });
-      }
-      if (payload.length === 0) throw new Error('No leave request rows were found.');
-      const { error: upsertError } = await supabase.from(LEAVE_REQUEST_TABLE).upsert(payload as any[], { onConflict: 'source,source_row_key' });
-      if (upsertError) throw new Error(String(upsertError.message ?? 'Failed to import leave requests.'));
-      setUploadMessage(`${t('导入完成', 'Import complete')}: ${importedCount} ${t('条', 'rows')} · ${t('匹配成功', 'matched')} ${matchedCount}`);
-      await loadRows();
-    } catch (err) {
-      setError(String((err as any)?.message ?? err ?? 'Failed to import leave requests.'));
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      setUploading(false);
-    }
+  const writeAudit = async (action: string, staffId: string | null, payload: Record<string, unknown>, target = LEAVE_REQUEST_TABLE) => {
+    if (!supabase) return;
+    const { error: auditError } = await supabase.from(AUDIT_TABLE).insert([{ actor: actorDisplay, action, staff_id: staffId, target, payload }] as any[]);
+    if (auditError) throw new Error(String(auditError.message ?? `Failed to write audit log for ${action}.`));
   };
 
-  const writeAudit = async (action: string, staffId: string | null, payload: Record<string, unknown>) => {
-    if (!supabase) return;
-    await supabase.from(AUDIT_TABLE).insert([{ actor: actorDisplay, action, staff_id: staffId, target: LEAVE_REQUEST_TABLE, payload }] as any[]);
+  const getEffectiveStatus = (row: LeaveRow): LeaveStatus => {
+    return getEffectiveLeaveStatus(row.status, row.leave_date, serverTime);
   };
 
   const updateLeaveStatus = async (row: LeaveRow, status: 'approved' | 'rejected') => {
@@ -438,13 +372,106 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
         } else {
           const isPastLeaveDate = row.leave_date < approveWindow.operationalDate;
           const nextNote = isPastLeaveDate ? '__leave__' : '__planned_leave__';
-          const { error: scheduleError } = await supabase.from(SCHEDULE_TABLE).upsert([{ staff_id: row.matched_staff_id, date: row.leave_date, position: employee.position || row.position_raw || 'Pick', note: nextNote, operator: actorDisplay, updated_at: nowIso }] as any[], { onConflict: 'staff_id,date' });
-          if (scheduleError) throw new Error(String(scheduleError.message ?? 'Failed to apply leave to schedule.'));
-          if (isPastLeaveDate) {
-            const deleteRes = await supabase.from(ATTENDANCE_MARKS_TABLE).delete().eq('staff_id', row.matched_staff_id).eq('work_date', row.leave_date).eq('mark_type', 'absent');
-            if (deleteRes.error) throw new Error(String(deleteRes.error.message ?? 'Failed to clear absent mark.'));
-            const excuseRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert([{ staff_id: row.matched_staff_id, work_date: row.leave_date, mark_type: 'excuse', source: 'leave_request', operator: actorDisplay, payload: { leave_request_id: row.id, leave_type: row.leave_type }, updated_at: nowIso }] as any[], { onConflict: 'staff_id,work_date,mark_type' });
-            if (excuseRes.error) throw new Error(String(excuseRes.error.message ?? 'Failed to write excuse mark.'));
+          const scheduleAction = isPastLeaveDate ? 'schedule_leave' : 'schedule_planned_leave';
+          const leaveDateValue = new Date(`${row.leave_date}T00:00:00`);
+          const weekday = Number.isNaN(leaveDateValue.getTime()) ? null : leaveDateValue.getDay() === 0 ? 7 : leaveDateValue.getDay();
+          const templateDate = getTemplateDateByActualDate(row.leave_date, approveWindow.editableStart);
+          if (!templateDate) throw new Error(`Could not map leave date ${row.leave_date} into schedule bucket.`);
+          const positionValue = employee.position || row.position_raw || 'Pick';
+          const existingScheduleRes = await supabase
+            .from(SCHEDULE_TABLE)
+            .select('note')
+            .eq('staff_id', row.matched_staff_id)
+            .eq('date', templateDate)
+            .maybeSingle();
+          if (existingScheduleRes.error) throw new Error(String(existingScheduleRes.error.message ?? 'Failed to load existing schedule state.'));
+          const existingScheduleState = getScheduleBaseStateFromNote(existingScheduleRes.data?.note);
+          const shouldApplyLeave = isLeaveWritableScheduleState(existingScheduleState);
+
+          if (shouldApplyLeave) {
+            const { error: scheduleError } = await supabase.from(SCHEDULE_TABLE).upsert([{ staff_id: row.matched_staff_id, date: templateDate, position: positionValue, note: nextNote, operator: actorDisplay, updated_at: nowIso }] as any[], { onConflict: 'staff_id,date' });
+            if (scheduleError) throw new Error(String(scheduleError.message ?? 'Failed to apply leave to schedule.'));
+            if (isPastLeaveDate) {
+              const deleteRes = await supabase.from(ATTENDANCE_MARKS_TABLE).delete().eq('staff_id', row.matched_staff_id).eq('work_date', row.leave_date).eq('mark_type', 'absent');
+              if (deleteRes.error) throw new Error(String(deleteRes.error.message ?? 'Failed to clear absent mark.'));
+              const excuseRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert([{ staff_id: row.matched_staff_id, work_date: row.leave_date, mark_type: 'excuse', source: 'leave_request', operator: actorDisplay, payload: { leave_request_id: row.id, leave_type: row.leave_type }, updated_at: nowIso }] as any[], { onConflict: 'staff_id,work_date,mark_type' });
+              if (excuseRes.error) throw new Error(String(excuseRes.error.message ?? 'Failed to write excuse mark.'));
+            }
+
+            const scheduleVerifyRes = await supabase
+              .from(SCHEDULE_TABLE)
+              .select('note')
+              .eq('staff_id', row.matched_staff_id)
+              .eq('date', templateDate)
+              .maybeSingle();
+            if (scheduleVerifyRes.error) throw new Error(String(scheduleVerifyRes.error.message ?? 'Failed to verify leave schedule update.'));
+            const savedNote = String(scheduleVerifyRes.data?.note ?? '').trim();
+            if (savedNote !== nextNote) {
+              throw new Error(
+                isPastLeaveDate
+                  ? 'Schedule was not updated to leave. Approval was blocked.'
+                  : 'Schedule was not updated to planned leave. Approval was blocked.'
+              );
+            }
+
+            if (isPastLeaveDate) {
+              const absentVerifyRes = await supabase
+                .from(ATTENDANCE_MARKS_TABLE)
+                .select('id')
+                .eq('staff_id', row.matched_staff_id)
+                .eq('work_date', row.leave_date)
+                .eq('mark_type', 'absent')
+                .limit(1);
+              if (absentVerifyRes.error) throw new Error(String(absentVerifyRes.error.message ?? 'Failed to verify absent mark removal.'));
+              if (Array.isArray(absentVerifyRes.data) && absentVerifyRes.data.length > 0) {
+                throw new Error('Absent mark still exists after leave approval. Approval was blocked.');
+              }
+
+              const excuseVerifyRes = await supabase
+                .from(ATTENDANCE_MARKS_TABLE)
+                .select('id')
+                .eq('staff_id', row.matched_staff_id)
+                .eq('work_date', row.leave_date)
+                .eq('mark_type', 'excuse')
+                .limit(1);
+              if (excuseVerifyRes.error) throw new Error(String(excuseVerifyRes.error.message ?? 'Failed to verify excuse mark.'));
+              if (!Array.isArray(excuseVerifyRes.data) || excuseVerifyRes.data.length === 0) {
+                throw new Error('Excuse mark was not created after leave approval. Approval was blocked.');
+              }
+            }
+
+            await writeAudit(scheduleAction, row.matched_staff_id, {
+              template_date: templateDate,
+              actual_date: row.leave_date,
+              weekday,
+              state: isPastLeaveDate ? 'leave' : 'planned_leave',
+              to_state: isPastLeaveDate ? 'leave' : 'planned_leave',
+              from_state: existingScheduleState,
+              position: positionValue,
+              leave_request_id: row.id,
+              leave_type: row.leave_type
+            }, SCHEDULE_TABLE);
+          } else {
+            const existingExcuseState = existingScheduleState === 'leave' || existingScheduleState === 'planned_leave';
+            if (isPastLeaveDate && existingExcuseState) {
+              const excuseVerifyRes = await supabase
+                .from(ATTENDANCE_MARKS_TABLE)
+                .select('id')
+                .eq('staff_id', row.matched_staff_id)
+                .eq('work_date', row.leave_date)
+                .eq('mark_type', 'excuse')
+                .limit(1);
+              if (excuseVerifyRes.error) throw new Error(String(excuseVerifyRes.error.message ?? 'Failed to verify existing excuse mark.'));
+              if (!Array.isArray(excuseVerifyRes.data) || excuseVerifyRes.data.length === 0) {
+                const excuseRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert([{ staff_id: row.matched_staff_id, work_date: row.leave_date, mark_type: 'excuse', source: 'leave_request', operator: actorDisplay, payload: { leave_request_id: row.id, leave_type: row.leave_type }, updated_at: nowIso }] as any[], { onConflict: 'staff_id,work_date,mark_type' });
+                if (excuseRes.error) throw new Error(String(excuseRes.error.message ?? 'Failed to align existing leave excuse mark.'));
+              }
+            }
+
+            if (isPastLeaveDate && existingScheduleState === 'leave') {
+              const deleteRes = await supabase.from(ATTENDANCE_MARKS_TABLE).delete().eq('staff_id', row.matched_staff_id).eq('work_date', row.leave_date).eq('mark_type', 'absent');
+              if (deleteRes.error) throw new Error(String(deleteRes.error.message ?? 'Failed to clear absent mark for existing leave state.'));
+            }
           }
         }
       }
@@ -465,6 +492,7 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
             : item
         )
       );
+      onPendingCountChange?.(rows.filter((item) => item.id !== row.id && getEffectiveLeaveStatus(item.status, item.leave_date, serverTime) === 'pending').length);
     } catch (err) {
       setError(String((err as any)?.message ?? err ?? 'Failed to update leave request.'));
     } finally {
@@ -475,14 +503,24 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((row) => {
-      if (statusFilter !== 'all' && row.status !== statusFilter) return false;
+      const effectiveStatus = getEffectiveStatus(row);
+      if (statusFilter !== 'all' && effectiveStatus !== statusFilter) return false;
       if (dateFilter && row.leave_date !== dateFilter) return false;
       if (!q) return true;
       return [row.employee_name_raw, row.employee_staff_id_raw, row.matched_staff_id, row.matched_employee_name, row.leave_type, row.position_raw].join(' ').toLowerCase().includes(q);
     });
   }, [rows, search, statusFilter, dateFilter]);
 
-  const summary = useMemo(() => ({ total: rows.length, pending: rows.filter((row) => row.status === 'pending').length, approved: rows.filter((row) => row.status === 'approved').length, unmatched: rows.filter((row) => !row.matched_staff_id).length }), [rows]);
+  const summary = useMemo(
+    () => ({
+      total: rows.length,
+      pending: rows.filter((row) => getEffectiveStatus(row) === 'pending').length,
+      approved: rows.filter((row) => getEffectiveStatus(row) === 'approved').length,
+      expired: rows.filter((row) => getEffectiveStatus(row) === 'expired').length,
+      unmatched: rows.filter((row) => !row.matched_staff_id).length
+    }),
+    [rows]
+  );
 
   const pagePanelClass = isLight ? 'rounded-2xl border border-slate-200 bg-white p-4 shadow-sm' : 'rounded-2xl border border-white/10 bg-white/[0.03] p-4';
   const inputClass = isLight ? 'h-10 rounded-2xl border border-slate-300 bg-white px-3 text-sm text-slate-900' : 'h-10 rounded-2xl border border-white/10 bg-white/[0.04] px-3 text-sm text-white';
@@ -496,17 +534,7 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
         <h2 className="font-display text-2xl tracking-[0.08em]">{t('请假审批', 'Leave Approval')}</h2>
       </div>
 
-      <div className="mt-5 grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <div className={pagePanelClass}>
-          <div className={labelClass}>{t('导入', 'Import')}</div>
-          <input ref={fileInputRef} type="file" className="hidden" accept={CSV_ACCEPT_TYPES} onChange={(e) => void importFile(e.target.files?.[0] ?? null)} />
-          <button type="button" disabled={isLocked || uploading} onClick={() => fileInputRef.current?.click()} className={[buttonPrimaryClass, 'mt-3'].join(' ')}>
-            {uploading ? t('导入中...', 'Importing...') : t('上传 Google Form 表格', 'Upload Google Form file')}
-          </button>
-          {uploadMessage && <div className={['mt-3 rounded-2xl border px-3 py-2 text-sm', isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-100'].join(' ')}>{uploadMessage}</div>}
-          {error && <div className={['mt-3 rounded-2xl border px-3 py-2 text-sm', isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-400/30 bg-rose-500/10 text-rose-200'].join(' ')}>{error}</div>}
-        </div>
-
+      <div className="mt-5">
         <div className={pagePanelClass}>
           <div className="flex flex-wrap items-center gap-2">
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('搜索姓名 / 工号 / 请假类型', 'Search name / staff ID / leave type')} className={[inputClass, 'w-[260px]'].join(' ')} />
@@ -520,10 +548,11 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
             <StyledDateInput value={dateFilter} onChange={setDateFilter} themeMode={themeMode} disabled={isLocked} />
           </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-4">
+          <div className="mt-4 grid gap-3 sm:grid-cols-5">
             <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'].join(' ')}><div className={labelClass}>{t('总申请', 'Total')}</div><div className="text-lg font-semibold">{summary.total}</div></div>
             <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-amber-200 bg-amber-50' : 'border-amber-400/30 bg-amber-500/10'].join(' ')}><div className={labelClass}>{t('待审批', 'Pending')}</div><div className="text-lg font-semibold">{summary.pending}</div></div>
             <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-emerald-200 bg-emerald-50' : 'border-emerald-400/30 bg-emerald-500/10'].join(' ')}><div className={labelClass}>{t('已批准', 'Approved')}</div><div className="text-lg font-semibold">{summary.approved}</div></div>
+            <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-slate-300 bg-slate-100' : 'border-slate-400/30 bg-slate-500/10'].join(' ')}><div className={labelClass}>{t('已过期', 'Expired')}</div><div className="text-lg font-semibold">{summary.expired}</div></div>
             <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-rose-200 bg-rose-50' : 'border-rose-400/30 bg-rose-500/10'].join(' ')}><div className={labelClass}>{t('未匹配', 'Unmatched')}</div><div className="text-lg font-semibold">{summary.unmatched}</div></div>
           </div>
 
@@ -547,11 +576,12 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
                 </thead>
                 <tbody>
                   {filteredRows.map((row) => {
+                    const effectiveStatus = getEffectiveStatus(row);
                     const matchedPosition = row.matched_staff_id ? employeesByStaffId[row.matched_staff_id]?.position ?? '' : '';
                     const displayPosition = matchedPosition || row.position_raw || '-';
                     return (
                       <tr key={row.id || row.source_row_key} className={isLight ? 'border-t border-slate-200' : 'border-t border-white/10'}>
-                        <td className="px-3 py-2 font-semibold">{row.status}</td>
+                        <td className="px-3 py-2 font-semibold">{effectiveStatus}</td>
                         <td className="px-3 py-2 whitespace-nowrap">{row.leave_date}</td>
                         <td className="px-3 py-2">
                           <div>{row.employee_name_raw || '-'}</div>
@@ -564,8 +594,8 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
                         <td className="px-3 py-2">{row.leave_type}</td>
                         <td className="px-3 py-2">
                           <div className="flex items-center gap-2 whitespace-nowrap">
-                            <button type="button" disabled={isLocked || savingRowId === row.id || row.status !== 'pending'} onClick={() => void updateLeaveStatus(row, 'approved')} className={buttonPrimaryClass}>{savingRowId === row.id ? t('处理中...', 'Saving...') : t('批准', 'Approve')}</button>
-                            <button type="button" disabled={isLocked || savingRowId === row.id || row.status !== 'pending'} onClick={() => void updateLeaveStatus(row, 'rejected')} className={buttonSecondaryClass}>{t('拒绝', 'Reject')}</button>
+                            <button type="button" disabled={isLocked || savingRowId === row.id || effectiveStatus !== 'pending'} onClick={() => void updateLeaveStatus(row, 'approved')} className={buttonPrimaryClass}>{savingRowId === row.id ? t('处理中...', 'Saving...') : t('批准', 'Approve')}</button>
+                            <button type="button" disabled={isLocked || savingRowId === row.id || effectiveStatus !== 'pending'} onClick={() => void updateLeaveStatus(row, 'rejected')} className={buttonSecondaryClass}>{t('拒绝', 'Reject')}</button>
                           </div>
                           {row.reviewed_by ? <div className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-white/50'].join(' ')}>{row.reviewed_by} · {formatDateTime(row.reviewed_at)}</div> : null}
                         </td>
@@ -578,6 +608,19 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
           </div>
         </div>
       </div>
+      {error ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-4">
+          <div className={['w-full max-w-md rounded-3xl border p-5 shadow-2xl', isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-[#18181c] text-white'].join(' ')}>
+            <div className="text-lg font-semibold">{t('操作失败', 'Action failed')}</div>
+            <div className={['mt-3 text-sm leading-6', isLight ? 'text-slate-600' : 'text-white/75'].join(' ')}>{error}</div>
+            <div className="mt-5 flex justify-end">
+              <button type="button" onClick={() => setError(null)} className={buttonPrimaryClass}>
+                {t('知道了', 'OK')}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
