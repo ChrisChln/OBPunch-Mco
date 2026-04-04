@@ -10,10 +10,7 @@ function syncLeaveRowFromEvent(e) {
   SpreadsheetApp.flush();
   Utilities.sleep(1200);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0] || [];
-  const values =
-    Array.isArray(e.values) && e.values.length > 0
-      ? e.values
-      : sheet.getRange(rowNumber, 1, 1, headers.length).getDisplayValues()[0] || [];
+  const values = sheet.getRange(rowNumber, 1, 1, headers.length).getDisplayValues()[0] || [];
   const record = {};
   for (let i = 0; i < headers.length; i += 1) record[headers[i]] = values[i];
   const row = {

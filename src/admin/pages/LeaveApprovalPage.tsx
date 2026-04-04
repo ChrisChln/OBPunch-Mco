@@ -52,6 +52,7 @@ type HeaderMap = {
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
+const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const LEAVE_REQUEST_TABLE = (import.meta.env.VITE_LEAVE_REQUEST_TABLE as string | undefined) ?? 'ob_leave_requests';
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
@@ -435,8 +436,16 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
         } else if (row.leave_date > approveWindow.editableEnd) {
           throw new Error(`Approval is only allowed for this week and next week (${approveWindow.editableStart} to ${approveWindow.editableEnd}).`);
         } else {
-          const { error: scheduleError } = await supabase.from(SCHEDULE_TABLE).upsert([{ staff_id: row.matched_staff_id, date: row.leave_date, position: employee.position || row.position_raw || 'Pick', note: '__planned_leave__', operator: actorDisplay, updated_at: nowIso }] as any[], { onConflict: 'staff_id,date' });
+          const isPastLeaveDate = row.leave_date < approveWindow.operationalDate;
+          const nextNote = isPastLeaveDate ? '__leave__' : '__planned_leave__';
+          const { error: scheduleError } = await supabase.from(SCHEDULE_TABLE).upsert([{ staff_id: row.matched_staff_id, date: row.leave_date, position: employee.position || row.position_raw || 'Pick', note: nextNote, operator: actorDisplay, updated_at: nowIso }] as any[], { onConflict: 'staff_id,date' });
           if (scheduleError) throw new Error(String(scheduleError.message ?? 'Failed to apply leave to schedule.'));
+          if (isPastLeaveDate) {
+            const deleteRes = await supabase.from(ATTENDANCE_MARKS_TABLE).delete().eq('staff_id', row.matched_staff_id).eq('work_date', row.leave_date).eq('mark_type', 'absent');
+            if (deleteRes.error) throw new Error(String(deleteRes.error.message ?? 'Failed to clear absent mark.'));
+            const excuseRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert([{ staff_id: row.matched_staff_id, work_date: row.leave_date, mark_type: 'excuse', source: 'leave_request', operator: actorDisplay, payload: { leave_request_id: row.id, leave_type: row.leave_type }, updated_at: nowIso }] as any[], { onConflict: 'staff_id,work_date,mark_type' });
+            if (excuseRes.error) throw new Error(String(excuseRes.error.message ?? 'Failed to write excuse mark.'));
+          }
         }
       }
       const { error: updateError } = await supabase.from(LEAVE_REQUEST_TABLE).update({ status: nextStatus, reviewed_by: actorDisplay, reviewed_at: nowIso, updated_at: nowIso }).eq('id', row.id);
@@ -444,7 +453,18 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
       const auditAction =
         nextStatus === 'approved' ? 'leave_request_approve' : nextStatus === 'expired' ? 'leave_request_expire' : 'leave_request_reject';
       await writeAudit(auditAction, row.matched_staff_id || null, { leave_request_id: row.id, leave_date: row.leave_date, leave_type: row.leave_type, source: row.source, status: nextStatus });
-      await loadRows();
+      setRows((current) =>
+        current.map((item) =>
+          item.id === row.id
+            ? {
+                ...item,
+                status: nextStatus,
+                reviewed_by: actorDisplay,
+                reviewed_at: nowIso
+              }
+            : item
+        )
+      );
     } catch (err) {
       setError(String((err as any)?.message ?? err ?? 'Failed to update leave request.'));
     } finally {
@@ -539,13 +559,12 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
                         </td>
                         <td className="px-3 py-2">
                           <div>{row.matched_staff_id ? `${row.matched_staff_id} · ${row.matched_employee_name || row.matched_staff_id}` : t('未匹配', 'Unmatched')}</div>
-                          {row.matching_score != null ? <div className={isLight ? 'text-xs text-slate-500' : 'text-xs text-white/50'}>{t('分数', 'Score')}: {row.matching_score}</div> : null}
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap">{displayPosition}</td>
                         <td className="px-3 py-2">{row.leave_type}</td>
                         <td className="px-3 py-2">
-                          <div className="flex flex-wrap gap-2">
-                            <button type="button" disabled={isLocked || savingRowId === row.id || row.status !== 'pending' || !row.matched_staff_id} onClick={() => void updateLeaveStatus(row, 'approved')} className={buttonPrimaryClass}>{savingRowId === row.id ? t('处理中...', 'Saving...') : t('批准', 'Approve')}</button>
+                          <div className="flex items-center gap-2 whitespace-nowrap">
+                            <button type="button" disabled={isLocked || savingRowId === row.id || row.status !== 'pending'} onClick={() => void updateLeaveStatus(row, 'approved')} className={buttonPrimaryClass}>{savingRowId === row.id ? t('处理中...', 'Saving...') : t('批准', 'Approve')}</button>
                             <button type="button" disabled={isLocked || savingRowId === row.id || row.status !== 'pending'} onClick={() => void updateLeaveStatus(row, 'rejected')} className={buttonSecondaryClass}>{t('拒绝', 'Reject')}</button>
                           </div>
                           {row.reviewed_by ? <div className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-white/50'].join(' ')}>{row.reviewed_by} · {formatDateTime(row.reviewed_at)}</div> : null}
