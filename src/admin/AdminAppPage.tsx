@@ -1056,6 +1056,31 @@ export default function AdminAppPage() {
   const scheduleRealtimeDebounceTimerRef = useRef<number | null>(null);
 
   const [page, setPage] = useState<AdminPage>('home');
+  const [leaveApprovalPendingCount, setLeaveApprovalPendingCount] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadLeaveApprovalPendingCount = async () => {
+      if (!supabase) return;
+      const { data, error } = await supabase
+        .from('ob_leave_requests')
+        .select('status, leave_date')
+        .eq('status', 'pending')
+        .limit(2000);
+      if (cancelled || error) return;
+      const now = new Date();
+      const operationalStart = new Date(now);
+      operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
+      if (now.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
+      const editableStart = toDateOnly(startOfWeekMonday(operationalStart));
+      const nextPending = (((data ?? []) as any[]) ?? []).filter((item) => String(item?.leave_date ?? '').trim() >= editableStart).length;
+      setLeaveApprovalPendingCount(nextPending);
+    };
+    void loadLeaveApprovalPendingCount();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   type Lang = 'zh' | 'en';
   type ThemeMode = 'dark' | 'light';
@@ -9372,6 +9397,36 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setTimecardPunchEdits(edits);
   };
 
+  const openTimecardPunchModalForDate = async (staffId: string, workDate: string) => {
+    const staff = normalizeStaffId(String(staffId ?? '').trim());
+    const dateOnly = String(workDate ?? '').trim();
+    const match = dateOnly.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!staff || !match) return;
+
+    const targetDate = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    if (Number.isNaN(targetDate.getTime())) return;
+
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const targetWeekStart = startOfWeekMonday(targetDate);
+    const weekOffset = Math.round((targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
+    const dayIndex = Math.floor((targetDate.getTime() - targetWeekStart.getTime()) / (24 * 60 * 60 * 1000));
+    if (dayIndex < 0 || dayIndex > 6) return;
+
+    setTimecardWeekOffset(weekOffset);
+    setTimecardWeekInput(dateOnly);
+    await fetchTimecard({
+      reset: true,
+      weekOffset,
+      search: staff,
+      agency: '',
+      position: '',
+      missingEmployeeOnly: false,
+      lockUi: false,
+      deferLateSync: false
+    });
+    await openTimecardPunchModal(staff, dayIndex);
+  };
+
   const closeTimecardPunchModal = () => {
     setTimecardPunchOpen(false);
     setTimecardPunchStaffId(null);
@@ -9387,6 +9442,327 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setTimecardPunchDragOverId(null);
     setTimecardPunchOrderIds([]);
     setTimecardPunchNew({ inAtLocal: '', outAtLocal: '' });
+  };
+
+  const notifyTimecardPunchSaved = (staffId: string, workDate: string) => {
+    if (typeof window === 'undefined') return;
+    const normalizedStaffId = normalizeStaffId(String(staffId ?? '').trim());
+    const dateOnly = String(workDate ?? '').trim();
+    if (!normalizedStaffId || !/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) return;
+    window.dispatchEvent(
+      new CustomEvent('ob-timecard-punch-saved', {
+        detail: {
+          staffId: normalizedStaffId,
+          workDate: dateOnly
+        }
+      })
+    );
+  };
+
+  const renderTimecardPunchModal = () => {
+    if (!timecardPunchOpen || typeof document === 'undefined') return null;
+    return createPortal(
+      <div
+        className={[
+          'fixed inset-0 z-50 flex items-center justify-center p-4',
+          themeMode === 'light' ? 'bg-slate-900/35' : 'bg-black/70'
+        ].join(' ')}
+        role="dialog"
+        aria-modal="true"
+      >
+        <div
+          className={[
+            'flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-3xl shadow-2xl',
+            themeMode === 'light' ? 'border border-slate-200 bg-white' : 'border border-white/10 bg-slate-950/90 backdrop-blur'
+          ].join(' ')}
+        >
+          <div
+            className={[
+              'flex items-start justify-between gap-4 px-6 py-5',
+              themeMode === 'light' ? 'border-b border-slate-200' : 'border-b border-white/10'
+            ].join(' ')}
+          >
+            <div>
+              <div className={['text-base font-semibold tracking-[0.06em]', themeMode === 'light' ? 'text-slate-800' : 'text-slate-100'].join(' ')}>
+                工时校正
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                <span className={['rounded-full px-2 py-0.5', themeMode === 'light' ? 'bg-slate-100 text-slate-700' : 'bg-white/10 text-slate-200'].join(' ')}>
+                  {timecardPunchHeaderMeta.name}
+                </span>
+                <span className={['rounded-full px-2 py-0.5', themeMode === 'light' ? 'bg-slate-100 text-slate-700' : 'bg-white/10 text-slate-200'].join(' ')}>
+                  {timecardPunchHeaderMeta.position}
+                </span>
+                <span className={['rounded-full px-2 py-0.5', themeMode === 'light' ? 'bg-slate-100 text-slate-700' : 'bg-white/10 text-slate-200'].join(' ')}>
+                  {timecardPunchHeaderMeta.label}
+                </span>
+                <span className={['rounded-full px-2 py-0.5 font-semibold', themeMode === 'light' ? 'bg-emerald-50 text-emerald-700' : 'bg-emerald-500/15 text-emerald-200'].join(' ')}>
+                  {timecardPunchHeaderMeta.finalHoursText}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {!timecardPunchReadOnly && (
+                <button
+                  type="button"
+                  disabled={isLocked}
+                  onClick={() => setTimecardPunchAddOpen((prev) => !prev)}
+                  className={[
+                    'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                    themeMode === 'light'
+                      ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                  ].join(' ')}
+                >
+                  {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
+                </button>
+              )}
+              {!timecardPunchReadOnly && (
+                <button
+                  type="button"
+                  disabled={isLocked}
+                  onClick={() => void saveAllTimecardPunchRows()}
+                  className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {t('保存全部', 'Save all')}
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={closeTimecardPunchModal}
+                className={[
+                  'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                  themeMode === 'light'
+                    ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                ].join(' ')}
+              >
+                {t('关闭', 'Close')}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            {!timecardPunchReadOnly && timecardPunchAddOpen && (
+              <div
+                className={[
+                  'rounded-2xl px-4 py-4',
+                  themeMode === 'light' ? 'border border-neon/50 bg-emerald-50' : 'border border-neon/40 bg-black/30 shadow-glow'
+                ].join(' ')}
+              >
+                <div className="grid gap-3 md:grid-cols-[1fr_1fr_7rem] md:items-end">
+                  <div>
+                    <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>IN Time</div>
+                    <input
+                      value={timecardPunchNew.inAtLocal}
+                      disabled={isLocked}
+                      onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, inAtLocal: e.target.value }))}
+                      type="datetime-local"
+                      className={[
+                        'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                        themeMode === 'light'
+                          ? 'border border-slate-300 bg-white text-slate-900'
+                          : 'border border-white/10 bg-black/30 text-white'
+                      ].join(' ')}
+                    />
+                  </div>
+                  <div>
+                    <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>OUT Time</div>
+                    <input
+                      value={timecardPunchNew.outAtLocal}
+                      disabled={isLocked}
+                      onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, outAtLocal: e.target.value }))}
+                      type="datetime-local"
+                      className={[
+                        'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                        themeMode === 'light'
+                          ? 'border border-slate-300 bg-white text-slate-900'
+                          : 'border border-white/10 bg-black/30 text-white'
+                      ].join(' ')}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isLocked}
+                    onClick={() => void addTimecardPunchRow()}
+                    className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {t('添加', 'Add')}
+                  </button>
+                </div>
+                <p className={['mt-3 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{t('手动一次添加一组 IN / OUT 打卡记录。', 'Add one IN/OUT pair manually.')}</p>
+              </div>
+            )}
+
+            {timecardPunchError && <p className="text-sm text-ember">{t('操作失败：', 'Failed: ')}{timecardPunchError}</p>}
+            {!timecardPunchError && timecardPunchRowsVisible.length === 0 && (
+              <p className={['text-sm', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{t('暂无记录', 'No records')}</p>
+            )}
+
+            {timecardPunchCardsVisible.length > 0 && (
+              <div className="mt-3 grid gap-2 md:grid-cols-2">
+                {timecardPunchCardsRendered.map((row) => {
+                  const pendingAddIdSet = new Set(timecardPunchPendingAddRows.map((r) => String(r.id)));
+                  const rowId = String(row.id);
+                  const edit = timecardPunchEdits[rowId] ?? {
+                    action: row.action,
+                    atLocal: row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : ''
+                  };
+                  const rowLocal = row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : '';
+                  const isDirty = edit.action !== row.action || edit.atLocal !== rowLocal;
+                  const isPendingAdd = pendingAddIdSet.has(rowId);
+                  const showEditedTone = isDirty || isPendingAdd;
+                  const isDragSource = timecardPunchDraggingId === rowId;
+                  const isDragTarget = timecardPunchDragOverId === rowId && timecardPunchDraggingId !== rowId;
+                  const isSwapPairHighlighted =
+                    Boolean(timecardPunchDraggingId && timecardPunchDragOverId) && (isDragSource || isDragTarget);
+
+                  return (
+                    <div
+                      key={rowId}
+                      draggable={!isLocked && !timecardPunchReadOnly}
+                      onDragStart={(e) => {
+                        if (isLocked || timecardPunchReadOnly) return;
+                        setTimecardPunchDraggingId(rowId);
+                        setTimecardPunchDragOverId(null);
+                        e.dataTransfer.effectAllowed = 'move';
+                        e.dataTransfer.setData('text/plain', rowId);
+                      }}
+                      onDragOver={(e) => {
+                        if (isLocked || timecardPunchReadOnly || !timecardPunchDraggingId || timecardPunchDraggingId === rowId) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                        if (timecardPunchDragOverId !== rowId) setTimecardPunchDragOverId(rowId);
+                      }}
+                      onDragEnter={(e) => {
+                        if (isLocked || timecardPunchReadOnly || !timecardPunchDraggingId || timecardPunchDraggingId === rowId) return;
+                        e.preventDefault();
+                        if (timecardPunchDragOverId !== rowId) setTimecardPunchDragOverId(rowId);
+                      }}
+                      onDrop={(e) => {
+                        if (isLocked || timecardPunchReadOnly) return;
+                        e.preventDefault();
+                        const dragId = String(timecardPunchDraggingId ?? '').trim();
+                        const dropId = String(timecardPunchDragOverId || rowId).trim();
+                        if (dragId && dropId && dragId !== dropId) {
+                          const targetRow = timecardPunchCardsVisible.find((r) => String(r.id) === dropId);
+                          if (targetRow) {
+                            const targetEdit = timecardPunchEdits[dropId] ?? {
+                              action: targetRow.action,
+                              atLocal: targetRow.created_at ? toLocalDateTimeInputValue(new Date(targetRow.created_at)) : ''
+                            };
+                            const targetAction: 'IN' | 'OUT' = targetEdit.action === 'OUT' ? 'OUT' : 'IN';
+                            setTimecardPunchEdits((prev) => {
+                              const sourceRow = timecardPunchCardsVisible.find((r) => String(r.id) === dragId);
+                              if (!sourceRow) return prev;
+                              const sourceEdit = prev[dragId] ?? {
+                                action: sourceRow.action,
+                                atLocal: sourceRow.created_at ? toLocalDateTimeInputValue(new Date(sourceRow.created_at)) : ''
+                              };
+                              if (sourceEdit.action === targetAction) return prev;
+                              return {
+                                ...prev,
+                                [dragId]: { ...sourceEdit, action: targetAction }
+                              };
+                            });
+                          }
+                        }
+                        swapTimecardPunchOrder(dragId, dropId);
+                        setTimecardPunchDraggingId(null);
+                        setTimecardPunchDragOverId(null);
+                      }}
+                      onDragEnd={() => {
+                        swapTimecardPunchOrder(timecardPunchDraggingId, timecardPunchDragOverId);
+                        setTimecardPunchDraggingId(null);
+                        setTimecardPunchDragOverId(null);
+                      }}
+                      className={[
+                        'relative rounded-2xl px-4 py-4 transition-[transform,box-shadow,opacity,background-color] duration-200 ease-out will-change-transform',
+                        themeMode === 'light' ? 'border border-slate-200 bg-slate-50' : 'bg-white/5',
+                        !isLocked && !timecardPunchReadOnly ? 'cursor-grab active:cursor-grabbing' : '',
+                        isDragSource ? 'opacity-70 scale-[0.985]' : '',
+                        isSwapPairHighlighted
+                          ? themeMode === 'light'
+                            ? 'ring-2 ring-neon/70 shadow-[0_0_24px_rgba(132,255,0,0.18)]'
+                            : 'ring-2 ring-neon/70 shadow-glow'
+                          : ''
+                      ].join(' ')}
+                    >
+                      {!timecardPunchReadOnly && (
+                        <button
+                          type="button"
+                          disabled={isLocked}
+                          onClick={() => void deleteTimecardPunchRow(row)}
+                          className="absolute right-3 top-3 h-7 w-7 rounded-full bg-ember/85 text-sm font-bold text-white transition hover:bg-ember disabled:cursor-not-allowed disabled:opacity-60"
+                          title={t('删除此条', 'Delete this row')}
+                        >
+                          ×
+                        </button>
+                      )}
+                      <div className="grid gap-3 md:grid-cols-[7rem_1fr] md:items-end">
+                        <div>
+                          <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Action</div>
+                          <select
+                            value={edit.action}
+                            disabled={isLocked || timecardPunchReadOnly}
+                            onChange={(e) =>
+                              setTimecardPunchEdits((prev) => ({
+                                ...prev,
+                                [rowId]: { ...edit, action: e.target.value === 'OUT' ? 'OUT' : 'IN' }
+                              }))
+                            }
+                            className={[
+                              'mt-2 h-10 w-full rounded-xl px-3 font-display text-lg tracking-[0.08em] outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                              showEditedTone
+                                ? themeMode === 'light'
+                                  ? 'border border-amber-400 bg-amber-50 text-slate-900'
+                                  : 'border border-amber-400/70 bg-amber-500/10'
+                                : themeMode === 'light'
+                                  ? 'border border-slate-300 bg-white'
+                                  : 'border border-white/10 bg-black/30',
+                              edit.action === 'IN' ? 'text-mint' : 'text-ember'
+                            ].join(' ')}
+                          >
+                            <option value="IN">IN</option>
+                            <option value="OUT">OUT</option>
+                          </select>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Time</div>
+                          <input
+                            value={edit.atLocal}
+                            disabled={isLocked || timecardPunchReadOnly}
+                            onChange={(e) =>
+                              setTimecardPunchEdits((prev) => ({
+                                ...prev,
+                                [rowId]: { ...edit, atLocal: e.target.value }
+                              }))
+                            }
+                            type="datetime-local"
+                            className={[
+                              'mt-2 h-10 w-full rounded-xl px-3 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                              showEditedTone
+                                ? themeMode === 'light'
+                                  ? 'border border-amber-400 bg-amber-50 text-slate-900'
+                                  : 'border border-amber-400/70 bg-amber-500/10 text-white'
+                                : themeMode === 'light'
+                                  ? 'border border-slate-300 bg-white text-slate-900'
+                                  : 'border border-white/10 bg-black/30 text-white'
+                            ].join(' ')}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>,
+      document.body
+    );
   };
 
   const addTimecardPunchRow = async () => {
@@ -9791,6 +10167,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
     if (saveFailed) return;
     setStatus({ tone: 'success', message: t('打卡流水已保存。', 'Punch records saved.') });
+    if (dayDateForAudit) notifyTimecardPunchSaved(staff, dayDateForAudit);
     closeTimecardPunchModal();
     void fetchCellAuditLogs();
     queueTimecardRefresh();
@@ -13153,7 +13530,7 @@ ${rowsToHtml(late)}
           />
         ) : (
           <>
-            <AdminNav page={page} isLocked={isLocked} onSetPage={setPage} tabClass={tabClass} t={t} />
+            <AdminNav page={page} isLocked={isLocked} onSetPage={setPage} tabClass={tabClass} t={t} leaveApprovalPendingCount={leaveApprovalPendingCount} />
 
             {page === 'home' && (
               <HomeDashboardPage
@@ -13230,6 +13607,7 @@ ${rowsToHtml(late)}
                 serverTime={serverTime}
                 userEmail={String(user?.email ?? '')}
                 userDisplayName={String(userDisplayName ?? '')}
+                onPendingCountChange={setLeaveApprovalPendingCount}
               />
             )}
             {page === 'work_hour_comparison' && (
@@ -13241,6 +13619,7 @@ ${rowsToHtml(late)}
                 serverTime={serverTime}
                 userEmail={String(user?.email ?? '')}
                 userDisplayName={String(userDisplayName ?? '')}
+                onOpenTimecardCalibration={openTimecardPunchModalForDate}
               />
             )}
             {page === 'punches' && (
@@ -15197,6 +15576,8 @@ ${rowsToHtml(late)}
             )}
           </>
         )}
+
+        {page !== 'timecard' && renderTimecardPunchModal()}
 
         {scheduleMistakeDraft.open &&
           typeof document !== 'undefined' &&

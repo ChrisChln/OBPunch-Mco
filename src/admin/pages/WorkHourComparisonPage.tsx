@@ -13,6 +13,7 @@ type WorkHourComparisonPageProps = {
   serverTime: Date;
   userEmail?: string;
   userDisplayName?: string;
+  onOpenTimecardCalibration?: (staffId: string, workDate: string) => void | Promise<void>;
 };
 
 type EmployeeLite = {
@@ -76,6 +77,15 @@ type HeaderMap = {
 };
 
 type DirectionFilter = '' | 'system_less' | 'iams_less';
+type PositionJumpTarget = {
+  workDate: string;
+  staffId: string;
+};
+type PositionCardStat = {
+  position: string;
+  count: number;
+  targets: PositionJumpTarget[];
+};
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
@@ -91,6 +101,26 @@ const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? Math.max(0, Math.
 const FILTER_STORAGE_KEY = 'ob_work_hour_comparison_filters_v1';
 const CSV_ACCEPT_TYPES =
   '.csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
+const TRACKED_UNRESOLVED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
+const TIMECARD_PUNCH_SAVED_EVENT = 'ob-timecard-punch-saved';
+
+const buildEmptyUnresolvedByPosition = (): PositionCardStat[] =>
+  TRACKED_UNRESOLVED_POSITIONS.map((position) => ({ position, count: 0, targets: [] }));
+
+const fetchAllRows = async (queryFactory: (from: number, to: number) => any, pageSize = 1000) => {
+  const allRows: any[] = [];
+  let from = 0;
+  while (true) {
+    const to = from + pageSize - 1;
+    const res = await queryFactory(from, to);
+    if (res.error) throw res.error;
+    const page = Array.isArray(res.data) ? res.data : [];
+    allRows.push(...page);
+    if (page.length < pageSize) break;
+    from += pageSize;
+  }
+  return allRows;
+};
 
 const isValidDateOnly = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '').trim());
 const toDateOnly = (value: Date) => {
@@ -103,6 +133,15 @@ const toDateOnly = (value: Date) => {
 const getDefaultDateTMinus1 = (base: Date) => {
   const value = new Date(base);
   value.setDate(value.getDate() - 1);
+  return toDateOnly(value);
+};
+
+const shiftDateOnly = (dateOnly: string, days: number) => {
+  if (!isValidDateOnly(dateOnly) || !Number.isFinite(days)) return dateOnly;
+  const [y, m, d] = dateOnly.split('-').map(Number);
+  const value = new Date(y, (m || 1) - 1, d || 1);
+  if (Number.isNaN(value.getTime())) return dateOnly;
+  value.setDate(value.getDate() + days);
   return toDateOnly(value);
 };
 
@@ -446,7 +485,8 @@ export default function WorkHourComparisonPage({
   themeMode,
   serverTime,
   userEmail = '',
-  userDisplayName = ''
+  userDisplayName = '',
+  onOpenTimecardCalibration
 }: WorkHourComparisonPageProps) {
   const isLight = themeMode === 'light';
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -465,6 +505,10 @@ export default function WorkHourComparisonPage({
   const [uploadSummary, setUploadSummary] = useState<UploadSummary | null>(null);
   const [skipExamples, setSkipExamples] = useState<string[]>([]);
   const [rows, setRows] = useState<ComparisonRow[]>([]);
+  const [globalUnresolvedByPosition, setGlobalUnresolvedByPosition] = useState(buildEmptyUnresolvedByPosition);
+  const [globalLargeDiffByPosition, setGlobalLargeDiffByPosition] = useState(buildEmptyUnresolvedByPosition);
+  const [unresolvedJumpCursor, setUnresolvedJumpCursor] = useState<Record<string, number>>({});
+  const [largeGapJumpCursor, setLargeGapJumpCursor] = useState<Record<string, number>>({});
   const [hasUploadedData, setHasUploadedData] = useState(false);
   const [employeesByStaffId, setEmployeesByStaffId] = useState<Record<string, EmployeeLite>>({});
   const [punchFlowOpen, setPunchFlowOpen] = useState(false);
@@ -480,6 +524,7 @@ export default function WorkHourComparisonPage({
     fixedAt: string;
   } | null>(null);
   const [markFixedLoading, setMarkFixedLoading] = useState(false);
+  const [openCalibrationLoading, setOpenCalibrationLoading] = useState(false);
   const [fixerDisplayByKey, setFixerDisplayByKey] = useState<Record<string, string>>({});
 
   const resolveFixerDisplay = (value: string) => {
@@ -528,6 +573,26 @@ export default function WorkHourComparisonPage({
     };
     window.localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(payload));
   }, [selectedDate, search, agencyFilter, positionFilter, shiftFilter, directionFilter, discrepancyOnly, hideTransfer]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleTimecardPunchSaved = async (event: Event) => {
+      const detail = (event as CustomEvent<{ staffId?: string; workDate?: string }>).detail;
+      const workDate = String(detail?.workDate ?? '').trim();
+      if (!workDate || workDate !== selectedDate) return;
+      try {
+        const employeeMap = Object.keys(employeesByStaffId).length > 0 ? employeesByStaffId : await loadEmployees();
+        await loadComparisonRows(selectedDate, employeeMap);
+        await loadGlobalUnresolvedCounts(employeeMap);
+      } catch (err) {
+        setError(String((err as any)?.message ?? err ?? 'Failed to refresh work hour comparison.'));
+      }
+    };
+    window.addEventListener(TIMECARD_PUNCH_SAVED_EVENT, handleTimecardPunchSaved as EventListener);
+    return () => {
+      window.removeEventListener(TIMECARD_PUNCH_SAVED_EVENT, handleTimecardPunchSaved as EventListener);
+    };
+  }, [selectedDate, employeesByStaffId]);
 
   const loadEmployees = async () => {
     if (!supabase) return {} as Record<string, EmployeeLite>;
@@ -652,6 +717,170 @@ export default function WorkHourComparisonPage({
     }
   };
 
+  const loadGlobalUnresolvedCounts = async (employeeMapOverride?: Record<string, EmployeeLite>) => {
+    if (!supabase) return;
+
+    const employeeMap =
+      employeeMapOverride && Object.keys(employeeMapOverride).length > 0
+        ? employeeMapOverride
+        : Object.keys(employeesByStaffId).length > 0
+          ? employeesByStaffId
+          : await loadEmployees();
+
+    try {
+      let importedRows: any[] | null = null;
+      {
+        try {
+          importedRows = (await fetchAllRows((from, to) =>
+            supabase
+              .from(IAMS_IMPORT_TABLE)
+              .select('staff_id, iams_hours, work_date, fixed_by')
+              .range(from, to)
+          )) as any[];
+        } catch (err) {
+          if (isMissingColumnError(err, 'fixed_by', IAMS_IMPORT_TABLE)) {
+            importedRows = (await fetchAllRows((from, to) =>
+              supabase
+                .from(IAMS_IMPORT_TABLE)
+                .select('staff_id, iams_hours, work_date')
+                .range(from, to)
+            )) as any[];
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      const unresolvedImports = ((importedRows ?? []) as Array<{
+        staff_id?: string | null;
+        iams_hours?: number | string | null;
+        work_date?: string | null;
+        fixed_by?: string | null;
+      }>)
+        .map((row) => ({
+          staffId: normalizeStaffId(String(row.staff_id ?? '')),
+          workDate: String(row.work_date ?? '').trim(),
+          iamsHours: Number(row.iams_hours ?? 0),
+          fixedBy: String(row.fixed_by ?? '').trim()
+        }))
+        .filter((row) => row.staffId && isValidDateOnly(row.workDate) && Number.isFinite(row.iamsHours) && row.iamsHours >= 0 && !row.fixedBy);
+
+      if (!unresolvedImports.length) {
+        setGlobalUnresolvedByPosition(buildEmptyUnresolvedByPosition());
+      }
+
+      const allImports = ((importedRows ?? []) as Array<{
+        staff_id?: string | null;
+        iams_hours?: number | string | null;
+        work_date?: string | null;
+        fixed_by?: string | null;
+      }>)
+        .map((row) => ({
+          staffId: normalizeStaffId(String(row.staff_id ?? '')),
+          workDate: String(row.work_date ?? '').trim(),
+          iamsHours: Number(row.iams_hours ?? 0),
+          fixedBy: String(row.fixed_by ?? '').trim()
+        }))
+        .filter((row) => row.staffId && isValidDateOnly(row.workDate) && Number.isFinite(row.iamsHours) && row.iamsHours >= 0);
+
+      if (!allImports.length) {
+        setGlobalLargeDiffByPosition(buildEmptyUnresolvedByPosition());
+        return;
+      }
+
+      const uniqueStaffIds = Array.from(new Set(allImports.map((row) => row.staffId)));
+      const uniqueDates = Array.from(new Set(allImports.map((row) => row.workDate)));
+      const ranges = uniqueDates
+        .map((workDate) => ({ workDate, range: getOperationalDayRange(workDate) }))
+        .filter((item): item is { workDate: string; range: { start: Date; end: Date } } => Boolean(item.range));
+
+      if (!ranges.length) {
+        setGlobalUnresolvedByPosition(buildEmptyUnresolvedByPosition());
+        return;
+      }
+
+      const windowStart = new Date(Math.min(...ranges.map((item) => item.range.start.getTime())));
+      const windowEnd = new Date(Math.max(...ranges.map((item) => item.range.end.getTime())));
+
+      const punches = await fetchAllRows((from, to) =>
+        supabase
+          .from('ob_punches')
+          .select('staff_id, action, created_at')
+          .in('staff_id', uniqueStaffIds)
+          .gte('created_at', windowStart.toISOString())
+          .lt('created_at', windowEnd.toISOString())
+          .order('created_at', { ascending: true })
+          .range(from, to)
+      );
+
+      const hoursByDate = new Map<string, Map<string, number>>();
+      for (const item of ranges) {
+        hoursByDate.set(item.workDate, computeSystemHoursByStaff((punches ?? []) as any[], item.range.start, item.range.end));
+      }
+
+      const counts = Object.fromEntries(TRACKED_UNRESOLVED_POSITIONS.map((position) => [position, 0])) as Record<string, number>;
+      const unresolvedTargets = Object.fromEntries(TRACKED_UNRESOLVED_POSITIONS.map((position) => [position, [] as PositionJumpTarget[]])) as Record<string, PositionJumpTarget[]>;
+      const largeDiffCounts = Object.fromEntries(TRACKED_UNRESOLVED_POSITIONS.map((position) => [position, 0])) as Record<string, number>;
+      const largeDiffTargets = Object.fromEntries(TRACKED_UNRESOLVED_POSITIONS.map((position) => [position, [] as PositionJumpTarget[]])) as Record<string, PositionJumpTarget[]>;
+      for (const row of unresolvedImports) {
+        const position = String(employeeMap[row.staffId]?.position ?? '').trim();
+        if (!TRACKED_UNRESOLVED_POSITIONS.includes(position as (typeof TRACKED_UNRESOLVED_POSITIONS)[number])) continue;
+        const systemHours = Number(hoursByDate.get(row.workDate)?.get(row.staffId) ?? 0);
+        const diffHours = Math.round((systemHours - row.iamsHours) * 100) / 100;
+        const globalRow: ComparisonRow = {
+          staffId: row.staffId,
+          name: String(employeeMap[row.staffId]?.name ?? '').trim(),
+          agency: String(employeeMap[row.staffId]?.agency ?? '').trim(),
+          position,
+          shift: resolveShift(employeeMap[row.staffId]?.shift ?? ''),
+          systemHours,
+          iamsHours: row.iamsHours,
+          diffHours,
+          fixedBy: row.fixedBy,
+          fixedAt: ''
+        };
+        if (Math.abs(globalRow.systemHours) < EPSILON && Math.abs(globalRow.iamsHours) < EPSILON) continue;
+        const status = getStatusView(globalRow, () => '').tone;
+        if (status !== 'abnormal') continue;
+        counts[position] += 1;
+        unresolvedTargets[position].push({ workDate: row.workDate, staffId: row.staffId });
+      }
+
+      for (const row of allImports) {
+        const position = String(employeeMap[row.staffId]?.position ?? '').trim();
+        if (!TRACKED_UNRESOLVED_POSITIONS.includes(position as (typeof TRACKED_UNRESOLVED_POSITIONS)[number])) continue;
+        const systemHours = Number(hoursByDate.get(row.workDate)?.get(row.staffId) ?? 0);
+        const diffHours = Math.round((systemHours - row.iamsHours) * 100) / 100;
+        if (Math.abs(diffHours) + EPSILON < DISCREPANCY_THRESHOLD) continue;
+        largeDiffCounts[position] += 1;
+        largeDiffTargets[position].push({ workDate: row.workDate, staffId: row.staffId });
+      }
+
+      for (const position of TRACKED_UNRESOLVED_POSITIONS) {
+        unresolvedTargets[position].sort((a, b) => (a.workDate === b.workDate ? a.staffId.localeCompare(b.staffId) : b.workDate.localeCompare(a.workDate)));
+        largeDiffTargets[position].sort((a, b) => (a.workDate === b.workDate ? a.staffId.localeCompare(b.staffId) : b.workDate.localeCompare(a.workDate)));
+      }
+
+      setGlobalUnresolvedByPosition(
+        TRACKED_UNRESOLVED_POSITIONS.map((position) => ({
+          position,
+          count: counts[position] ?? 0,
+          targets: unresolvedTargets[position] ?? []
+        }))
+      );
+      setGlobalLargeDiffByPosition(
+        TRACKED_UNRESOLVED_POSITIONS.map((position) => ({
+          position,
+          count: largeDiffCounts[position] ?? 0,
+          targets: largeDiffTargets[position] ?? []
+        }))
+      );
+    } catch {
+      setGlobalUnresolvedByPosition(buildEmptyUnresolvedByPosition());
+      setGlobalLargeDiffByPosition(buildEmptyUnresolvedByPosition());
+    }
+  };
+
   useEffect(() => {
     let active = true;
     const run = async () => {
@@ -660,6 +889,8 @@ export default function WorkHourComparisonPage({
         const employeeMap = await loadEmployees();
         if (!active) return;
         await loadComparisonRows(selectedDate, employeeMap);
+        if (!active) return;
+        await loadGlobalUnresolvedCounts(employeeMap);
       } catch (err) {
         if (!active) return;
         setError(String((err as any)?.message ?? err ?? 'Failed to initialize page.'));
@@ -765,17 +996,28 @@ export default function WorkHourComparisonPage({
       const workDates = Array.from(new Set(matchedRows.map((row) => row.workDate)));
       const { data: existingRows, error: existingError } = await supabase
         .from(IAMS_IMPORT_TABLE)
-        .select('staff_id, work_date')
+        .select('staff_id, work_date, fixed_by, fixed_at')
         .in('work_date', workDates)
         .in('staff_id', staffIds);
       if (existingError) throw new Error(String(existingError.message ?? 'Failed to inspect existing imports.'));
 
+      const existingFixMap = new Map<
+        string,
+        {
+          fixedBy: string | null;
+          fixedAt: string | null;
+        }
+      >();
       const existingSet = new Set(
-        ((existingRows ?? []) as Array<{ staff_id?: string | null; work_date?: string | null }>)
+        ((existingRows ?? []) as Array<{ staff_id?: string | null; work_date?: string | null; fixed_by?: string | null; fixed_at?: string | null }>)
           .map((row) => {
             const staff = normalizeStaffId(row.staff_id ?? '');
             const date = String(row.work_date ?? '').trim();
             if (!staff || !date) return '';
+            existingFixMap.set(`${date}__${staff}`, {
+              fixedBy: String(row.fixed_by ?? '').trim() || null,
+              fixedAt: String(row.fixed_at ?? '').trim() || null
+            });
             return `${date}__${staff}`;
           })
           .filter(Boolean)
@@ -805,8 +1047,8 @@ export default function WorkHourComparisonPage({
         source_user_code: row.sourceUserCode,
         iams_hours: row.iamsHours,
         upload_batch_id: Number.isFinite(batchId) && batchId > 0 ? batchId : null,
-        fixed_by: null,
-        fixed_at: null,
+        fixed_by: (existingFixMap.get(`${row.workDate}__${row.staffId}`)?.fixedBy ?? null),
+        fixed_at: (existingFixMap.get(`${row.workDate}__${row.staffId}`)?.fixedAt ?? null),
         updated_at: new Date().toISOString()
       }));
 
@@ -838,6 +1080,7 @@ export default function WorkHourComparisonPage({
       });
       setSkipExamples(skipReasons.slice(0, 50));
       await loadComparisonRows(selectedDate, employeeMap);
+      await loadGlobalUnresolvedCounts(employeeMap);
     } catch (err) {
       setError(String((err as any)?.message ?? err ?? 'Upload failed.'));
     } finally {
@@ -885,11 +1128,46 @@ export default function WorkHourComparisonPage({
     };
   }, [filteredRows]);
 
+  const jumpToPositionTarget = (
+    item: PositionCardStat,
+    cursorMap: Record<string, number>,
+    setCursorMap: (value: any) => void
+  ) => {
+    if (!item.targets.length) return;
+    const currentIndex = cursorMap[item.position] ?? 0;
+    const target = item.targets[currentIndex % item.targets.length];
+    setSelectedDate(target.workDate);
+    setPositionFilter(item.position);
+    setSearch(target.staffId);
+    setAgencyFilter('');
+    setShiftFilter('');
+    setDirectionFilter('');
+    setDiscrepancyOnly(true);
+    if (item.position === 'Transfer') setHideTransfer(false);
+    setCursorMap((prev: Record<string, number>) => ({
+      ...prev,
+      [item.position]: (currentIndex + 1) % item.targets.length
+    }));
+  };
+
   const closePunchFlow = () => {
     setPunchFlowOpen(false);
     setPunchFlowError(null);
     setPunchFlowRows([]);
     setPunchFlowTarget(null);
+  };
+
+  const openTimecardCalibrationFromPunchFlow = async () => {
+    if (!punchFlowTarget || !onOpenTimecardCalibration || openCalibrationLoading) return;
+    setOpenCalibrationLoading(true);
+    try {
+      closePunchFlow();
+      await onOpenTimecardCalibration(punchFlowTarget.staffId, selectedDate);
+    } catch (err) {
+      setError(String((err as any)?.message ?? err ?? 'Failed to open timecard calibration.'));
+    } finally {
+      setOpenCalibrationLoading(false);
+    }
   };
 
   const openPunchFlow = async (row: ComparisonRow) => {
@@ -997,6 +1275,7 @@ export default function WorkHourComparisonPage({
         )
       );
       setPunchFlowTarget((prev) => (prev ? { ...prev, fixedBy, fixedAt } : prev));
+      await loadGlobalUnresolvedCounts();
     } catch (err) {
       setPunchFlowError(String((err as any)?.message ?? err ?? 'Failed to mark as fixed.'));
     } finally {
@@ -1022,59 +1301,172 @@ export default function WorkHourComparisonPage({
         <div>
           <h2 className="font-display text-2xl tracking-[0.08em]">{t('工时对比', 'Work Hour Comparison')}</h2>
         </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            disabled={isLocked || uploading}
+            onClick={() => setSelectedDate((prev) => shiftDateOnly(prev, -1))}
+            className={buttonSecondaryClass}
+          >
+            {t('前一天', 'Prev day')}
+          </button>
+          <StyledDateInput value={selectedDate} onChange={setSelectedDate} themeMode={themeMode} disabled={isLocked || uploading} />
+          <button
+            type="button"
+            disabled={isLocked || uploading}
+            onClick={() => setSelectedDate((prev) => shiftDateOnly(prev, 1))}
+            className={buttonSecondaryClass}
+          >
+            {t('后一天', 'Next day')}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            accept={CSV_ACCEPT_TYPES}
+            onChange={(e) => void onUploadFile(e.target.files?.[0] ?? null)}
+          />
+          <button
+            type="button"
+            disabled={isLocked || uploading}
+            onClick={() => fileInputRef.current?.click()}
+            className={buttonPrimaryClass}
+          >
+            {uploading ? t('上传中...', 'Uploading...') : t('上传 iAMS 表', 'Upload iAMS file')}
+          </button>
+          <button
+            type="button"
+            disabled={isLocked}
+            onClick={() => {
+              if (typeof window === 'undefined') return;
+              window.open('http://iams-us.jd.com/attendanceDetail', '_blank', 'noopener,noreferrer');
+            }}
+            className={buttonSecondaryClass}
+          >
+            {t('考勤明细', 'Attendance Detail')}
+          </button>
+        </div>
       </div>
 
-      <div className="mt-5 grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+      {uploadSummary && (
+        <div className={['mt-4 rounded-2xl border px-3 py-2 text-sm', isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-100'].join(' ')}>
+          <div>{t('上传成功', 'Upload success')}: {uploadSummary.fileName}</div>
+          <div className="mt-1 text-xs opacity-90">
+            {t('总行数', 'Total')}: {uploadSummary.sourceRows} | {t('覆盖日期数', 'Dates')}: {uploadSummary.dateCount} | {t('匹配导入', 'Imported')}: {uploadSummary.matchedRows} | {t('跳过', 'Skipped')}: {uploadSummary.skippedRows} | {t('覆盖更新', 'Replaced')}: {uploadSummary.replacedRows}
+          </div>
+        </div>
+      )}
+
+      {skipExamples.length > 0 && (
+        <div className={['mt-4 rounded-2xl border px-3 py-2 text-sm', isLight ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-amber-300/30 bg-amber-500/10 text-amber-100'].join(' ')}>
+          <div className="font-semibold">{t('跳过示例（最多50条）', 'Skipped examples (up to 50)')}</div>
+          <div className="mt-1 max-h-40 overflow-auto text-xs leading-5">
+            {skipExamples.map((line, index) => (
+              <div key={`${line}-${index}`}>{line}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className={['mt-4 rounded-2xl border px-3 py-2 text-sm', isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-400/30 bg-rose-500/10 text-rose-200'].join(' ')}>
+          {error}
+        </div>
+      )}
+
+      <div className="mt-5">
         <div className={pagePanelClass}>
-          <div className={labelClass}>{t('日期与上传', 'Date and upload')}</div>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <StyledDateInput value={selectedDate} onChange={setSelectedDate} themeMode={themeMode} disabled={isLocked || uploading} />
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="hidden"
-              accept={CSV_ACCEPT_TYPES}
-              onChange={(e) => void onUploadFile(e.target.files?.[0] ?? null)}
-            />
-            <button
-              type="button"
-              disabled={isLocked || uploading}
-              onClick={() => fileInputRef.current?.click()}
-              className={buttonPrimaryClass}
-            >
-              {uploading ? t('上传中...', 'Uploading...') : t('上传 iAMS 表', 'Upload iAMS file')}
-            </button>
+          <div className="mt-4 grid gap-3 sm:grid-cols-4">
+            <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'].join(' ')}>
+              <div className={labelClass}>{t('人数', 'Rows')}</div>
+              <div className="text-lg font-semibold">{summary.count}</div>
+            </div>
+            <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'].join(' ')}>
+              <div className={labelClass}>{t('系统工时', 'System hours')}</div>
+              <div className="text-lg font-semibold">{formatHours(summary.totalSystem)}</div>
+            </div>
+            <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'].join(' ')}>
+              <div className={labelClass}>{t('iAMS 工时', 'iAMS hours')}</div>
+              <div className="text-lg font-semibold">{formatHours(summary.totalIams)}</div>
+            </div>
+            <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'].join(' ')}>
+              <div className={labelClass}>{t('差异大人数', 'Large discrepancy')}</div>
+              <div className="text-lg font-semibold">{summary.gapCount}</div>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-5">
+            {globalUnresolvedByPosition.map((item) => (
+              <button
+                type="button"
+                key={item.position}
+                onClick={() => jumpToPositionTarget(item, unresolvedJumpCursor, setUnresolvedJumpCursor)}
+                className={[
+                  'rounded-2xl border px-3 py-2 text-left transition',
+                  item.count > 0 ? 'cursor-pointer hover:brightness-105' : 'cursor-default',
+                  item.count === 0
+                    ? isLight
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                      : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+                    : isLight
+                      ? 'border-rose-200 bg-rose-50 text-rose-900'
+                      : 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+                ].join(' ')}
+              >
+                <div
+                  className={
+                    item.count === 0
+                      ? isLight
+                        ? 'text-xs uppercase tracking-[0.16em] text-emerald-700'
+                        : 'text-xs uppercase tracking-[0.16em] text-emerald-200/80'
+                      : isLight
+                        ? 'text-xs uppercase tracking-[0.16em] text-rose-700'
+                        : 'text-xs uppercase tracking-[0.16em] text-rose-200/80'
+                  }
+                >
+                  {t(`${item.position} 未处理异常`, `${item.position} unresolved`)}
+                </div>
+                <div className="text-lg font-semibold">{item.count}</div>
+              </button>
+            ))}
           </div>
 
-          {uploadSummary && (
-            <div className={['mt-3 rounded-2xl border px-3 py-2 text-sm', isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-100'].join(' ')}>
-              <div>{t('上传成功', 'Upload success')}: {uploadSummary.fileName}</div>
-              <div className="mt-1 text-xs opacity-90">
-                {t('总行数', 'Total')}: {uploadSummary.sourceRows} | {t('覆盖日期数', 'Dates')}: {uploadSummary.dateCount} | {t('匹配导入', 'Imported')}: {uploadSummary.matchedRows} | {t('跳过', 'Skipped')}: {uploadSummary.skippedRows} | {t('覆盖更新', 'Replaced')}: {uploadSummary.replacedRows}
-              </div>
-            </div>
-          )}
+          <div className="mt-3 grid gap-3 sm:grid-cols-5">
+            {globalLargeDiffByPosition.map((item) => (
+              <button
+                type="button"
+                key={`global-diff-${item.position}`}
+                onClick={() => jumpToPositionTarget(item, largeGapJumpCursor, setLargeGapJumpCursor)}
+                className={[
+                  'rounded-2xl border px-3 py-2 text-left transition',
+                  item.count > 0 ? 'cursor-pointer hover:brightness-105' : 'cursor-default',
+                  item.count === 0
+                    ? isLight
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                      : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+                    : isLight
+                      ? 'border-rose-200 bg-rose-50 text-rose-900'
+                      : 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+                ].join(' ')}
+              >
+                <div
+                  className={
+                    item.count === 0
+                      ? isLight
+                        ? 'text-xs uppercase tracking-[0.16em] text-emerald-700'
+                        : 'text-xs uppercase tracking-[0.16em] text-emerald-200/80'
+                      : isLight
+                      ? 'text-xs uppercase tracking-[0.16em] text-rose-700'
+                      : 'text-xs uppercase tracking-[0.16em] text-rose-200/80'
+                  }
+                >
+                  {t(`${item.position} 差异数`, `${item.position} Large Gap`)}
+                </div>
+                <div className="text-lg font-semibold">{item.count}</div>
+              </button>
+            ))}
+          </div>
 
-          {skipExamples.length > 0 && (
-            <div className={['mt-3 rounded-2xl border px-3 py-2 text-sm', isLight ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-amber-300/30 bg-amber-500/10 text-amber-100'].join(' ')}>
-              <div className="font-semibold">{t('跳过示例（最多50条）', 'Skipped examples (up to 50)')}</div>
-              <div className="mt-1 max-h-40 overflow-auto text-xs leading-5">
-                {skipExamples.map((line, index) => (
-                  <div key={`${line}-${index}`}>{line}</div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {error && (
-            <div className={['mt-3 rounded-2xl border px-3 py-2 text-sm', isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-400/30 bg-rose-500/10 text-rose-200'].join(' ')}>
-              {error}
-            </div>
-          )}
-        </div>
-
-        <div className={pagePanelClass}>
-          <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap">
+          <div className="mt-3 flex items-center gap-2 overflow-x-auto whitespace-nowrap">
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -1123,25 +1515,6 @@ export default function WorkHourComparisonPage({
               />
               {t('不看Transfer', 'Hide Transfer')}
             </label>
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-4">
-            <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'].join(' ')}>
-              <div className={labelClass}>{t('人数', 'Rows')}</div>
-              <div className="text-lg font-semibold">{summary.count}</div>
-            </div>
-            <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'].join(' ')}>
-              <div className={labelClass}>{t('系统工时', 'System hours')}</div>
-              <div className="text-lg font-semibold">{formatHours(summary.totalSystem)}</div>
-            </div>
-            <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'].join(' ')}>
-              <div className={labelClass}>{t('iAMS 工时', 'iAMS hours')}</div>
-              <div className="text-lg font-semibold">{formatHours(summary.totalIams)}</div>
-            </div>
-            <div className={['rounded-2xl border px-3 py-2', isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'].join(' ')}>
-              <div className={labelClass}>{t('差异大人数', 'Large discrepancy')}</div>
-              <div className="text-lg font-semibold">{summary.gapCount}</div>
-            </div>
           </div>
 
           <div className="mt-4 overflow-auto">
@@ -1249,6 +1622,16 @@ export default function WorkHourComparisonPage({
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {punchFlowTarget && (
+                    <button
+                      type="button"
+                      onClick={() => void openTimecardCalibrationFromPunchFlow()}
+                      disabled={openCalibrationLoading || !onOpenTimecardCalibration}
+                      className={buttonSecondaryClass}
+                    >
+                      {openCalibrationLoading ? t('打开中...', 'Opening...') : t('工时校准', 'Timecard calibration')}
+                    </button>
+                  )}
                   {punchFlowTarget && Math.abs(punchFlowTarget.diffHours) >= DISCREPANCY_THRESHOLD && !punchFlowTarget.fixedBy && (
                     <button
                       type="button"

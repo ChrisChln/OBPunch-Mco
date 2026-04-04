@@ -8,9 +8,17 @@ type AdminNavProps = {
   onSetPage: (page: AdminPage) => void;
   tabClass: (active: boolean) => string;
   t: TranslateFn;
+  leaveApprovalPendingCount?: number;
 };
 
-export default function AdminNav({ page, isLocked, onSetPage, tabClass, t }: AdminNavProps) {
+export default function AdminNav({
+  page,
+  isLocked,
+  onSetPage,
+  tabClass,
+  t,
+  leaveApprovalPendingCount = 0
+}: AdminNavProps) {
   return (
     <nav className="glass reveal flex flex-wrap gap-2 rounded-[30px] border border-white/10 p-3.5">
       <button type="button" disabled={isLocked} onClick={() => onSetPage('home')} className={tabClass(page === 'home')}>
@@ -25,7 +33,13 @@ export default function AdminNav({ page, isLocked, onSetPage, tabClass, t }: Adm
       <button type="button" disabled={isLocked} onClick={() => onSetPage('timecard')} className={tabClass(page === 'timecard')}>
         {t('时间卡', 'Timecard')}
       </button>
-      <button type="button" disabled={isLocked} onClick={() => onSetPage('leave_approval')} className={tabClass(page === 'leave_approval')}>
+      <button
+        type="button"
+        disabled={isLocked}
+        onClick={() => onSetPage('leave_approval')}
+        className={[tabClass(page === 'leave_approval'), 'relative'].join(' ')}
+      >
+        {leaveApprovalPendingCount > 0 ? <span className="absolute right-0 top-0.5 h-2.5 w-2.5 rounded-full bg-rose-500 shadow-[0_0_0_2px_rgba(15,23,42,0.55)]" /> : null}
         {t('请假审批', 'Leave Approval')}
       </button>
       <button
