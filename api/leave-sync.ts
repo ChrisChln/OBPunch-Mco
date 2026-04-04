@@ -179,10 +179,12 @@ const resolveEmployeeMatch = (employees: EmployeeLite[], employeeNameRaw: string
 
 const normalizeIncomingRow = (record: Record<string, unknown>, employees: EmployeeLite[], index: number): NormalizedLeaveRow | null => {
   const employeeNameRaw = String(firstNonEmpty(record, ['Name/ Nombre', 'Name', 'Nombre', 'employee_name']) ?? '').trim();
-  const employeeStaffIdRaw = String(firstNonEmpty(record, ['Employee ID / ID del', 'Employee ID', 'staff_id', 'employee_staff_id']) ?? '').trim();
+  const employeeStaffIdRaw = String(
+    firstNonEmpty(record, ['Employee ID / ID del', 'Employee ID /ID del empleado', 'Employee ID', 'ID del empleado', 'staff_id', 'employee_staff_id']) ?? ''
+  ).trim();
   const positionRaw = String(firstNonEmpty(record, ['Position', '岗位']) ?? '').trim();
-  const leaveDate = parseDateCell(firstNonEmpty(record, ['Off Date / Fecha del', 'Off Date', 'Leave Date', 'off_date']));
-  const leaveType = String(firstNonEmpty(record, ['Type of Leave/Tipo de permiso', 'Type of Leave', 'Leave Type', 'leave_type']) ?? '').trim();
+  const leaveDate = parseDateCell(firstNonEmpty(record, ['Off Date / Fecha del', 'Off Date/ Fecha del permiso', 'Off Date', 'Leave Date', 'Fecha del permiso', 'off_date']));
+  const leaveType = String(firstNonEmpty(record, ['Type of Leave/Tipo de permiso', 'Type of Leave / Tipo de permiso', 'Type of Leave', 'Leave Type', 'leave_type']) ?? '').trim();
   if (!employeeNameRaw || !leaveDate || !leaveType) return null;
   const submittedAtRaw = String(firstNonEmpty(record, ['时间戳记', 'Timestamp', 'submitted_at']) ?? '').trim();
   const submittedAt = parseSubmittedAtCell(submittedAtRaw);
