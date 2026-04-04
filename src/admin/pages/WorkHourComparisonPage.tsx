@@ -1334,6 +1334,17 @@ export default function WorkHourComparisonPage({
           >
             {uploading ? t('上传中...', 'Uploading...') : t('上传 iAMS 表', 'Upload iAMS file')}
           </button>
+          <button
+            type="button"
+            disabled={isLocked}
+            onClick={() => {
+              if (typeof window === 'undefined') return;
+              window.open('http://iams-us.jd.com/attendanceDetail', '_blank', 'noopener,noreferrer');
+            }}
+            className={buttonSecondaryClass}
+          >
+            {t('考勤明细', 'Attendance Detail')}
+          </button>
         </div>
       </div>
 
