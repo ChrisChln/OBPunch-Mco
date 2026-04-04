@@ -2,15 +2,26 @@ const LEAVE_SYNC_URL = 'https://YOUR-DOMAIN/api/leave-sync';
 const LEAVE_SYNC_TOKEN = 'YOUR_GOOGLE_SHEET_SYNC_TOKEN';
 
 function syncLeaveRowFromEvent(e) {
-  if (!e || !e.namedValues) throw new Error('Missing form submit event payload.');
+  if (!e || !e.range) throw new Error('Missing form submit event payload.');
   const sheet = e.range && e.range.getSheet ? e.range.getSheet() : null;
   const spreadsheet = sheet ? sheet.getParent() : null;
+  if (!sheet) throw new Error('Missing target sheet.');
+  const rowNumber = e.range.getRow();
+  SpreadsheetApp.flush();
+  Utilities.sleep(1200);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0] || [];
+  const values =
+    Array.isArray(e.values) && e.values.length > 0
+      ? e.values
+      : sheet.getRange(rowNumber, 1, 1, headers.length).getDisplayValues()[0] || [];
+  const record = {};
+  for (let i = 0; i < headers.length; i += 1) record[headers[i]] = values[i];
   const row = {
     source: 'google_form',
     sheet_id: spreadsheet ? spreadsheet.getId() : '',
     sheet_name: sheet ? sheet.getName() : '',
-    row_number: e.range ? e.range.getRow() : '',
-    ...flattenNamedValues(e.namedValues)
+    row_number: rowNumber,
+    ...record
   };
   postLeaveRows([row]);
 }
