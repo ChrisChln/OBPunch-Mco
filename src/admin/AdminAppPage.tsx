@@ -34,6 +34,7 @@ import ForecastPage from './pages/ForecastPage';
 import PredictionModelPage from './pages/PredictionModelPage';
 import EfficiencyPage from './pages/EfficiencyPage';
 import WorkHourComparisonPage from './pages/WorkHourComparisonPage';
+import LeaveApprovalPage from './pages/LeaveApprovalPage';
 import AppDialog from '../components/AppDialog';
 import { useScheduleRealtime } from './useScheduleRealtime';
 import {
@@ -3823,7 +3824,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         fetchSchedulePunchPresence({ employeesOverride: latestEmployees }),
         fetchScheduleUph({ employeesOverride: latestEmployees }),
         fetchScheduleMistakeCounts({ employeesOverride: latestEmployees }),
-        fetchScheduleMonthlyAbsentDates({ employeesOverride: latestEmployees, monthDateOverride: scheduleWeekStart }),
+        fetchScheduleMonthlyAbsentDates({ employeesOverride: latestEmployees, monthDateOverride: scheduleMonthAnchor }),
         fetchScheduleLateMarks({
           employeesOverride: latestEmployees,
           scheduleRowsOverride: latestScheduleRows
@@ -4568,7 +4569,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
 
-    const monthBase = options?.monthDateOverride ?? scheduleWeekStart;
+    const monthBase = options?.monthDateOverride ?? scheduleMonthAnchor;
     const { startKey, endKey } = getMonthDateRange(monthBase);
     const datesByStaff = new Map<string, Set<string>>();
 
@@ -11448,8 +11449,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const baseWeekStart = startOfWeekMonday(serverTime);
     return addDays(baseWeekStart, scheduleWeekOffset * 7);
   }, [serverTime, scheduleWeekOffset]);
-  const scheduleMonthRange = useMemo(() => getMonthDateRange(scheduleWeekStart), [scheduleWeekStart]);
-  const scheduleMonthLabel = useMemo(() => formatYearMonthKey(scheduleWeekStart), [scheduleWeekStart]);
 
   const scheduleDays = useMemo(
     () => Array.from({ length: 7 }, (_, idx) => addDays(scheduleWeekStart, idx)),
@@ -12024,6 +12023,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (now.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
     return toDateOnly(operationalStart);
   }, [serverTime]);
+  const scheduleMonthAnchor = useMemo(() => {
+    if (scheduleWeekOffset !== 0) return scheduleWeekStart;
+    const operationalDate = new Date(`${currentOperationalDate}T12:00:00`);
+    if (Number.isNaN(operationalDate.getTime())) return scheduleWeekStart;
+    const scheduleWeekEnd = addDays(scheduleWeekStart, 6);
+    if (operationalDate >= scheduleWeekStart && operationalDate <= scheduleWeekEnd) {
+      return operationalDate;
+    }
+    return serverTime;
+  }, [currentOperationalDate, scheduleWeekOffset, scheduleWeekStart, serverTime]);
+  const scheduleMonthRange = useMemo(() => getMonthDateRange(scheduleMonthAnchor), [scheduleMonthAnchor]);
+  const scheduleMonthLabel = useMemo(() => formatYearMonthKey(scheduleMonthAnchor), [scheduleMonthAnchor]);
   const homeNowMinutes = useMemo(() => {
     const now = new Date(serverTime);
     return now.getHours() * 60 + now.getMinutes();
@@ -13210,6 +13221,17 @@ ${rowsToHtml(late)}
               <PredictionModelPage t={t} isLocked={isLocked} themeMode={themeMode} serverTime={serverTime} supabase={supabase} />
             )}
             {page === 'efficiency' && <EfficiencyPage t={t} isLocked={isLocked} supabase={supabase} themeMode={themeMode} serverTime={serverTime} />}
+            {page === 'leave_approval' && (
+              <LeaveApprovalPage
+                t={t}
+                isLocked={isLocked}
+                supabase={supabase}
+                themeMode={themeMode}
+                serverTime={serverTime}
+                userEmail={String(user?.email ?? '')}
+                userDisplayName={String(userDisplayName ?? '')}
+              />
+            )}
             {page === 'work_hour_comparison' && (
               <WorkHourComparisonPage
                 t={t}

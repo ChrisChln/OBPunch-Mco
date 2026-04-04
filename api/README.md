@@ -11,6 +11,19 @@
   - `action`: "IN" | "OUT"
   - `effective_at`?: ISO 时间字符串 或 null
   - `note`?: string
+- `POST /api/leave-sync`：Google Form / Google Sheet 请假同步。请求头：
+  - `Authorization: Bearer <GOOGLE_SHEET_SYNC_TOKEN>`（未配置时回退 `ADMIN_TOKEN`）
+  - JSON: `{ rows: [...] }` 或 `{ row: {...} }`
+  - 每行至少需要：
+    - `Name/ Nombre` 或 `Name`
+    - `Off Date / Fecha del` 或 `Off Date`
+    - `Type of Leave/Tipo de permiso` 或 `Type of Leave`
+  - 可选：
+    - `Employee ID / ID del`
+    - `Position`
+    - `是否完成排班调整`
+    - `时间戳记` / `Timestamp`
+    - `sheet_id` / `sheet_name` / `row_number`（推荐，用于生成稳定唯一键）
 
 返回：
 - 200: { status: 'ok' }
@@ -18,6 +31,7 @@
 
 部署说明：
 在 Vercel/Netlify 等平台上部署时将环境变量注入到运行环境。不要在前端暴露 `SUPABASE_SERVICE_ROLE_KEY`。
+Google Sheet 直连建议用 Apps Script 调用 `/api/leave-sync`，示例脚本见 `scripts/google-leave-sync.gs`。
 
 
 

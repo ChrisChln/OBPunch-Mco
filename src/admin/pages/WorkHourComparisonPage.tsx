@@ -885,16 +885,6 @@ export default function WorkHourComparisonPage({
     };
   }, [filteredRows]);
 
-  const clearFilters = () => {
-    setSearch('');
-    setAgencyFilter('');
-    setPositionFilter('');
-    setShiftFilter('');
-    setDirectionFilter('');
-    setDiscrepancyOnly(false);
-    setHideTransfer(false);
-  };
-
   const closePunchFlow = () => {
     setPunchFlowOpen(false);
     setPunchFlowError(null);
@@ -972,7 +962,7 @@ export default function WorkHourComparisonPage({
       }
 
       if (!Array.isArray(existingMistakeRows) || existingMistakeRows.length === 0) {
-        const reason = `工时对比异常已修复: 系统工时与iAMS存在差异，修复人 ${fixedBy}`;
+        const reason = `Work hour discrepancy resolved: system hours and iAMS hours were reconciled by ${fixedBy}`;
         const { error: createMistakeError } = await supabase
           .from(MISTAKE_REPORT_TABLE)
           .insert({
@@ -1133,9 +1123,6 @@ export default function WorkHourComparisonPage({
               />
               {t('不看Transfer', 'Hide Transfer')}
             </label>
-            <button type="button" onClick={clearFilters} className={buttonSecondaryClass}>
-              {t('清空筛选', 'Clear filters')}
-            </button>
           </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-4">
