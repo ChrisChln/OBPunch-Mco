@@ -25,6 +25,9 @@ export default function AdminNav({ page, isLocked, onSetPage, tabClass, t }: Adm
       <button type="button" disabled={isLocked} onClick={() => onSetPage('timecard')} className={tabClass(page === 'timecard')}>
         {t('时间卡', 'Timecard')}
       </button>
+      <button type="button" disabled={isLocked} onClick={() => onSetPage('leave_approval')} className={tabClass(page === 'leave_approval')}>
+        {t('请假审批', 'Leave Approval')}
+      </button>
       <button
         type="button"
         disabled={isLocked}

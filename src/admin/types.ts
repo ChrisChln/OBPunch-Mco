@@ -5,6 +5,7 @@ export type AdminPage =
   | 'employees'
   | 'accounts'
   | 'timecard'
+  | 'leave_approval'
   | 'work_hour_comparison'
   | 'audit'
   | 'schedule'
