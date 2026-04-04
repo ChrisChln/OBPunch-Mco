@@ -12,7 +12,6 @@ const LEAVE_REQUEST_TABLE = process.env.LEAVE_REQUEST_TABLE || 'ob_leave_request
 type EmployeeLite = {
   staffId: string;
   name: string;
-  position: string;
 };
 
 type ExistingLeaveRow = {
@@ -218,13 +217,12 @@ const chunk = <T,>(items: T[], size: number) => {
 
 const loadEmployees = async () => {
   if (!supabase) return [] as EmployeeLite[];
-  const { data, error } = await supabase.from(EMPLOYEE_TABLE).select('staff_id,name,position').limit(20000);
+  const { data, error } = await supabase.from(EMPLOYEE_TABLE).select('staff_id,name').limit(20000);
   if (error) throw new Error(error.message || 'Failed to load employees.');
   return ((data ?? []) as any[])
     .map((row) => ({
       staffId: normalizeStaffId(row.staff_id),
-      name: String(row.name ?? '').trim(),
-      position: String(row.position ?? '').trim()
+      name: String(row.name ?? '').trim()
     }))
     .filter((row) => row.staffId);
 };
