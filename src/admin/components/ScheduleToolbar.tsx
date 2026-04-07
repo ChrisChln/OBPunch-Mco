@@ -94,7 +94,7 @@ export default function ScheduleToolbar({
           onClick={() => openScheduleDailyList('toolbar_daily_list')}
           className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
         >
-          {t('每日报表', 'Daily list')}
+          {t('明日名单', 'Tomorrow list')}
         </button>
 
         <StyledDateInput

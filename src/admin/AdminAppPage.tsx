@@ -2891,7 +2891,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       schedule_auto_daily_activation: t('自动计划激活', 'Auto Daily Activation'),
       schedule_week_switch: t('排班切换周', 'Schedule Week Switch'),
       schedule_refresh: t('排班刷新', 'Schedule Refresh'),
-      schedule_open_daily_list: t('打开日报', 'Open Daily List'),
+      schedule_open_daily_list: t('打开明日名单', 'Open Tomorrow List'),
       admin_page_switch: t('页面切换', 'Page Switch'),
       schedule_rest: t('排班休息', 'Schedule Off'),
       schedule_clear: t('清空排班', 'Schedule Clear'),
@@ -7103,7 +7103,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       push(t('来源', 'Source'), payload?.source);
       push(t('周', 'Week'), `${fmtText(payload?.week_start)} ~ ${fmtText(payload?.week_end)}`);
     } else if (action === 'schedule_open_daily_list') {
-      summary = t('打开日报', 'Daily list opened');
+      summary = t('打开明日名单', 'Tomorrow list opened');
       push(t('来源', 'Source'), payload?.source);
       push(t('目标日期', 'Target date'), payload?.target_date);
       push(t('排班周偏移', 'Schedule week offset'), payload?.schedule_week_offset);
@@ -12942,8 +12942,8 @@ ${rowsToHtml(late)}
         tone: 'success',
         message:
           scope === 'all'
-            ? `Copied daily list (${early.length + late.length} rows).`
-            : `Copied ${scope === 'early' ? 'early' : 'night'} list (${scope === 'early' ? early.length : late.length} rows).`
+            ? `Copied tomorrow list (${early.length + late.length} rows).`
+            : `Copied ${scope === 'early' ? 'morning' : 'night'} tomorrow list (${scope === 'early' ? early.length : late.length} rows).`
       });
     } catch (err: any) {
       setStatus({ tone: 'error', message: `Copy failed: ${String(err?.message ?? err ?? 'Unknown error')}` });
@@ -14779,7 +14779,7 @@ ${rowsToHtml(late)}
                         >
                           <div>
                             <h3 className={['font-display text-2xl tracking-[0.08em]', themeMode === 'light' ? 'text-slate-900' : 'text-white'].join(' ')}>
-                              {t('每日名单', 'Daily list')}
+                              {t('明日名单', 'Tomorrow list')}
                             </h3>
                             <div className="mt-2 w-fit">
                               <input
