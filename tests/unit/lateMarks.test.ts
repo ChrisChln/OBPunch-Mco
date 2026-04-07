@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  buildStaleLateAutoDeletePlan,
   evaluateLateDecision,
   formatClockMinutes,
   parseClockTextToMinutes,
@@ -195,5 +196,37 @@ describe('lateMarks', () => {
         teamSamples: []
       })
     ).toBe(7 * 60);
+  });
+
+  test('builds delete plan only for stale late_auto rows', () => {
+    expect(
+      buildStaleLateAutoDeletePlan({
+        existingRows: [
+          { staff_id: 'US1', work_date: '2026-03-01' },
+          { staff_id: 'US1', work_date: '2026-03-02' },
+          { staff_id: 'US2', work_date: '2026-03-03' }
+        ],
+        nextRows: [
+          { staff_id: 'US1', work_date: '2026-03-02' },
+          { staff_id: 'US2', work_date: '2026-03-04' }
+        ]
+      })
+    ).toEqual([
+      { staffId: 'US1', workDates: ['2026-03-01'] },
+      { staffId: 'US2', workDates: ['2026-03-03'] }
+    ]);
+  });
+
+  test('deduplicates stale delete plan rows', () => {
+    expect(
+      buildStaleLateAutoDeletePlan({
+        existingRows: [
+          { staff_id: 'US1', work_date: '2026-03-01' },
+          { staff_id: 'US1', work_date: '2026-03-01' },
+          { staff_id: 'US1', work_date: '2026-03-02' }
+        ],
+        nextRows: [{ staff_id: 'US1', work_date: '2026-03-02' }]
+      })
+    ).toEqual([{ staffId: 'US1', workDates: ['2026-03-01'] }]);
   });
 });

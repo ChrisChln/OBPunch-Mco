@@ -22,6 +22,16 @@ export type LateDecision = LateBaseline & {
   isLate: boolean;
 };
 
+export type LateMarkKeyRow = {
+  staff_id: string;
+  work_date: string;
+};
+
+export type LateMarkDeletePlanRow = {
+  staffId: string;
+  workDates: string[];
+};
+
 export const LATE_BASELINE_SAMPLE_TARGET = 20;
 export const LATE_BASELINE_MIN_PERSONAL_SAMPLES = 5;
 export const LATE_BASELINE_MIN_TEAM_SAMPLES = 5;
@@ -232,4 +242,37 @@ export const evaluateLateDecision = (options: {
     minutesLate,
     isLate: minutesLate > graceMinutes
   };
+};
+
+export const buildStaleLateAutoDeletePlan = (options: {
+  existingRows: LateMarkKeyRow[];
+  nextRows: LateMarkKeyRow[];
+}): LateMarkDeletePlanRow[] => {
+  const nextKeySet = new Set(
+    options.nextRows
+      .map((row) => {
+        const staffId = String(row.staff_id ?? '').trim();
+        const workDate = String(row.work_date ?? '').trim();
+        return staffId && workDate ? `${staffId}__${workDate}` : '';
+      })
+      .filter(Boolean)
+  );
+
+  const workDatesByStaffId = new Map<string, Set<string>>();
+  for (const row of options.existingRows) {
+    const staffId = String(row.staff_id ?? '').trim();
+    const workDate = String(row.work_date ?? '').trim();
+    if (!staffId || !workDate) continue;
+    if (nextKeySet.has(`${staffId}__${workDate}`)) continue;
+    const dates = workDatesByStaffId.get(staffId) ?? new Set<string>();
+    dates.add(workDate);
+    workDatesByStaffId.set(staffId, dates);
+  }
+
+  return Array.from(workDatesByStaffId.entries())
+    .sort((a, b) => a[0].localeCompare(b[0], 'en-US'))
+    .map(([staffId, workDates]) => ({
+      staffId,
+      workDates: Array.from(workDates).sort((a, b) => a.localeCompare(b, 'en-US'))
+    }));
 };
