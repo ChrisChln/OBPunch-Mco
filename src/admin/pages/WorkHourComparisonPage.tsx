@@ -2,6 +2,14 @@
 import { createPortal } from 'react-dom';
 import StyledDateInput from '../components/StyledDateInput';
 import { isValidStaffId, normalizeStaffId } from '../../lib/staffId';
+import { chunkArray, prepareWorkHourUploadRows, type ParsedUploadRow } from '../workHourImport';
+import {
+  buildStaffIdsByDate,
+  hasSystemHoursCoverage,
+  mergeSystemHoursEntry,
+  type CachedSystemHoursEntry
+} from '../workHourStats';
+import { getTrackedStaffIds } from '../workHourGlobalStats';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -62,14 +70,6 @@ type UploadSummary = {
   replacedRows: number;
 };
 
-type ParsedUploadRow = {
-  workDate: string;
-  sourceUserCode: string;
-  staffId: string;
-  iamsHours: number;
-  rowNumber: number;
-};
-
 type HeaderMap = {
   dateIndex: number;
   userCodeIndex: number;
@@ -103,6 +103,8 @@ const CSV_ACCEPT_TYPES =
   '.csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
 const TRACKED_UNRESOLVED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
 const TIMECARD_PUNCH_SAVED_EVENT = 'ob-timecard-punch-saved';
+const IAMS_IMPORT_UPSERT_BATCH_SIZE = 500;
+const GLOBAL_IMPORT_FETCH_STAFF_BATCH_SIZE = 500;
 
 const buildEmptyUnresolvedByPosition = (): PositionCardStat[] =>
   TRACKED_UNRESOLVED_POSITIONS.map((position) => ({ position, count: 0, targets: [] }));
@@ -526,6 +528,7 @@ export default function WorkHourComparisonPage({
   const [markFixedLoading, setMarkFixedLoading] = useState(false);
   const [openCalibrationLoading, setOpenCalibrationLoading] = useState(false);
   const [fixerDisplayByKey, setFixerDisplayByKey] = useState<Record<string, string>>({});
+  const systemHoursCacheRef = useRef<Map<string, CachedSystemHoursEntry>>(new Map());
 
   const resolveFixerDisplay = (value: string) => {
     const raw = String(value ?? '').trim();
@@ -534,6 +537,102 @@ export default function WorkHourComparisonPage({
     const mapped = fixerDisplayByKey[key];
     if (mapped) return mapped;
     return resolveFixerName(raw);
+  };
+
+  const invalidateSystemHoursCache = (workDates?: string[]) => {
+    if (!workDates?.length) {
+      systemHoursCacheRef.current.clear();
+      return;
+    }
+    for (const workDate of workDates) {
+      const normalized = String(workDate ?? '').trim();
+      if (normalized) systemHoursCacheRef.current.delete(normalized);
+    }
+  };
+
+  const loadSystemHoursForDate = async (workDate: string, staffIds: string[]) => {
+    if (!supabase || !isValidDateOnly(workDate)) return new Map<string, number>();
+
+    const requestedStaffIds = Array.from(new Set(staffIds.map((value) => normalizeStaffId(value)).filter(Boolean)));
+    if (!requestedStaffIds.length) return new Map<string, number>();
+
+    const cached = systemHoursCacheRef.current.get(workDate);
+    if (hasSystemHoursCoverage(cached, requestedStaffIds)) {
+      return cached?.hoursByStaff ?? new Map<string, number>();
+    }
+
+    const dayRange = getOperationalDayRange(workDate);
+    if (!dayRange) return new Map<string, number>();
+
+    const windowStart = new Date(dayRange.start.getTime() - 24 * 60 * 60 * 1000);
+    const windowEnd = new Date(dayRange.end.getTime() + 24 * 60 * 60 * 1000);
+
+    const { data: punches, error: punchError } = await supabase
+      .from('ob_punches')
+      .select('staff_id, action, created_at')
+      .in('staff_id', requestedStaffIds)
+      .gte('created_at', windowStart.toISOString())
+      .lt('created_at', windowEnd.toISOString())
+      .order('created_at', { ascending: true });
+    if (punchError) throw new Error(String(punchError.message ?? 'Failed to load punch records.'));
+
+    const nextHoursByStaff = computeSystemHoursByStaff((punches ?? []) as any[], dayRange.start, dayRange.end);
+    const mergedEntry = mergeSystemHoursEntry(cached, requestedStaffIds, nextHoursByStaff);
+    systemHoursCacheRef.current.set(workDate, mergedEntry);
+    return mergedEntry.hoursByStaff;
+  };
+
+  const loadSystemHoursByDate = async (staffIdsByDate: Map<string, Set<string>>) => {
+    const hoursByDate = new Map<string, Map<string, number>>();
+    const requests = Array.from(staffIdsByDate.entries()).map(([workDate, staffIds]) => ({
+      workDate,
+      staffIds: Array.from(staffIds)
+    }));
+
+    for (const batch of chunkArray(requests, 5)) {
+      const batchResults = await Promise.all(
+        batch.map(async (item) => ({
+          workDate: item.workDate,
+          hoursByStaff: await loadSystemHoursForDate(item.workDate, item.staffIds)
+        }))
+      );
+      for (const item of batchResults) {
+        hoursByDate.set(item.workDate, item.hoursByStaff);
+      }
+    }
+
+    return hoursByDate;
+  };
+
+  const fetchTrackedImportedRows = async (employeeMap: Record<string, EmployeeLite>) => {
+    if (!supabase) return [] as any[];
+
+    const trackedStaffIds = getTrackedStaffIds(employeeMap, TRACKED_UNRESOLVED_POSITIONS);
+    if (!trackedStaffIds.length) return [] as any[];
+
+    const fetchByColumns = async (columns: string) => {
+      const combinedRows: any[] = [];
+      for (const staffIdBatch of chunkArray(trackedStaffIds, GLOBAL_IMPORT_FETCH_STAFF_BATCH_SIZE)) {
+        const batchRows = await fetchAllRows((from, to) =>
+          supabase
+            .from(IAMS_IMPORT_TABLE)
+            .select(columns)
+            .in('staff_id', staffIdBatch)
+            .range(from, to)
+        );
+        combinedRows.push(...(batchRows ?? []));
+      }
+      return combinedRows;
+    };
+
+    try {
+      return await fetchByColumns('staff_id, iams_hours, work_date, fixed_by');
+    } catch (err) {
+      if (isMissingColumnError(err, 'fixed_by', IAMS_IMPORT_TABLE)) {
+        return await fetchByColumns('staff_id, iams_hours, work_date');
+      }
+      throw err;
+    }
   };
 
   useEffect(() => {
@@ -581,6 +680,7 @@ export default function WorkHourComparisonPage({
       const workDate = String(detail?.workDate ?? '').trim();
       if (!workDate || workDate !== selectedDate) return;
       try {
+        invalidateSystemHoursCache([workDate]);
         const employeeMap = Object.keys(employeesByStaffId).length > 0 ? employeesByStaffId : await loadEmployees();
         await loadComparisonRows(selectedDate, employeeMap);
         await loadGlobalUnresolvedCounts(employeeMap);
@@ -668,19 +768,7 @@ export default function WorkHourComparisonPage({
 
       setHasUploadedData(true);
       const staffIds = Array.from(new Set(normalizedImported.map((row) => row.staff_id)));
-      const windowStart = new Date(dayRange.start.getTime() - 24 * 60 * 60 * 1000);
-      const windowEnd = new Date(dayRange.end.getTime() + 24 * 60 * 60 * 1000);
-
-      const { data: punches, error: punchError } = await supabase
-        .from('ob_punches')
-        .select('staff_id, action, created_at')
-        .in('staff_id', staffIds)
-        .gte('created_at', windowStart.toISOString())
-        .lt('created_at', windowEnd.toISOString())
-        .order('created_at', { ascending: true });
-      if (punchError) throw new Error(String(punchError.message ?? 'Failed to load punch records.'));
-
-      const hoursByStaff = computeSystemHoursByStaff((punches ?? []) as any[], dayRange.start, dayRange.end);
+      const hoursByStaff = await loadSystemHoursForDate(dateOnly, staffIds);
 
       const nextRows: ComparisonRow[] = normalizedImported.map((row) => {
         const employee = employeeMap[row.staff_id] ?? {
@@ -728,28 +816,7 @@ export default function WorkHourComparisonPage({
           : await loadEmployees();
 
     try {
-      let importedRows: any[] | null = null;
-      {
-        try {
-          importedRows = (await fetchAllRows((from, to) =>
-            supabase
-              .from(IAMS_IMPORT_TABLE)
-              .select('staff_id, iams_hours, work_date, fixed_by')
-              .range(from, to)
-          )) as any[];
-        } catch (err) {
-          if (isMissingColumnError(err, 'fixed_by', IAMS_IMPORT_TABLE)) {
-            importedRows = (await fetchAllRows((from, to) =>
-              supabase
-                .from(IAMS_IMPORT_TABLE)
-                .select('staff_id, iams_hours, work_date')
-                .range(from, to)
-            )) as any[];
-          } else {
-            throw err;
-          }
-        }
-      }
+      const importedRows = await fetchTrackedImportedRows(employeeMap);
 
       const unresolvedImports = ((importedRows ?? []) as Array<{
         staff_id?: string | null;
@@ -788,35 +855,14 @@ export default function WorkHourComparisonPage({
         return;
       }
 
-      const uniqueStaffIds = Array.from(new Set(allImports.map((row) => row.staffId)));
-      const uniqueDates = Array.from(new Set(allImports.map((row) => row.workDate)));
-      const ranges = uniqueDates
-        .map((workDate) => ({ workDate, range: getOperationalDayRange(workDate) }))
-        .filter((item): item is { workDate: string; range: { start: Date; end: Date } } => Boolean(item.range));
+      const staffIdsByDate = buildStaffIdsByDate(allImports);
+      const validWorkDates = Array.from(staffIdsByDate.keys()).filter((workDate) => Boolean(getOperationalDayRange(workDate)));
 
-      if (!ranges.length) {
+      if (!validWorkDates.length) {
         setGlobalUnresolvedByPosition(buildEmptyUnresolvedByPosition());
         return;
       }
-
-      const windowStart = new Date(Math.min(...ranges.map((item) => item.range.start.getTime())));
-      const windowEnd = new Date(Math.max(...ranges.map((item) => item.range.end.getTime())));
-
-      const punches = await fetchAllRows((from, to) =>
-        supabase
-          .from('ob_punches')
-          .select('staff_id, action, created_at')
-          .in('staff_id', uniqueStaffIds)
-          .gte('created_at', windowStart.toISOString())
-          .lt('created_at', windowEnd.toISOString())
-          .order('created_at', { ascending: true })
-          .range(from, to)
-      );
-
-      const hoursByDate = new Map<string, Map<string, number>>();
-      for (const item of ranges) {
-        hoursByDate.set(item.workDate, computeSystemHoursByStaff((punches ?? []) as any[], item.range.start, item.range.end));
-      }
+      const hoursByDate = await loadSystemHoursByDate(staffIdsByDate);
 
       const counts = Object.fromEntries(TRACKED_UNRESOLVED_POSITIONS.map((position) => [position, 0])) as Record<string, number>;
       const unresolvedTargets = Object.fromEntries(TRACKED_UNRESOLVED_POSITIONS.map((position) => [position, [] as PositionJumpTarget[]])) as Record<string, PositionJumpTarget[]>;
@@ -960,22 +1006,18 @@ export default function WorkHourComparisonPage({
         Object.keys(employeesByStaffId).length > 0
           ? employeesByStaffId
           : await loadEmployees();
-
-      const dedupByStaffAndDate = new Map<string, ParsedUploadRow>();
-      const skipReasons: string[] = [];
-      for (const row of parsedRows) {
-        if (!row.staffId) {
-          skipReasons.push(`Row ${row.rowNumber}: user code ${row.sourceUserCode} is invalid.`);
-          continue;
-        }
-        if (!employeeMap[row.staffId]) {
-          skipReasons.push(`Row ${row.rowNumber}: ${row.staffId} not found in OBPUNCH employees.`);
-          continue;
-        }
-        dedupByStaffAndDate.set(`${row.workDate}__${row.staffId}`, row);
+      const preparedRows = prepareWorkHourUploadRows(parsedRows, employeeMap);
+      const matchedRows = preparedRows.matchedRows;
+      const skipReasons = preparedRows.skipReasons;
+      if (preparedRows.duplicateReasons.length > 0) {
+        setSkipExamples(preparedRows.duplicateReasons.slice(0, 50));
+        throw new Error(
+          t(
+            `文件中存在重复员工日期记录，请先清理后重试。重复 ${preparedRows.duplicateReasons.length} 组。`,
+            `Duplicate staff/date rows were found in the file. Remove them and retry. ${preparedRows.duplicateReasons.length} duplicate group(s).`
+          )
+        );
       }
-
-      const matchedRows = Array.from(dedupByStaffAndDate.values());
       if (!matchedRows.length) {
         const uniqueDates = Array.from(new Set(parsedRows.map((row) => row.workDate)));
         setUploadSummary({
@@ -1053,19 +1095,30 @@ export default function WorkHourComparisonPage({
       }));
 
       let upsertError: any = null;
-      {
-        const withFixColumns = await supabase
-          .from(IAMS_IMPORT_TABLE)
-          .upsert(upsertPayload, { onConflict: 'work_date,staff_id' });
-        if (withFixColumns.error && isMissingColumnError(withFixColumns.error, 'fixed_by', IAMS_IMPORT_TABLE)) {
-          const fallbackPayload = upsertPayload.map(({ fixed_by, fixed_at, ...rest }) => rest);
+      let includeFixColumns = true;
+      for (const batch of chunkArray(upsertPayload, IAMS_IMPORT_UPSERT_BATCH_SIZE)) {
+        if (includeFixColumns) {
+          const withFixColumns = await supabase
+            .from(IAMS_IMPORT_TABLE)
+            .upsert(batch, { onConflict: 'work_date,staff_id' });
+          if (withFixColumns.error && isMissingColumnError(withFixColumns.error, 'fixed_by', IAMS_IMPORT_TABLE)) {
+            includeFixColumns = false;
+            const fallbackPayload = batch.map(({ fixed_by, fixed_at, ...rest }) => rest);
+            const fallback = await supabase
+              .from(IAMS_IMPORT_TABLE)
+              .upsert(fallbackPayload, { onConflict: 'work_date,staff_id' });
+            upsertError = fallback.error;
+          } else {
+            upsertError = withFixColumns.error;
+          }
+        } else {
+          const fallbackPayload = batch.map(({ fixed_by, fixed_at, ...rest }) => rest);
           const fallback = await supabase
             .from(IAMS_IMPORT_TABLE)
             .upsert(fallbackPayload, { onConflict: 'work_date,staff_id' });
           upsertError = fallback.error;
-        } else {
-          upsertError = withFixColumns.error;
         }
+        if (upsertError) break;
       }
       if (upsertError) throw new Error(String(upsertError.message ?? 'Failed to import iAMS rows.'));
 
@@ -1079,6 +1132,7 @@ export default function WorkHourComparisonPage({
         replacedRows
       });
       setSkipExamples(skipReasons.slice(0, 50));
+      invalidateSystemHoursCache(workDates);
       await loadComparisonRows(selectedDate, employeeMap);
       await loadGlobalUnresolvedCounts(employeeMap);
     } catch (err) {

@@ -107,7 +107,6 @@ const fetchAllEmployees = async () => {
 const fetchPunchesByStaffBatch = async (staffIds, rangeStart, rangeEnd) => {
   const eventsByStaff = new Map();
   const pageSize = 1000;
-  const maxPages = 80;
   const base = () =>
     supabase
       .from(PUNCH_TABLE)
@@ -116,8 +115,7 @@ const fetchPunchesByStaffBatch = async (staffIds, rangeStart, rangeEnd) => {
       .gte('created_at', rangeStart.toISOString())
       .lt('created_at', rangeEnd.toISOString());
 
-  for (let page = 0; page < maxPages; page += 1) {
-    const from = page * pageSize;
+  for (let from = 0; ; from += pageSize) {
     const to = from + pageSize - 1;
     const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
     const attempt = attemptCreatedAt.error ? await base().order('id', { ascending: true }).range(from, to) : attemptCreatedAt;
