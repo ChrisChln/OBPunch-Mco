@@ -48,6 +48,7 @@ import {
 } from './scheduleWeek';
 import { formatRoundedHours, getTimecardTerminatedByDay } from './timecardDisplay';
 import {
+  buildStaleLateAutoDeletePlan,
   evaluateLateDecision,
   formatClockMinutes,
   getClockMinutesFromDate,
@@ -110,6 +111,15 @@ type LateMarkView = {
   finalExpectedStart: string;
   firstIn: string;
   sampleCount: number;
+};
+type LateMarkPersistRow = {
+  staff_id: string;
+  work_date: string;
+  mark_type: 'late';
+  source: string;
+  operator: string | null;
+  payload: Record<string, unknown>;
+  updated_at: string;
 };
 type DailyListCapacitySource = 'recent14' | 'template_fallback' | 'excluded' | 'transfer' | 'unmapped';
 type DailyListCapacityView = {
@@ -340,6 +350,18 @@ const isMissingTableError = (message: unknown, table: string) => {
     text.includes('relation') ||
     text.includes('does not exist')
   ) && text.includes(target);
+};
+
+const isMissingLateSyncRpcError = (error: unknown) => {
+  const text = String(
+    typeof error === 'object' && error !== null
+      ? `${(error as { code?: unknown }).code ?? ''} ${(error as { message?: unknown }).message ?? ''} ${(error as { details?: unknown }).details ?? ''}`
+      : error ?? ''
+  ).toLowerCase();
+  return (
+    text.includes('sync_late_attendance_marks') &&
+    (text.includes('could not find') || text.includes('function') || text.includes('schema cache') || text.includes('pgrst'))
+  );
 };
 
 const formatUph = (value: number | null | undefined) => (value === null || value === undefined ? '-' : value.toFixed(1));
@@ -7703,15 +7725,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       punchOnlyPersonalSamplesByStaff.get(staff)!.push({ workDate, firstInMinutes });
     }
 
-    const marksToInsert: Array<{
-      staff_id: string;
-      work_date: string;
-      mark_type: 'late';
-      source: string;
-      operator: string | null;
-      payload: Record<string, unknown>;
-      updated_at: string;
-    }> = [];
+    const marksToInsert: LateMarkPersistRow[] = [];
     const lateByStaffDayKey: Record<string, LateMarkView> = {};
     const nowIso = new Date(serverTime).toISOString();
     for (const item of targetWorkDays) {
@@ -7772,22 +7786,82 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       });
     }
 
-    try {
+    const persistLateMarksFallback = async () => {
+      const existingLateRows: Array<{ staff_id: string; work_date: string; source: string }> = [];
       for (const batch of chunk(targetStaffIds, 200)) {
-        const clearRes = await supabase
+        const existingRes = await supabase
           .from(ATTENDANCE_MARKS_TABLE)
-          .delete()
+          .select('staff_id, work_date, source')
           .in('staff_id', batch as any)
           .gte('work_date', weekStartKey)
           .lte('work_date', weekEndKey)
           .eq('mark_type', 'late');
-        if (clearRes.error) throw new Error(clearRes.error.message);
+        if (existingRes.error) throw new Error(existingRes.error.message);
+        for (const row of (((existingRes.data as any[]) ?? []) as Array<{ staff_id?: string; work_date?: string; source?: string }>)) {
+          const staffId = normalizeStaffId(String(row.staff_id ?? '').trim());
+          const workDate = String(row.work_date ?? '').trim();
+          if (!staffId || !workDate) continue;
+          existingLateRows.push({
+            staff_id: staffId,
+            work_date: workDate,
+            source: String(row.source ?? '').trim()
+          });
+        }
       }
-      if (marksToInsert.length > 0) {
-        const upsertRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert(marksToInsert as any, {
-          onConflict: 'staff_id,work_date,mark_type'
-        });
-        if (upsertRes.error) throw new Error(upsertRes.error.message);
+
+      const protectedManualKeySet = new Set(
+        existingLateRows
+          .filter((row) => row.source && row.source !== 'late_auto')
+          .map((row) => `${row.staff_id}__${row.work_date}`)
+      );
+      const marksToPersist = marksToInsert.filter(
+        (row) => !protectedManualKeySet.has(`${row.staff_id}__${row.work_date}`)
+      );
+
+      if (marksToPersist.length > 0) {
+        for (const batch of chunk(marksToPersist, 500)) {
+          const upsertRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert(batch as any, {
+            onConflict: 'staff_id,work_date,mark_type'
+          });
+          if (upsertRes.error) throw new Error(upsertRes.error.message);
+        }
+      }
+
+      const staleDeletePlan = buildStaleLateAutoDeletePlan({
+        existingRows: existingLateRows.filter((row) => row.source === 'late_auto'),
+        nextRows: marksToPersist.map((row) => ({
+          staff_id: row.staff_id,
+          work_date: row.work_date
+        }))
+      });
+      for (const item of staleDeletePlan) {
+        for (const workDateBatch of chunk(item.workDates, 50)) {
+          const clearRes = await supabase
+            .from(ATTENDANCE_MARKS_TABLE)
+            .delete()
+            .eq('staff_id', item.staffId)
+            .in('work_date', workDateBatch as any)
+            .eq('mark_type', 'late')
+            .eq('source', 'late_auto');
+          if (clearRes.error) throw new Error(clearRes.error.message);
+        }
+      }
+    };
+
+    try {
+      const rpcRes = await supabase.rpc('sync_late_attendance_marks', {
+        p_range_start: weekStartKey,
+        p_range_end: weekEndKey,
+        p_staff_ids: targetStaffIds,
+        p_rows: marksToInsert,
+        p_actor: user?.email ?? null
+      });
+      if (rpcRes.error) {
+        if (isMissingLateSyncRpcError(rpcRes.error)) {
+          await persistLateMarksFallback();
+        } else {
+          throw new Error(rpcRes.error.message);
+        }
       }
     } catch (error) {
       console.warn('[late] persist late marks failed:', error);

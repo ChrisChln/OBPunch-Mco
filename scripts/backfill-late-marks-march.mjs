@@ -170,6 +170,45 @@ const chunk = (arr, size) => {
   return out;
 };
 
+const isMissingLateSyncRpcError = (error) => {
+  const text = String(error?.code ?? '') + ' ' + String(error?.message ?? '') + ' ' + String(error?.details ?? '');
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes('sync_late_attendance_marks') &&
+    (normalized.includes('could not find') || normalized.includes('function') || normalized.includes('schema cache') || normalized.includes('pgrst'))
+  );
+};
+
+const buildStaleLateAutoDeletePlan = ({ existingRows, nextRows }) => {
+  const nextKeySet = new Set(
+    nextRows
+      .map((row) => {
+        const staffId = String(row?.staff_id ?? '').trim();
+        const workDate = String(row?.work_date ?? '').trim();
+        return staffId && workDate ? `${staffId}__${workDate}` : '';
+      })
+      .filter(Boolean)
+  );
+
+  const workDatesByStaffId = new Map();
+  for (const row of existingRows) {
+    const staffId = String(row?.staff_id ?? '').trim();
+    const workDate = String(row?.work_date ?? '').trim();
+    if (!staffId || !workDate) continue;
+    if (nextKeySet.has(`${staffId}__${workDate}`)) continue;
+    const dates = workDatesByStaffId.get(staffId) ?? new Set();
+    dates.add(workDate);
+    workDatesByStaffId.set(staffId, dates);
+  }
+
+  return Array.from(workDatesByStaffId.entries())
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'en-US'))
+    .map(([staffId, workDates]) => ({
+      staffId,
+      workDates: Array.from(workDates).sort((a, b) => String(a).localeCompare(String(b), 'en-US'))
+    }));
+};
+
 const main = async () => {
   const { start, end } = monthRange(TARGET_MONTH);
   const [yearRaw, monthRaw] = TARGET_MONTH.split('-');
@@ -293,33 +332,90 @@ const main = async () => {
     return;
   }
 
-  const staffIds = Array.from(new Set(marksToInsert.map((m) => m.staff_id)));
-  console.log(`Clearing old late marks for ${staffIds.length} staff in ${TARGET_MONTH} ...`);
+  const persistLateMarksFallback = async () => {
+    const existingLateRows = [];
+    const pageSize = 1000;
+    const maxPages = 80;
+    for (let page = 0; page < maxPages; page += 1) {
+      const from = page * pageSize;
+      const to = from + pageSize - 1;
+      const res = await supabase
+        .from(ATTENDANCE_MARKS_TABLE)
+        .select('staff_id, work_date, source')
+        .gte('work_date', monthStartDate)
+        .lte('work_date', monthEndDate)
+        .eq('mark_type', 'late')
+        .range(from, to);
+      if (res.error) throw new Error(`Load existing late marks failed: ${res.error.message}`);
+      const rows = res.data ?? [];
+      existingLateRows.push(...rows);
+      if (rows.length < pageSize) break;
+    }
 
-  for (const batch of chunk(staffIds, 200)) {
-    const clearRes = await supabase
-      .from(ATTENDANCE_MARKS_TABLE)
-      .delete()
-      .in('staff_id', batch)
-      .gte('work_date', monthStartDate)
-      .lte('work_date', monthEndDate)
-      .eq('mark_type', 'late');
-    if (clearRes.error) throw new Error(`Delete old late marks failed: ${clearRes.error.message}`);
+    const protectedManualKeySet = new Set(
+      existingLateRows
+        .filter((row) => String(row?.source ?? '').trim() && String(row?.source ?? '').trim() !== 'late_auto')
+        .map((row) => `${String(row?.staff_id ?? '').trim()}__${String(row?.work_date ?? '').trim()}`)
+    );
+    const marksToPersist = marksToInsert.filter((row) => !protectedManualKeySet.has(`${row.staff_id}__${row.work_date}`));
+
+    if (marksToPersist.length > 0) {
+      for (const batch of chunk(marksToPersist, 500)) {
+        const upsertRes = await supabase
+          .from(ATTENDANCE_MARKS_TABLE)
+          .upsert(batch, { onConflict: 'staff_id,work_date,mark_type' });
+        if (upsertRes.error) throw new Error(`Upsert late marks failed: ${upsertRes.error.message}`);
+      }
+    } else {
+      console.log('No late marks to upsert after protecting manual rows.');
+    }
+
+    const staleDeletePlan = buildStaleLateAutoDeletePlan({
+      existingRows: existingLateRows.filter((row) => String(row?.source ?? '').trim() === 'late_auto'),
+      nextRows: marksToPersist.map((row) => ({ staff_id: row.staff_id, work_date: row.work_date }))
+    });
+    console.log(`Clearing stale late_auto marks for ${staleDeletePlan.length} staff in ${TARGET_MONTH} ...`);
+    for (const item of staleDeletePlan) {
+      for (const workDateBatch of chunk(item.workDates, 50)) {
+        const clearRes = await supabase
+          .from(ATTENDANCE_MARKS_TABLE)
+          .delete()
+          .eq('staff_id', item.staffId)
+          .in('work_date', workDateBatch)
+          .eq('mark_type', 'late')
+          .eq('source', 'late_auto');
+        if (clearRes.error) throw new Error(`Delete stale late_auto marks failed: ${clearRes.error.message}`);
+      }
+    }
+
+    return { persistedCount: marksToPersist.length, mode: 'fallback' };
+  };
+
+  try {
+    const rpcRes = await supabase.rpc('sync_late_attendance_marks', {
+      p_range_start: monthStartDate,
+      p_range_end: monthEndDate,
+      p_staff_ids: Array.from(new Set(marksToInsert.map((row) => row.staff_id))),
+      p_rows: marksToInsert,
+      p_actor: OPERATOR
+    });
+    if (rpcRes.error) {
+      if (isMissingLateSyncRpcError(rpcRes.error)) {
+        const result = await persistLateMarksFallback();
+        console.log(`Done. Recalculated late marks for ${TARGET_MONTH}. Inserted/updated: ${result.persistedCount} (${result.mode}).`);
+        return;
+      }
+      throw new Error(`Sync late marks RPC failed: ${rpcRes.error.message}`);
+    }
+    console.log(`Done. Recalculated late marks for ${TARGET_MONTH}. Inserted/updated: ${marksToInsert.length} (rpc).`);
+  } catch (error) {
+    if (isMissingLateSyncRpcError(error)) {
+      const result = await persistLateMarksFallback();
+      console.log(`Done. Recalculated late marks for ${TARGET_MONTH}. Inserted/updated: ${result.persistedCount} (${result.mode}).`);
+      return;
+    }
+    throw error;
   }
-
-  if (marksToInsert.length === 0) {
-    console.log('No late marks to insert.');
-    return;
-  }
-
-  for (const batch of chunk(marksToInsert, 500)) {
-    const upsertRes = await supabase
-      .from(ATTENDANCE_MARKS_TABLE)
-      .upsert(batch, { onConflict: 'staff_id,work_date,mark_type' });
-    if (upsertRes.error) throw new Error(`Upsert late marks failed: ${upsertRes.error.message}`);
-  }
-
-  console.log(`Done. Recalculated late marks for ${TARGET_MONTH}. Inserted/updated: ${marksToInsert.length}`);
 };
 
 main().catch((error) => {
