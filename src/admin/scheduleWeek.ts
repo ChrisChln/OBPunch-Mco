@@ -112,7 +112,8 @@ export const activatePlannedScheduleNote = (
 
 export const buildDailyPlannedActivationUpserts = (
   rows: RolloverRow[],
-  dateKey: string,
+  activationTemplateDateKey: string,
+  currentWeekStartTemplateDateKey: string,
   nowIso: string,
   tempWorkNote: string,
   leaveNote: string,
@@ -142,19 +143,15 @@ export const buildDailyPlannedActivationUpserts = (
         updated_at: nowIso
       };
     })
-    .filter((row) => row.staff_id && row.date && row.date <= dateKey)
+    .filter((row) => row.staff_id && row.date)
+    .filter((row) => row.date >= currentWeekStartTemplateDateKey && row.date <= activationTemplateDateKey)
     .filter((row) => row.position)
     .filter((row) => row.note !== null);
 
 export const buildWeeklyRolloverUpserts = (
   nextWeekRows: RolloverRow[],
-  existingCurrentWeekRows: RolloverRow[],
   nowIso: string
 ) => {
-  const existingKeys = new Set(
-    existingCurrentWeekRows.map((row) => `${String(row.staff_id ?? '').trim()}__${String(row.date ?? '').trim()}`).filter((key) => key !== '__')
-  );
-
   return nextWeekRows
     .map((row) => {
       const rawDate = String(row.date ?? '').trim();
@@ -170,6 +167,5 @@ export const buildWeeklyRolloverUpserts = (
       };
     })
     .filter((row) => row.staff_id && row.date)
-    .filter((row) => row.position)
-    .filter((row) => !existingKeys.has(`${row.staff_id}__${row.date}`));
+    .filter((row) => row.position);
 };

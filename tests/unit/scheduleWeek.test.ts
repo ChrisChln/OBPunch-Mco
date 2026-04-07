@@ -129,7 +129,7 @@ describe('schedule week note handling', () => {
     expect(preserveScheduleNoteForWeekRollover(null)).toBeNull();
   });
 
-  test('week rollover only fills missing current-week rows and does not overwrite existing ones', () => {
+  test('week rollover overwrites current-week rows with next-week rows', () => {
     const result = buildWeeklyRolloverUpserts(
       [
         {
@@ -147,16 +147,18 @@ describe('schedule week note handling', () => {
           operator: 'planner@example.com'
         }
       ],
-      [
-        {
-          staff_id: 'US001',
-          date: '2026-03-09'
-        }
-      ],
       '2026-03-09T05:01:00.000Z'
     );
 
     expect(result).toEqual([
+      {
+        staff_id: 'US001',
+        date: '2026-03-09',
+        position: 'Pick',
+        note: TEMP_WORK_NOTE,
+        operator: 'planner@example.com',
+        updated_at: '2026-03-09T05:01:00.000Z'
+      },
       {
         staff_id: 'US002',
         date: '2026-03-10',
@@ -179,7 +181,6 @@ describe('schedule week note handling', () => {
           operator: 'planner@example.com'
         }
       ],
-      [],
       '2026-03-09T05:01:00.000Z'
     );
 
@@ -328,11 +329,12 @@ describe('schedule week note handling', () => {
     expect(
       buildDailyPlannedActivationUpserts(
         [
-          { staff_id: 'US001', date: '2026-03-09', position: 'Pick', note: PLANNED_LEAVE_NOTE, operator: 'planner@example.com' },
-          { staff_id: 'US002', date: '2026-03-10', position: 'Pack', note: PLANNED_TEMP_REST_NOTE, operator: 'planner@example.com' },
-          { staff_id: 'US003', date: '2026-03-11', position: 'Rebin', note: PLANNED_TEMP_WORK_NOTE, operator: 'planner@example.com' }
+          { staff_id: 'US001', date: '2000-01-03', position: 'Pick', note: PLANNED_LEAVE_NOTE, operator: 'planner@example.com' },
+          { staff_id: 'US002', date: '2000-01-04', position: 'Pack', note: PLANNED_TEMP_REST_NOTE, operator: 'planner@example.com' },
+          { staff_id: 'US003', date: '2000-01-05', position: 'Rebin', note: PLANNED_TEMP_WORK_NOTE, operator: 'planner@example.com' }
         ],
-        '2026-03-10',
+        '2000-01-04',
+        '2000-01-03',
         '2026-03-10T06:01:00.000Z',
         TEMP_WORK_NOTE,
         '__leave__',
@@ -344,7 +346,7 @@ describe('schedule week note handling', () => {
     ).toEqual([
       {
         staff_id: 'US001',
-        date: '2026-03-09',
+        date: '2000-01-03',
         position: 'Pick',
         note: '__leave__',
         operator: 'planner@example.com',
@@ -352,7 +354,7 @@ describe('schedule week note handling', () => {
       },
       {
         staff_id: 'US002',
-        date: '2026-03-10',
+        date: '2000-01-04',
         position: 'Pack',
         note: TEMP_REST_NOTE,
         operator: 'planner@example.com',
@@ -364,8 +366,9 @@ describe('schedule week note handling', () => {
   test('daily planned-state activation skips rows with missing position', () => {
     expect(
       buildDailyPlannedActivationUpserts(
-        [{ staff_id: 'US001', date: '2026-03-10', note: PLANNED_LEAVE_NOTE, operator: 'planner@example.com' }],
-        '2026-03-10',
+        [{ staff_id: 'US001', date: '2000-01-04', note: PLANNED_LEAVE_NOTE, operator: 'planner@example.com' }],
+        '2000-01-04',
+        '2000-01-03',
         '2026-03-10T06:01:00.000Z',
         TEMP_WORK_NOTE,
         '__leave__',
@@ -375,5 +378,34 @@ describe('schedule week note handling', () => {
         PLANNED_TEMP_REST_NOTE
       )
     ).toEqual([]);
+  });
+
+  test('daily planned-state activation does not activate next-week template rows early', () => {
+    expect(
+      buildDailyPlannedActivationUpserts(
+        [
+          { staff_id: 'US001', date: '2000-01-04', position: 'Pick', note: PLANNED_TEMP_REST_NOTE, operator: 'planner@example.com' },
+          { staff_id: 'US001', date: '2000-01-10', position: 'Pick', note: PLANNED_TEMP_REST_NOTE, operator: 'planner@example.com' }
+        ],
+        '2000-01-04',
+        '2000-01-03',
+        '2026-03-10T06:01:00.000Z',
+        TEMP_WORK_NOTE,
+        '__leave__',
+        TEMP_REST_NOTE,
+        PLANNED_TEMP_WORK_NOTE,
+        PLANNED_LEAVE_NOTE,
+        PLANNED_TEMP_REST_NOTE
+      )
+    ).toEqual([
+      {
+        staff_id: 'US001',
+        date: '2000-01-04',
+        position: 'Pick',
+        note: TEMP_REST_NOTE,
+        operator: 'planner@example.com',
+        updated_at: '2026-03-10T06:01:00.000Z'
+      }
+    ]);
   });
 });

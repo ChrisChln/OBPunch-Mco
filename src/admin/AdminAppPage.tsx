@@ -2683,6 +2683,119 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
   };
 
+  const getWeekAuditPayload = (weekOffset: number) => {
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekStart = addDays(baseWeekStart, weekOffset * 7);
+    const weekEnd = addDays(weekStart, 6);
+    return {
+      week_offset: weekOffset,
+      week_start: toDateOnly(weekStart),
+      week_end: toDateOnly(weekEnd)
+    };
+  };
+
+  const changeScheduleWeek = (nextOffset: number, source: string) => {
+    const previousWeek = getWeekAuditPayload(scheduleWeekOffset);
+    const nextWeek = getWeekAuditPayload(nextOffset);
+    setScheduleWeekOffset(nextOffset);
+    setScheduleWeekInput(nextWeek.week_start);
+    void writeAudit({
+      action: 'schedule_week_switch',
+      target: SCHEDULE_TABLE,
+      payload: {
+        source,
+        previous_week_offset: previousWeek.week_offset,
+        previous_week_start: previousWeek.week_start,
+        previous_week_end: previousWeek.week_end,
+        next_week_offset: nextWeek.week_offset,
+        next_week_start: nextWeek.week_start,
+        next_week_end: nextWeek.week_end
+      }
+    });
+  };
+
+  const openScheduleDailyList = (source: string) => {
+    const targetDate = toDateOnly(addDays(new Date(serverTime), 1));
+    setDailyListDateInput(targetDate);
+    setDailyListFilterPositions(createEmptyPositionFlags());
+    void loadDailyListSelectedPositionsGlobal({ targetDateOverride: targetDate });
+    setDailyListOpen(true);
+    void writeAudit({
+      action: 'schedule_open_daily_list',
+      target: SCHEDULE_TABLE,
+      payload: {
+        source,
+        target_date: targetDate,
+        schedule_week_offset: scheduleWeekOffset
+      }
+    });
+  };
+
+  const refreshSchedulePanelWithAudit = async (source: string) => {
+    const week = getWeekAuditPayload(scheduleWeekOffset);
+    void writeAudit({
+      action: 'schedule_refresh',
+      target: SCHEDULE_TABLE,
+      payload: {
+        source,
+        week_offset: week.week_offset,
+        week_start: week.week_start,
+        week_end: week.week_end
+      }
+    });
+    await refreshSchedulePanel();
+  };
+
+  const changeTimecardWeek = async (nextOffset: number, source: string) => {
+    const previousWeek = getWeekAuditPayload(timecardWeekOffset);
+    const nextWeek = getWeekAuditPayload(nextOffset);
+    setTimecardWeekOffset(nextOffset);
+    setTimecardWeekInput(nextWeek.week_start);
+    void writeAudit({
+      action: 'timecard_week_switch',
+      target: 'timecard',
+      payload: {
+        source,
+        previous_week_offset: previousWeek.week_offset,
+        previous_week_start: previousWeek.week_start,
+        previous_week_end: previousWeek.week_end,
+        next_week_offset: nextWeek.week_offset,
+        next_week_start: nextWeek.week_start,
+        next_week_end: nextWeek.week_end
+      }
+    });
+    await fetchTimecard({ reset: true, weekOffset: nextOffset, lockUi: false });
+  };
+
+  const refreshTimecardWithAudit = async (source: string) => {
+    const week = getWeekAuditPayload(timecardWeekOffset);
+    void writeAudit({
+      action: 'timecard_refresh',
+      target: 'timecard',
+      payload: {
+        source,
+        week_offset: week.week_offset,
+        week_start: week.week_start,
+        week_end: week.week_end
+      }
+    });
+    await recomputeTimecardAttendanceMarks();
+  };
+
+  const changeAdminPage = (nextPage: AdminPage, source: string) => {
+    const previousPage = page;
+    setPage(nextPage);
+    void writeAudit({
+      action: 'admin_page_switch',
+      target: 'admin_navigation',
+      payload: {
+        source,
+        previous_page: previousPage,
+        next_page: nextPage
+      }
+    });
+  };
+
   const fetchAudit = async (options?: { search?: string }) => {
     if (!supabase) {
       setAuditError('缺少 Supabase 配置。');
@@ -2776,8 +2889,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       schedule_planned_temp_rest: t('计划临时排休', 'Planned Temp Off'),
       schedule_auto_week_reset: t('自动周重置', 'Auto Weekly Reset'),
       schedule_auto_daily_activation: t('自动计划激活', 'Auto Daily Activation'),
+      schedule_week_switch: t('排班切换周', 'Schedule Week Switch'),
+      schedule_refresh: t('排班刷新', 'Schedule Refresh'),
+      schedule_open_daily_list: t('打开日报', 'Open Daily List'),
+      admin_page_switch: t('页面切换', 'Page Switch'),
       schedule_rest: t('排班休息', 'Schedule Off'),
       schedule_clear: t('清空排班', 'Schedule Clear'),
+      timecard_week_switch: t('打卡切换周', 'Timecard Week Switch'),
+      timecard_refresh: t('打卡刷新', 'Timecard Refresh'),
       device_add: t('新增设备', 'Device Add'),
       device_update: t('更新设备', 'Device Update'),
       device_borrow: t('借出设备', 'Device Borrow'),
@@ -3675,6 +3794,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (!supabase) return;
     const now = new Date(Date.now() + offsetMs);
     const dateKey = toDateOnly(now);
+    const operationalDayIndex = (() => {
+      const operationalStart = new Date(now);
+      operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
+      if (now.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
+      return (operationalStart.getDay() + 6) % 7;
+    })();
+    const currentWeekStartTemplateDateKey = getTemplateDateByDayIndex(0, 0);
+    const activationTemplateDateKey = getTemplateDateByDayIndex(operationalDayIndex, 0);
     const lockUi = options?.lockUi ?? true;
 
     const markerRes = await supabase
@@ -3749,7 +3876,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const planRowsRes = await supabase
         .from(SCHEDULE_TABLE)
         .select('staff_id, date, position, note, operator')
-        .lte('date', dateKey)
+        .gte('date', currentWeekStartTemplateDateKey)
+        .lte('date', activationTemplateDateKey)
         .in('note', [SCHEDULE_PLANNED_TEMP_WORK_NOTE, SCHEDULE_PLANNED_LEAVE_NOTE, SCHEDULE_PLANNED_TEMP_REST_NOTE] as any);
       if (planRowsRes.error) {
         setScheduleError(planRowsRes.error.message);
@@ -3766,7 +3894,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (rows.length > 0) {
         const payload = buildDailyPlannedActivationUpserts(
           rows,
-          dateKey,
+          activationTemplateDateKey,
+          currentWeekStartTemplateDateKey,
           nowIso,
           SCHEDULE_TEMP_WORK_NOTE,
           SCHEDULE_LEAVE_NOTE,
@@ -3821,7 +3950,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         setScheduleRows((prev) =>
           prev.map((row) => {
             const rowDate = String(row.date ?? '').trim();
-            if (!rowDate || rowDate > dateKey) return row;
+            if (!rowDate || rowDate < currentWeekStartTemplateDateKey || rowDate > activationTemplateDateKey) return row;
             const nextNote = activatePlannedScheduleNote(
               row.note ?? null,
               SCHEDULE_TEMP_WORK_NOTE,
@@ -3942,16 +4071,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (nextRows.length === 0) return;
 
       const nowIso = now.toISOString();
-      const currentStart = getTemplateDateByDayIndex(0, 0);
-      const currentEnd = getTemplateDateByDayIndex(6, 0);
-      const currentWeekRes = await supabase
-        .from(SCHEDULE_TABLE)
-        .select('staff_id, date')
-        .gte('date', currentStart)
-        .lte('date', currentEnd);
-      if (currentWeekRes.error) return;
-
-      const migrated = buildWeeklyRolloverUpserts(nextRows, ((currentWeekRes.data as any[]) ?? []) as any[], nowIso).map((row) => ({
+      const migrated = buildWeeklyRolloverUpserts(nextRows, nowIso).map((row) => ({
         ...row,
         staff_id: normalizeStaffId(row.staff_id)
       }));
@@ -6973,6 +7093,32 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       summary = t('自动计划激活已执行', 'Automatic daily plan activation applied');
       push(t('激活日期', 'Activation date'), payload?.date);
       push(t('激活条数', 'Activated rows'), payload?.activated_count);
+    } else if (action === 'schedule_week_switch') {
+      summary = `Week: ${fmtText(payload?.previous_week_start)} -> ${fmtText(payload?.next_week_start)}`;
+      push(t('来源', 'Source'), payload?.source);
+      push(t('上一周', 'Previous week'), `${fmtText(payload?.previous_week_start)} ~ ${fmtText(payload?.previous_week_end)}`);
+      push(t('下一周', 'Next week'), `${fmtText(payload?.next_week_start)} ~ ${fmtText(payload?.next_week_end)}`);
+    } else if (action === 'schedule_refresh') {
+      summary = t('排班页面已刷新', 'Schedule refreshed');
+      push(t('来源', 'Source'), payload?.source);
+      push(t('周', 'Week'), `${fmtText(payload?.week_start)} ~ ${fmtText(payload?.week_end)}`);
+    } else if (action === 'schedule_open_daily_list') {
+      summary = t('打开日报', 'Daily list opened');
+      push(t('来源', 'Source'), payload?.source);
+      push(t('目标日期', 'Target date'), payload?.target_date);
+      push(t('排班周偏移', 'Schedule week offset'), payload?.schedule_week_offset);
+    } else if (action === 'timecard_week_switch') {
+      summary = `Week: ${fmtText(payload?.previous_week_start)} -> ${fmtText(payload?.next_week_start)}`;
+      push(t('来源', 'Source'), payload?.source);
+      push(t('上一周', 'Previous week'), `${fmtText(payload?.previous_week_start)} ~ ${fmtText(payload?.previous_week_end)}`);
+      push(t('下一周', 'Next week'), `${fmtText(payload?.next_week_start)} ~ ${fmtText(payload?.next_week_end)}`);
+    } else if (action === 'timecard_refresh') {
+      summary = t('打卡页面已刷新', 'Timecard refreshed');
+      push(t('来源', 'Source'), payload?.source);
+      push(t('周', 'Week'), `${fmtText(payload?.week_start)} ~ ${fmtText(payload?.week_end)}`);
+    } else if (action === 'admin_page_switch') {
+      summary = `${fmtText(payload?.previous_page)} -> ${fmtText(payload?.next_page)}`;
+      push(t('来源', 'Source'), payload?.source);
     }
 
     return { summary, details };
@@ -13604,7 +13750,7 @@ ${rowsToHtml(late)}
           />
         ) : (
           <>
-            <AdminNav page={page} isLocked={isLocked} onSetPage={setPage} tabClass={tabClass} t={t} leaveApprovalPendingCount={leaveApprovalPendingCount} />
+            <AdminNav page={page} isLocked={isLocked} onSetPage={(nextPage) => changeAdminPage(nextPage, 'nav')} tabClass={tabClass} t={t} leaveApprovalPendingCount={leaveApprovalPendingCount} />
 
             {page === 'home' && (
               <HomeDashboardPage
@@ -13742,23 +13888,14 @@ ${rowsToHtml(late)}
                   schedulePublishForDate={schedulePublishForDate}
                   setSchedulePublishSetting={setSchedulePublishSetting}
                   scheduleWeekOffset={scheduleWeekOffset}
-                  setScheduleWeekOffset={setScheduleWeekOffset}
-                  setScheduleWeekInput={setScheduleWeekInput}
-                  serverTime={serverTime}
-                  startOfWeekMonday={startOfWeekMonday}
-                  toDateOnly={toDateOnly}
-                  addDays={addDays}
-                  setDailyListDateInput={setDailyListDateInput}
-                  setDailyListFilterPositions={setDailyListFilterPositions}
-                  createEmptyPositionFlags={createEmptyPositionFlags}
-                  loadDailyListSelectedPositionsGlobal={loadDailyListSelectedPositionsGlobal}
-                  setDailyListOpen={setDailyListOpen}
+                  changeScheduleWeek={changeScheduleWeek}
+                  openScheduleDailyList={openScheduleDailyList}
                   schedulePrintDate={schedulePrintDate}
                   setSchedulePrintDate={setSchedulePrintDate}
                   scheduleEmployeesFilteredLength={scheduleEmployeesFiltered.length}
                   printScheduleSignInSheet={printScheduleSignInSheet}
                   exportScheduleTemplate={exportScheduleTemplate}
-                  refreshSchedulePanel={refreshSchedulePanel}
+                  refreshSchedulePanelWithAudit={refreshSchedulePanelWithAudit}
                 />
 
                 <div className="mt-5 grid gap-4 md:grid-cols-10">
@@ -13776,8 +13913,7 @@ ${rowsToHtml(late)}
                         const weekStart = startOfWeekMonday(parsed);
                         const baseWeekStart = startOfWeekMonday(serverTime);
                         const offset = Math.round((weekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
-                        setScheduleWeekOffset(offset);
-                        setScheduleWeekInput(toDateOnly(weekStart));
+                        changeScheduleWeek(offset, 'date_input');
                       }}
                       className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     />
@@ -15272,11 +15408,11 @@ ${rowsToHtml(late)}
                   addDays={addDays}
                   toDateOnly={toDateOnly}
                   timecardWeekOffset={timecardWeekOffset}
-                  setTimecardWeekOffset={setTimecardWeekOffset}
+                  changeTimecardWeek={changeTimecardWeek}
                   timecardWeekInput={timecardWeekInput}
                   setTimecardWeekInput={setTimecardWeekInput}
                   fetchTimecard={fetchTimecard}
-                  recomputeTimecardAttendanceMarks={recomputeTimecardAttendanceMarks}
+                  refreshTimecardWithAudit={refreshTimecardWithAudit}
                   timecardRowsFilteredCount={timecardRowsFiltered.length}
                   exportTimecard={exportTimecard}
                   exportDailyPunches={exportDailyPunches}
