@@ -9,23 +9,14 @@ type ScheduleToolbarProps = {
   schedulePublishForDate: string;
   setSchedulePublishSetting: (value: boolean) => void | Promise<void>;
   scheduleWeekOffset: number;
-  setScheduleWeekOffset: (value: number) => void;
-  setScheduleWeekInput: (value: string) => void;
-  serverTime: Date;
-  startOfWeekMonday: (value: Date) => Date;
-  toDateOnly: (value: Date) => string;
-  addDays: (value: Date, days: number) => Date;
-  setDailyListDateInput: (value: string) => void;
-  setDailyListFilterPositions: (value: any) => void;
-  createEmptyPositionFlags: () => any;
-  loadDailyListSelectedPositionsGlobal: (arg?: { targetDateOverride?: string }) => void | Promise<void>;
-  setDailyListOpen: (value: boolean) => void;
+  changeScheduleWeek: (value: number, source: string) => void;
+  openScheduleDailyList: (source: string) => void;
   schedulePrintDate: string;
   setSchedulePrintDate: (value: string) => void;
   scheduleEmployeesFilteredLength: number;
   printScheduleSignInSheet: () => void;
   exportScheduleTemplate: () => void | Promise<void>;
-  refreshSchedulePanel: () => void | Promise<void>;
+  refreshSchedulePanelWithAudit: (source: string) => void | Promise<void>;
 };
 
 export default function ScheduleToolbar({
@@ -34,23 +25,14 @@ export default function ScheduleToolbar({
   schedulePublishTomorrow,
   setSchedulePublishSetting,
   scheduleWeekOffset,
-  setScheduleWeekOffset,
-  setScheduleWeekInput,
-  serverTime,
-  startOfWeekMonday,
-  toDateOnly,
-  addDays,
-  setDailyListDateInput,
-  setDailyListFilterPositions,
-  createEmptyPositionFlags,
-  loadDailyListSelectedPositionsGlobal,
-  setDailyListOpen,
+  changeScheduleWeek,
+  openScheduleDailyList,
   schedulePrintDate,
   setSchedulePrintDate,
   scheduleEmployeesFilteredLength,
   printScheduleSignInSheet,
   exportScheduleTemplate,
-  refreshSchedulePanel
+  refreshSchedulePanelWithAudit
 }: ScheduleToolbarProps) {
   const actionButtonClass =
     'inline-flex h-10 min-w-[104px] items-center justify-center rounded-2xl px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60';
@@ -75,19 +57,14 @@ export default function ScheduleToolbar({
           title={t('手动发布明日名单', 'Manual publish tomorrow roster')}
         >
           {schedulePublishTomorrow
-            ? t(`明日名单已开启`, `Tomorrow list ON`)
+            ? t('明日名单已开启', 'Tomorrow list ON')
             : t('明日名单已关闭', 'Tomorrow list OFF')}
         </button>
 
         <button
           type="button"
           disabled={isLocked}
-          onClick={() => {
-            const next = scheduleWeekOffset - 1;
-            setScheduleWeekOffset(next);
-            const baseWeekStart = startOfWeekMonday(serverTime);
-            setScheduleWeekInput(toDateOnly(addDays(baseWeekStart, next * 7)));
-          }}
+          onClick={() => changeScheduleWeek(scheduleWeekOffset - 1, 'toolbar_prev')}
           className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
         >
           {t('上一周', 'Prev')}
@@ -96,11 +73,7 @@ export default function ScheduleToolbar({
         <button
           type="button"
           disabled={isLocked}
-          onClick={() => {
-            setScheduleWeekOffset(0);
-            const baseWeekStart = startOfWeekMonday(serverTime);
-            setScheduleWeekInput(toDateOnly(baseWeekStart));
-          }}
+          onClick={() => changeScheduleWeek(0, 'toolbar_this_week')}
           className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
         >
           {t('本周', 'This week')}
@@ -109,12 +82,7 @@ export default function ScheduleToolbar({
         <button
           type="button"
           disabled={isLocked}
-          onClick={() => {
-            const next = scheduleWeekOffset + 1;
-            setScheduleWeekOffset(next);
-            const baseWeekStart = startOfWeekMonday(serverTime);
-            setScheduleWeekInput(toDateOnly(addDays(baseWeekStart, next * 7)));
-          }}
+          onClick={() => changeScheduleWeek(scheduleWeekOffset + 1, 'toolbar_next')}
           className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
         >
           {t('下一周', 'Next')}
@@ -123,16 +91,10 @@ export default function ScheduleToolbar({
         <button
           type="button"
           disabled={isLocked}
-          onClick={() => {
-            const targetDate = toDateOnly(addDays(new Date(serverTime), 1));
-            setDailyListDateInput(targetDate);
-            setDailyListFilterPositions(createEmptyPositionFlags());
-            void loadDailyListSelectedPositionsGlobal({ targetDateOverride: targetDate });
-            setDailyListOpen(true);
-          }}
+          onClick={() => openScheduleDailyList('toolbar_daily_list')}
           className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
         >
-          {t('每日名单', 'Daily list')}
+          {t('每日报表', 'Daily list')}
         </button>
 
         <StyledDateInput
@@ -140,7 +102,7 @@ export default function ScheduleToolbar({
           value={schedulePrintDate}
           disabled={isLocked}
           onChange={setSchedulePrintDate}
-          title={t('打印签到表日期', 'Sign-in print date')}
+          title={t('签到表日期', 'Sign-in print date')}
         />
 
         <button
@@ -164,7 +126,7 @@ export default function ScheduleToolbar({
         <button
           type="button"
           disabled={isLocked}
-          onClick={() => void refreshSchedulePanel()}
+          onClick={() => void refreshSchedulePanelWithAudit('toolbar_refresh')}
           className={[
             actionButtonClass,
             'bg-neon font-semibold text-white shadow-glow hover:-translate-y-0.5 hover:shadow-2xl disabled:opacity-50'

@@ -11,11 +11,11 @@ type TimecardControlsProps = {
   addDays: (date: Date, days: number) => Date;
   toDateOnly: (date: Date) => string;
   timecardWeekOffset: number;
-  setTimecardWeekOffset: (value: number) => void;
+  changeTimecardWeek: (value: number, source: string) => void | Promise<void>;
   timecardWeekInput: string;
   setTimecardWeekInput: (value: string) => void;
   fetchTimecard: (payload: { reset: boolean; weekOffset?: number; search?: string; agency?: string; position?: string; lockUi?: boolean }) => void | Promise<any>;
-  recomputeTimecardAttendanceMarks: () => void | Promise<void>;
+  refreshTimecardWithAudit: (source: string) => void | Promise<void>;
   timecardRowsFilteredCount: number;
   exportTimecard: () => void | Promise<void>;
   exportDailyPunches: () => void | Promise<void>;
@@ -46,11 +46,11 @@ export default function TimecardControls({
   addDays,
   toDateOnly,
   timecardWeekOffset,
-  setTimecardWeekOffset,
+  changeTimecardWeek,
   timecardWeekInput,
   setTimecardWeekInput,
   fetchTimecard,
-  recomputeTimecardAttendanceMarks,
+  refreshTimecardWithAudit,
   timecardRowsFilteredCount,
   exportTimecard,
   exportDailyPunches,
@@ -83,98 +83,79 @@ export default function TimecardControls({
       : 'border-white/10 bg-black/30 text-white focus:border-neon focus:shadow-glow'
   ].join(' ');
 
+  const baseWeekStart = startOfWeekMonday(serverTime);
+  const visibleWeekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+  const visibleWeekEnd = addDays(visibleWeekStart, 6);
+
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="font-display text-2xl tracking-[0.08em]">{t('时间卡', 'Timecard')}</h2>
-          {(() => {
-            const baseWeekStart = startOfWeekMonday(serverTime);
-            const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
-            const weekEnd = addDays(weekStart, 6);
-            return (
-              <p className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
-                {t('周期：', 'Week: ')}
-                <span className={isLight ? 'text-slate-800' : 'text-slate-200'}>{toDateOnly(weekStart)}</span> ～{' '}
-                <span className={isLight ? 'text-slate-800' : 'text-slate-200'}>{toDateOnly(weekEnd)}</span>
-              </p>
-            );
-          })()}
+          <h2 className="font-display text-2xl tracking-[0.08em]">{t('打卡', 'Timecard')}</h2>
+          <p className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+            {t('周:', 'Week: ')}
+            <span className={isLight ? 'text-slate-800' : 'text-slate-200'}>{toDateOnly(visibleWeekStart)}</span>
+            <span>{' - '}</span>
+            <span className={isLight ? 'text-slate-800' : 'text-slate-200'}>{toDateOnly(visibleWeekEnd)}</span>
+          </p>
         </div>
+
         <div className="flex flex-wrap gap-3">
-          {(() => {
-            const baseWeekStart = startOfWeekMonday(serverTime);
-            return (
-              <div className={['flex items-center gap-2 rounded-2xl px-4 py-2', isLight ? 'border border-slate-200 bg-slate-100' : 'bg-white/5'].join(' ')}>
-                <span className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Week</span>
-                <StyledDateInput
-                  themeMode={themeMode}
-                  disabled={isLocked}
-                  value={timecardWeekInput}
-                  onChange={(raw) => {
-                    setTimecardWeekInput(raw);
-                    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return;
-                    const dt = new Date(`${raw}T00:00:00`);
-                    if (Number.isNaN(dt.getTime())) return;
-                    const targetWeekStart = startOfWeekMonday(dt);
-                    const nextOffset = Math.round((targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
-                    setTimecardWeekOffset(nextOffset);
-                    void fetchTimecard({ reset: true, weekOffset: nextOffset, lockUi: false });
-                  }}
-                  title={t('选择任意日期', 'Pick any date')}
-                />
-              </div>
-            );
-          })()}
+          <div className={['flex items-center gap-2 rounded-2xl px-4 py-2', isLight ? 'border border-slate-200 bg-slate-100' : 'bg-white/5'].join(' ')}>
+            <span className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Week</span>
+            <StyledDateInput
+              themeMode={themeMode}
+              disabled={isLocked}
+              value={timecardWeekInput}
+              onChange={(raw) => {
+                setTimecardWeekInput(raw);
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return;
+                const dt = new Date(`${raw}T00:00:00`);
+                if (Number.isNaN(dt.getTime())) return;
+                const targetWeekStart = startOfWeekMonday(dt);
+                const nextOffset = Math.round((targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
+                void changeTimecardWeek(nextOffset, 'date_input');
+              }}
+              title={t('选择任意日期', 'Pick any date')}
+            />
+          </div>
+
           <button
             type="button"
             disabled={isLocked}
-            onClick={() => {
-              const next = timecardWeekOffset - 1;
-              setTimecardWeekOffset(next);
-              const baseWeekStart = startOfWeekMonday(serverTime);
-              setTimecardWeekInput(toDateOnly(addDays(baseWeekStart, next * 7)));
-              void fetchTimecard({ reset: true, weekOffset: next, lockUi: false });
-            }}
+            onClick={() => void changeTimecardWeek(timecardWeekOffset - 1, 'toolbar_prev')}
             className={ghostButtonClass}
           >
             {t('上一周', 'Prev')}
           </button>
+
           <button
             type="button"
             disabled={isLocked || timecardWeekOffset === 0}
-            onClick={() => {
-              setTimecardWeekOffset(0);
-              const baseWeekStart = startOfWeekMonday(serverTime);
-              setTimecardWeekInput(toDateOnly(baseWeekStart));
-              void fetchTimecard({ reset: true, weekOffset: 0, lockUi: false });
-            }}
+            onClick={() => void changeTimecardWeek(0, 'toolbar_this_week')}
             className={ghostButtonClass}
           >
             {t('本周', 'This week')}
           </button>
+
           <button
             type="button"
             disabled={isLocked}
-            onClick={() => {
-              const next = timecardWeekOffset + 1;
-              setTimecardWeekOffset(next);
-              const baseWeekStart = startOfWeekMonday(serverTime);
-              setTimecardWeekInput(toDateOnly(addDays(baseWeekStart, next * 7)));
-              void fetchTimecard({ reset: true, weekOffset: next, lockUi: false });
-            }}
+            onClick={() => void changeTimecardWeek(timecardWeekOffset + 1, 'toolbar_next')}
             className={ghostButtonClass}
           >
             {t('下一周', 'Next')}
           </button>
+
           <button
             type="button"
             disabled={isLocked}
-            onClick={() => void recomputeTimecardAttendanceMarks()}
+            onClick={() => void refreshTimecardWithAudit('toolbar_refresh')}
             className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
           >
             {t('刷新', 'Refresh')}
           </button>
+
           <button
             type="button"
             disabled={isLocked || timecardRowsFilteredCount === 0}
@@ -183,6 +164,7 @@ export default function TimecardControls({
           >
             {t('导出', 'Export')}
           </button>
+
           <button
             type="button"
             disabled={isLocked}
@@ -191,6 +173,7 @@ export default function TimecardControls({
           >
             {t('导出流水', 'Export punches')}
           </button>
+
           <button
             type="button"
             disabled={isLocked}
@@ -215,8 +198,9 @@ export default function TimecardControls({
                   : 'bg-white/10 text-slate-200 hover:bg-white/15'
             ].join(' ')}
           >
-            {timecardMissingEmployeeOnly ? t('显示全部时间卡', 'Show all timecards') : t('三无员工', 'Missing employee info')}
+            {timecardMissingEmployeeOnly ? t('显示全部打卡', 'Show all timecards') : t('缺少员工信息', 'Missing employee info')}
           </button>
+
           <button
             type="button"
             disabled={isLocked}
@@ -244,10 +228,11 @@ export default function TimecardControls({
             value={timecardSearch}
             onChange={(e) => setTimecardSearch(e.target.value)}
             disabled={isLocked}
-            placeholder={t('通过名字和USid搜索', 'Search by name or staff id')}
+            placeholder={t('按姓名或工号搜索', 'Search by name or staff id')}
             className={controlInputClass}
           />
         </div>
+
         <div>
           <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Agency</label>
           <select
@@ -256,14 +241,15 @@ export default function TimecardControls({
             disabled={isLocked || timecardMissingEmployeeOnly}
             className={controlInputClass}
           >
-            <option value="">{t('全部Agency', 'All agencies')}</option>
-            {timecardAgencyOptions.map((a) => (
-              <option key={a} value={a}>
-                {a}
+            <option value="">{t('全部 Agency', 'All agencies')}</option>
+            {timecardAgencyOptions.map((agency) => (
+              <option key={agency} value={agency}>
+                {agency}
               </option>
             ))}
           </select>
         </div>
+
         <div>
           <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Position</label>
           <select
@@ -273,13 +259,14 @@ export default function TimecardControls({
             className={controlInputClass}
           >
             <option value="">{t('全部岗位', 'All positions')}</option>
-            {timecardPositionOptions.map((p) => (
-              <option key={p} value={p}>
-                {p}
+            {timecardPositionOptions.map((position) => (
+              <option key={position} value={position}>
+                {position}
               </option>
             ))}
           </select>
         </div>
+
         <div>
           <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Shift</label>
           <select
@@ -293,6 +280,7 @@ export default function TimecardControls({
             <option value="late">{t('晚班', 'Night')}</option>
           </select>
         </div>
+
         <div className="flex items-end">
           <label
             className={[
@@ -309,14 +297,14 @@ export default function TimecardControls({
               disabled={isLocked}
               className="h-4 w-4 accent-neon"
             />
-            {t('只看打卡中', 'In progress only')}
+            {t('只看进行中', 'In progress only')}
           </label>
         </div>
       </div>
 
-      {timecardError && <p className="mt-3 text-sm text-ember">加载失败：{timecardError}</p>}
+      {timecardError && <p className="mt-3 text-sm text-ember">{timecardError}</p>}
       {!timecardError && timecardRowsFilteredCount === 0 && (
-        <p className="mt-3 text-sm text-slate-400">{t('暂无数据，可输入搜索/筛选或点击“刷新”。', 'No data. Use filters or click “Refresh”.')}</p>
+        <p className="mt-3 text-sm text-slate-400">{t('暂无数据，可使用筛选或点击刷新。', 'No data. Use filters or click Refresh.')}</p>
       )}
     </>
   );
