@@ -143,9 +143,7 @@ const fetchAllEmployees = async () => {
 const fetchPunchRows = async (startIso, endIso) => {
   const rows = [];
   const pageSize = 1000;
-  const maxPages = 400;
-  for (let page = 0; page < maxPages; page += 1) {
-    const from = page * pageSize;
+  for (let from = 0; ; from += pageSize) {
     const to = from + pageSize - 1;
     const base = () =>
       supabase
@@ -157,7 +155,6 @@ const fetchPunchRows = async (startIso, endIso) => {
     const attempt = byCreatedAt.error ? await base().order('id', { ascending: true }).range(from, to) : byCreatedAt;
     if (attempt.error) throw new Error(`Load punches failed: ${attempt.error.message}`);
     const pageRows = attempt.data ?? [];
-    if (pageRows.length === 0) break;
     rows.push(...pageRows);
     if (pageRows.length < pageSize) break;
   }
@@ -335,9 +332,7 @@ const main = async () => {
   const persistLateMarksFallback = async () => {
     const existingLateRows = [];
     const pageSize = 1000;
-    const maxPages = 80;
-    for (let page = 0; page < maxPages; page += 1) {
-      const from = page * pageSize;
+    for (let from = 0; ; from += pageSize) {
       const to = from + pageSize - 1;
       const res = await supabase
         .from(ATTENDANCE_MARKS_TABLE)

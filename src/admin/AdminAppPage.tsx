@@ -121,6 +121,22 @@ type LateMarkPersistRow = {
   payload: Record<string, unknown>;
   updated_at: string;
 };
+type NonLateAttendanceMarkPersistRow = {
+  staff_id: string;
+  work_date: string;
+  mark_type: 'absent' | 'excuse' | 'temporary_leave';
+  source: string;
+  operator: string | null;
+  payload: Record<string, unknown>;
+  updated_at: string;
+};
+type SyncLateMarksForWeekResult = {
+  lateByStaffDayKey: Record<string, LateMarkView>;
+  persistRows: LateMarkPersistRow[];
+  targetStaffIds: string[];
+  rangeStart: string;
+  rangeEnd: string;
+};
 type DailyListCapacitySource = 'recent14' | 'template_fallback' | 'excluded' | 'transfer' | 'unmapped';
 type DailyListCapacityView = {
   capacity: number | null;
@@ -165,6 +181,7 @@ const SCHEDULE_UPH_DAYS = 30;
 const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
 const ATTENDANCE_MARK_TYPES = ['absent', 'excuse', 'temporary_leave', 'late'] as const;
 const NON_LATE_ATTENDANCE_MARK_TYPES = ['absent', 'excuse', 'temporary_leave'] as const;
+const DEFAULT_TIMECARD_ATTENDANCE_SYNC_TABLES = ATTENDANCE_MARKS_TABLE === 'ob_attendance_marks';
 const LATE_LOOKBACK_DAYS = 120;
 const LATE_MIN_VALID_PUNCH_COUNT = 2;
 const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
@@ -362,6 +379,43 @@ const isMissingLateSyncRpcError = (error: unknown) => {
     text.includes('sync_late_attendance_marks') &&
     (text.includes('could not find') || text.includes('function') || text.includes('schema cache') || text.includes('pgrst'))
   );
+};
+
+const isMissingTimecardAttendanceSyncRpcError = (error: unknown) => {
+  const text = String(
+    typeof error === 'object' && error !== null
+      ? `${(error as { code?: unknown }).code ?? ''} ${(error as { message?: unknown }).message ?? ''} ${(error as { details?: unknown }).details ?? ''}`
+      : error ?? ''
+  ).toLowerCase();
+  return (
+    text.includes('sync_timecard_attendance_marks') &&
+    (text.includes('could not find') || text.includes('function') || text.includes('schema cache') || text.includes('pgrst'))
+  );
+};
+
+const fetchAllPagedRows = async <T,>(options: {
+  pageSize?: number;
+  fetchPage: (from: number, to: number) => Promise<{ data?: T[] | null; error?: { message?: string } | null }>;
+  shouldStop?: () => boolean;
+  stopError?: string;
+}) => {
+  const pageSize = Math.max(1, Number(options.pageSize ?? 1000));
+  const allRows: T[] = [];
+  for (let page = 0; ; page += 1) {
+    if (options.shouldStop?.()) {
+      return { rows: [] as T[], error: options.stopError ?? 'Stopped' };
+    }
+    const from = page * pageSize;
+    const to = from + pageSize - 1;
+    const res = await options.fetchPage(from, to);
+    if (res.error?.message) {
+      return { rows: [] as T[], error: res.error.message };
+    }
+    const pageRows = Array.isArray(res.data) ? res.data : [];
+    allRows.push(...pageRows);
+    if (pageRows.length < pageSize) break;
+  }
+  return { rows: allRows, error: null as string | null };
 };
 
 const formatUph = (value: number | null | undefined) => (value === null || value === undefined ? '-' : value.toFixed(1));
@@ -2104,7 +2158,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const pageSize = 1000;
-      const maxPages = 10;
       const latestByStaff = new Map<string, { action: 'IN' | 'OUT'; at: string }>();
       const firstInByStaff = new Map<string, { at: string }>();
       const runAttendanceQuery = async <T,>(queryFactory: () => PromiseLike<{ data: T | null; error: any }>) => {
@@ -2119,72 +2172,58 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return lastRes;
       };
 
-      for (let page = 0; page < maxPages; page += 1) {
-        const from = page * pageSize;
-        const to = from + pageSize - 1;
-        const res = await runAttendanceQuery(() =>
-          supabase
-            .from('ob_punches')
-            .select('staff_id, action, created_at, id')
-            .gte('created_at', rangeStart.toISOString())
-            .order('created_at', { ascending: false })
-            .range(from, to)
-        );
-
-        if (seq !== attendanceFetchSeqRef.current) return;
-
-        if (res.error) {
-          if (!isAbortLikeError(res.error)) setAttendanceError(normalizeAttendanceFetchError(res.error));
-          return;
-        }
-
-        const rows = (res.data as any[] | null) ?? [];
-        if (rows.length === 0) break;
-
-        for (const r of rows) {
-          const staff = String(r.staff_id ?? '').trim();
-          if (!staff || latestByStaff.has(staff)) continue;
-          const action = String(r.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-          const at = String(r.created_at ?? '').trim();
-          if (!at) continue;
-          latestByStaff.set(staff, { action, at });
-        }
-
-        if (rows.length < pageSize) break;
+      const latestPunchRowsRes = await fetchAllPagedRows<any>({
+        pageSize,
+        shouldStop: () => seq !== attendanceFetchSeqRef.current,
+        stopError: STALE_TIMECARD_REQUEST,
+        fetchPage: async (from, to) =>
+          await runAttendanceQuery(() =>
+            supabase
+              .from('ob_punches')
+              .select('staff_id, action, created_at, id')
+              .gte('created_at', rangeStart.toISOString())
+              .order('created_at', { ascending: false })
+              .range(from, to)
+          )
+      });
+      if (latestPunchRowsRes.error) {
+        if (latestPunchRowsRes.error === STALE_TIMECARD_REQUEST) return;
+        setAttendanceError(normalizeAttendanceFetchError(latestPunchRowsRes.error));
+        return;
+      }
+      for (const r of latestPunchRowsRes.rows) {
+        const staff = String(r.staff_id ?? '').trim();
+        if (!staff || latestByStaff.has(staff)) continue;
+        const action = String(r.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+        const at = String(r.created_at ?? '').trim();
+        if (!at) continue;
+        latestByStaff.set(staff, { action, at });
       }
 
-      for (let page = 0; page < maxPages; page += 1) {
-        const from = page * pageSize;
-        const to = from + pageSize - 1;
-        const res = await runAttendanceQuery(() =>
-          supabase
-            .from('ob_punches')
-            .select('staff_id, created_at, id')
-            // 移除device_type的自动转换/fallback映射
-            // 允许自定义类型值直接保存到数据库
-            .order('created_at', { ascending: true })
-            .range(from, to)
-        );
-
-        if (seq !== attendanceFetchSeqRef.current) return;
-
-        if (res.error) {
-          if (!isAbortLikeError(res.error)) setAttendanceError(normalizeAttendanceFetchError(res.error));
-          return;
-        }
-
-        const rows = (res.data as any[] | null) ?? [];
-        if (rows.length === 0) break;
-
-        for (const r of rows) {
-          const staff = String(r.staff_id ?? '').trim();
-          if (!staff || firstInByStaff.has(staff)) continue;
-          const at = String(r.created_at ?? '').trim();
-          if (!at) continue;
-          firstInByStaff.set(staff, { at });
-        }
-
-        if (rows.length < pageSize) break;
+      const firstPunchRowsRes = await fetchAllPagedRows<any>({
+        pageSize,
+        shouldStop: () => seq !== attendanceFetchSeqRef.current,
+        stopError: STALE_TIMECARD_REQUEST,
+        fetchPage: async (from, to) =>
+          await runAttendanceQuery(() =>
+            supabase
+              .from('ob_punches')
+              .select('staff_id, created_at, id')
+              .order('created_at', { ascending: true })
+              .range(from, to)
+          )
+      });
+      if (firstPunchRowsRes.error) {
+        if (firstPunchRowsRes.error === STALE_TIMECARD_REQUEST) return;
+        setAttendanceError(normalizeAttendanceFetchError(firstPunchRowsRes.error));
+        return;
+      }
+      for (const r of firstPunchRowsRes.rows) {
+        const staff = String(r.staff_id ?? '').trim();
+        if (!staff || firstInByStaff.has(staff)) continue;
+        const at = String(r.created_at ?? '').trim();
+        if (!at) continue;
+        firstInByStaff.set(staff, { at });
       }
 
       const activeStaff = Array.from(latestByStaff.entries())
@@ -2891,7 +2930,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       schedule_auto_daily_activation: t('自动计划激活', 'Auto Daily Activation'),
       schedule_week_switch: t('排班切换周', 'Schedule Week Switch'),
       schedule_refresh: t('排班刷新', 'Schedule Refresh'),
-      schedule_open_daily_list: t('打开日报', 'Open Daily List'),
+      schedule_open_daily_list: t('打开明日名单', 'Open Tomorrow List'),
       admin_page_switch: t('页面切换', 'Page Switch'),
       schedule_rest: t('排班休息', 'Schedule Off'),
       schedule_clear: t('清空排班', 'Schedule Clear'),
@@ -3286,29 +3325,24 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     const exec = async () => {
       setScheduleError(null);
-      const pageSize = 1000;
-      const maxPages = 20;
-      const allRows: ScheduleRow[] = [];
-      for (let page = 0; page < maxPages; page += 1) {
-        const from = page * pageSize;
-        const to = from + pageSize - 1;
-        const res = await supabase
-          .from(SCHEDULE_TABLE)
-          .select('id, staff_id, date, position, note, operator, updated_at, created_at')
-          .gte('date', startDate)
-          .lte('date', endDate)
-          .order('date', { ascending: false })
-          .order('staff_id', { ascending: true })
-          .range(from, to);
-        if (res.error) {
-          if (!isAbortLikeError(res.error.message)) setScheduleError(res.error.message);
-          setScheduleRows([]);
-          return [] as ScheduleRow[];
-        }
-        const rows = (((res.data as any[]) ?? []) as ScheduleRow[]);
-        allRows.push(...rows);
-        if (rows.length < pageSize) break;
+      const res = await fetchAllPagedRows<ScheduleRow>({
+        pageSize: 1000,
+        fetchPage: async (from, to) =>
+          await supabase
+            .from(SCHEDULE_TABLE)
+            .select('id, staff_id, date, position, note, operator, updated_at, created_at')
+            .gte('date', startDate)
+            .lte('date', endDate)
+            .order('date', { ascending: false })
+            .order('staff_id', { ascending: true })
+            .range(from, to)
+      });
+      if (res.error) {
+        if (!isAbortLikeError(res.error)) setScheduleError(res.error);
+        setScheduleRows([]);
+        return [] as ScheduleRow[];
       }
+      const allRows = res.rows;
 
       const latestRows = pickLatestScheduleRowsByStaffDate(allRows).sort((a, b) => {
         const dateDelta = String(b.date ?? '').localeCompare(String(a.date ?? ''));
@@ -4286,37 +4320,34 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const dayIndex = (operationalStart.getDay() + 6) % 7;
 
       for (const batch of staffBatches) {
-        const pageSize = 1000;
-        const maxPages = 40;
-        for (let page = 0; page < maxPages; page += 1) {
-          const from = page * pageSize;
-          const to = from + pageSize - 1;
-          const res = await supabase
-            .from('ob_punches')
-            .select('staff_id')
-            .in('staff_id', batch)
-            .gte('created_at', operationalStart.toISOString())
-            .lte('created_at', now.toISOString())
-            .order('created_at', { ascending: true })
-            .range(from, to);
+        const res = await fetchAllPagedRows<any>({
+          pageSize: 1000,
+          shouldStop: isStale,
+          fetchPage: async (from, to) =>
+            await supabase
+              .from('ob_punches')
+              .select('staff_id')
+              .in('staff_id', batch)
+              .gte('created_at', operationalStart.toISOString())
+              .lte('created_at', now.toISOString())
+              .order('created_at', { ascending: true })
+              .range(from, to)
+        });
 
-          if (res.error) {
-            if (!isStale()) {
-              setSchedulePunchPresenceKeys(new Set());
-              setScheduleFirstInByStaffDayKey({});
-              setSchedulePunchPresenceReady(false);
-              setSchedulePunchPresenceWeekOffset(null);
-            }
-            return;
+        if (res.error) {
+          if (!isStale()) {
+            setSchedulePunchPresenceKeys(new Set());
+            setScheduleFirstInByStaffDayKey({});
+            setSchedulePunchPresenceReady(false);
+            setSchedulePunchPresenceWeekOffset(null);
           }
+          return;
+        }
 
-          const rows = (res.data as any[]) ?? [];
-          for (const row of rows) {
-            const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-            if (!staff || !staffSet.has(staff)) continue;
-            found.add(`${staff}__${dayIndex}`);
-          }
-          if (rows.length < pageSize) break;
+        for (const row of res.rows) {
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          if (!staff || !staffSet.has(staff)) continue;
+          found.add(`${staff}__${dayIndex}`);
         }
       }
 
@@ -4336,50 +4367,46 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const day0StartMs = start.getTime();
 
     for (const batch of staffBatches) {
-      const pageSize = 1000;
-      const maxPages = 40;
-      for (let page = 0; page < maxPages; page += 1) {
-        const from = page * pageSize;
-        const to = from + pageSize - 1;
-        const res = await supabase
-          .from('ob_punches')
-          .select('staff_id, action, created_at')
-          .in('staff_id', batch)
-          .gte('created_at', start.toISOString())
-          .lt('created_at', end.toISOString())
-          .order('created_at', { ascending: true })
-          .range(from, to);
+      const res = await fetchAllPagedRows<any>({
+        pageSize: 1000,
+        shouldStop: isStale,
+        fetchPage: async (from, to) =>
+          await supabase
+            .from('ob_punches')
+            .select('staff_id, action, created_at')
+            .in('staff_id', batch)
+            .gte('created_at', start.toISOString())
+            .lt('created_at', end.toISOString())
+            .order('created_at', { ascending: true })
+            .range(from, to)
+      });
 
-        if (res.error) {
-          if (!isStale()) {
-            setSchedulePunchPresenceKeys(new Set());
-            setScheduleFirstInByStaffDayKey({});
-            setSchedulePunchPresenceReady(false);
-            setSchedulePunchPresenceWeekOffset(null);
-          }
-          return;
+      if (res.error) {
+        if (!isStale()) {
+          setSchedulePunchPresenceKeys(new Set());
+          setScheduleFirstInByStaffDayKey({});
+          setSchedulePunchPresenceReady(false);
+          setSchedulePunchPresenceWeekOffset(null);
         }
+        return;
+      }
 
-        const rows = (res.data as any[]) ?? [];
-        for (const row of rows) {
-          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-          if (!staff || !staffSet.has(staff)) continue;
-          const at = new Date(String(row.created_at ?? ''));
-          if (Number.isNaN(at.getTime())) continue;
-          const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-          const dayIndex = Math.floor((getOperationalBucketTimeMs(at, action) - day0StartMs) / dayMs);
-          if (dayIndex < 0 || dayIndex > 6) continue;
-          found.add(`${staff}__${dayIndex}`);
-          if (action === 'IN') {
-            const firstInKey = `${staff}__${dayIndex}`;
-            const prev = firstInByDayKey[firstInKey];
-            if (!prev || at.getTime() < new Date(prev).getTime()) {
-              firstInByDayKey[firstInKey] = at.toISOString();
-            }
+      for (const row of res.rows) {
+        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+        if (!staff || !staffSet.has(staff)) continue;
+        const at = new Date(String(row.created_at ?? ''));
+        if (Number.isNaN(at.getTime())) continue;
+        const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+        const dayIndex = Math.floor((getOperationalBucketTimeMs(at, action) - day0StartMs) / dayMs);
+        if (dayIndex < 0 || dayIndex > 6) continue;
+        found.add(`${staff}__${dayIndex}`);
+        if (action === 'IN') {
+          const firstInKey = `${staff}__${dayIndex}`;
+          const prev = firstInByDayKey[firstInKey];
+          if (!prev || at.getTime() < new Date(prev).getTime()) {
+            firstInByDayKey[firstInKey] = at.toISOString();
           }
         }
-
-        if (rows.length < pageSize) break;
       }
     }
 
@@ -4561,41 +4588,35 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     >();
 
     for (const batch of batches) {
-      const pageSize = 1000;
-      const maxPages = 20;
-      for (let page = 0; page < maxPages; page += 1) {
-        const from = page * pageSize;
-        const to = from + pageSize - 1;
-        const detailsRes = await obupSupabase
-          .from(OBUP_REPORT_DETAILS_TABLE)
-          .select('report_id, operator, uph')
-          .in('report_id', batch as any[])
-          .range(from, to);
-        if (detailsRes.error) {
-          if (requestId === scheduleUphRequestRef.current) setScheduleUphByStaffId({});
-          return;
-        }
+      const detailsRes = await fetchAllPagedRows<{ report_id?: string | null; operator?: string | null; uph?: number | null }>({
+        pageSize: 1000,
+        fetchPage: async (from, to) =>
+          await obupSupabase
+            .from(OBUP_REPORT_DETAILS_TABLE)
+            .select('report_id, operator, uph')
+            .in('report_id', batch as any[])
+            .range(from, to)
+      });
+      if (detailsRes.error) {
+        if (requestId === scheduleUphRequestRef.current) setScheduleUphByStaffId({});
+        return;
+      }
 
-        const rows =
-          (detailsRes.data as Array<{ report_id?: string | null; operator?: string | null; uph?: number | null }> | null) ?? [];
-        for (const row of rows) {
-          const reportId = String(row.report_id ?? '').trim();
-          const stage = reportIdToStage.get(reportId);
-          if (!stage) continue;
-          const operatorRaw = String(row.operator ?? '').trim();
-          const key = normalizeWorkAccountKey(operatorRaw);
-          if (!key) continue;
-          const uph = parseUph(row.uph);
-          if (uph === null) continue;
-          if (!avgByStageOperatorKey.has(stage)) avgByStageOperatorKey.set(stage, new Map());
-          const byOperator = avgByStageOperatorKey.get(stage)!;
-          const prev = byOperator.get(key) ?? { sum: 0, count: 0 };
-          prev.sum += uph;
-          prev.count += 1;
-          byOperator.set(key, prev);
-        }
-
-        if (rows.length < pageSize) break;
+      for (const row of detailsRes.rows) {
+        const reportId = String(row.report_id ?? '').trim();
+        const stage = reportIdToStage.get(reportId);
+        if (!stage) continue;
+        const operatorRaw = String(row.operator ?? '').trim();
+        const key = normalizeWorkAccountKey(operatorRaw);
+        if (!key) continue;
+        const uph = parseUph(row.uph);
+        if (uph === null) continue;
+        if (!avgByStageOperatorKey.has(stage)) avgByStageOperatorKey.set(stage, new Map());
+        const byOperator = avgByStageOperatorKey.get(stage)!;
+        const prev = byOperator.get(key) ?? { sum: 0, count: 0 };
+        prev.sum += uph;
+        prev.count += 1;
+        byOperator.set(key, prev);
       }
     }
 
@@ -5075,14 +5096,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const activeLoaded: EmployeeRow[] = [];
       let from = 0;
       let done = false;
-      const maxPages = 500;
       let pageCount = 0;
       let previousPageSignature = '';
       while (!done) {
-        if (pageCount >= maxPages) {
-          setEmployeesError('Employee list paging exceeded safety limit. Please refine filters and retry.');
-          break;
-        }
         const pageSize = pageCount === 0 ? firstPageSize : nextPageSize;
         const to = from + pageSize - 1;
         let attempt = await run(mode, from, to);
@@ -5176,14 +5192,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const out: Record<string, string | null> = {};
         const batches = chunk(ids, 200);
         const pageSize = 1000;
-        const maxPages = 60;
 
         for (const batch of batches) {
           const found = new Set<string>();
           const base = () => supabase.from('ob_punches').select('staff_id, created_at, id').in('staff_id', batch);
 
-          for (let page = 0; page < maxPages; page += 1) {
-            const from = page * pageSize;
+          for (let from = 0; ; from += pageSize) {
             const to = from + pageSize - 1;
             const attemptCreatedAt = await base().order('created_at', { ascending: false }).range(from, to);
             const attempt = attemptCreatedAt.error
@@ -5202,9 +5216,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             }
 
             if (found.size >= batch.length || rows.length < pageSize) break;
-            if (page === maxPages - 1) {
-              return { map: {} as Record<string, string | null>, error: 'Punch data too large when reading latest punch time.' };
-            }
           }
 
           for (const staff of batch) {
@@ -7103,7 +7114,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       push(t('来源', 'Source'), payload?.source);
       push(t('周', 'Week'), `${fmtText(payload?.week_start)} ~ ${fmtText(payload?.week_end)}`);
     } else if (action === 'schedule_open_daily_list') {
-      summary = t('打开日报', 'Daily list opened');
+      summary = t('打开明日名单', 'Tomorrow list opened');
       push(t('来源', 'Source'), payload?.source);
       push(t('目标日期', 'Target date'), payload?.target_date);
       push(t('排班周偏移', 'Schedule week offset'), payload?.schedule_week_offset);
@@ -7528,6 +7539,94 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   };
 
+  const persistLateAttendanceMarks = async (options: {
+    rangeStart: string;
+    rangeEnd: string;
+    staffIds: string[];
+    rows: LateMarkPersistRow[];
+    actor: string | null;
+  }) => {
+    if (!supabase) return;
+    const { rangeStart, rangeEnd, staffIds, rows, actor } = options;
+
+    const persistLateMarksFallback = async () => {
+      const existingLateRows: Array<{ staff_id: string; work_date: string; source: string }> = [];
+      for (const batch of chunk(staffIds, 200)) {
+        const existingRes = await supabase
+          .from(ATTENDANCE_MARKS_TABLE)
+          .select('staff_id, work_date, source')
+          .in('staff_id', batch as any)
+          .gte('work_date', rangeStart)
+          .lte('work_date', rangeEnd)
+          .eq('mark_type', 'late');
+        if (existingRes.error) throw new Error(existingRes.error.message);
+        for (const row of (((existingRes.data as any[]) ?? []) as Array<{ staff_id?: string; work_date?: string; source?: string }>)) {
+          const staffId = normalizeStaffId(String(row.staff_id ?? '').trim());
+          const workDate = String(row.work_date ?? '').trim();
+          if (!staffId || !workDate) continue;
+          existingLateRows.push({
+            staff_id: staffId,
+            work_date: workDate,
+            source: String(row.source ?? '').trim()
+          });
+        }
+      }
+
+      const protectedManualKeySet = new Set(
+        existingLateRows
+          .filter((row) => row.source && row.source !== 'late_auto')
+          .map((row) => `${row.staff_id}__${row.work_date}`)
+      );
+      const marksToPersist = rows.filter(
+        (row) => !protectedManualKeySet.has(`${row.staff_id}__${row.work_date}`)
+      );
+
+      if (marksToPersist.length > 0) {
+        for (const batch of chunk(marksToPersist, 500)) {
+          const upsertRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert(batch as any, {
+            onConflict: 'staff_id,work_date,mark_type'
+          });
+          if (upsertRes.error) throw new Error(upsertRes.error.message);
+        }
+      }
+
+      const staleDeletePlan = buildStaleLateAutoDeletePlan({
+        existingRows: existingLateRows.filter((row) => row.source === 'late_auto'),
+        nextRows: marksToPersist.map((row) => ({
+          staff_id: row.staff_id,
+          work_date: row.work_date
+        }))
+      });
+      for (const item of staleDeletePlan) {
+        for (const workDateBatch of chunk(item.workDates, 50)) {
+          const clearRes = await supabase
+            .from(ATTENDANCE_MARKS_TABLE)
+            .delete()
+            .eq('staff_id', item.staffId)
+            .in('work_date', workDateBatch as any)
+            .eq('mark_type', 'late')
+            .eq('source', 'late_auto');
+          if (clearRes.error) throw new Error(clearRes.error.message);
+        }
+      }
+    };
+
+    const rpcRes = await supabase.rpc('sync_late_attendance_marks', {
+      p_range_start: rangeStart,
+      p_range_end: rangeEnd,
+      p_staff_ids: staffIds,
+      p_rows: rows,
+      p_actor: actor
+    });
+    if (rpcRes.error) {
+      if (isMissingLateSyncRpcError(rpcRes.error)) {
+        await persistLateMarksFallback();
+        return;
+      }
+      throw new Error(rpcRes.error.message);
+    }
+  };
+
   const syncLateMarksForWeek = async (options: {
     weekStart: Date;
     targetEmployees: Array<
@@ -7537,8 +7636,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
     >;
     scheduleRowsForWeek?: ScheduleRow[];
-  }) => {
-    const empty = { lateByStaffDayKey: {} as Record<string, LateMarkView> };
+    persist?: boolean;
+  }): Promise<SyncLateMarksForWeekResult> => {
+    const empty: SyncLateMarksForWeekResult = {
+      lateByStaffDayKey: {},
+      persistRows: [],
+      targetStaffIds: [],
+      rangeStart: '',
+      rangeEnd: ''
+    };
     if (!supabase) return empty;
 
     const weekStart = new Date(options.weekStart);
@@ -7575,23 +7681,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (targetStaffIds.length === 0) return empty;
 
     const fetchScheduleRowsPaged = async (buildQuery: (from: number, to: number) => any) => {
-      const pageSize = 2000;
-      const maxPages = 60;
-      const allRows: ScheduleRow[] = [];
-      for (let page = 0; page < maxPages; page += 1) {
-        const from = page * pageSize;
-        const to = from + pageSize - 1;
-        const res = await buildQuery(from, to);
-        if (res.error) return { rows: [] as ScheduleRow[], error: res.error.message as string };
-        const rows = (((res.data as any[]) ?? []) as ScheduleRow[]).map((row) => ({
+      const res = await fetchAllPagedRows<ScheduleRow>({
+        pageSize: 2000,
+        fetchPage: async (from, to) => await buildQuery(from, to)
+      });
+      return {
+        rows: res.rows.map((row) => ({
           ...row,
           shift: normalizeShiftValue(String((row as any).shift ?? '').trim()) || null,
           position: String((row as any).position ?? '').trim()
-        }));
-        allRows.push(...rows);
-        if (rows.length < pageSize) break;
-      }
-      return { rows: allRows, error: null as string | null };
+        })),
+        error: res.error
+      };
     };
 
     const fetchEmployeeShiftByStaffIds = async (staffIds: string[]) => {
@@ -7738,26 +7839,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (staffIds.length === 0) return { rows: [] as any[], error: null as string | null };
       const all: any[] = [];
       for (const batch of chunk(staffIds, 200)) {
-        const pageSize = 1000;
-        const maxPages = 80;
-        for (let page = 0; page < maxPages; page += 1) {
-          const from = page * pageSize;
-          const to = from + pageSize - 1;
-          const base = () =>
-            supabase
-              .from('ob_punches')
-              .select('staff_id, action, created_at, id')
-              .in('staff_id', batch as any)
-              .gte('created_at', startIso)
-              .lt('created_at', endIso);
-          const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
-          const attempt = attemptCreatedAt.error ? await base().order('id', { ascending: true }).range(from, to) : attemptCreatedAt;
-          if (attempt.error) return { rows: [] as any[], error: attempt.error.message as string };
-          const rows = (attempt.data as any[] | null) ?? [];
-          if (rows.length === 0) break;
-          all.push(...rows);
-          if (rows.length < pageSize) break;
-        }
+        const base = () =>
+          supabase
+            .from('ob_punches')
+            .select('staff_id, action, created_at, id')
+            .in('staff_id', batch as any)
+            .gte('created_at', startIso)
+            .lt('created_at', endIso);
+        const batchRes = await fetchAllPagedRows<any>({
+          pageSize: 1000,
+          fetchPage: async (from, to) => {
+            const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
+            return attemptCreatedAt.error ? await base().order('id', { ascending: true }).range(from, to) : attemptCreatedAt;
+          }
+        });
+        if (batchRes.error) return { rows: [] as any[], error: batchRes.error };
+        all.push(...batchRes.rows);
       }
       return { rows: all, error: null as string | null };
     };
@@ -7932,88 +8029,27 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       });
     }
 
-    const persistLateMarksFallback = async () => {
-      const existingLateRows: Array<{ staff_id: string; work_date: string; source: string }> = [];
-      for (const batch of chunk(targetStaffIds, 200)) {
-        const existingRes = await supabase
-          .from(ATTENDANCE_MARKS_TABLE)
-          .select('staff_id, work_date, source')
-          .in('staff_id', batch as any)
-          .gte('work_date', weekStartKey)
-          .lte('work_date', weekEndKey)
-          .eq('mark_type', 'late');
-        if (existingRes.error) throw new Error(existingRes.error.message);
-        for (const row of (((existingRes.data as any[]) ?? []) as Array<{ staff_id?: string; work_date?: string; source?: string }>)) {
-          const staffId = normalizeStaffId(String(row.staff_id ?? '').trim());
-          const workDate = String(row.work_date ?? '').trim();
-          if (!staffId || !workDate) continue;
-          existingLateRows.push({
-            staff_id: staffId,
-            work_date: workDate,
-            source: String(row.source ?? '').trim()
-          });
-        }
+    if (options.persist !== false) {
+      try {
+        await persistLateAttendanceMarks({
+          rangeStart: weekStartKey,
+          rangeEnd: weekEndKey,
+          staffIds: targetStaffIds,
+          rows: marksToInsert,
+          actor: user?.email ?? null
+        });
+      } catch (error) {
+        console.warn('[late] persist late marks failed:', error);
       }
-
-      const protectedManualKeySet = new Set(
-        existingLateRows
-          .filter((row) => row.source && row.source !== 'late_auto')
-          .map((row) => `${row.staff_id}__${row.work_date}`)
-      );
-      const marksToPersist = marksToInsert.filter(
-        (row) => !protectedManualKeySet.has(`${row.staff_id}__${row.work_date}`)
-      );
-
-      if (marksToPersist.length > 0) {
-        for (const batch of chunk(marksToPersist, 500)) {
-          const upsertRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert(batch as any, {
-            onConflict: 'staff_id,work_date,mark_type'
-          });
-          if (upsertRes.error) throw new Error(upsertRes.error.message);
-        }
-      }
-
-      const staleDeletePlan = buildStaleLateAutoDeletePlan({
-        existingRows: existingLateRows.filter((row) => row.source === 'late_auto'),
-        nextRows: marksToPersist.map((row) => ({
-          staff_id: row.staff_id,
-          work_date: row.work_date
-        }))
-      });
-      for (const item of staleDeletePlan) {
-        for (const workDateBatch of chunk(item.workDates, 50)) {
-          const clearRes = await supabase
-            .from(ATTENDANCE_MARKS_TABLE)
-            .delete()
-            .eq('staff_id', item.staffId)
-            .in('work_date', workDateBatch as any)
-            .eq('mark_type', 'late')
-            .eq('source', 'late_auto');
-          if (clearRes.error) throw new Error(clearRes.error.message);
-        }
-      }
-    };
-
-    try {
-      const rpcRes = await supabase.rpc('sync_late_attendance_marks', {
-        p_range_start: weekStartKey,
-        p_range_end: weekEndKey,
-        p_staff_ids: targetStaffIds,
-        p_rows: marksToInsert,
-        p_actor: user?.email ?? null
-      });
-      if (rpcRes.error) {
-        if (isMissingLateSyncRpcError(rpcRes.error)) {
-          await persistLateMarksFallback();
-        } else {
-          throw new Error(rpcRes.error.message);
-        }
-      }
-    } catch (error) {
-      console.warn('[late] persist late marks failed:', error);
     }
 
-    return { lateByStaffDayKey };
+    return {
+      lateByStaffDayKey,
+      persistRows: marksToInsert,
+      targetStaffIds,
+      rangeStart: weekStartKey,
+      rangeEnd: weekEndKey
+    };
   };
 
   const fetchTimecard = async ({
@@ -8179,25 +8215,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return { staffIds: [] as string[], error: 'Missing Supabase config.' };
       }
 
-      const maxPages = 80;
-      const pageSizeRows = 1000;
-
       const collectFromPaged = async (
         run: (from: number, to: number) => any
       ) => {
-        for (let page = 0; page < maxPages; page += 1) {
-          if (isStale()) return STALE_TIMECARD_REQUEST;
-          const from = page * pageSizeRows;
-          const to = from + pageSizeRows - 1;
-          const res = (await run(from, to)) as { data?: any[] | null; error?: { message?: string } | null };
-          if (res.error?.message) return res.error.message;
-          const rows = (res.data ?? []) as any[];
-          if (rows.length === 0) break;
-          for (const row of rows) {
-            const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-            if (staff) set.add(staff);
-          }
-          if (rows.length < pageSizeRows) break;
+        const res = await fetchAllPagedRows<any>({
+          pageSize: 1000,
+          shouldStop: isStale,
+          stopError: STALE_TIMECARD_REQUEST,
+          fetchPage: async (from, to) => await run(from, to)
+        });
+        if (res.error) return res.error;
+        for (const row of res.rows) {
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          if (staff) set.add(staff);
         }
         return null;
       };
@@ -8436,39 +8466,21 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return { rows: [] as any[], error: 'Missing Supabase config.' };
       }
 
-      const punchPageSize = 1000;
-      const maxPages = 80;
-      const all: any[] = [];
-
       const base = () =>
         supabase
           .from('ob_punches')
           .select('id, staff_id, action, created_at')
           .gte('created_at', rangeStart.toISOString())
           .lt('created_at', rangeEnd.toISOString());
-
-      for (let page = 0; page < maxPages; page += 1) {
-        if (isStale()) {
-          return { rows: [] as any[], error: STALE_TIMECARD_REQUEST };
+      return await fetchAllPagedRows<any>({
+        pageSize: 1000,
+        shouldStop: isStale,
+        stopError: STALE_TIMECARD_REQUEST,
+        fetchPage: async (from, to) => {
+          const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
+          return attemptCreatedAt.error ? await base().order('id', { ascending: true }).range(from, to) : attemptCreatedAt;
         }
-        const from = page * punchPageSize;
-        const to = from + punchPageSize - 1;
-        const attemptCreatedAt = await base().order('created_at', { ascending: true }).range(from, to);
-        const attempt = attemptCreatedAt.error ? await base().order('id', { ascending: true }).range(from, to) : attemptCreatedAt;
-        if (attempt.error) {
-          return { rows: [] as any[], error: attempt.error.message };
-        }
-        const rows = (attempt.data as any[] | null) ?? [];
-        if (rows.length === 0) break;
-        all.push(...rows);
-        if (rows.length < punchPageSize) break;
-      }
-
-      if (all.length >= punchPageSize * maxPages) {
-        return { rows: [] as any[], error: 'Too many punch rows; please narrow the date range.' };
-      }
-
-      return { rows: all, error: null as string | null };
+      });
     };
 
     const buildTimecardRow = ({
@@ -9142,50 +9154,37 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       weekDateByIndex.forEach((d, idx) => dayIndexByDate.set(d, idx));
       const hasPunchByStaffDay = new Set<string>();
 
-      const pageSize = 1000;
-      const maxPages = 80;
-      for (let page = 0; page < maxPages; page += 1) {
-        const from = page * pageSize;
-        const to = from + pageSize - 1;
-        const res = await supabase
-          .from('ob_punches')
-          .select('staff_id, action, created_at, id')
-          .gte('created_at', weekRange.start.toISOString())
-          .lt('created_at', weekRange.end.toISOString())
-          .order('created_at', { ascending: true })
-          .range(from, to);
-        if (res.error) {
-          setStatus({ tone: 'error', message: `重算失败：${res.error.message}` });
-          return;
-        }
-        const rows = (res.data as any[] | null) ?? [];
-        if (rows.length === 0) break;
-        for (const row of rows) {
-          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-          const atRaw = String(row.created_at ?? '').trim();
-          if (!staff || !atRaw) continue;
-          const at = new Date(atRaw);
-          if (Number.isNaN(at.getTime())) continue;
-          const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-          const opDayDate = new Date(getOperationalBucketTimeMs(at, action) - DAY_CUTOFF_MS);
-          const workDate = toDateOnly(opDayDate);
-          const dayIndex = dayIndexByDate.get(workDate);
-          if (dayIndex == null) continue;
-          hasPunchByStaffDay.add(`${staff}__${dayIndex}`);
-        }
-        if (rows.length < pageSize) break;
+      const weekPunchRowsRes = await fetchAllPagedRows<any>({
+        pageSize: 1000,
+        fetchPage: async (from, to) =>
+          await supabase
+            .from('ob_punches')
+            .select('staff_id, action, created_at, id')
+            .gte('created_at', weekRange.start.toISOString())
+            .lt('created_at', weekRange.end.toISOString())
+            .order('created_at', { ascending: true })
+            .range(from, to)
+      });
+      if (weekPunchRowsRes.error) {
+        setStatus({ tone: 'error', message: `重算失败：${weekPunchRowsRes.error}` });
+        return;
+      }
+      for (const row of weekPunchRowsRes.rows) {
+        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+        const atRaw = String(row.created_at ?? '').trim();
+        if (!staff || !atRaw) continue;
+        const at = new Date(atRaw);
+        if (Number.isNaN(at.getTime())) continue;
+        const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+        const opDayDate = new Date(getOperationalBucketTimeMs(at, action) - DAY_CUTOFF_MS);
+        const workDate = toDateOnly(opDayDate);
+        const dayIndex = dayIndexByDate.get(workDate);
+        if (dayIndex == null) continue;
+        hasPunchByStaffDay.add(`${staff}__${dayIndex}`);
       }
 
       const now = new Date(serverTime);
-      const marksToInsert: Array<{
-        staff_id: string;
-        work_date: string;
-        mark_type: 'absent' | 'excuse' | 'temporary_leave';
-        source: string;
-        operator: string | null;
-        payload: Record<string, unknown>;
-        updated_at: string;
-      }> = [];
+      const marksToInsert: NonLateAttendanceMarkPersistRow[] = [];
 
       for (const [key, state] of stateByStaffDay.entries()) {
         const [staff, dayIndexRaw] = key.split('__');
@@ -9236,29 +9235,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         });
       }
 
-      const clearRes = await supabase
-        .from(ATTENDANCE_MARKS_TABLE)
-        .delete()
-        .gte('work_date', weekDateByIndex[0] ?? '')
-        .lte('work_date', weekDateByIndex[6] ?? '')
-        .in('mark_type', NON_LATE_ATTENDANCE_MARK_TYPES as any)
-        .in('source', ['schedule', 'recompute'] as any);
-      if (clearRes.error) {
-        setStatus({ tone: 'error', message: `重算失败：${clearRes.error.message}` });
-        return;
-      }
-
-      if (marksToInsert.length > 0) {
-        const upsertRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert(marksToInsert as any, {
-          onConflict: 'staff_id,work_date,mark_type'
-        });
-        if (upsertRes.error) {
-          setStatus({ tone: 'error', message: `重算失败：${upsertRes.error.message}` });
-          return;
-        }
-      }
-
       let lateCount = 0;
+      let latePersistRows: LateMarkPersistRow[] = [];
+      let lateTargetStaffIds: string[] = [];
       try {
         const staffIds = Array.from(new Set(Array.from(stateByStaffDay.keys()).map((key) => String(key.split('__')[0] ?? '').trim()).filter(Boolean)));
         const employeeMap = new Map<string, EmployeeRow>();
@@ -9279,12 +9258,72 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               shift: normalizeShiftValue(String(employee?.shift ?? '').trim()),
               terminated_at: String((employee as any)?.terminated_at ?? '').trim() || null
             };
-          })
+          }),
+          persist: false
         });
         lateCount = Object.keys(lateRes.lateByStaffDayKey).length;
+        latePersistRows = lateRes.persistRows;
+        lateTargetStaffIds = lateRes.targetStaffIds;
       } catch (error: any) {
         setStatus({ tone: 'error', message: `重算迟到失败：${String(error?.message ?? error ?? 'Unknown error')}` });
         return;
+      }
+
+      let persistedWithRpc = false;
+      if (DEFAULT_TIMECARD_ATTENDANCE_SYNC_TABLES) {
+        const rpcRes = await supabase.rpc('sync_timecard_attendance_marks', {
+          p_range_start: weekDateByIndex[0] ?? '',
+          p_range_end: weekDateByIndex[6] ?? '',
+          p_rows: marksToInsert,
+          p_late_rows: latePersistRows,
+          p_staff_ids: lateTargetStaffIds,
+          p_actor: user?.email ?? null
+        });
+        if (rpcRes.error) {
+          if (!isMissingTimecardAttendanceSyncRpcError(rpcRes.error)) {
+            setStatus({ tone: 'error', message: `重算失败：${rpcRes.error.message}` });
+            return;
+          }
+        } else {
+          persistedWithRpc = true;
+        }
+      }
+
+      if (!persistedWithRpc) {
+        const clearRes = await supabase
+          .from(ATTENDANCE_MARKS_TABLE)
+          .delete()
+          .gte('work_date', weekDateByIndex[0] ?? '')
+          .lte('work_date', weekDateByIndex[6] ?? '')
+          .in('mark_type', NON_LATE_ATTENDANCE_MARK_TYPES as any)
+          .in('source', ['schedule', 'recompute'] as any);
+        if (clearRes.error) {
+          setStatus({ tone: 'error', message: `重算失败：${clearRes.error.message}` });
+          return;
+        }
+
+        if (marksToInsert.length > 0) {
+          const upsertRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert(marksToInsert as any, {
+            onConflict: 'staff_id,work_date,mark_type'
+          });
+          if (upsertRes.error) {
+            setStatus({ tone: 'error', message: `重算失败：${upsertRes.error.message}` });
+            return;
+          }
+        }
+
+        try {
+          await persistLateAttendanceMarks({
+            rangeStart: weekDateByIndex[0] ?? '',
+            rangeEnd: weekDateByIndex[6] ?? '',
+            staffIds: lateTargetStaffIds,
+            rows: latePersistRows,
+            actor: user?.email ?? null
+          });
+        } catch (latePersistError: any) {
+          setStatus({ tone: 'error', message: `重算迟到失败：${String(latePersistError?.message ?? latePersistError ?? 'Unknown error')}` });
+          return;
+        }
       }
 
       setStatus({
@@ -9390,38 +9429,29 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           .filter(Boolean)
       );
 
-      const pageSize = 1000;
-      const maxPages = 20;
       const punches: Array<{ staff_id: string; action: 'IN' | 'OUT'; created_at: string }> = [];
+      const punchRowsRes = await fetchAllPagedRows<any>({
+        pageSize: 1000,
+        fetchPage: async (from, to) =>
+          await supabase
+            .from('ob_punches')
+            .select('staff_id, action, created_at, id')
+            .gte('created_at', dayStart.toISOString())
+            .lt('created_at', dayEnd.toISOString())
+            .order('created_at', { ascending: true })
+            .range(from, to)
+      });
+      if (punchRowsRes.error) {
+        setStatus({ tone: 'error', message: `导出失败：${punchRowsRes.error}` });
+        return;
+      }
 
-      for (let page = 0; page < maxPages; page += 1) {
-        const from = page * pageSize;
-        const to = from + pageSize - 1;
-        const res = await supabase
-          .from('ob_punches')
-          .select('staff_id, action, created_at, id')
-          .gte('created_at', dayStart.toISOString())
-          .lt('created_at', dayEnd.toISOString())
-          .order('created_at', { ascending: true })
-          .range(from, to);
-
-        if (res.error) {
-          setStatus({ tone: 'error', message: `导出失败：${res.error.message}` });
-          return;
-        }
-
-        const rows = (res.data as any[] | null) ?? [];
-        if (rows.length === 0) break;
-
-        for (const r of rows) {
-          const staff = String(r.staff_id ?? '').trim();
-          const action = String(r.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-          const at = String(r.created_at ?? '').trim();
-          if (!staff || !at) continue;
-          punches.push({ staff_id: staff, action, created_at: at });
-        }
-
-        if (rows.length < pageSize) break;
+      for (const r of punchRowsRes.rows) {
+        const staff = String(r.staff_id ?? '').trim();
+        const action = String(r.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+        const at = String(r.created_at ?? '').trim();
+        if (!staff || !at) continue;
+        punches.push({ staff_id: staff, action, created_at: at });
       }
 
       const filteredPunches = punches.filter((p) =>
@@ -12942,8 +12972,8 @@ ${rowsToHtml(late)}
         tone: 'success',
         message:
           scope === 'all'
-            ? `Copied daily list (${early.length + late.length} rows).`
-            : `Copied ${scope === 'early' ? 'early' : 'night'} list (${scope === 'early' ? early.length : late.length} rows).`
+            ? `Copied tomorrow list (${early.length + late.length} rows).`
+            : `Copied ${scope === 'early' ? 'morning' : 'night'} tomorrow list (${scope === 'early' ? early.length : late.length} rows).`
       });
     } catch (err: any) {
       setStatus({ tone: 'error', message: `Copy failed: ${String(err?.message ?? err ?? 'Unknown error')}` });
@@ -14779,7 +14809,7 @@ ${rowsToHtml(late)}
                         >
                           <div>
                             <h3 className={['font-display text-2xl tracking-[0.08em]', themeMode === 'light' ? 'text-slate-900' : 'text-white'].join(' ')}>
-                              {t('每日名单', 'Daily list')}
+                              {t('明日名单', 'Tomorrow list')}
                             </h3>
                             <div className="mt-2 w-fit">
                               <input

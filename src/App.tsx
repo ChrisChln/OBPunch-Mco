@@ -113,6 +113,22 @@ const ABSENT_ROSTER_CACHE_TTL_MS = 60 * 1000;
 const ARRIVAL_METRICS_CACHE_TTL_MS = 60 * 1000;
 const ARRIVAL_METRICS_STORAGE_KEY = 'obpunch_arrival_metrics_cache_v1';
 
+const fetchAllPagedRows = async <T,>(
+  fetchPage: (from: number, to: number) => Promise<{ data?: T[] | null; error?: { message?: string } | null }>,
+  pageSize = 1000
+) => {
+  const rows: T[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const res = await fetchPage(from, to);
+    if (res.error?.message) return { rows: [] as T[], error: res.error.message };
+    const pageRows = Array.isArray(res.data) ? res.data : [];
+    rows.push(...pageRows);
+    if (pageRows.length < pageSize) break;
+  }
+  return { rows, error: null as string | null };
+};
+
 const supabase = createSupabaseClient({ persistSession: false });
 const obupSupabase = createSupabaseClientWithCredentials({
   persistSession: false,
@@ -1306,37 +1322,23 @@ export default function App() {
       return { staffIds: [] as string[], error: 'Missing Supabase configuration.' };
     }
 
-    const pageSize = 1000;
-    const maxPages = 20;
-
     const fetchAll = async (mode: EmployeeColumnMode) => {
       const positionCol = mode === 'cased' ? 'Position' : 'position';
-      const all: string[] = [];
-
-      for (let page = 0; page < maxPages; page += 1) {
-        const from = page * pageSize;
-        const to = from + pageSize - 1;
-        const res = await supabase
-          .from(EMPLOYEE_TABLE)
-          .select('staff_id')
-          .ilike(positionCol as any, position)
-          .range(from, to);
-
-        if (res.error) {
-          return { staffIds: [] as string[], error: res.error.message };
-        }
-
-        const rows = (res.data as any[] | null) ?? [];
-        for (const r of rows) {
-          const staff = String(r.staff_id ?? '').trim();
-          if (staff) all.push(staff);
-        }
-
-        if (rows.length < pageSize) {
-          break;
-        }
+      const res = await fetchAllPagedRows<{ staff_id?: string | null }>(
+        async (from, to) =>
+          await supabase
+            .from(EMPLOYEE_TABLE)
+            .select('staff_id')
+            .ilike(positionCol as any, position)
+            .range(from, to),
+        1000
+      );
+      if (res.error) {
+        return { staffIds: [] as string[], error: res.error };
       }
-
+      const all = res.rows
+        .map((row) => String(row.staff_id ?? '').trim())
+        .filter(Boolean);
       return { staffIds: Array.from(new Set(all)), error: null as string | null };
     };
 
@@ -1525,34 +1527,29 @@ const fetchPunchBoardUph = async (
 
     const avgByStageOperator = new Map<'picking' | 'sorting' | 'packing', Map<string, { sum: number; count: number }>>();
     for (const batch of chunk(reportIds, 100)) {
-      const pageSize = 1000;
-      const maxPages = 30;
-      for (let page = 0; page < maxPages; page += 1) {
-        const from = page * pageSize;
-        const to = from + pageSize - 1;
-        const detailsRes = await obupSupabase
-          .from(OBUP_REPORT_DETAILS_TABLE)
-          .select('report_id, operator, uph')
-          .in('report_id', batch)
-          .range(from, to);
-        if (detailsRes.error) break;
-        const rows =
-          (detailsRes.data as Array<{ report_id?: string | null; operator?: string | null; uph?: number | null }> | null) ?? [];
-        for (const row of rows) {
-          const reportId = String(row.report_id ?? '').trim();
-          const stage = reportIdToStage.get(reportId);
-          if (!stage) continue;
-          const operatorKey = normalizeWorkOperatorKey(String(row.operator ?? '').trim());
-          const uph = parseUph(row.uph);
-          if (!operatorKey || uph === null) continue;
-          if (!avgByStageOperator.has(stage)) avgByStageOperator.set(stage, new Map());
-          const byOperator = avgByStageOperator.get(stage)!;
-          const prev = byOperator.get(operatorKey) ?? { sum: 0, count: 0 };
-          prev.sum += uph;
-          prev.count += 1;
-          byOperator.set(operatorKey, prev);
-        }
-        if (rows.length < pageSize) break;
+      const detailsRes = await fetchAllPagedRows<{ report_id?: string | null; operator?: string | null; uph?: number | null }>(
+        async (from, to) =>
+          await obupSupabase
+            .from(OBUP_REPORT_DETAILS_TABLE)
+            .select('report_id, operator, uph')
+            .in('report_id', batch)
+            .range(from, to),
+        1000
+      );
+      if (detailsRes.error) break;
+      for (const row of detailsRes.rows) {
+        const reportId = String(row.report_id ?? '').trim();
+        const stage = reportIdToStage.get(reportId);
+        if (!stage) continue;
+        const operatorKey = normalizeWorkOperatorKey(String(row.operator ?? '').trim());
+        const uph = parseUph(row.uph);
+        if (!operatorKey || uph === null) continue;
+        if (!avgByStageOperator.has(stage)) avgByStageOperator.set(stage, new Map());
+        const byOperator = avgByStageOperator.get(stage)!;
+        const prev = byOperator.get(operatorKey) ?? { sum: 0, count: 0 };
+        prev.sum += uph;
+        prev.count += 1;
+        byOperator.set(operatorKey, prev);
       }
     }
 

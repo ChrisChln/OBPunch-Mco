@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import StyledDateInput from '../components/StyledDateInput';
 import { isValidStaffId, normalizeStaffId } from '../../lib/staffId';
+import {
+  getApproveWindow,
+  getEffectiveLeaveStatus,
+  getTemplateDateByActualDate,
+  isValidDateOnly,
+  toDateOnly,
+  type LeaveStatus
+} from '../leaveApprovalShared';
 
 type TranslateFn = (zh: string, en: string) => string;
-type LeaveStatus = 'pending' | 'approved' | 'rejected' | 'cancelled' | 'expired';
 
 type Props = {
   t: TranslateFn;
@@ -41,6 +48,13 @@ type LeaveRow = {
   reviewed_at: string | null;
 };
 
+type LeaveDecisionRpcResult = {
+  leave_request_id?: string | null;
+  next_status?: LeaveStatus | string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+};
+
 type HeaderMap = {
   submittedAtIndex: number;
   nameIndex: number;
@@ -56,6 +70,12 @@ const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefine
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const LEAVE_REQUEST_TABLE = (import.meta.env.VITE_LEAVE_REQUEST_TABLE as string | undefined) ?? 'ob_leave_requests';
+const DEFAULT_LEAVE_APPROVAL_TABLES =
+  EMPLOYEE_TABLE === 'ob_employees' &&
+  SCHEDULE_TABLE === 'ob_schedules' &&
+  ATTENDANCE_MARKS_TABLE === 'ob_attendance_marks' &&
+  AUDIT_TABLE === 'ob_audit_logs' &&
+  LEAVE_REQUEST_TABLE === 'ob_leave_requests';
 const SCHEDULE_REST_NOTE = '__rest__';
 const SCHEDULE_FIXED_WORK_NOTE = '__fixed_work__';
 const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
@@ -64,33 +84,6 @@ const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
 const SCHEDULE_PLANNED_TEMP_WORK_NOTE = '__planned_temp_work__';
 const SCHEDULE_PLANNED_LEAVE_NOTE = '__planned_leave__';
 const SCHEDULE_PLANNED_TEMP_REST_NOTE = '__planned_temp_rest__';
-const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
-const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? Math.max(0, Math.min(23, DAY_CUTOFF_HOUR_RAW)) : 5;
-const isValidDateOnly = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '').trim());
-const toDateOnly = (value: Date) =>
-  `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
-const addDays = (value: Date, days: number) => {
-  const next = new Date(value);
-  next.setDate(next.getDate() + days);
-  return next;
-};
-const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
-const startOfWeekMonday = (value: Date) => {
-  const next = new Date(value);
-  next.setHours(0, 0, 0, 0);
-  const day = next.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  next.setDate(next.getDate() + diff);
-  return next;
-};
-const getTemplateDateByActualDate = (actualDateOnly: string, actualWeekStartDateOnly: string) => {
-  const actualDate = new Date(`${actualDateOnly}T00:00:00`);
-  const actualWeekStart = new Date(`${actualWeekStartDateOnly}T00:00:00`);
-  if (Number.isNaN(actualDate.getTime()) || Number.isNaN(actualWeekStart.getTime())) return '';
-  const diffDays = Math.round((actualDate.getTime() - actualWeekStart.getTime()) / (24 * 60 * 60 * 1000));
-  if (diffDays < 0 || diffDays > 13) return '';
-  return toDateOnly(addDays(SCHEDULE_TEMPLATE_WEEK_START, diffDays));
-};
 const getScheduleBaseStateFromNote = (note: unknown) => {
   const value = String(note ?? '').trim();
   if (value === SCHEDULE_FIXED_WORK_NOTE) return 'fixed_work';
@@ -215,32 +208,6 @@ const formatDateTime = (value: string | null | undefined) => {
   return date.toLocaleString('zh-CN', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 };
 
-const getCurrentOperationalDate = (serverTime: Date) => {
-  const now = new Date(serverTime);
-  const operationalStart = new Date(now);
-  operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
-  if (now.getTime() < operationalStart.getTime()) operationalStart.setDate(operationalStart.getDate() - 1);
-  return toDateOnly(operationalStart);
-};
-
-const getApproveWindow = (serverTime: Date) => {
-  const operationalDate = getCurrentOperationalDate(serverTime);
-  const operationalDateBase = new Date(`${operationalDate}T00:00:00`);
-  const thisWeekStart = startOfWeekMonday(operationalDateBase);
-  const nextWeekEnd = addDays(thisWeekStart, 13);
-  return {
-    operationalDate,
-    editableStart: toDateOnly(thisWeekStart),
-    editableEnd: toDateOnly(nextWeekEnd)
-  };
-};
-
-const getEffectiveLeaveStatus = (status: LeaveStatus, leaveDate: string, serverTime: Date): LeaveStatus => {
-  if (status !== 'pending') return status;
-  const approveWindow = getApproveWindow(serverTime);
-  return leaveDate < approveWindow.editableStart ? 'expired' : 'pending';
-};
-
 // Kept temporarily to avoid churn while the old upload path is being retired.
 void buildHeaderMap;
 void parseDateCell;
@@ -349,8 +316,167 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
     if (auditError) throw new Error(String(auditError.message ?? `Failed to write audit log for ${action}.`));
   };
 
+  const isMissingLeaveDecisionRpcError = (error: unknown) => {
+    const text = String(
+      typeof error === 'object' && error !== null
+        ? `${(error as { code?: unknown }).code ?? ''} ${(error as { message?: unknown }).message ?? ''} ${(error as { details?: unknown }).details ?? ''}`
+        : error ?? ''
+    ).toLowerCase();
+    return (
+      text.includes('apply_leave_request_decision') &&
+      (text.includes('could not find') || text.includes('function') || text.includes('schema cache') || text.includes('pgrst'))
+    );
+  };
+
   const getEffectiveStatus = (row: LeaveRow): LeaveStatus => {
     return getEffectiveLeaveStatus(row.status, row.leave_date, serverTime);
+  };
+
+  const applyLocalLeaveStatus = (rowId: string, nextStatus: LeaveStatus, reviewedBy: string, reviewedAt: string) => {
+    setRows((current) => {
+      const nextRows = current.map((item) =>
+        item.id === rowId
+          ? {
+              ...item,
+              status: nextStatus,
+              reviewed_by: reviewedBy,
+              reviewed_at: reviewedAt
+            }
+          : item
+      );
+      onPendingCountChange?.(nextRows.filter((item) => getEffectiveLeaveStatus(item.status, item.leave_date, serverTime) === 'pending').length);
+      return nextRows;
+    });
+  };
+
+  const updateLeaveStatusFallback = async (row: LeaveRow, status: 'approved' | 'rejected') => {
+    const nowIso = new Date(serverTime).toISOString();
+    let nextStatus: LeaveStatus = status;
+    if (status === 'approved') {
+      if (!row.matched_staff_id) throw new Error('This request is unmatched. Match by name or ID before approval.');
+      const employee = employeesByStaffId[row.matched_staff_id];
+      if (!employee) throw new Error(`Matched employee ${row.matched_staff_id} is missing from employee table.`);
+      const approveWindow = getApproveWindow(serverTime);
+      if (row.leave_date < approveWindow.editableStart) {
+        nextStatus = 'expired';
+      } else if (row.leave_date > approveWindow.editableEnd) {
+        throw new Error(`Approval is only allowed for this week and next week (${approveWindow.editableStart} to ${approveWindow.editableEnd}).`);
+      } else {
+        const isPastLeaveDate = row.leave_date < approveWindow.operationalDate;
+        const nextNote = isPastLeaveDate ? '__leave__' : '__planned_leave__';
+        const scheduleAction = isPastLeaveDate ? 'schedule_leave' : 'schedule_planned_leave';
+        const leaveDateValue = new Date(`${row.leave_date}T00:00:00`);
+        const weekday = Number.isNaN(leaveDateValue.getTime()) ? null : leaveDateValue.getDay() === 0 ? 7 : leaveDateValue.getDay();
+        const templateDate = getTemplateDateByActualDate(row.leave_date, approveWindow.editableStart);
+        if (!templateDate) throw new Error(`Could not map leave date ${row.leave_date} into schedule bucket.`);
+        const positionValue = employee.position || row.position_raw || 'Pick';
+        const existingScheduleRes = await supabase
+          .from(SCHEDULE_TABLE)
+          .select('note')
+          .eq('staff_id', row.matched_staff_id)
+          .eq('date', templateDate)
+          .maybeSingle();
+        if (existingScheduleRes.error) throw new Error(String(existingScheduleRes.error.message ?? 'Failed to load existing schedule state.'));
+        const existingScheduleState = getScheduleBaseStateFromNote(existingScheduleRes.data?.note);
+        const shouldApplyLeave = isLeaveWritableScheduleState(existingScheduleState);
+
+        if (shouldApplyLeave) {
+          const { error: scheduleError } = await supabase.from(SCHEDULE_TABLE).upsert([{ staff_id: row.matched_staff_id, date: templateDate, position: positionValue, note: nextNote, operator: actorDisplay, updated_at: nowIso }] as any[], { onConflict: 'staff_id,date' });
+          if (scheduleError) throw new Error(String(scheduleError.message ?? 'Failed to apply leave to schedule.'));
+          if (isPastLeaveDate) {
+            const deleteRes = await supabase.from(ATTENDANCE_MARKS_TABLE).delete().eq('staff_id', row.matched_staff_id).eq('work_date', row.leave_date).eq('mark_type', 'absent');
+            if (deleteRes.error) throw new Error(String(deleteRes.error.message ?? 'Failed to clear absent mark.'));
+            const excuseRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert([{ staff_id: row.matched_staff_id, work_date: row.leave_date, mark_type: 'excuse', source: 'leave_request', operator: actorDisplay, payload: { leave_request_id: row.id, leave_type: row.leave_type }, updated_at: nowIso }] as any[], { onConflict: 'staff_id,work_date,mark_type' });
+            if (excuseRes.error) throw new Error(String(excuseRes.error.message ?? 'Failed to write excuse mark.'));
+          }
+
+          const scheduleVerifyRes = await supabase
+            .from(SCHEDULE_TABLE)
+            .select('note')
+            .eq('staff_id', row.matched_staff_id)
+            .eq('date', templateDate)
+            .maybeSingle();
+          if (scheduleVerifyRes.error) throw new Error(String(scheduleVerifyRes.error.message ?? 'Failed to verify leave schedule update.'));
+          const savedNote = String(scheduleVerifyRes.data?.note ?? '').trim();
+          if (savedNote !== nextNote) {
+            throw new Error(
+              isPastLeaveDate
+                ? 'Schedule was not updated to leave. Approval was blocked.'
+                : 'Schedule was not updated to planned leave. Approval was blocked.'
+            );
+          }
+
+          if (isPastLeaveDate) {
+            const absentVerifyRes = await supabase
+              .from(ATTENDANCE_MARKS_TABLE)
+              .select('id')
+              .eq('staff_id', row.matched_staff_id)
+              .eq('work_date', row.leave_date)
+              .eq('mark_type', 'absent')
+              .limit(1);
+            if (absentVerifyRes.error) throw new Error(String(absentVerifyRes.error.message ?? 'Failed to verify absent mark removal.'));
+            if (Array.isArray(absentVerifyRes.data) && absentVerifyRes.data.length > 0) {
+              throw new Error('Absent mark still exists after leave approval. Approval was blocked.');
+            }
+
+            const excuseVerifyRes = await supabase
+              .from(ATTENDANCE_MARKS_TABLE)
+              .select('id')
+              .eq('staff_id', row.matched_staff_id)
+              .eq('work_date', row.leave_date)
+              .eq('mark_type', 'excuse')
+              .limit(1);
+            if (excuseVerifyRes.error) throw new Error(String(excuseVerifyRes.error.message ?? 'Failed to verify excuse mark.'));
+            if (!Array.isArray(excuseVerifyRes.data) || excuseVerifyRes.data.length === 0) {
+              throw new Error('Excuse mark was not created after leave approval. Approval was blocked.');
+            }
+          }
+
+          await writeAudit(scheduleAction, row.matched_staff_id, {
+            template_date: templateDate,
+            actual_date: row.leave_date,
+            weekday,
+            state: isPastLeaveDate ? 'leave' : 'planned_leave',
+            to_state: isPastLeaveDate ? 'leave' : 'planned_leave',
+            from_state: existingScheduleState,
+            position: positionValue,
+            leave_request_id: row.id,
+            leave_type: row.leave_type
+          }, SCHEDULE_TABLE);
+        } else {
+          const existingExcuseState = existingScheduleState === 'leave' || existingScheduleState === 'planned_leave';
+          if (isPastLeaveDate && existingExcuseState) {
+            const excuseVerifyRes = await supabase
+              .from(ATTENDANCE_MARKS_TABLE)
+              .select('id')
+              .eq('staff_id', row.matched_staff_id)
+              .eq('work_date', row.leave_date)
+              .eq('mark_type', 'excuse')
+              .limit(1);
+            if (excuseVerifyRes.error) throw new Error(String(excuseVerifyRes.error.message ?? 'Failed to verify existing excuse mark.'));
+            if (!Array.isArray(excuseVerifyRes.data) || excuseVerifyRes.data.length === 0) {
+              const excuseRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert([{ staff_id: row.matched_staff_id, work_date: row.leave_date, mark_type: 'excuse', source: 'leave_request', operator: actorDisplay, payload: { leave_request_id: row.id, leave_type: row.leave_type }, updated_at: nowIso }] as any[], { onConflict: 'staff_id,work_date,mark_type' });
+              if (excuseRes.error) throw new Error(String(excuseRes.error.message ?? 'Failed to align existing leave excuse mark.'));
+            }
+          }
+
+          if (isPastLeaveDate && existingScheduleState === 'leave') {
+            const deleteRes = await supabase.from(ATTENDANCE_MARKS_TABLE).delete().eq('staff_id', row.matched_staff_id).eq('work_date', row.leave_date).eq('mark_type', 'absent');
+            if (deleteRes.error) throw new Error(String(deleteRes.error.message ?? 'Failed to clear absent mark for existing leave state.'));
+          }
+        }
+      }
+    }
+    const { error: updateError } = await supabase.from(LEAVE_REQUEST_TABLE).update({ status: nextStatus, reviewed_by: actorDisplay, reviewed_at: nowIso, updated_at: nowIso }).eq('id', row.id);
+    if (updateError) throw new Error(String(updateError.message ?? `Failed to ${nextStatus} leave request.`));
+    const auditAction =
+      nextStatus === 'approved' ? 'leave_request_approve' : nextStatus === 'expired' ? 'leave_request_expire' : 'leave_request_reject';
+    await writeAudit(auditAction, row.matched_staff_id || null, { leave_request_id: row.id, leave_date: row.leave_date, leave_type: row.leave_type, source: row.source, status: nextStatus });
+    return {
+      nextStatus,
+      reviewedAt: nowIso,
+      reviewedBy: actorDisplay
+    };
   };
 
   const updateLeaveStatus = async (row: LeaveRow, status: 'approved' | 'rejected') => {
@@ -358,141 +484,47 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
     setSavingRowId(row.id);
     setError(null);
     try {
-      const nowIso = new Date(serverTime).toISOString();
-      let nextStatus: LeaveStatus = status;
-      if (status === 'approved') {
-        if (!row.matched_staff_id) throw new Error('This request is unmatched. Match by name or ID before approval.');
-        const employee = employeesByStaffId[row.matched_staff_id];
-        if (!employee) throw new Error(`Matched employee ${row.matched_staff_id} is missing from employee table.`);
-        const approveWindow = getApproveWindow(serverTime);
-        if (row.leave_date < approveWindow.editableStart) {
-          nextStatus = 'expired';
-        } else if (row.leave_date > approveWindow.editableEnd) {
-          throw new Error(`Approval is only allowed for this week and next week (${approveWindow.editableStart} to ${approveWindow.editableEnd}).`);
-        } else {
-          const isPastLeaveDate = row.leave_date < approveWindow.operationalDate;
-          const nextNote = isPastLeaveDate ? '__leave__' : '__planned_leave__';
-          const scheduleAction = isPastLeaveDate ? 'schedule_leave' : 'schedule_planned_leave';
-          const leaveDateValue = new Date(`${row.leave_date}T00:00:00`);
-          const weekday = Number.isNaN(leaveDateValue.getTime()) ? null : leaveDateValue.getDay() === 0 ? 7 : leaveDateValue.getDay();
-          const templateDate = getTemplateDateByActualDate(row.leave_date, approveWindow.editableStart);
-          if (!templateDate) throw new Error(`Could not map leave date ${row.leave_date} into schedule bucket.`);
-          const positionValue = employee.position || row.position_raw || 'Pick';
-          const existingScheduleRes = await supabase
-            .from(SCHEDULE_TABLE)
-            .select('note')
-            .eq('staff_id', row.matched_staff_id)
-            .eq('date', templateDate)
-            .maybeSingle();
-          if (existingScheduleRes.error) throw new Error(String(existingScheduleRes.error.message ?? 'Failed to load existing schedule state.'));
-          const existingScheduleState = getScheduleBaseStateFromNote(existingScheduleRes.data?.note);
-          const shouldApplyLeave = isLeaveWritableScheduleState(existingScheduleState);
+      let nextStatus: LeaveStatus;
+      let reviewedAt: string;
+      let reviewedBy: string;
 
-          if (shouldApplyLeave) {
-            const { error: scheduleError } = await supabase.from(SCHEDULE_TABLE).upsert([{ staff_id: row.matched_staff_id, date: templateDate, position: positionValue, note: nextNote, operator: actorDisplay, updated_at: nowIso }] as any[], { onConflict: 'staff_id,date' });
-            if (scheduleError) throw new Error(String(scheduleError.message ?? 'Failed to apply leave to schedule.'));
-            if (isPastLeaveDate) {
-              const deleteRes = await supabase.from(ATTENDANCE_MARKS_TABLE).delete().eq('staff_id', row.matched_staff_id).eq('work_date', row.leave_date).eq('mark_type', 'absent');
-              if (deleteRes.error) throw new Error(String(deleteRes.error.message ?? 'Failed to clear absent mark.'));
-              const excuseRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert([{ staff_id: row.matched_staff_id, work_date: row.leave_date, mark_type: 'excuse', source: 'leave_request', operator: actorDisplay, payload: { leave_request_id: row.id, leave_type: row.leave_type }, updated_at: nowIso }] as any[], { onConflict: 'staff_id,work_date,mark_type' });
-              if (excuseRes.error) throw new Error(String(excuseRes.error.message ?? 'Failed to write excuse mark.'));
+      if (DEFAULT_LEAVE_APPROVAL_TABLES) {
+        try {
+          const approveWindow = getApproveWindow(serverTime);
+          const rpcRes = await supabase.rpc('apply_leave_request_decision', {
+            p_leave_request_id: row.id,
+            p_decision: status,
+            p_actor: actorDisplay,
+            p_operational_date: approveWindow.operationalDate,
+            p_editable_start: approveWindow.editableStart,
+            p_editable_end: approveWindow.editableEnd,
+            p_reviewed_at: new Date(serverTime).toISOString()
+          });
+          if (rpcRes.error) {
+            if (!isMissingLeaveDecisionRpcError(rpcRes.error)) {
+              throw new Error(String(rpcRes.error.message ?? 'Failed to apply leave decision.'));
             }
-
-            const scheduleVerifyRes = await supabase
-              .from(SCHEDULE_TABLE)
-              .select('note')
-              .eq('staff_id', row.matched_staff_id)
-              .eq('date', templateDate)
-              .maybeSingle();
-            if (scheduleVerifyRes.error) throw new Error(String(scheduleVerifyRes.error.message ?? 'Failed to verify leave schedule update.'));
-            const savedNote = String(scheduleVerifyRes.data?.note ?? '').trim();
-            if (savedNote !== nextNote) {
-              throw new Error(
-                isPastLeaveDate
-                  ? 'Schedule was not updated to leave. Approval was blocked.'
-                  : 'Schedule was not updated to planned leave. Approval was blocked.'
-              );
-            }
-
-            if (isPastLeaveDate) {
-              const absentVerifyRes = await supabase
-                .from(ATTENDANCE_MARKS_TABLE)
-                .select('id')
-                .eq('staff_id', row.matched_staff_id)
-                .eq('work_date', row.leave_date)
-                .eq('mark_type', 'absent')
-                .limit(1);
-              if (absentVerifyRes.error) throw new Error(String(absentVerifyRes.error.message ?? 'Failed to verify absent mark removal.'));
-              if (Array.isArray(absentVerifyRes.data) && absentVerifyRes.data.length > 0) {
-                throw new Error('Absent mark still exists after leave approval. Approval was blocked.');
-              }
-
-              const excuseVerifyRes = await supabase
-                .from(ATTENDANCE_MARKS_TABLE)
-                .select('id')
-                .eq('staff_id', row.matched_staff_id)
-                .eq('work_date', row.leave_date)
-                .eq('mark_type', 'excuse')
-                .limit(1);
-              if (excuseVerifyRes.error) throw new Error(String(excuseVerifyRes.error.message ?? 'Failed to verify excuse mark.'));
-              if (!Array.isArray(excuseVerifyRes.data) || excuseVerifyRes.data.length === 0) {
-                throw new Error('Excuse mark was not created after leave approval. Approval was blocked.');
-              }
-            }
-
-            await writeAudit(scheduleAction, row.matched_staff_id, {
-              template_date: templateDate,
-              actual_date: row.leave_date,
-              weekday,
-              state: isPastLeaveDate ? 'leave' : 'planned_leave',
-              to_state: isPastLeaveDate ? 'leave' : 'planned_leave',
-              from_state: existingScheduleState,
-              position: positionValue,
-              leave_request_id: row.id,
-              leave_type: row.leave_type
-            }, SCHEDULE_TABLE);
-          } else {
-            const existingExcuseState = existingScheduleState === 'leave' || existingScheduleState === 'planned_leave';
-            if (isPastLeaveDate && existingExcuseState) {
-              const excuseVerifyRes = await supabase
-                .from(ATTENDANCE_MARKS_TABLE)
-                .select('id')
-                .eq('staff_id', row.matched_staff_id)
-                .eq('work_date', row.leave_date)
-                .eq('mark_type', 'excuse')
-                .limit(1);
-              if (excuseVerifyRes.error) throw new Error(String(excuseVerifyRes.error.message ?? 'Failed to verify existing excuse mark.'));
-              if (!Array.isArray(excuseVerifyRes.data) || excuseVerifyRes.data.length === 0) {
-                const excuseRes = await supabase.from(ATTENDANCE_MARKS_TABLE).upsert([{ staff_id: row.matched_staff_id, work_date: row.leave_date, mark_type: 'excuse', source: 'leave_request', operator: actorDisplay, payload: { leave_request_id: row.id, leave_type: row.leave_type }, updated_at: nowIso }] as any[], { onConflict: 'staff_id,work_date,mark_type' });
-                if (excuseRes.error) throw new Error(String(excuseRes.error.message ?? 'Failed to align existing leave excuse mark.'));
-              }
-            }
-
-            if (isPastLeaveDate && existingScheduleState === 'leave') {
-              const deleteRes = await supabase.from(ATTENDANCE_MARKS_TABLE).delete().eq('staff_id', row.matched_staff_id).eq('work_date', row.leave_date).eq('mark_type', 'absent');
-              if (deleteRes.error) throw new Error(String(deleteRes.error.message ?? 'Failed to clear absent mark for existing leave state.'));
-            }
+            throw rpcRes.error;
           }
+          const result = ((rpcRes.data ?? {}) as LeaveDecisionRpcResult);
+          nextStatus = ((String(result.next_status ?? status).trim() as LeaveStatus) || status);
+          reviewedAt = String(result.reviewed_at ?? new Date(serverTime).toISOString());
+          reviewedBy = String(result.reviewed_by ?? actorDisplay).trim() || actorDisplay;
+        } catch (error) {
+          if (!isMissingLeaveDecisionRpcError(error)) throw error;
+          const fallback = await updateLeaveStatusFallback(row, status);
+          nextStatus = fallback.nextStatus;
+          reviewedAt = fallback.reviewedAt;
+          reviewedBy = fallback.reviewedBy;
         }
+      } else {
+        const fallback = await updateLeaveStatusFallback(row, status);
+        nextStatus = fallback.nextStatus;
+        reviewedAt = fallback.reviewedAt;
+        reviewedBy = fallback.reviewedBy;
       }
-      const { error: updateError } = await supabase.from(LEAVE_REQUEST_TABLE).update({ status: nextStatus, reviewed_by: actorDisplay, reviewed_at: nowIso, updated_at: nowIso }).eq('id', row.id);
-      if (updateError) throw new Error(String(updateError.message ?? `Failed to ${nextStatus} leave request.`));
-      const auditAction =
-        nextStatus === 'approved' ? 'leave_request_approve' : nextStatus === 'expired' ? 'leave_request_expire' : 'leave_request_reject';
-      await writeAudit(auditAction, row.matched_staff_id || null, { leave_request_id: row.id, leave_date: row.leave_date, leave_type: row.leave_type, source: row.source, status: nextStatus });
-      setRows((current) =>
-        current.map((item) =>
-          item.id === row.id
-            ? {
-                ...item,
-                status: nextStatus,
-                reviewed_by: actorDisplay,
-                reviewed_at: nowIso
-              }
-            : item
-        )
-      );
-      onPendingCountChange?.(rows.filter((item) => item.id !== row.id && getEffectiveLeaveStatus(item.status, item.leave_date, serverTime) === 'pending').length);
+
+      applyLocalLeaveStatus(row.id, nextStatus, reviewedBy, reviewedAt);
     } catch (err) {
       setError(String((err as any)?.message ?? err ?? 'Failed to update leave request.'));
     } finally {
