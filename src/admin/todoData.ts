@@ -163,16 +163,18 @@ export const fetchTodoProfiles = async (supabase: any) => {
 
 export const fetchAssignedTodoItems = async (supabase: any, userId: string) => {
   const res = await supabase
-    .from(TODO_ASSIGNEE_TABLE)
-    .select(`item_id, ${TODO_ITEM_TABLE}!inner(${TODO_ITEM_SELECT})`)
-    .eq('assignee_user_id', userId)
-    .neq(`${TODO_ITEM_TABLE}.status`, 'deleted')
-    .order('created_at', { ascending: false, referencedTable: TODO_ITEM_TABLE });
+    .from(TODO_ITEM_TABLE)
+    .select(TODO_ITEM_SELECT)
+    .neq('status', 'deleted')
+    .order('created_at', { ascending: false });
   if (res.error) throw new Error(String(res.error.message ?? 'Failed to load assigned tasks.'));
-  return ((res.data ?? []) as Array<{ ob_todo_items?: RawTodoRow | null }>)
-    .map((row) => row.ob_todo_items)
-    .filter((row): row is RawTodoRow => Boolean(row))
-    .map(normalizeItem);
+  return ((res.data ?? []) as RawTodoRow[])
+    .map(normalizeItem)
+    .filter((item) =>
+      item.delivery_mode === 'shared'
+        ? item.assignees.some((assignee) => assignee.assignee_user_id === userId)
+        : true
+    );
 };
 
 export const fetchCreatedTodoItems = async (supabase: any, userId: string) => {

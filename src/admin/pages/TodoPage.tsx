@@ -14,6 +14,7 @@ import {
   type TodoRecurrenceRule,
   type TodoStatus
 } from '../todoShared';
+import { createPortal } from 'react-dom';
 import {
   fetchAssignedTodoItems,
   fetchCreatedTodoItems,
@@ -23,7 +24,7 @@ import {
 } from '../todoData';
 
 type TranslateFn = (zh: string, en: string) => string;
-type TodoView = 'assigned' | 'created' | 'pending' | 'form';
+type TodoView = 'assigned' | 'completed' | 'created' | 'pending';
 
 type Props = {
   t: TranslateFn;
@@ -52,6 +53,26 @@ type FormState = {
   recurrenceRule: TodoRecurrenceRule;
   assignees: TodoAssigneeInput[];
   links: TodoLinkInput[];
+};
+
+type TodoGroupParticipant = {
+  item_id: string;
+  assignee_user_id: string;
+  assignee_email: string;
+  assignee_display_name: string;
+  status: TodoStatus;
+  due_at: string | null;
+  completed_at: string | null;
+  is_current_user: boolean;
+};
+
+type TodoItemGroup = {
+  key: string;
+  primary: TodoItemRecord;
+  items: TodoItemRecord[];
+  participants: TodoGroupParticipant[];
+  hasCurrentUserParticipant: boolean;
+  isGroupedIndividual: boolean;
 };
 
 const EMPTY_FORM: FormState = {
@@ -110,10 +131,33 @@ const getProfileLabel = (profile: { display_name?: string; user_email?: string; 
 const getProfileSubLabel = (profile: { user_email?: string; user_id?: string }) => String(profile.user_email ?? '').trim() || String(profile.user_id ?? '').trim();
 const getInitial = (profile: { display_name?: string; user_email?: string; user_id?: string }) => getProfileLabel(profile).slice(0, 1).toUpperCase() || '?';
 
-const getStatusToneClass = (status: TodoStatus, isLight: boolean) => {
+const isTodoOverdue = (item: TodoItemRecord) => {
+  if (item.status !== 'open' || !item.due_at) return false;
+  const dueAt = new Date(item.due_at).getTime();
+  return Number.isFinite(dueAt) && dueAt < Date.now();
+};
+
+const isParticipantOverdue = (participant: TodoGroupParticipant) => {
+  if (participant.status !== 'open' || !participant.due_at) return false;
+  const dueAt = new Date(participant.due_at).getTime();
+  return Number.isFinite(dueAt) && dueAt < Date.now();
+};
+
+const getTodoGroupCardToneClass = (group: TodoItemGroup, isLight: boolean) => {
+  const status = getTodoGroupStatus(group);
+  if (status === 'done') return isLight ? 'border-emerald-300 bg-emerald-50/70' : 'border-emerald-500/35 bg-emerald-500/8';
+  if (status === 'pending_delete') return isLight ? 'border-amber-300 bg-amber-50/70' : 'border-amber-500/35 bg-amber-500/8';
+  if (status === 'deleted') return isLight ? 'border-slate-200 bg-slate-100/70' : 'border-white/10 bg-white/[0.03]';
+  if (isTodoGroupOverdue(group)) return isLight ? 'border-rose-300 bg-rose-50/70' : 'border-rose-500/35 bg-rose-500/8';
+  return isLight ? 'border-sky-300 bg-sky-50/70' : 'border-sky-500/35 bg-sky-500/8';
+};
+
+const getTodoGroupBadgeToneClass = (group: TodoItemGroup, isLight: boolean) => {
+  const status = getTodoGroupStatus(group);
   if (status === 'done') return isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
   if (status === 'pending_delete') return isLight ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-amber-500/30 bg-amber-500/10 text-amber-200';
   if (status === 'deleted') return isLight ? 'border-slate-200 bg-slate-100 text-slate-500' : 'border-white/10 bg-white/5 text-white/50';
+  if (isTodoGroupOverdue(group)) return isLight ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-rose-500/30 bg-rose-500/10 text-rose-200';
   return isLight ? 'border-sky-200 bg-sky-50 text-sky-700' : 'border-sky-500/30 bg-sky-500/10 text-sky-200';
 };
 
@@ -122,6 +166,11 @@ const getStatusText = (status: TodoStatus, t: TranslateFn) => {
   if (status === 'pending_delete') return t('待删确认', 'Pending delete');
   if (status === 'deleted') return t('已删除', 'Deleted');
   return t('进行中', 'Open');
+};
+
+const getTodoGroupStatusText = (group: TodoItemGroup, t: TranslateFn) => {
+  if (isTodoGroupOverdue(group) && getTodoGroupStatus(group) === 'open') return t('已过期', 'Overdue');
+  return getStatusText(getTodoGroupStatus(group), t);
 };
 
 const dispatchTodoUpdated = () => {
@@ -148,6 +197,73 @@ const buildEditForm = (item: TodoItemRecord): FormState => ({
     sort_order: Number.isFinite(link.sort_order) ? link.sort_order : index
   }))
 });
+
+const getTodoGroupKey = (item: TodoItemRecord) =>
+  item.delivery_mode === 'individual' ? `${item.template_id}__${item.instance_date ?? 'single'}` : item.id;
+
+const getTodoGroupStatus = (group: TodoItemGroup): TodoStatus => {
+  if (group.items.every((item) => item.status === 'done')) return 'done';
+  if (group.items.some((item) => item.status === 'pending_delete')) return 'pending_delete';
+  if (group.items.every((item) => item.status === 'deleted')) return 'deleted';
+  return 'open';
+};
+
+const isTodoGroupOverdue = (group: TodoItemGroup) => group.items.some((item) => isTodoOverdue(item));
+
+const groupHasCurrentUserStatus = (group: TodoItemGroup, statuses: TodoStatus[]) =>
+  group.participants.some((participant) => participant.is_current_user && statuses.includes(participant.status));
+
+const buildTodoGroups = (items: TodoItemRecord[], userId: string) => {
+  const groups = new Map<string, TodoItemGroup>();
+
+  for (const item of items) {
+    const key = getTodoGroupKey(item);
+    const existing = groups.get(key);
+    const participants = item.assignees.map((assignee) => ({
+      item_id: item.id,
+      assignee_user_id: assignee.assignee_user_id,
+      assignee_email: assignee.assignee_email,
+      assignee_display_name: assignee.assignee_display_name,
+      status: item.status,
+      due_at: item.due_at,
+      completed_at: item.completed_at,
+      is_current_user: assignee.assignee_user_id === userId
+    }));
+
+    if (!existing) {
+      groups.set(key, {
+        key,
+        primary: item,
+        items: [item],
+        participants,
+        hasCurrentUserParticipant: participants.some((participant) => participant.is_current_user),
+        isGroupedIndividual: item.delivery_mode === 'individual'
+      });
+      continue;
+    }
+
+    existing.items.push(item);
+    existing.participants.push(...participants);
+    existing.hasCurrentUserParticipant = existing.hasCurrentUserParticipant || participants.some((participant) => participant.is_current_user);
+    if (new Date(item.created_at).getTime() > new Date(existing.primary.created_at).getTime()) {
+      existing.primary = item;
+    }
+  }
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      items: [...group.items].sort((left, right) => left.created_at.localeCompare(right.created_at, 'en-US')),
+      participants: [...group.participants].sort((left, right) =>
+        (left.assignee_display_name || left.assignee_email || left.assignee_user_id).localeCompare(
+          right.assignee_display_name || right.assignee_email || right.assignee_user_id,
+          'en-US'
+        )
+      ),
+      isGroupedIndividual: group.primary.delivery_mode === 'individual' && group.participants.length > 1
+    }))
+    .sort((left, right) => right.primary.created_at.localeCompare(left.primary.created_at, 'en-US'));
+};
 export default function TodoPage({
   t,
   isLocked,
@@ -170,14 +286,19 @@ export default function TodoPage({
   const [error, setError] = useState<string | null>(null);
   const [assigneeQuery, setAssigneeQuery] = useState('');
   const [assigneePickerOpen, setAssigneePickerOpen] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  const [participantsItem, setParticipantsItem] = useState<TodoItemRecord | null>(null);
 
   const buttonSecondaryClass = isLight
-    ? 'h-10 rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:border-slate-400 disabled:opacity-60'
-    : 'h-10 rounded-2xl border border-white/20 bg-white/[0.05] px-4 text-sm font-semibold text-white hover:border-white/40 disabled:opacity-60';
+    ? 'inline-flex h-10 items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:border-slate-400 disabled:opacity-60'
+    : 'inline-flex h-10 items-center justify-center rounded-2xl border border-white/20 bg-white/[0.05] px-4 text-sm font-semibold text-white hover:border-white/40 disabled:opacity-60';
   const buttonPrimaryClass = isLight
-    ? 'h-10 rounded-2xl bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60'
-    : 'h-10 rounded-2xl bg-neon px-4 text-sm font-semibold text-slate-950 hover:brightness-110 disabled:opacity-60';
+    ? 'inline-flex h-10 items-center justify-center rounded-2xl bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60'
+    : 'inline-flex h-10 items-center justify-center rounded-2xl bg-neon px-4 text-sm font-semibold text-slate-950 hover:brightness-110 disabled:opacity-60';
   const panelClass = isLight ? 'rounded-2xl border border-slate-200 bg-white p-4 shadow-sm' : 'rounded-2xl border border-white/10 bg-white/[0.03] p-4';
+  const modalPanelClass = isLight
+    ? 'rounded-3xl border border-slate-200 bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.18)] md:p-7'
+    : 'rounded-3xl border border-white/10 bg-slate-950 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] md:p-7';
   const inputClass = isLight
     ? 'h-10 rounded-2xl border border-slate-300 bg-white px-3 text-sm text-slate-900'
     : 'h-10 rounded-2xl border border-white/10 bg-white/[0.04] px-3 text-sm text-white';
@@ -260,8 +381,34 @@ export default function TodoPage({
     );
   }, [userDisplayName, userEmail, userId]);
 
+  useEffect(() => {
+    if (!formOpen || typeof window === 'undefined') return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !saving) {
+        setFormOpen(false);
+        setAssigneePickerOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [formOpen, saving]);
+
   const visibleAssignedItems = useMemo(() => assignedItems.filter((item) => item.status !== 'deleted'), [assignedItems]);
   const visibleCreatedItems = useMemo(() => createdItems.filter((item) => item.status !== 'deleted'), [createdItems]);
+  const allAssignedGroups = useMemo(
+    () =>
+      buildTodoGroups(visibleAssignedItems, userId).filter(
+        (group) =>
+          group.primary.delivery_mode === 'shared'
+            ? group.primary.assignees.some((assignee) => assignee.assignee_user_id === userId)
+            : group.hasCurrentUserParticipant
+      ),
+    [userId, visibleAssignedItems]
+  );
+  const assignedGroups = useMemo(() => allAssignedGroups.filter((group) => groupHasCurrentUserStatus(group, ['open'])), [allAssignedGroups]);
+  const completedGroups = useMemo(() => allAssignedGroups.filter((group) => groupHasCurrentUserStatus(group, ['done'])), [allAssignedGroups]);
+  const createdGroups = useMemo(() => buildTodoGroups(visibleCreatedItems, userId), [userId, visibleCreatedItems]);
+  const pendingGroups = useMemo(() => buildTodoGroups(pendingDeleteItems, userId), [pendingDeleteItems, userId]);
 
   const assigneeOptions = useMemo(() => {
     const next = new Map<string, TodoProfile>();
@@ -296,18 +443,44 @@ export default function TodoPage({
     });
   }, [assigneeOptions, assigneeQuery, form.assignees]);
 
+  const buildDefaultAssignees = () =>
+    normalizeTodoAssignees(
+      userId
+        ? [{ user_id: userId, user_email: String(userEmail ?? '').trim(), display_name: String(userDisplayName ?? '').trim() || String(userEmail ?? '').trim() || userId }]
+        : []
+    );
+
+  const closeForm = () => {
+    if (saving) return;
+    setFormOpen(false);
+    setAssigneePickerOpen(false);
+    setAssigneeQuery('');
+  };
+
   const resetForm = () => {
     setForm({
       ...EMPTY_FORM,
-      assignees: normalizeTodoAssignees(
-        userId
-          ? [{ user_id: userId, user_email: String(userEmail ?? '').trim(), display_name: String(userDisplayName ?? '').trim() || String(userEmail ?? '').trim() || userId }]
-          : []
-      )
+      assignees: buildDefaultAssignees()
     });
     setAssigneeQuery('');
     setAssigneePickerOpen(false);
-    setView('form');
+    setFormOpen(true);
+  };
+
+  const openEditForm = (item: TodoItemRecord) => {
+    setForm(buildEditForm(item));
+    setAssigneeQuery('');
+    setAssigneePickerOpen(false);
+    setFormOpen(true);
+  };
+
+  const clearFormFields = () => {
+    setForm({
+      ...EMPTY_FORM,
+      assignees: buildDefaultAssignees()
+    });
+    setAssigneeQuery('');
+    setAssigneePickerOpen(false);
   };
   const toggleAssignee = (profile: TodoProfile) => {
     setForm((prev) => {
@@ -381,6 +554,7 @@ export default function TodoPage({
           p_instance_date: instanceDate,
           p_recurrence_kind: form.recurrenceKind,
           p_recurrence_rule: form.recurrenceRule,
+          p_assignees: normalizeTodoAssignees(form.assignees),
           p_links: normalizedLinks,
           p_is_active: true
         });
@@ -388,7 +562,8 @@ export default function TodoPage({
       }
       dispatchTodoUpdated();
       await refreshAll();
-      resetForm();
+      clearFormFields();
+      setFormOpen(false);
     } catch (err) {
       setError(String((err as any)?.message ?? err ?? 'Failed to save task.'));
     } finally {
@@ -412,50 +587,228 @@ export default function TodoPage({
     }
   };
 
-  const renderLinks = (item: TodoItemRecord) =>
-    !item.links.length ? null : (
-      <div className="mt-3 flex flex-wrap gap-2">
-        {item.links.map((link) => (
-          <a key={link.id} href={link.url} target="_blank" rel="noreferrer" className={buttonSecondaryClass}>
-            {link.label}
-          </a>
-        ))}
+  const applyItemActionMany = async (itemIds: string[], action: 'request_delete' | 'approve_delete' | 'reject_delete') => {
+    const ids = Array.from(new Set(itemIds.filter(Boolean)));
+    if (!supabase || !ids.length || saving || isLocked) return;
+    setSaving(true);
+    setError(null);
+    try {
+      for (const itemId of ids) {
+        const { error: rpcError } = await supabase.rpc('apply_todo_item_action', { p_item_id: itemId, p_action: action });
+        if (rpcError) throw new Error(String(rpcError.message ?? 'Failed to update task.'));
+      }
+      dispatchTodoUpdated();
+      await refreshAll();
+    } catch (err) {
+      setError(String((err as any)?.message ?? err ?? 'Failed to update task.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const renderActionLinks = (item: TodoItemRecord) =>
+    item.links.map((link) => (
+      <a key={link.id} href={link.url} target="_blank" rel="noreferrer" title={link.label || link.url} className={buttonSecondaryClass}>
+        {link.label}
+      </a>
+    ));
+
+  const closeParticipants = () => {
+    setParticipantsItem(null);
+  };
+
+  const renderGroupParticipants = (group: TodoItemGroup, mode: 'assigned' | 'completed' | 'created' | 'pending') =>
+    !group.isGroupedIndividual ? null : (
+      <div className="space-y-2">
+        {group.participants.map((participant) => {
+          const canToggle =
+            (mode === 'assigned' || mode === 'completed' || mode === 'created') &&
+            participant.is_current_user &&
+            (participant.status === 'open' || participant.status === 'done');
+          const overdue = isParticipantOverdue(participant);
+          const rowTone =
+            participant.status === 'done'
+              ? isLight
+                ? 'border-emerald-200 bg-emerald-50/60'
+                : 'border-emerald-500/20 bg-emerald-500/8'
+              : overdue
+                ? isLight
+                  ? 'border-rose-200 bg-rose-50/60'
+                  : 'border-rose-500/20 bg-rose-500/8'
+              : participant.is_current_user
+                ? isLight
+                  ? 'border-sky-200 bg-sky-50/60'
+                  : 'border-sky-500/20 bg-sky-500/8'
+                : isLight
+                  ? 'border-slate-200 bg-white'
+                  : 'border-white/10 bg-white/[0.03]';
+          return (
+            <div key={participant.item_id} className={['flex items-center justify-between gap-3 rounded-2xl border px-3 py-2.5', rowTone].join(' ')}>
+              <div className="flex min-w-0 items-center gap-3">
+                <button
+                  type="button"
+                  disabled={!canToggle}
+                  onClick={() => void applyItemAction(participant.item_id, participant.status === 'done' ? 'mark_open' : 'mark_done')}
+                  className={[
+                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition',
+                    participant.status === 'done'
+                      ? isLight
+                        ? 'border-emerald-500 bg-emerald-500 text-white'
+                        : 'border-neon bg-neon text-slate-950'
+                      : isLight
+                        ? 'border-slate-300 bg-white text-transparent'
+                        : 'border-white/20 bg-transparent text-transparent',
+                    canToggle ? (isLight ? 'hover:border-sky-500' : 'hover:border-neon') : 'cursor-default opacity-70'
+                  ].join(' ')}
+                  aria-label={participant.status === 'done' ? t('恢复未完成', 'Reopen') : t('完成', 'Done')}
+                >
+                  <span className="text-xs font-bold leading-none">{participant.status === 'done' ? '✓' : ''}</span>
+                </button>
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">
+                    {participant.assignee_display_name || participant.assignee_email || participant.assignee_user_id}
+                    {participant.is_current_user ? ` · ${t('我', 'Me')}` : ''}
+                  </div>
+                  <div className={['truncate text-xs', isLight ? 'text-slate-500' : 'text-white/50'].join(' ')}>
+                    {participant.assignee_email || participant.assignee_user_id}
+                  </div>
+                </div>
+              </div>
+              <span
+                className={[
+                  'inline-flex min-w-[72px] items-center justify-center rounded-full border px-2.5 py-1 text-center text-[11px] font-semibold',
+                  participant.status === 'done'
+                    ? isLight
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                      : 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
+                    : overdue
+                      ? isLight
+                        ? 'border-rose-200 bg-rose-50 text-rose-700'
+                        : 'border-rose-500/25 bg-rose-500/10 text-rose-200'
+                      : isLight
+                        ? 'border-sky-200 bg-sky-50 text-sky-700'
+                        : 'border-sky-500/25 bg-sky-500/10 text-sky-200'
+                ].join(' ')}
+              >
+                {participant.status === 'done' ? t('已完成', 'Done') : overdue ? t('已过期', 'Overdue') : t('进行中', 'Open')}
+              </span>
+            </div>
+          );
+        })}
       </div>
     );
 
-  const renderItemCard = (item: TodoItemRecord, mode: 'assigned' | 'created' | 'pending') => (
-    <article key={item.id} className={[panelClass, 'space-y-3'].join(' ')}>
+  const renderGroupCard = (group: TodoItemGroup, mode: 'assigned' | 'completed' | 'created' | 'pending') => {
+    const item = group.primary;
+    const currentUserItemIds = group.participants.filter((participant) => participant.is_current_user).map((participant) => participant.item_id);
+    const groupItemIds = group.items.map((entry) => entry.id);
+    const pendingItemIds = group.items.filter((entry) => entry.status === 'pending_delete').map((entry) => entry.id);
+
+    return (
+      <article key={group.key} className={['space-y-3 rounded-2xl border p-4', getTodoGroupCardToneClass(group, isLight)].join(' ')}>
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-lg font-semibold">{item.title}</h3>
-          <div className={['mt-1 text-sm', isLight ? 'text-slate-500' : 'text-white/60'].join(' ')}>
-            {item.creator_display_name || item.creator_email || '-'}
-            {item.due_at ? ` · ${new Date(item.due_at).toLocaleString()}` : ''}
+        <div className="flex min-w-0 items-start gap-3">
+          {!group.isGroupedIndividual ? (
+            <button
+              type="button"
+              disabled={(mode !== 'assigned' && mode !== 'completed') || saving || isLocked || (item.status !== 'open' && item.status !== 'done')}
+              onClick={() => {
+                if (mode !== 'assigned' && mode !== 'completed') return;
+                if (item.status === 'done') {
+                  void applyItemAction(item.id, 'mark_open');
+                  return;
+                }
+                if (item.status === 'open') {
+                  void applyItemAction(item.id, 'mark_done');
+                }
+              }}
+              aria-label={item.status === 'done' ? t('恢复未完成', 'Reopen') : t('完成', 'Done')}
+              className={[
+                'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition',
+                item.status === 'done'
+                  ? isLight
+                    ? 'border-emerald-500 bg-emerald-500 text-white'
+                    : 'border-neon bg-neon text-slate-950'
+                  : isLight
+                    ? 'border-slate-300 bg-white text-transparent'
+                    : 'border-white/20 bg-transparent text-transparent',
+                (mode === 'assigned' || mode === 'completed') && !saving && !isLocked && (item.status === 'open' || item.status === 'done')
+                  ? isLight
+                    ? 'hover:border-sky-500'
+                    : 'hover:border-neon'
+                  : 'cursor-default opacity-70'
+              ].join(' ')}
+            >
+              <span className="text-sm font-bold leading-none">{item.status === 'done' ? '✓' : ''}</span>
+            </button>
+          ) : null}
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold">{item.title}</h3>
+            <div className={['mt-1 text-sm', isLight ? 'text-slate-500' : 'text-white/60'].join(' ')}>
+              {item.creator_display_name || item.creator_email || '-'}
+              {item.due_at ? ` · ${new Date(item.due_at).toLocaleString()}` : ''}
+            </div>
           </div>
         </div>
-        <span className={['rounded-full border px-3 py-1 text-xs font-semibold', getStatusToneClass(item.status, isLight)].join(' ')}>{getStatusText(item.status, t)}</span>
+        <span className={['rounded-full border px-3 py-1 text-xs font-semibold', getTodoGroupBadgeToneClass(group, isLight)].join(' ')}>{getTodoGroupStatusText(group, t)}</span>
       </div>
       {item.content ? <div className={['whitespace-pre-wrap text-sm', isLight ? 'text-slate-700' : 'text-white/80'].join(' ')}>{item.content}</div> : null}
       <div className={['text-sm', isLight ? 'text-slate-500' : 'text-white/60'].join(' ')}>
-        {item.delivery_mode === 'shared' ? t(`共享任务 · ${item.assignees.length} 人`, `Shared · ${item.assignees.length} assignees`) : item.assignees[0]?.assignee_display_name || item.assignees[0]?.assignee_email || t('个人任务', 'Individual')}
+        {group.isGroupedIndividual ? (
+          t(`个人任务 · ${group.participants.length} 人`, `Individual · ${group.participants.length} assignees`)
+        ) : item.delivery_mode === 'shared' ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span>{t('共享任务', 'Shared')}</span>
+            <span>·</span>
+            <button
+              type="button"
+              className={[isLight ? 'text-sky-700 hover:text-sky-800' : 'text-sky-300 hover:text-sky-200', 'font-semibold underline underline-offset-2'].join(' ')}
+              onClick={() => setParticipantsItem(item)}
+            >
+              {t(`${item.assignees.length} 人`, `${item.assignees.length} assignees`)}
+            </button>
+          </span>
+        ) : item.assignees[0]?.assignee_display_name || item.assignees[0]?.assignee_email || t('个人任务', 'Individual')}
       </div>
-      {renderLinks(item)}
-      <div className="flex flex-wrap gap-2">
-        {mode === 'assigned' && item.status === 'open' ? <button type="button" className={buttonPrimaryClass} disabled={saving || isLocked} onClick={() => applyItemAction(item.id, 'mark_done')}>{t('完成', 'Done')}</button> : null}
-        {mode === 'assigned' && item.status === 'done' ? <button type="button" className={buttonSecondaryClass} disabled={saving || isLocked} onClick={() => applyItemAction(item.id, 'mark_open')}>{t('恢复未完成', 'Reopen')}</button> : null}
-        {(mode === 'assigned' || mode === 'created') && item.status !== 'deleted' && item.status !== 'pending_delete' ? <button type="button" className={buttonSecondaryClass} disabled={saving || isLocked} onClick={() => applyItemAction(item.id, 'request_delete')}>{t('删除', 'Delete')}</button> : null}
-        {mode === 'created' ? <button type="button" className={buttonSecondaryClass} disabled={saving || isLocked} onClick={() => { setForm(buildEditForm(item)); setAssigneeQuery(''); setAssigneePickerOpen(false); setView('form'); }}>{t('编辑', 'Edit')}</button> : null}
-        {mode === 'pending' ? <><button type="button" className={buttonPrimaryClass} disabled={saving || isLocked} onClick={() => applyItemAction(item.id, 'approve_delete')}>{t('确认删除', 'Approve delete')}</button><button type="button" className={buttonSecondaryClass} disabled={saving || isLocked} onClick={() => applyItemAction(item.id, 'reject_delete')}>{t('驳回', 'Reject')}</button></> : null}
+      {renderGroupParticipants(group, mode)}
+      <div className="flex flex-wrap items-center gap-2">
+        {(mode === 'assigned' || mode === 'completed' || mode === 'created') && getTodoGroupStatus(group) !== 'deleted' && getTodoGroupStatus(group) !== 'pending_delete' ? (
+          <button
+            type="button"
+            className={buttonSecondaryClass}
+            disabled={saving || isLocked}
+            onClick={() => {
+              if (mode === 'assigned' || mode === 'completed') {
+                void applyItemActionMany(currentUserItemIds, 'request_delete');
+                return;
+              }
+              void applyItemActionMany(groupItemIds, 'request_delete');
+            }}
+          >
+            {t('删除', 'Delete')}
+          </button>
+        ) : null}
+        {renderActionLinks(item)}
+        {item.creator_user_id === userId ? <button type="button" className={buttonSecondaryClass} disabled={saving || isLocked} onClick={() => openEditForm(item)}>{t('编辑', 'Edit')}</button> : null}
+        {mode === 'pending' ? (
+          <>
+            <button type="button" className={buttonPrimaryClass} disabled={saving || isLocked} onClick={() => void applyItemActionMany(pendingItemIds, 'approve_delete')}>{t('确认删除', 'Approve delete')}</button>
+            <button type="button" className={buttonSecondaryClass} disabled={saving || isLocked} onClick={() => void applyItemActionMany(pendingItemIds, 'reject_delete')}>{t('驳回', 'Reject')}</button>
+          </>
+        ) : null}
       </div>
     </article>
-  );
+    );
+  };
 
   const tabs: Array<[TodoView, string]> = [
     ['assigned', t('我的任务', 'Assigned')],
+    ['completed', t('已完成', 'Completed')],
     ['created', t('我发布的', 'Created')],
-    ['pending', t('待删确认', 'Pending delete')],
-    ['form', t('任务表单', 'Form')]
+    ['pending', t('待删确认', 'Pending delete')]
   ];
+  const modalRoot = typeof document === 'undefined' ? null : document.body;
+
   return (
     <section className="glass reveal rounded-3xl px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -474,21 +827,34 @@ export default function TodoPage({
 
       {error ? <div className={['mt-4 rounded-2xl border px-4 py-3 text-sm', isLight ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'].join(' ')}>{error}</div> : null}
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.9fr]">
-        <div className="space-y-4">
-          {view === 'assigned' && visibleAssignedItems.map((item) => renderItemCard(item, 'assigned'))}
-          {view === 'created' && visibleCreatedItems.map((item) => renderItemCard(item, 'created'))}
-          {view === 'pending' && pendingDeleteItems.map((item) => renderItemCard(item, 'pending'))}
-          {((view === 'assigned' && !visibleAssignedItems.length) || (view === 'created' && !visibleCreatedItems.length) || (view === 'pending' && !pendingDeleteItems.length)) ? <div className={panelClass}>{t('暂无任务。', 'No tasks yet.')}</div> : null}
-        </div>
+      <div className="mt-6 space-y-4">
+        {view === 'assigned' && assignedGroups.map((group) => renderGroupCard(group, 'assigned'))}
+        {view === 'completed' && completedGroups.map((group) => renderGroupCard(group, 'completed'))}
+        {view === 'created' && createdGroups.map((group) => renderGroupCard(group, 'created'))}
+        {view === 'pending' && pendingGroups.map((group) => renderGroupCard(group, 'pending'))}
+        {((view === 'assigned' && !assignedGroups.length) || (view === 'completed' && !completedGroups.length) || (view === 'created' && !createdGroups.length) || (view === 'pending' && !pendingGroups.length)) ? <div className={panelClass}>{t('暂无任务。', 'No tasks yet.')}</div> : null}
+      </div>
 
-        <aside className={panelClass}>
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-lg font-semibold">{form.templateId ? t('编辑任务', 'Edit Task') : t('新建任务', 'New Task')}</h3>
-            {form.templateId ? <button type="button" className={buttonSecondaryClass} onClick={resetForm}>{t('取消编辑', 'Cancel')}</button> : null}
-          </div>
+      {formOpen && modalRoot
+        ? createPortal(
+            <div
+              className={['fixed inset-0 z-[110] flex items-center justify-center p-4', isLight ? 'bg-slate-900/45' : 'bg-black/72'].join(' ')}
+              role="dialog"
+              aria-modal="true"
+            >
+              <aside
+                className={[modalPanelClass, 'max-h-[calc(100vh-32px)] w-full max-w-3xl overflow-y-auto'].join(' ')}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-lg font-semibold">{form.templateId ? t('编辑任务', 'Edit Task') : t('新建任务', 'New Task')}</h3>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button type="button" className={buttonPrimaryClass} disabled={saving || isLocked} onClick={() => void saveTask()}>{form.templateId ? t('保存修改', 'Save') : t('创建任务', 'Create')}</button>
+                    <button type="button" className={buttonSecondaryClass} disabled={saving || isLocked} onClick={clearFormFields}>{t('重置', 'Reset')}</button>
+                    <button type="button" className={buttonSecondaryClass} disabled={saving} onClick={closeForm}>{t('关闭', 'Close')}</button>
+                  </div>
+                </div>
 
-          <div className="mt-4 space-y-4">
+                <div className="mt-4 space-y-4">
             <div>
               <div className={labelClass}>{t('发布模式', 'Mode')}</div>
               <select className={['mt-1 w-full', inputClass].join(' ')} value={form.deliveryMode} disabled={Boolean(form.templateId)} onChange={(event) => setForm((prev) => ({ ...prev, deliveryMode: event.target.value as TodoDeliveryMode }))}>
@@ -499,20 +865,20 @@ export default function TodoPage({
 
             <div>
               <div className={labelClass}>{t('被分配人', 'Assignees')}</div>
-              <div className="mt-2 space-y-2" onFocusCapture={() => { if (!form.templateId) setAssigneePickerOpen(true); }} onBlurCapture={(event) => { if (event.currentTarget.contains(event.relatedTarget as Node | null)) return; setAssigneePickerOpen(false); }}>
+              <div className="mt-2 space-y-2" onFocusCapture={() => { setAssigneePickerOpen(true); }} onBlurCapture={(event) => { if (event.currentTarget.contains(event.relatedTarget as Node | null)) return; setAssigneePickerOpen(false); }}>
                 <div className={['rounded-2xl border p-3 transition', isLight ? 'border-slate-300 bg-white focus-within:border-sky-500' : 'border-white/10 bg-white/[0.04] focus-within:border-neon/70'].join(' ')}>
                   <div className="flex flex-wrap items-center gap-2">
                     {form.assignees.map((assignee) => (
                       <span key={assignee.user_id} className={['inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm', isLight ? 'border-slate-300 bg-slate-50 text-slate-800' : 'border-white/15 bg-white/[0.05] text-white/85'].join(' ')}>
                         <span className={['flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold', isLight ? 'bg-sky-100 text-sky-700' : 'bg-neon/20 text-neon'].join(' ')}>{getInitial(assignee)}</span>
                         <span>{getProfileLabel(assignee)}</span>
-                        {!form.templateId ? <button type="button" className={isLight ? 'text-slate-500 hover:text-slate-800' : 'text-white/50 hover:text-white'} onClick={() => removeAssignee(assignee.user_id)}>×</button> : null}
+                        <button type="button" className={isLight ? 'text-slate-500 hover:text-slate-800' : 'text-white/50 hover:text-white'} onClick={() => removeAssignee(assignee.user_id)}>×</button>
                       </span>
                     ))}
-                    {!form.templateId ? <input className={['min-w-[180px] flex-1 border-0 bg-transparent px-1 py-1 text-sm outline-none', isLight ? 'text-slate-900 placeholder:text-slate-400' : 'text-white placeholder:text-white/35'].join(' ')} value={assigneeQuery} onChange={(event) => { setAssigneeQuery(event.target.value); setAssigneePickerOpen(true); }} onFocus={() => setAssigneePickerOpen(true)} placeholder={t('添加人员、姓名或邮箱', 'Add people, name, or email')} /> : null}
+                    <input className={['min-w-[180px] flex-1 border-0 bg-transparent px-1 py-1 text-sm outline-none', isLight ? 'text-slate-900 placeholder:text-slate-400' : 'text-white placeholder:text-white/35'].join(' ')} value={assigneeQuery} onChange={(event) => { setAssigneeQuery(event.target.value); setAssigneePickerOpen(true); }} onFocus={() => setAssigneePickerOpen(true)} placeholder={t('添加人员、姓名或邮箱', 'Add people, name, or email')} />
                   </div>
                 </div>
-                {!form.templateId && assigneePickerOpen ? (
+                {assigneePickerOpen ? (
                   <div className={['max-h-56 overflow-auto rounded-2xl border p-2', isLight ? 'border-slate-200 bg-white shadow-sm' : 'border-white/10 bg-slate-950/95'].join(' ')}>
                     {!assigneeOptions.length ? <div className={['px-3 py-2 text-sm', isLight ? 'text-slate-500' : 'text-white/60'].join(' ')}>{t('暂无可选账号。', 'No accounts available.')}</div> : null}
                     {assigneeOptions.length > 0 && !filteredAssigneeOptions.length ? <div className={['px-3 py-2 text-sm', isLight ? 'text-slate-500' : 'text-white/60'].join(' ')}>{t('没有匹配的账号。', 'No matching accounts.')}</div> : null}
@@ -619,14 +985,59 @@ export default function TodoPage({
                 <button type="button" className={buttonSecondaryClass} onClick={addLink}>{t('新增链接', 'Add link')}</button>
               </div>
             </div>
+                </div>
+              </aside>
+            </div>,
+            modalRoot
+          )
+        : null}
 
-            <div className="flex gap-2">
-              <button type="button" className={buttonPrimaryClass} disabled={saving || isLocked} onClick={() => void saveTask()}>{form.templateId ? t('保存修改', 'Save') : t('创建任务', 'Create')}</button>
-              <button type="button" className={buttonSecondaryClass} disabled={saving || isLocked} onClick={resetForm}>{t('重置', 'Reset')}</button>
-            </div>
-          </div>
-        </aside>
-      </div>
+      {participantsItem && modalRoot
+        ? createPortal(
+            <div
+              className={['fixed inset-0 z-[111] flex items-center justify-center p-4', isLight ? 'bg-slate-900/45' : 'bg-black/72'].join(' ')}
+              role="dialog"
+              aria-modal="true"
+            >
+              <aside className={[modalPanelClass, 'w-full max-w-lg'].join(' ')}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-semibold">{t('参与人', 'Participants')}</h3>
+                    <div className={['mt-1 text-sm', isLight ? 'text-slate-500' : 'text-white/60'].join(' ')}>
+                      {participantsItem.title}
+                    </div>
+                  </div>
+                  <button type="button" className={buttonSecondaryClass} onClick={closeParticipants}>{t('关闭', 'Close')}</button>
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  {participantsItem.assignees.map((assignee) => (
+                    <div
+                      key={`${participantsItem.id}-${assignee.id}`}
+                      className={[
+                        'flex items-center gap-3 rounded-2xl border px-3 py-3',
+                        isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.04]'
+                      ].join(' ')}
+                    >
+                      <span className={['flex h-9 w-9 items-center justify-center rounded-full text-xs font-semibold', isLight ? 'bg-sky-100 text-sky-700' : 'bg-neon/20 text-neon'].join(' ')}>
+                        {getInitial({ display_name: assignee.assignee_display_name, user_email: assignee.assignee_email, user_id: assignee.assignee_user_id })}
+                      </span>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">
+                          {assignee.assignee_display_name || assignee.assignee_email || assignee.assignee_user_id}
+                        </div>
+                        <div className={['truncate text-xs', isLight ? 'text-slate-500' : 'text-white/50'].join(' ')}>
+                          {assignee.assignee_email || assignee.assignee_user_id}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </aside>
+            </div>,
+            modalRoot
+          )
+        : null}
     </section>
   );
 }

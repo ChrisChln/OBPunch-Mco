@@ -255,6 +255,33 @@ as $$
     );
 $$;
 
+create or replace function public.todo_item_has_group_assignee_access(
+  p_item_id uuid,
+  p_user_id uuid default auth.uid()
+)
+returns boolean
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  select
+    coalesce(p_user_id, auth.uid()) is not null
+    and exists (
+      select 1
+      from public.ob_todo_items as current_item
+      join public.ob_todo_items as sibling_item
+        on sibling_item.template_id = current_item.template_id
+       and coalesce(sibling_item.instance_date, date '2000-01-01') = coalesce(current_item.instance_date, date '2000-01-01')
+       and sibling_item.delivery_mode = 'individual'
+       and current_item.delivery_mode = 'individual'
+      join public.ob_todo_item_assignees as sibling_assignee
+        on sibling_assignee.item_id = sibling_item.id
+      where current_item.id = p_item_id
+        and sibling_item.status <> 'deleted'
+        and sibling_assignee.assignee_user_id = coalesce(p_user_id, auth.uid())
+    );
+$$;
+
 create or replace function public.todo_item_has_access(
   p_item_id uuid,
   p_user_id uuid default auth.uid()
@@ -266,7 +293,8 @@ set search_path = public, pg_temp
 as $$
   select
     public.todo_item_is_creator(p_item_id, coalesce(p_user_id, auth.uid()))
-    or public.todo_item_is_assignee(p_item_id, coalesce(p_user_id, auth.uid()));
+    or public.todo_item_is_assignee(p_item_id, coalesce(p_user_id, auth.uid()))
+    or public.todo_item_has_group_assignee_access(p_item_id, coalesce(p_user_id, auth.uid()));
 $$;
 
 create or replace function public.todo_template_has_access(
@@ -309,10 +337,7 @@ create policy ob_todo_item_assignees_select_access
   on public.ob_todo_item_assignees
   for select
   to authenticated
-  using (
-    assignee_user_id = auth.uid()
-    or public.todo_item_is_creator(item_id)
-  );
+  using (public.todo_item_has_access(item_id));
 
 drop policy if exists ob_todo_item_links_select_access on public.ob_todo_item_links;
 create policy ob_todo_item_links_select_access
@@ -773,6 +798,8 @@ begin
 end;
 $$;
 
+drop function if exists public.update_todo_task(uuid, text, text, timestamptz, date, text, jsonb, jsonb, boolean);
+
 create or replace function public.update_todo_task(
   p_template_id uuid,
   p_title text,
@@ -781,6 +808,7 @@ create or replace function public.update_todo_task(
   p_instance_date date default null,
   p_recurrence_kind text default 'none',
   p_recurrence_rule jsonb default '{}'::jsonb,
+  p_assignees jsonb default '[]'::jsonb,
   p_links jsonb default '[]'::jsonb,
   p_is_active boolean default true
 )
@@ -797,8 +825,10 @@ declare
   v_content text := coalesce(p_content, '');
   v_recurrence_kind text := lower(btrim(coalesce(p_recurrence_kind, 'none')));
   v_due_time_local text := null;
+  v_assignees_json jsonb := '[]'::jsonb;
   v_links_json jsonb := '[]'::jsonb;
   v_now timestamptz := now();
+  assignee_row record;
   item_row record;
 begin
   if v_actor_user_id is null then
@@ -833,6 +863,29 @@ begin
     raise exception 'Only the creator can update this task.';
   end if;
 
+  create temporary table if not exists tmp_todo_assignees (
+    user_id uuid primary key,
+    user_email text not null,
+    display_name text not null
+  ) on commit drop;
+  truncate tmp_todo_assignees;
+
+  insert into tmp_todo_assignees (user_id, user_email, display_name)
+  select distinct
+    row_data.user_id,
+    coalesce(nullif(btrim(coalesce(row_data.user_email, '')), ''), ''),
+    coalesce(nullif(btrim(coalesce(row_data.display_name, '')), ''), nullif(btrim(coalesce(row_data.user_email, '')), ''), row_data.user_id::text)
+  from jsonb_to_recordset(coalesce(p_assignees, '[]'::jsonb)) as row_data(
+    user_id uuid,
+    user_email text,
+    display_name text
+  )
+  where row_data.user_id is not null;
+
+  if not exists (select 1 from tmp_todo_assignees) then
+    raise exception 'At least one assignee is required.';
+  end if;
+
   create temporary table if not exists tmp_todo_links (
     label text not null,
     url text not null,
@@ -856,6 +909,19 @@ begin
   if exists (select 1 from tmp_todo_links where url !~* '^https?://') then
     raise exception 'Todo links must use http or https.';
   end if;
+
+  select coalesce(
+    jsonb_agg(
+      jsonb_build_object(
+        'user_id', user_id,
+        'user_email', user_email,
+        'display_name', display_name
+      )
+      order by display_name, user_email, user_id::text
+    ),
+    '[]'::jsonb
+  ) into v_assignees_json
+  from tmp_todo_assignees;
 
   select coalesce(
     jsonb_agg(
@@ -888,36 +954,149 @@ begin
     anchor_instance_date = p_instance_date,
     recurrence_kind = v_recurrence_kind,
     recurrence_rule = coalesce(p_recurrence_rule, '{}'::jsonb),
+    assignees = v_assignees_json,
     links = v_links_json,
     is_active = coalesce(p_is_active, true),
     updated_at = v_now
   where id = p_template_id;
 
-  for item_row in
-    select id, instance_date
-    from public.ob_todo_items
-    where template_id = p_template_id
-      and status <> 'done'
-      and status <> 'deleted'
-  loop
-    update public.ob_todo_items
-    set
-      title = v_title,
-      content = v_content,
-      due_at = case
-        when p_due_at is null then null
-        when item_row.instance_date is null then p_due_at
-        else timezone('America/New_York', ((item_row.instance_date)::text || ' ' || v_due_time_local)::timestamp)
-      end,
-      updated_at = v_now
-    where id = item_row.id;
+  if v_template.delivery_mode = 'shared' then
+    for item_row in
+      select id, instance_date
+      from public.ob_todo_items
+      where template_id = p_template_id
+        and status <> 'done'
+        and status <> 'deleted'
+    loop
+      update public.ob_todo_items
+      set
+        title = v_title,
+        content = v_content,
+        due_at = case
+          when p_due_at is null then null
+          when item_row.instance_date is null then p_due_at
+          else timezone('America/New_York', ((item_row.instance_date)::text || ' ' || v_due_time_local)::timestamp)
+        end,
+        updated_at = v_now
+      where id = item_row.id;
 
-    delete from public.ob_todo_item_links where item_id = item_row.id;
-    insert into public.ob_todo_item_links (item_id, label, url, sort_order, created_at, updated_at)
-    select item_row.id, label, url, row_number() over (order by sort_order, label, url) - 1, v_now, v_now
-    from tmp_todo_links
-    order by sort_order, label, url;
-  end loop;
+      delete from public.ob_todo_item_assignees where item_id = item_row.id;
+      insert into public.ob_todo_item_assignees (item_id, assignee_user_id, assignee_email, assignee_display_name, created_at)
+      select item_row.id, user_id, user_email, display_name, v_now
+      from tmp_todo_assignees;
+
+      delete from public.ob_todo_item_links where item_id = item_row.id;
+      insert into public.ob_todo_item_links (item_id, label, url, sort_order, created_at, updated_at)
+      select item_row.id, label, url, row_number() over (order by sort_order, label, url) - 1, v_now, v_now
+      from tmp_todo_links
+      order by sort_order, label, url;
+    end loop;
+  else
+    delete from public.ob_todo_items as item
+    where item.template_id = p_template_id
+      and item.delivery_mode = 'individual'
+      and item.status <> 'done'
+      and item.status <> 'deleted'
+      and not exists (
+        select 1
+        from tmp_todo_assignees as assignee
+        where assignee.user_id::text = item.delivery_key
+      );
+
+    for item_row in
+      select
+        item.id,
+        item.instance_date,
+        assignee.user_id,
+        assignee.user_email,
+        assignee.display_name
+      from public.ob_todo_items as item
+      join tmp_todo_assignees as assignee
+        on assignee.user_id::text = item.delivery_key
+      where item.template_id = p_template_id
+        and item.delivery_mode = 'individual'
+        and item.status <> 'done'
+        and item.status <> 'deleted'
+    loop
+      update public.ob_todo_items
+      set
+        title = v_title,
+        content = v_content,
+        due_at = case
+          when p_due_at is null then null
+          when item_row.instance_date is null then p_due_at
+          else timezone('America/New_York', ((item_row.instance_date)::text || ' ' || v_due_time_local)::timestamp)
+        end,
+        updated_at = v_now
+      where id = item_row.id;
+
+      delete from public.ob_todo_item_assignees where item_id = item_row.id;
+      insert into public.ob_todo_item_assignees (item_id, assignee_user_id, assignee_email, assignee_display_name, created_at)
+      values (item_row.id, item_row.user_id, item_row.user_email, item_row.display_name, v_now);
+
+      delete from public.ob_todo_item_links where item_id = item_row.id;
+      insert into public.ob_todo_item_links (item_id, label, url, sort_order, created_at, updated_at)
+      select item_row.id, label, url, row_number() over (order by sort_order, label, url) - 1, v_now, v_now
+      from tmp_todo_links
+      order by sort_order, label, url;
+    end loop;
+
+    for assignee_row in
+      select *
+      from tmp_todo_assignees
+      where not exists (
+        select 1
+        from public.ob_todo_items as item
+        where item.template_id = p_template_id
+          and item.delivery_mode = 'individual'
+          and item.status <> 'deleted'
+          and item.delivery_key = tmp_todo_assignees.user_id::text
+      )
+      order by display_name, user_email, user_id::text
+    loop
+      insert into public.ob_todo_items (
+        template_id,
+        series_key,
+        delivery_key,
+        instance_date,
+        delivery_mode,
+        title,
+        content,
+        due_at,
+        creator_user_id,
+        creator_email,
+        creator_display_name,
+        status,
+        created_at,
+        updated_at
+      )
+      values (
+        p_template_id,
+        v_template.id::text,
+        assignee_row.user_id::text,
+        p_instance_date,
+        v_template.delivery_mode,
+        v_title,
+        v_content,
+        p_due_at,
+        v_template.creator_user_id,
+        v_template.creator_email,
+        v_template.creator_display_name,
+        'open',
+        v_now,
+        v_now
+      )
+      returning id into item_row;
+
+      insert into public.ob_todo_item_assignees (item_id, assignee_user_id, assignee_email, assignee_display_name, created_at)
+      values (item_row.id, assignee_row.user_id, assignee_row.user_email, assignee_row.display_name, v_now);
+
+      insert into public.ob_todo_item_links (item_id, label, url, sort_order, created_at, updated_at)
+      select item_row.id, label, url, row_number() over (order by sort_order, label, url) - 1, v_now, v_now
+      from tmp_todo_links
+      order by sort_order, label, url;
+    end loop;
+  end if;
 
   insert into public.ob_todo_events (item_id, template_id, actor_user_id, actor_display, event_type, payload, created_at)
   values (
@@ -1127,20 +1306,21 @@ end;
 $$;
 
 revoke all on function public.create_todo_task(text, text, text, timestamptz, date, text, jsonb, jsonb, jsonb) from public;
-revoke all on function public.update_todo_task(uuid, text, text, timestamptz, date, text, jsonb, jsonb, boolean) from public;
+revoke all on function public.update_todo_task(uuid, text, text, timestamptz, date, text, jsonb, jsonb, jsonb, boolean) from public;
 revoke all on function public.apply_todo_item_action(uuid, text) from public;
 revoke all on function public.list_todo_profiles() from public;
 revoke all on function public.todo_resolve_user_identity(uuid) from public;
 revoke all on function public.todo_template_is_creator(uuid, uuid) from public;
 revoke all on function public.todo_item_is_creator(uuid, uuid) from public;
 revoke all on function public.todo_item_is_assignee(uuid, uuid) from public;
+revoke all on function public.todo_item_has_group_assignee_access(uuid, uuid) from public;
 revoke all on function public.todo_item_has_access(uuid, uuid) from public;
 revoke all on function public.todo_template_has_access(uuid, uuid) from public;
 
 grant execute on function public.create_todo_task(text, text, text, timestamptz, date, text, jsonb, jsonb, jsonb) to authenticated;
 grant execute on function public.create_todo_task(text, text, text, timestamptz, date, text, jsonb, jsonb, jsonb) to service_role;
-grant execute on function public.update_todo_task(uuid, text, text, timestamptz, date, text, jsonb, jsonb, boolean) to authenticated;
-grant execute on function public.update_todo_task(uuid, text, text, timestamptz, date, text, jsonb, jsonb, boolean) to service_role;
+grant execute on function public.update_todo_task(uuid, text, text, timestamptz, date, text, jsonb, jsonb, jsonb, boolean) to authenticated;
+grant execute on function public.update_todo_task(uuid, text, text, timestamptz, date, text, jsonb, jsonb, jsonb, boolean) to service_role;
 grant execute on function public.apply_todo_item_action(uuid, text) to authenticated;
 grant execute on function public.apply_todo_item_action(uuid, text) to service_role;
 grant execute on function public.list_todo_profiles() to authenticated;
@@ -1153,6 +1333,8 @@ grant execute on function public.todo_item_is_creator(uuid, uuid) to authenticat
 grant execute on function public.todo_item_is_creator(uuid, uuid) to service_role;
 grant execute on function public.todo_item_is_assignee(uuid, uuid) to authenticated;
 grant execute on function public.todo_item_is_assignee(uuid, uuid) to service_role;
+grant execute on function public.todo_item_has_group_assignee_access(uuid, uuid) to authenticated;
+grant execute on function public.todo_item_has_group_assignee_access(uuid, uuid) to service_role;
 grant execute on function public.todo_item_has_access(uuid, uuid) to authenticated;
 grant execute on function public.todo_item_has_access(uuid, uuid) to service_role;
 grant execute on function public.todo_template_has_access(uuid, uuid) to authenticated;

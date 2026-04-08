@@ -10,6 +10,7 @@ import {
   type CachedSystemHoursEntry
 } from '../workHourStats';
 import { getTrackedStaffIds } from '../workHourGlobalStats';
+import { buildComparisonRows } from '../workHourComparisonData';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -87,6 +88,14 @@ type PositionCardStat = {
   targets: PositionJumpTarget[];
 };
 
+const readEmployeeText = (row: Record<string, unknown>, ...keys: string[]) => {
+  for (const key of keys) {
+    const value = String(row[key] ?? '').trim();
+    if (value) return value;
+  }
+  return '';
+};
+
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 const IAMS_IMPORT_TABLE =
@@ -105,6 +114,7 @@ const TRACKED_UNRESOLVED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Trans
 const TIMECARD_PUNCH_SAVED_EVENT = 'ob-timecard-punch-saved';
 const IAMS_IMPORT_UPSERT_BATCH_SIZE = 500;
 const GLOBAL_IMPORT_FETCH_STAFF_BATCH_SIZE = 500;
+const ALL_SYSTEM_HOURS_COVERAGE_TOKEN = '__ALL_SYSTEM_HOURS__';
 
 const buildEmptyUnresolvedByPosition = (): PositionCardStat[] =>
   TRACKED_UNRESOLVED_POSITIONS.map((position) => ({ position, count: 0, targets: [] }));
@@ -557,7 +567,7 @@ export default function WorkHourComparisonPage({
     if (!requestedStaffIds.length) return new Map<string, number>();
 
     const cached = systemHoursCacheRef.current.get(workDate);
-    if (hasSystemHoursCoverage(cached, requestedStaffIds)) {
+    if (cached?.coveredStaffIds.has(ALL_SYSTEM_HOURS_COVERAGE_TOKEN) || hasSystemHoursCoverage(cached, requestedStaffIds)) {
       return cached?.hoursByStaff ?? new Map<string, number>();
     }
 
@@ -580,6 +590,39 @@ export default function WorkHourComparisonPage({
     const mergedEntry = mergeSystemHoursEntry(cached, requestedStaffIds, nextHoursByStaff);
     systemHoursCacheRef.current.set(workDate, mergedEntry);
     return mergedEntry.hoursByStaff;
+  };
+
+  const loadAllSystemHoursForDate = async (workDate: string) => {
+    if (!supabase || !isValidDateOnly(workDate)) return new Map<string, number>();
+
+    const cached = systemHoursCacheRef.current.get(workDate);
+    if (cached?.coveredStaffIds.has(ALL_SYSTEM_HOURS_COVERAGE_TOKEN)) {
+      return cached.hoursByStaff;
+    }
+
+    const dayRange = getOperationalDayRange(workDate);
+    if (!dayRange) return new Map<string, number>();
+
+    const windowStart = new Date(dayRange.start.getTime() - 24 * 60 * 60 * 1000);
+    const windowEnd = new Date(dayRange.end.getTime() + 24 * 60 * 60 * 1000);
+    const punches = await fetchAllRows(
+      (from, to) =>
+        supabase
+          .from('ob_punches')
+          .select('staff_id, action, created_at')
+          .gte('created_at', windowStart.toISOString())
+          .lt('created_at', windowEnd.toISOString())
+          .order('created_at', { ascending: true })
+          .range(from, to),
+      1000
+    );
+
+    const hoursByStaff = computeSystemHoursByStaff((punches ?? []) as any[], dayRange.start, dayRange.end);
+    systemHoursCacheRef.current.set(workDate, {
+      hoursByStaff,
+      coveredStaffIds: new Set<string>([...hoursByStaff.keys(), ALL_SYSTEM_HOURS_COVERAGE_TOKEN])
+    });
+    return hoursByStaff;
   };
 
   const loadSystemHoursByDate = async (staffIdsByDate: Map<string, Set<string>>) => {
@@ -701,13 +744,23 @@ export default function WorkHourComparisonPage({
 
     const next: Record<string, EmployeeLite> = {};
     for (const row of (data ?? []) as any[]) {
-      const staffId = normalizeStaffId(String(row.staff_id ?? row.Staff_ID ?? row.STAFF_ID ?? ''));
+      const staffId = normalizeStaffId(
+        readEmployeeText(
+          row as Record<string, unknown>,
+          'staff_id',
+          'staffId',
+          'Staff_ID',
+          'STAFF_ID',
+          'StaffId',
+          'STAFFID'
+        )
+      );
       if (!staffId) continue;
       next[staffId] = {
         staffId,
-        name: String(row.name ?? row.Name ?? '').trim(),
-        agency: String(row.agency ?? row.Agency ?? '').trim(),
-        position: String(row.position ?? row.Position ?? '').trim(),
+        name: readEmployeeText(row as Record<string, unknown>, 'name', 'Name', 'NAME'),
+        agency: readEmployeeText(row as Record<string, unknown>, 'agency', 'Agency', 'AGENCY', 'agency '),
+        position: readEmployeeText(row as Record<string, unknown>, 'position', 'Position', 'POSITION', 'position '),
         shift: resolveShift(row.shift ?? row.Shift)
       };
     }
@@ -760,41 +813,9 @@ export default function WorkHourComparisonPage({
         }))
         .filter((row) => row.staff_id && Number.isFinite(row.iams_hours) && row.iams_hours >= 0);
 
-      if (!normalizedImported.length) {
-        setRows([]);
-        setHasUploadedData(false);
-        return;
-      }
-
-      setHasUploadedData(true);
-      const staffIds = Array.from(new Set(normalizedImported.map((row) => row.staff_id)));
-      const hoursByStaff = await loadSystemHoursForDate(dateOnly, staffIds);
-
-      const nextRows: ComparisonRow[] = normalizedImported.map((row) => {
-        const employee = employeeMap[row.staff_id] ?? {
-          staffId: row.staff_id,
-          name: '',
-          agency: '',
-          position: '',
-          shift: '' as const
-        };
-        const systemHours = Number(hoursByStaff.get(row.staff_id) ?? 0);
-        const iamsHours = Math.round(Number(row.iams_hours ?? 0) * 100) / 100;
-        const diffHours = Math.round((systemHours - iamsHours) * 100) / 100;
-        return {
-          staffId: row.staff_id,
-          name: employee.name,
-          agency: employee.agency,
-          position: employee.position,
-          shift: employee.shift,
-          systemHours,
-          iamsHours,
-          diffHours,
-          fixedBy: String(row.fixed_by ?? '').trim(),
-          fixedAt: String(row.fixed_at ?? '').trim()
-        };
-      });
-
+      setHasUploadedData(normalizedImported.length > 0);
+      const hoursByStaff = await loadAllSystemHoursForDate(dateOnly);
+      const nextRows: ComparisonRow[] = buildComparisonRows(normalizedImported, hoursByStaff, employeeMap, EPSILON);
       setRows(nextRows);
     } catch (err) {
       setRows([]);
@@ -976,8 +997,26 @@ export default function WorkHourComparisonPage({
   }, [supabase]);
 
   useEffect(() => {
-    void loadComparisonRows(selectedDate);
-  }, [selectedDate]);
+    let active = true;
+    const run = async () => {
+      if (!supabase) return;
+      try {
+        const employeeMap =
+          Object.keys(employeesByStaffId).length > 0
+            ? employeesByStaffId
+            : await loadEmployees();
+        if (!active) return;
+        await loadComparisonRows(selectedDate, employeeMap);
+      } catch (err) {
+        if (!active) return;
+        setError(String((err as any)?.message ?? err ?? 'Failed to load comparison list.'));
+      }
+    };
+    void run();
+    return () => {
+      active = false;
+    };
+  }, [selectedDate, supabase]);
 
   const onUploadFile = async (file: File | null) => {
     setError(null);
@@ -1181,6 +1220,11 @@ export default function WorkHourComparisonPage({
       gapCount
     };
   }, [filteredRows]);
+
+  const hasSystemOnlyRows = useMemo(
+    () => rows.some((row) => Math.abs(row.systemHours) >= EPSILON && Math.abs(row.iamsHours) < EPSILON),
+    [rows]
+  );
 
   const jumpToPositionTarget = (
     item: PositionCardStat,
@@ -1572,9 +1616,14 @@ export default function WorkHourComparisonPage({
           </div>
 
           <div className="mt-4 overflow-auto">
-            {!hasUploadedData && !loading ? (
+            {!hasUploadedData && hasSystemOnlyRows && !loading ? (
+              <div className={['mb-4 rounded-2xl border px-4 py-3 text-sm', isLight ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-amber-400/30 bg-amber-500/10 text-amber-200'].join(' ')}>
+                {t('当前日期没有 iAMS 导入，以下仅显示系统工时。', 'No iAMS upload found for this date. Showing system hours only.')}
+              </div>
+            ) : null}
+            {!hasUploadedData && !loading && rows.length === 0 ? (
               <div className={['rounded-2xl border px-4 py-8 text-center text-sm', isLight ? 'border-slate-200 bg-slate-50 text-slate-600' : 'border-white/10 bg-white/[0.02] text-white/70'].join(' ')}>
-                {t('当前日期还没有上传 iAMS 数据，列表保持为空。', 'No iAMS upload found for this date, list stays empty.')}
+                {t('当前日期还没有上传 iAMS 数据，也没有系统工时。', 'No iAMS upload or system hours found for this date.')}
               </div>
             ) : filteredRows.length === 0 && !loading ? (
               <div className={['rounded-2xl border px-4 py-8 text-center text-sm', isLight ? 'border-slate-200 bg-slate-50 text-slate-600' : 'border-white/10 bg-white/[0.02] text-white/70'].join(' ')}>

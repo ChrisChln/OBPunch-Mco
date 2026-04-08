@@ -99,6 +99,16 @@ const getScheduleBaseStateFromNote = (note: unknown) => {
 const isLeaveWritableScheduleState = (state: string) =>
   state === 'work' || state === 'fixed_work' || state === 'temp_work' || state === 'planned_temp_work';
 
+const readEmployeeField = (row: Record<string, unknown>, ...keys: string[]) => {
+  for (const key of keys) {
+    const value = row[key];
+    if (value === null || value === undefined) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return '';
+};
+
 const normalizeHeaderKey = (value: unknown) =>
   String(value ?? '')
     .trim()
@@ -232,9 +242,15 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
     if (fetchError) throw new Error(String(fetchError.message ?? 'Failed to load employees.'));
     const next: Record<string, EmployeeLite> = {};
     for (const row of (data ?? []) as any[]) {
-      const staffId = normalizeStaffId(String(row.staff_id ?? ''));
+      const staffId = normalizeStaffId(
+        readEmployeeField(row as Record<string, unknown>, 'staff_id', 'staffId', 'Staff_ID', 'STAFF_ID')
+      );
       if (!staffId) continue;
-      next[staffId] = { staffId, name: String(row.name ?? '').trim(), position: String(row.position ?? '').trim() };
+      next[staffId] = {
+        staffId,
+        name: readEmployeeField(row as Record<string, unknown>, 'name', 'Name', 'NAME'),
+        position: readEmployeeField(row as Record<string, unknown>, 'position', 'Position', 'POSITION')
+      };
     }
     setEmployeesByStaffId(next);
   };
@@ -326,6 +342,15 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
       text.includes('apply_leave_request_decision') &&
       (text.includes('could not find') || text.includes('function') || text.includes('schema cache') || text.includes('pgrst'))
     );
+  };
+
+  const isLeaveDecisionRpcCompatibilityError = (error: unknown) => {
+    const text = String(
+      typeof error === 'object' && error !== null
+        ? `${(error as { code?: unknown }).code ?? ''} ${(error as { message?: unknown }).message ?? ''} ${(error as { details?: unknown }).details ?? ''}`
+        : error ?? ''
+    ).toLowerCase();
+    return text.includes('column') && text.includes('does not exist') && (text.includes('position') || text.includes('name'));
   };
 
   const getEffectiveStatus = (row: LeaveRow): LeaveStatus => {
@@ -511,7 +536,7 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
           reviewedAt = String(result.reviewed_at ?? new Date(serverTime).toISOString());
           reviewedBy = String(result.reviewed_by ?? actorDisplay).trim() || actorDisplay;
         } catch (error) {
-          if (!isMissingLeaveDecisionRpcError(error)) throw error;
+          if (!isMissingLeaveDecisionRpcError(error) && !isLeaveDecisionRpcCompatibilityError(error)) throw error;
           const fallback = await updateLeaveStatusFallback(row, status);
           nextStatus = fallback.nextStatus;
           reviewedAt = fallback.reviewedAt;
