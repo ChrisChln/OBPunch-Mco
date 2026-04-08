@@ -9,6 +9,7 @@ type AdminNavProps = {
   tabClass: (active: boolean) => string;
   t: TranslateFn;
   leaveApprovalPendingCount?: number;
+  todoPendingCount?: number;
 };
 
 export default function AdminNav({
@@ -17,7 +18,8 @@ export default function AdminNav({
   onSetPage,
   tabClass,
   t,
-  leaveApprovalPendingCount = 0
+  leaveApprovalPendingCount = 0,
+  todoPendingCount = 0
 }: AdminNavProps) {
   return (
     <nav className="glass reveal flex flex-wrap gap-2 rounded-[30px] border border-white/10 p-3.5">
@@ -49,6 +51,15 @@ export default function AdminNav({
         className={tabClass(page === 'work_hour_comparison')}
       >
         {t('工时对比', 'Work Hour Comparison')}
+      </button>
+      <button
+        type="button"
+        disabled={isLocked}
+        onClick={() => onSetPage('todo')}
+        className={[tabClass(page === 'todo'), 'relative'].join(' ')}
+      >
+        {todoPendingCount > 0 ? <span className="absolute right-0 top-0.5 min-w-[18px] rounded-full bg-sky-500 px-1.5 text-[10px] font-semibold leading-5 text-white">{todoPendingCount}</span> : null}
+        {t('待办', 'ToDo')}
       </button>
       <button type="button" disabled={isLocked} onClick={() => onSetPage('punches')} className={tabClass(page === 'punches')}>
         {t('打卡流水', 'Punches')}

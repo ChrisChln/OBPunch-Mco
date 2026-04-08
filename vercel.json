@@ -1,1 +1,8 @@
-{}
+{
+  "crons": [
+    {
+      "path": "/api/todo-recurring-sync",
+      "schedule": "5 * * * *"
+    }
+  ]
+}

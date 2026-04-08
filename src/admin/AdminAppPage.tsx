@@ -35,6 +35,7 @@ import PredictionModelPage from './pages/PredictionModelPage';
 import EfficiencyPage from './pages/EfficiencyPage';
 import WorkHourComparisonPage from './pages/WorkHourComparisonPage';
 import LeaveApprovalPage from './pages/LeaveApprovalPage';
+import TodoPage from './pages/TodoPage';
 import AppDialog from '../components/AppDialog';
 import { useScheduleRealtime } from './useScheduleRealtime';
 import {
@@ -59,6 +60,8 @@ import {
   type LateRoundingFamily,
   type LateSample
 } from './lateMarks';
+import { fetchTodoNavPendingCount } from './todoData';
+import { TODO_UPDATED_EVENT } from './todoShared';
 import {
   loadDailyCapacityStaffStats,
   type DailyCapacityProcKey,
@@ -1286,6 +1289,7 @@ export default function AdminAppPage() {
   const [recentPunchesError, setRecentPunchesError] = useState<string | null>(null);
   const [employeeByStaffId, setEmployeeByStaffId] = useState<Record<string, { name: string; agency: string }>>({});
   const [punchesSearch, setPunchesSearch] = useState('');
+  const [todoPendingCount, setTodoPendingCount] = useState(0);
 
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
   const [tempAccounts, setTempAccounts] = useState<
@@ -2632,6 +2636,36 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     };
   }, []);
 
+  useEffect(() => {
+    if (!supabase || !user?.id) {
+      setTodoPendingCount(0);
+      return;
+    }
+    let active = true;
+    const refreshTodoCount = async () => {
+      try {
+        const nextCount = await fetchTodoNavPendingCount(supabase, user.id);
+        if (active) setTodoPendingCount(nextCount);
+      } catch {
+        if (active) setTodoPendingCount(0);
+      }
+    };
+    void refreshTodoCount();
+    if (typeof window === 'undefined') {
+      return () => {
+        active = false;
+      };
+    }
+    const handler = () => {
+      void refreshTodoCount();
+    };
+    window.addEventListener(TODO_UPDATED_EVENT, handler as EventListener);
+    return () => {
+      active = false;
+      window.removeEventListener(TODO_UPDATED_EVENT, handler as EventListener);
+    };
+  }, [supabase, user?.id]);
+
   const doLogin = async () => {
     if (!supabase) {
       setStatus({ tone: 'error', message: '缺少 Supabase 配置，请检查环境变量。' });
@@ -2821,18 +2855,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     await recomputeTimecardAttendanceMarks();
   };
 
-  const changeAdminPage = (nextPage: AdminPage, source: string) => {
-    const previousPage = page;
+  const changeAdminPage = (nextPage: AdminPage, _source: string) => {
     setPage(nextPage);
-    void writeAudit({
-      action: 'admin_page_switch',
-      target: 'admin_navigation',
-      payload: {
-        source,
-        previous_page: previousPage,
-        next_page: nextPage
-      }
-    });
   };
 
   const fetchAudit = async (options?: { search?: string }) => {
@@ -2855,6 +2879,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       let q = supabase
         .from(AUDIT_TABLE)
         .select('id, created_at, actor, action, staff_id, target, payload')
+        .neq('action', 'admin_page_switch')
         .order('created_at', { ascending: false })
         .limit(searchValue ? 500 : 200);
       if (searchValue) {
@@ -10486,6 +10511,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (page === 'work_hour_comparison') {
       setStatus({ tone: 'idle', message: t('工时对比：请选择日期后上传 iAMS 文件。', 'Work hour comparison: select a date and upload iAMS file.') });
     }
+    if (page === 'todo') {
+      setStatus({ tone: 'idle', message: t('待办：管理分配、完成和删除确认。', 'ToDo: manage assignments, completion, and delete approvals.') });
+    }
     if (page === 'audit') {
       void fetchAudit({ search: auditSearch });
     }
@@ -13780,7 +13808,15 @@ ${rowsToHtml(late)}
           />
         ) : (
           <>
-            <AdminNav page={page} isLocked={isLocked} onSetPage={(nextPage) => changeAdminPage(nextPage, 'nav')} tabClass={tabClass} t={t} leaveApprovalPendingCount={leaveApprovalPendingCount} />
+            <AdminNav
+              page={page}
+              isLocked={isLocked}
+              onSetPage={(nextPage) => changeAdminPage(nextPage, 'nav')}
+              tabClass={tabClass}
+              t={t}
+              leaveApprovalPendingCount={leaveApprovalPendingCount}
+              todoPendingCount={todoPendingCount}
+            />
 
             {page === 'home' && (
               <HomeDashboardPage
@@ -13870,6 +13906,18 @@ ${rowsToHtml(late)}
                 userEmail={String(user?.email ?? '')}
                 userDisplayName={String(userDisplayName ?? '')}
                 onOpenTimecardCalibration={openTimecardPunchModalForDate}
+              />
+            )}
+            {page === 'todo' && (
+              <TodoPage
+                t={t}
+                isLocked={isLocked}
+                supabase={supabase}
+                themeMode={themeMode}
+                userId={String(user?.id ?? '')}
+                userEmail={String(user?.email ?? '')}
+                userDisplayName={String(userDisplayName ?? '')}
+                onPendingCountChange={setTodoPendingCount}
               />
             )}
             {page === 'punches' && (
