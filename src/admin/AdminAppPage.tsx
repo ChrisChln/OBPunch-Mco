@@ -19,6 +19,7 @@ import DailyListNewHireModal from './components/DailyListNewHireModal';
 import DevicesPage from './pages/DevicesPage';
 import EmployeeUploadPage from './pages/EmployeeUploadPage';
 import AccountManagementPage from './pages/AccountManagementPage';
+import AdminAccessManagementSection from './pages/AdminAccessManagementSection';
 import EmployeesToolbar from './pages/EmployeesToolbar';
 import EmployeeAddModal from './pages/EmployeeAddModal';
 import EmployeesTableSection from './pages/EmployeesTableSection';
@@ -35,7 +36,27 @@ import PredictionModelPage from './pages/PredictionModelPage';
 import EfficiencyPage from './pages/EfficiencyPage';
 import WorkHourComparisonPage from './pages/WorkHourComparisonPage';
 import LeaveApprovalPage from './pages/LeaveApprovalPage';
+import TodoPage from './pages/TodoPage';
 import AppDialog from '../components/AppDialog';
+import {
+  canManageAdminAccess,
+  canReviewTerminationRequests,
+  getModuleMapFromContext,
+  hasModuleAccess,
+  normalizeAdminAccessContext,
+  type AdminAccessContext
+} from '../shared/adminAccess';
+import {
+  fetchAdminAccessContext,
+  listAdminAccessAccounts,
+  listEmployeeTerminationRequests,
+  reviewEmployeeTerminationRequest,
+  saveAdminAccessAccount,
+  type AdminAccessAccountRecord,
+  type AdminAccessSavePayload,
+  type AdminAccessUserOption,
+  type TerminationRequestRecord
+} from './adminAccessApi';
 import { useScheduleRealtime } from './useScheduleRealtime';
 import {
   activatePlannedScheduleNote,
@@ -59,6 +80,8 @@ import {
   type LateRoundingFamily,
   type LateSample
 } from './lateMarks';
+import { fetchTodoNavPendingCount, fetchTodoProfiles } from './todoData';
+import { TODO_UPDATED_EVENT } from './todoShared';
 import {
   loadDailyCapacityStaffStats,
   type DailyCapacityProcKey,
@@ -980,6 +1003,28 @@ const normalizeHeaderKey = (value: string) =>
     .replace(/\s+/g, '_')
     .replace(/-+/g, '_');
 
+const getVisibleAdminPages = (accessContext: AdminAccessContext | null | undefined): AdminPage[] => {
+  const moduleMap = getModuleMapFromContext(accessContext);
+  const pages: AdminPage[] = [];
+
+  if (hasModuleAccess(moduleMap, 'home', 'view')) pages.push('home');
+  if (hasModuleAccess(moduleMap, 'employees', 'view')) pages.push('employees');
+  if (hasModuleAccess(moduleMap, 'accounts', 'view')) pages.push('accounts');
+  if (hasModuleAccess(moduleMap, 'timecard', 'view')) pages.push('timecard');
+  if (hasModuleAccess(moduleMap, 'leave_approval', 'view')) pages.push('leave_approval');
+  if (hasModuleAccess(moduleMap, 'efficiency', 'view')) pages.push('work_hour_comparison');
+  if (hasModuleAccess(moduleMap, 'todo', 'view')) pages.push('todo');
+  if (hasModuleAccess(moduleMap, 'punches', 'view')) pages.push('punches');
+  if (hasModuleAccess(moduleMap, 'audit', 'view')) pages.push('audit');
+  if (hasModuleAccess(moduleMap, 'schedule', 'view')) pages.push('schedule');
+  if (hasModuleAccess(moduleMap, 'devices', 'view')) pages.push('devices');
+  if (hasModuleAccess(moduleMap, 'forecast', 'view')) pages.push('forecast');
+  if (hasModuleAccess(moduleMap, 'prediction_model', 'view')) pages.push('prediction_model');
+  if (hasModuleAccess(moduleMap, 'efficiency', 'view')) pages.push('efficiency');
+
+  return pages.length > 0 ? pages : ['home'];
+};
+
 const EMPLOYEE_KEY_ALIASES: Record<string, string> = {
   employee_id: 'staff_id',
   employeeid: 'staff_id',
@@ -1132,7 +1177,31 @@ export default function AdminAppPage() {
   const scheduleRealtimeDebounceTimerRef = useRef<number | null>(null);
 
   const [page, setPage] = useState<AdminPage>('home');
+  const [adminAccessContext, setAdminAccessContext] = useState<AdminAccessContext | null>(null);
+  const [terminationRequests, setTerminationRequests] = useState<TerminationRequestRecord[]>([]);
+  const [adminAccessAccounts, setAdminAccessAccounts] = useState<AdminAccessAccountRecord[]>([]);
+  const [adminAccessUserOptions, setAdminAccessUserOptions] = useState<AdminAccessUserOption[]>([]);
   const [leaveApprovalPendingCount, setLeaveApprovalPendingCount] = useState(0);
+  const visibleAdminPages = useMemo(() => getVisibleAdminPages(adminAccessContext), [adminAccessContext]);
+  const adminModuleMap = useMemo(() => getModuleMapFromContext(adminAccessContext), [adminAccessContext]);
+  const scheduleCanReviewTermination = useMemo(
+    () => canReviewTerminationRequests(adminAccessContext),
+    [adminAccessContext]
+  );
+  const accountsCanManageAdminAccess = useMemo(
+    () => canManageAdminAccess(adminAccessContext),
+    [adminAccessContext]
+  );
+  const pendingTerminationRequestsByStaffId = useMemo(() => {
+    const map = new Map<string, TerminationRequestRecord>();
+    for (const request of terminationRequests) {
+      if (request.status !== 'pending') continue;
+      const staff = normalizeStaffId(String(request.staff_id ?? '').trim());
+      if (!staff || map.has(staff)) continue;
+      map.set(staff, request);
+    }
+    return map;
+  }, [terminationRequests]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1286,6 +1355,7 @@ export default function AdminAppPage() {
   const [recentPunchesError, setRecentPunchesError] = useState<string | null>(null);
   const [employeeByStaffId, setEmployeeByStaffId] = useState<Record<string, { name: string; agency: string }>>({});
   const [punchesSearch, setPunchesSearch] = useState('');
+  const [todoPendingCount, setTodoPendingCount] = useState(0);
 
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
   const [tempAccounts, setTempAccounts] = useState<
@@ -2632,6 +2702,93 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     };
   }, []);
 
+  useEffect(() => {
+    if (!supabase || !user?.id) {
+      setTodoPendingCount(0);
+      return;
+    }
+    let active = true;
+    const refreshTodoCount = async () => {
+      try {
+        const nextCount = await fetchTodoNavPendingCount(supabase, user.id);
+        if (active) setTodoPendingCount(nextCount);
+      } catch {
+        if (active) setTodoPendingCount(0);
+      }
+    };
+    void refreshTodoCount();
+    if (typeof window === 'undefined') {
+      return () => {
+        active = false;
+      };
+    }
+    const handler = () => {
+      void refreshTodoCount();
+    };
+    window.addEventListener(TODO_UPDATED_EVENT, handler as EventListener);
+    return () => {
+      active = false;
+      window.removeEventListener(TODO_UPDATED_EVENT, handler as EventListener);
+    };
+  }, [supabase, user?.id]);
+
+  useEffect(() => {
+    let active = true;
+    const loadAdminAccessContext = async () => {
+      if (!supabase || !user) {
+        setAdminAccessContext(null);
+        return;
+      }
+      try {
+        const context = await fetchAdminAccessContext(supabase, user.email);
+        if (!active) return;
+        setAdminAccessContext(context);
+      } catch {
+        if (!active) return;
+        setAdminAccessContext(
+          normalizeAdminAccessContext(
+            {
+              user_id: user.id,
+              role: user.email?.trim().toLowerCase() === STAFF_ID_EDITOR_EMAIL ? 'level1' : 'level3',
+              managed_agencies: [],
+              modules: []
+            },
+            user.email
+          )
+        );
+      }
+    };
+    void loadAdminAccessContext();
+    return () => {
+      active = false;
+    };
+  }, [supabase, user?.id, user?.email]);
+
+  useEffect(() => {
+    if (!visibleAdminPages.includes(page)) {
+      setPage(visibleAdminPages[0] ?? 'home');
+    }
+  }, [page, visibleAdminPages]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!user || !adminAccessContext) return;
+    if (adminAccessContext.role !== 'agency') return;
+    if (window.location.pathname.startsWith('/agency')) return;
+    window.location.replace('/agency/');
+  }, [adminAccessContext, user]);
+
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    void fetchTerminationRequests({ lockUi: false });
+  }, [page, user?.id, adminAccessContext?.role]);
+
+  useEffect(() => {
+    if (page !== 'accounts') return;
+    if (!accountsCanManageAdminAccess) return;
+    void fetchAdminAccessAccountsAndUsers({ lockUi: false });
+  }, [page, user?.id, accountsCanManageAdminAccess]);
+
   const doLogin = async () => {
     if (!supabase) {
       setStatus({ tone: 'error', message: '缺少 Supabase 配置，请检查环境变量。' });
@@ -2656,6 +2813,107 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     await runLocked('logout', async () => {
       await supabase.auth.signOut();
       setStatus({ tone: 'idle', message: '已退出登录' });
+    });
+  };
+
+  const fetchTerminationRequests = async (options?: { lockUi?: boolean; status?: 'pending' | 'approved' | 'rejected' | 'all' }) => {
+    if (!supabase || !hasModuleAccess(adminModuleMap, 'schedule', 'view')) {
+      setTerminationRequests([]);
+      return [];
+    }
+
+    const statusFilter = options?.status ?? 'pending';
+    const exec = async () => {
+      const rows = await listEmployeeTerminationRequests(supabase, statusFilter);
+      setTerminationRequests(rows);
+      return rows;
+    };
+
+    if (options?.lockUi === false) {
+      return exec();
+    }
+
+    let rows: TerminationRequestRecord[] = [];
+    await runLocked('termination_requests', async () => {
+      rows = await exec();
+    });
+    return rows;
+  };
+
+  const fetchAdminAccessAccountsAndUsers = async (options?: { lockUi?: boolean }) => {
+    if (!supabase || !accountsCanManageAdminAccess) {
+      setAdminAccessAccounts([]);
+      setAdminAccessUserOptions([]);
+      return;
+    }
+
+    const exec = async () => {
+      const [rows, users] = await Promise.all([listAdminAccessAccounts(supabase), fetchTodoProfiles(supabase)]);
+      setAdminAccessAccounts(rows);
+      setAdminAccessUserOptions(
+        users
+          .map((item) => ({
+            user_id: String(item.user_id ?? '').trim(),
+            user_email: String(item.user_email ?? '').trim(),
+            display_name: String(item.display_name ?? '').trim()
+          }))
+          .filter((item) => item.user_id)
+      );
+    };
+
+    if (options?.lockUi === false) {
+      await exec();
+      return;
+    }
+
+    await runLocked('admin_access_accounts', exec);
+  };
+
+  const reviewTerminationRequest = async (request: TerminationRequestRecord, action: 'approve' | 'reject') => {
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
+      return;
+    }
+    if (!scheduleCanReviewTermination) {
+      setStatus({ tone: 'error', message: t('当前账号不能审批离职。', 'This account cannot review termination requests.') });
+      return;
+    }
+
+    const ok = await askConfirm(
+      action === 'approve'
+        ? t(`确认离职 ${request.staff_id} 吗？`, `Approve departure for ${request.staff_id}?`)
+        : t(`拒绝离职 ${request.staff_id} 吗？`, `Reject departure for ${request.staff_id}?`),
+      action === 'approve' ? t('确认离职', 'Confirm Departure') : t('拒绝离职', 'Reject Departure')
+    );
+    if (!ok) return;
+
+    await runLocked(`termination_${action}`, async () => {
+      await reviewEmployeeTerminationRequest(supabase, request.id, action);
+      setStatus({
+        tone: 'success',
+        message:
+          action === 'approve'
+            ? t(`已确认离职：${request.staff_id}`, `Departure approved: ${request.staff_id}`)
+            : t(`已拒绝离职：${request.staff_id}`, `Departure rejected: ${request.staff_id}`)
+      });
+      await Promise.all([refreshSchedulePanel({ lockUi: false }), fetchTerminationRequests({ lockUi: false })]);
+    });
+  };
+
+  const saveAdminAccessConfig = async (payload: AdminAccessSavePayload) => {
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
+      return;
+    }
+
+    await runLocked('admin_access_save', async () => {
+      await saveAdminAccessAccount(supabase, payload);
+      if (user?.id && payload.user_id === user.id) {
+        const nextContext = await fetchAdminAccessContext(supabase, user.email);
+        setAdminAccessContext(nextContext);
+      }
+      await fetchAdminAccessAccountsAndUsers({ lockUi: false });
+      setStatus({ tone: 'success', message: t('权限已保存。', 'Access saved.') });
     });
   };
 
@@ -2821,18 +3079,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     await recomputeTimecardAttendanceMarks();
   };
 
-  const changeAdminPage = (nextPage: AdminPage, source: string) => {
-    const previousPage = page;
+  const changeAdminPage = (nextPage: AdminPage, _source: string) => {
+    if (!visibleAdminPages.includes(nextPage)) {
+      return;
+    }
     setPage(nextPage);
-    void writeAudit({
-      action: 'admin_page_switch',
-      target: 'admin_navigation',
-      payload: {
-        source,
-        previous_page: previousPage,
-        next_page: nextPage
-      }
-    });
   };
 
   const fetchAudit = async (options?: { search?: string }) => {
@@ -2855,6 +3106,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       let q = supabase
         .from(AUDIT_TABLE)
         .select('id, created_at, actor, action, staff_id, target, payload')
+        .neq('action', 'admin_page_switch')
         .order('created_at', { ascending: false })
         .limit(searchValue ? 500 : 200);
       if (searchValue) {
@@ -2934,6 +3186,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       admin_page_switch: t('页面切换', 'Page Switch'),
       schedule_rest: t('排班休息', 'Schedule Off'),
       schedule_clear: t('清空排班', 'Schedule Clear'),
+      agency_planned_leave: t('中介计划请假', 'Agency Planned Leave'),
+      agency_substitute_assign: t('中介替补安排', 'Agency Substitute'),
+      agency_new_hire_create: t('中介新人需求', 'Agency New Hire Create'),
+      agency_new_hire_update: t('中介新人需求更新', 'Agency New Hire Update'),
+      agency_termination_request: t('中介离职申请', 'Agency Termination Request'),
+      admin_access_save: t('权限更新', 'Access Updated'),
+      employee_termination_approve: t('确认离职', 'Termination Approved'),
+      employee_termination_reject: t('拒绝离职', 'Termination Rejected'),
       timecard_week_switch: t('打卡切换周', 'Timecard Week Switch'),
       timecard_refresh: t('打卡刷新', 'Timecard Refresh'),
       device_add: t('新增设备', 'Device Add'),
@@ -4035,6 +4295,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         fetchScheduleUph({ employeesOverride: latestEmployees }),
         fetchScheduleMistakeCounts({ employeesOverride: latestEmployees }),
         fetchScheduleMonthlyAbsentDates({ employeesOverride: latestEmployees, monthDateOverride: scheduleMonthAnchor }),
+        fetchTerminationRequests({ lockUi: false }),
         fetchScheduleLateMarks({
           employeesOverride: latestEmployees,
           scheduleRowsOverride: latestScheduleRows
@@ -10486,6 +10747,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (page === 'work_hour_comparison') {
       setStatus({ tone: 'idle', message: t('工时对比：请选择日期后上传 iAMS 文件。', 'Work hour comparison: select a date and upload iAMS file.') });
     }
+    if (page === 'todo') {
+      setStatus({ tone: 'idle', message: t('待办：管理分配、完成和删除确认。', 'ToDo: manage assignments, completion, and delete approvals.') });
+    }
     if (page === 'audit') {
       void fetchAudit({ search: auditSearch });
     }
@@ -13780,7 +14044,16 @@ ${rowsToHtml(late)}
           />
         ) : (
           <>
-            <AdminNav page={page} isLocked={isLocked} onSetPage={(nextPage) => changeAdminPage(nextPage, 'nav')} tabClass={tabClass} t={t} leaveApprovalPendingCount={leaveApprovalPendingCount} />
+            <AdminNav
+              page={page}
+              isLocked={isLocked}
+              onSetPage={(nextPage) => changeAdminPage(nextPage, 'nav')}
+              tabClass={tabClass}
+              t={t}
+              visiblePages={visibleAdminPages}
+              leaveApprovalPendingCount={leaveApprovalPendingCount}
+              todoPendingCount={todoPendingCount}
+            />
 
             {page === 'home' && (
               <HomeDashboardPage
@@ -13870,6 +14143,18 @@ ${rowsToHtml(late)}
                 userEmail={String(user?.email ?? '')}
                 userDisplayName={String(userDisplayName ?? '')}
                 onOpenTimecardCalibration={openTimecardPunchModalForDate}
+              />
+            )}
+            {page === 'todo' && (
+              <TodoPage
+                t={t}
+                isLocked={isLocked}
+                supabase={supabase}
+                themeMode={themeMode}
+                userId={String(user?.id ?? '')}
+                userEmail={String(user?.email ?? '')}
+                userDisplayName={String(userDisplayName ?? '')}
+                onPendingCountChange={setTodoPendingCount}
               />
             )}
             {page === 'punches' && (
@@ -14343,6 +14628,8 @@ ${rowsToHtml(late)}
                           const agency = String(employee.agency ?? employee.Agency ?? '').trim();
                           const position = String(employee.position ?? employee.Position ?? '').trim();
                           const label = String(employee.label ?? employee.Label ?? '').trim();
+                          const pendingTerminationRequest = pendingTerminationRequestsByStaffId.get(staff) ?? null;
+                          const hasPendingTermination = Boolean(pendingTerminationRequest);
                           if (!staff) return null;
 
                           let workDays = 0;
@@ -14398,23 +14685,46 @@ ${rowsToHtml(late)}
                                 : effectiveWorkDays >= 1 && effectiveWorkDays <= 4
                                   ? 'border-amber-400/60 text-amber-200 bg-amber-500/10'
                                   : 'border-rose-400/60 text-rose-200 bg-rose-500/10';
+                          const scheduleRowClass = hasPendingTermination
+                            ? themeMode === 'light'
+                              ? 'border-b border-slate-300 bg-slate-200/85 text-slate-700 transition-colors hover:bg-slate-200 last:border-0'
+                              : 'border-b border-white/5 bg-slate-800/70 text-slate-200 transition-colors hover:bg-slate-800 last:border-0'
+                            : 'border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-0';
+                          const scheduleBodyTextClass = hasPendingTermination
+                            ? themeMode === 'light'
+                              ? 'text-slate-700'
+                              : 'text-slate-300'
+                            : 'text-slate-200';
 
                           return (
-                            <tr className="border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-0" key={staff}>
-                              <td className="pl-4 pr-1 py-2 font-mono text-slate-200">{staff}</td>
-                              <td className="px-1 py-2 text-slate-200 truncate">{name || '-'}</td>
+                            <tr className={scheduleRowClass} key={staff}>
+                              <td className={['pl-4 pr-1 py-2 font-mono', scheduleBodyTextClass].join(' ')}>{staff}</td>
+                              <td className={['px-1 py-2 truncate', scheduleBodyTextClass].join(' ')}>
+                                <div>{name || '-'}</div>
+                                {hasPendingTermination && (
+                                  <div
+                                    className={[
+                                      'mt-1 text-[10px]',
+                                      themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'
+                                    ].join(' ')}
+                                    title={pendingTerminationRequest?.reason || undefined}
+                                  >
+                                    {t('待审批离职', 'Pending departure')}
+                                  </div>
+                                )}
+                              </td>
                               <td className="px-1.5 py-2 text-center">
                                 <span className={['inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold', workDaysClass].join(' ')}>
                                   {effectiveWorkDays}
                                 </span>
                               </td>
-                              <td className="px-1 py-2 text-slate-200 truncate">{agency || '-'}</td>
-                              <td className="px-1 py-2 text-slate-200">
+                              <td className={['px-1 py-2 truncate', scheduleBodyTextClass].join(' ')}>{agency || '-'}</td>
+                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
                                 <span className={['inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]', getSchedulePositionBadgeClass(position)].join(' ')}>
                                   {position || '-'}
                                 </span>
                               </td>
-                              <td className="px-1 py-2 text-slate-200">
+                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
                                 {label ? (
                                   <span
                                     className={[
@@ -14428,7 +14738,7 @@ ${rowsToHtml(late)}
                                   '-'
                                 )}
                               </td>
-                              <td className="px-1 py-2 text-center text-slate-200">
+                              <td className={['px-1 py-2 text-center', scheduleBodyTextClass].join(' ')}>
                                 {(() => {
                                   const dbShift = normalizeShiftValue(String(employee.shift ?? '').trim());
                                   const shift = dbShift || '';
@@ -14437,7 +14747,7 @@ ${rowsToHtml(late)}
                                   return <span className={['inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.06em]', shiftClass].join(' ')}>{shiftLabel}</span>;
                                 })()}
                               </td>
-                              <td className="px-1 py-2 text-center font-mono text-slate-200">{formatUph(scheduleUphByStaffId[staff])}</td>
+                              <td className={['px-1 py-2 text-center font-mono', scheduleBodyTextClass].join(' ')}>{formatUph(scheduleUphByStaffId[staff])}</td>
                               <td className="px-1 py-2 text-center">
                                 {(() => {
                                   const count = Number(scheduleMonthlyAbsentByStaffId[staff] ?? 0);
@@ -14712,16 +15022,44 @@ ${rowsToHtml(late)}
                                 );
                               })}
                               <td className="px-0.5 py-1.5 text-center">
-                                <button
-                                  type="button"
-                                  disabled={isLocked}
-                                  onClick={() => {
-                                    void deleteEmployeeRow(staff);
-                                  }}
-                                  className="rounded-md bg-ember px-1.5 py-1 text-[9px] font-semibold leading-none text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                  {t('离职', 'Depart')}
-                                </button>
+                                {hasPendingTermination ? (
+                                  <div className="flex flex-col items-center gap-1">
+                                    <button
+                                      type="button"
+                                      disabled={isLocked || !scheduleCanReviewTermination}
+                                      title={pendingTerminationRequest?.reason || undefined}
+                                      onClick={() => {
+                                        if (!pendingTerminationRequest) return;
+                                        void reviewTerminationRequest(pendingTerminationRequest, 'approve');
+                                      }}
+                                      className="rounded-md bg-ember px-1.5 py-1 text-[9px] font-semibold leading-none text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                      {t('确认离职', 'Confirm')}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={isLocked || !scheduleCanReviewTermination}
+                                      onClick={() => {
+                                        if (!pendingTerminationRequest) return;
+                                        void reviewTerminationRequest(pendingTerminationRequest, 'reject');
+                                      }}
+                                      className="rounded-md bg-white/10 px-1.5 py-1 text-[9px] font-semibold leading-none text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                      {t('拒绝', 'Reject')}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={isLocked}
+                                    onClick={() => {
+                                      void deleteEmployeeRow(staff);
+                                    }}
+                                    className="rounded-md bg-ember px-1.5 py-1 text-[9px] font-semibold leading-none text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {t('离职', 'Depart')}
+                                  </button>
+                                )}
                               </td>
                             </tr>
                           );
@@ -15403,28 +15741,45 @@ ${rowsToHtml(late)}
             )}
 
             {page === 'accounts' && (
-              <AccountManagementPage
-                t={t}
-                themeMode={themeMode}
-                isLocked={isLocked}
-                accountSearch={accountSearch}
-                setAccountSearch={setAccountSearch}
-                accountPositionFilter={accountPositionFilter}
-                setAccountPositionFilter={setAccountPositionFilter}
-                accountPositionOptions={accountPositionOptions}
-                accountRowsFiltered={accountRowsFiltered}
-                accountRowsRendered={accountRowsRendered}
-                setAccountRenderCount={setAccountRenderCount}
-                onRefreshEmployees={async () => {
-                  await fetchTempAccounts({ lockUi: false });
-                }}
-                onDownloadTemplate={downloadTempAccountTemplate}
-                onImportAccounts={importTempAccounts}
-                onExportAccounts={exportTempAccounts}
-                accountCardPrintingStaffId={accountCardPrintingStaffId}
-                onPrintAccountCard={printAccountCard}
-                onEditAccount={editTempAccount}
-              />
+              <>
+                {accountsCanManageAdminAccess && (
+                  <AdminAccessManagementSection
+                    t={t}
+                    themeMode={themeMode}
+                    isLocked={isLocked}
+                    rows={adminAccessAccounts}
+                    userOptions={adminAccessUserOptions}
+                    agencyOptions={employeeAgencyOptions}
+                    onRefresh={async () => {
+                      await fetchAdminAccessAccountsAndUsers({ lockUi: false });
+                    }}
+                    onSave={saveAdminAccessConfig}
+                  />
+                )}
+
+                <AccountManagementPage
+                  t={t}
+                  themeMode={themeMode}
+                  isLocked={isLocked}
+                  accountSearch={accountSearch}
+                  setAccountSearch={setAccountSearch}
+                  accountPositionFilter={accountPositionFilter}
+                  setAccountPositionFilter={setAccountPositionFilter}
+                  accountPositionOptions={accountPositionOptions}
+                  accountRowsFiltered={accountRowsFiltered}
+                  accountRowsRendered={accountRowsRendered}
+                  setAccountRenderCount={setAccountRenderCount}
+                  onRefreshEmployees={async () => {
+                    await fetchTempAccounts({ lockUi: false });
+                  }}
+                  onDownloadTemplate={downloadTempAccountTemplate}
+                  onImportAccounts={importTempAccounts}
+                  onExportAccounts={exportTempAccounts}
+                  accountCardPrintingStaffId={accountCardPrintingStaffId}
+                  onPrintAccountCard={printAccountCard}
+                  onEditAccount={editTempAccount}
+                />
+              </>
             )}
 
             {page === 'timecard' && (

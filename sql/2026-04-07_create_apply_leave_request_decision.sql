@@ -85,9 +85,14 @@ begin
       v_schedule_action := case when v_is_past_leave_date then 'schedule_leave' else 'schedule_planned_leave' end;
 
       select
-        coalesce(nullif(btrim(coalesce(position, '')), ''), nullif(btrim(coalesce(v_leave_row.position_raw, '')), ''), 'Pick')
+        coalesce(
+          nullif(btrim(coalesce(to_jsonb(employee_row) ->> 'position', '')), ''),
+          nullif(btrim(coalesce(to_jsonb(employee_row) ->> 'Position', '')), ''),
+          nullif(btrim(coalesce(v_leave_row.position_raw, '')), ''),
+          'Pick'
+        )
       into v_position
-      from public.ob_employees
+      from public.ob_employees as employee_row
       where staff_id = v_leave_row.matched_staff_id
       limit 1;
 

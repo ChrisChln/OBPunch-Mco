@@ -7,6 +7,7 @@ export type AdminPage =
   | 'timecard'
   | 'leave_approval'
   | 'work_hour_comparison'
+  | 'todo'
   | 'audit'
   | 'schedule'
   | 'devices'

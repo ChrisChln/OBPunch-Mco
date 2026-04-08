@@ -9,7 +9,8 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         admin: resolve(__dirname, 'admin.html'),
-        device: resolve(__dirname, 'device.html')
+        device: resolve(__dirname, 'device.html'),
+        agency: resolve(__dirname, 'agency/index.html')
       }
     }
   }
