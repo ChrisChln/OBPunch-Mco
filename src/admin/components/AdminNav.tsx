@@ -23,6 +23,7 @@ const NAV_ITEMS: NavItem[] = [
   { page: 'home', label: (t) => t('首页', 'Home') },
   { page: 'employees', label: (t) => t('员工信息', 'Employees') },
   { page: 'accounts', label: (t) => t('账号管理', 'Accounts') },
+  { page: 'permissions', label: (t) => t('权限', 'Permissions') },
   { page: 'timecard', label: (t) => t('时间卡', 'Timecard') },
   { page: 'leave_approval', label: (t) => t('请假审批', 'Leave Approval'), badge: 'leave' },
   { page: 'work_hour_comparison', label: (t) => t('工时对比', 'Work Hour Comparison') },

@@ -128,7 +128,7 @@ begin
     return 'level1';
   end if;
 
-  return null;
+  return 'level3';
 end;
 $$;
 
@@ -202,7 +202,7 @@ begin
 
   return jsonb_build_object(
     'user_id', v_user_id,
-    'role', coalesce(v_role, 'agency'),
+    'role', coalesce(v_role, 'level3'),
     'managed_agencies', to_jsonb(v_managed_agencies),
     'modules', v_modules
   );
@@ -1157,7 +1157,7 @@ begin
   return jsonb_build_object(
     'work_date', v_work_date,
     'template_date', v_template_date,
-    'role', coalesce(v_role, 'agency'),
+    'role', coalesce(v_role, 'level3'),
     'managed_agencies', to_jsonb(coalesce(v_managed_agencies, '{}'::text[])),
     'summary_cards', v_summary_cards,
     'attendance_cards', v_attendance_cards,

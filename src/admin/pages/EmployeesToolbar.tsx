@@ -6,6 +6,7 @@ type EmployeesToolbarProps = {
   t: TranslateFn;
   themeMode: 'light' | 'dark';
   isLocked: boolean;
+  isReadOnly?: boolean;
   employeeBadgeBatchPrinting: boolean;
   employeeBadgeBatchSelectedStaffIds: string[];
   onPrintSelectedBadgeBatch: () => void | Promise<void>;
@@ -38,6 +39,7 @@ export default function EmployeesToolbar({
   t,
   themeMode,
   isLocked,
+  isReadOnly = false,
   employeeBadgeBatchPrinting,
   employeeBadgeBatchSelectedStaffIds,
   onPrintSelectedBadgeBatch,
@@ -66,6 +68,7 @@ export default function EmployeesToolbar({
   cycleScheduleLabelTone
 }: EmployeesToolbarProps) {
   const isLight = themeMode === 'light';
+  const writeLocked = isLocked || isReadOnly;
   const labelDetailsRef = useRef<HTMLDetailsElement | null>(null);
 
   useEffect(() => {
@@ -118,7 +121,7 @@ export default function EmployeesToolbar({
             ref={fileInputRef}
             type="file"
             accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-            disabled={isLocked}
+            disabled={writeLocked}
             onChange={async (e) => {
               const file = e.target.files?.[0] ?? null;
               await onFileSelected(file);
@@ -129,7 +132,7 @@ export default function EmployeesToolbar({
           />
           <button
             type="button"
-            disabled={isLocked}
+            disabled={writeLocked}
             onClick={() => fileInputRef.current?.click()}
             className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -145,7 +148,7 @@ export default function EmployeesToolbar({
           </button>
           <button
             type="button"
-            disabled={isLocked}
+            disabled={writeLocked}
             onClick={() => setEmployeeAddOpen(true)}
             className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -323,7 +326,7 @@ export default function EmployeesToolbar({
                         <div className="ml-2 flex items-center gap-2">
                           <button
                             type="button"
-                            disabled={isLocked}
+                            disabled={writeLocked}
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();

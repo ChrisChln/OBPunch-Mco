@@ -17,6 +17,7 @@ type TranslateFn = (zh: string, en: string) => string;
 type WorkHourComparisonPageProps = {
   t: TranslateFn;
   isLocked: boolean;
+  isReadOnly?: boolean;
   supabase: any;
   themeMode: 'light' | 'dark';
   serverTime: Date;
@@ -493,6 +494,7 @@ const formatPunchDateTime = (value: string) => {
 export default function WorkHourComparisonPage({
   t,
   isLocked,
+  isReadOnly = false,
   supabase,
   themeMode,
   serverTime,
@@ -501,6 +503,7 @@ export default function WorkHourComparisonPage({
   onOpenTimecardCalibration
 }: WorkHourComparisonPageProps) {
   const isLight = themeMode === 'light';
+  const writeLocked = isLocked || isReadOnly;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [selectedDate, setSelectedDate] = useState(() => getDefaultDateTMinus1(new Date(serverTime)));
@@ -1316,6 +1319,7 @@ export default function WorkHourComparisonPage({
   };
 
   const markCurrentAsFixed = async () => {
+    if (isReadOnly) return;
     if (!supabase || !punchFlowTarget) return;
     setMarkFixedLoading(true);
     setPunchFlowError(null);
@@ -1426,7 +1430,7 @@ export default function WorkHourComparisonPage({
           />
           <button
             type="button"
-            disabled={isLocked || uploading}
+            disabled={writeLocked || uploading}
             onClick={() => fileInputRef.current?.click()}
             className={buttonPrimaryClass}
           >
@@ -1739,7 +1743,7 @@ export default function WorkHourComparisonPage({
                     <button
                       type="button"
                       onClick={() => void markCurrentAsFixed()}
-                      disabled={markFixedLoading}
+                      disabled={writeLocked || markFixedLoading}
                       className={buttonPrimaryClass}
                     >
                       {markFixedLoading ? t('处理中...', 'Saving...') : t('已修复', 'Mark as fixed')}

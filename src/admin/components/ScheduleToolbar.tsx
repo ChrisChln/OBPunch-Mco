@@ -5,6 +5,7 @@ type TranslateFn = (zh: string, en: string) => string;
 type ScheduleToolbarProps = {
   t: TranslateFn;
   isLocked: boolean;
+  isReadOnly?: boolean;
   schedulePublishTomorrow: boolean;
   schedulePublishForDate: string;
   setSchedulePublishSetting: (value: boolean) => void | Promise<void>;
@@ -22,6 +23,7 @@ type ScheduleToolbarProps = {
 export default function ScheduleToolbar({
   t,
   isLocked,
+  isReadOnly = false,
   schedulePublishTomorrow,
   setSchedulePublishSetting,
   scheduleWeekOffset,
@@ -34,6 +36,7 @@ export default function ScheduleToolbar({
   exportScheduleTemplate,
   refreshSchedulePanelWithAudit
 }: ScheduleToolbarProps) {
+  const writeLocked = isLocked || isReadOnly;
   const actionButtonClass =
     'inline-flex h-10 min-w-[104px] items-center justify-center rounded-2xl px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60';
 
@@ -46,7 +49,7 @@ export default function ScheduleToolbar({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          disabled={isLocked}
+          disabled={writeLocked}
           onClick={() => void setSchedulePublishSetting(!schedulePublishTomorrow)}
           className={[
             `${actionButtonClass} min-w-[136px] font-semibold`,

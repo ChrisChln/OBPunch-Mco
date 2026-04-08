@@ -48,6 +48,7 @@ const MODULE_LABELS: Record<AdminModuleKey, { zh: string; en: string }> = {
   forecast: { zh: '件量预测', en: 'Forecast' },
   prediction_model: { zh: '预测模型', en: 'Model' },
   efficiency: { zh: '人效', en: 'Efficiency' },
+  permissions: { zh: '权限', en: 'Permissions' },
   agency: { zh: 'Agency', en: 'Agency' }
 };
 

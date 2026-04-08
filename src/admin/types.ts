@@ -4,6 +4,7 @@ export type AdminPage =
   | 'punches'
   | 'employees'
   | 'accounts'
+  | 'permissions'
   | 'timecard'
   | 'leave_approval'
   | 'work_hour_comparison'

@@ -47,6 +47,30 @@ export type AdminAccessSavePayload = {
   modules: Array<{ module_key: AdminModuleKey; access_level: AdminModuleAccessLevel }>;
 };
 
+export type AdminAccessRequestRecord = {
+  id: string;
+  requester_user_id: string;
+  requester_user_email: string;
+  requester_display_name: string;
+  requested_role: AdminRole;
+  requested_managed_agencies: string[];
+  requested_modules: AdminAccessModule[];
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  review_note: string;
+  reviewed_by_user_id: string | null;
+  reviewed_by_display_name: string;
+  created_at: string;
+  reviewed_at: string | null;
+};
+
+export type AdminAccessRequestCreatePayload = {
+  requested_role: AdminRole;
+  requested_managed_agencies: string[];
+  requested_modules: Array<{ module_key: AdminModuleKey; access_level: AdminModuleAccessLevel }>;
+  reason: string;
+};
+
 export type TerminationRequestRecord = {
   id: string;
   staff_id: string;
@@ -101,6 +125,76 @@ export const saveAdminAccessAccount = async (supabase: SupabaseClient, payload: 
       p_is_active: payload.is_active,
       p_managed_agencies: payload.managed_agencies,
       p_modules: payload.modules
+    })
+  );
+
+const normalizeAdminAccessRequest = (row: Record<string, unknown>): AdminAccessRequestRecord => {
+  const requestedRole = normalizeAdminAccessContext({
+    user_id: row.requester_user_id,
+    role: row.requested_role,
+    managed_agencies: row.requested_managed_agencies,
+    modules: row.requested_modules
+  });
+  const statusRaw = String(row.status ?? 'pending').trim().toLowerCase();
+  const status: AdminAccessRequestRecord['status'] =
+    statusRaw === 'approved' || statusRaw === 'rejected' ? statusRaw : 'pending';
+
+  return {
+    id: String(row.id ?? '').trim(),
+    requester_user_id: String(row.requester_user_id ?? '').trim(),
+    requester_user_email: String(row.requester_user_email ?? '').trim(),
+    requester_display_name: String(row.requester_display_name ?? '').trim(),
+    requested_role: requestedRole.role,
+    requested_managed_agencies: requestedRole.managed_agencies,
+    requested_modules: requestedRole.modules,
+    reason: String(row.reason ?? '').trim(),
+    status,
+    review_note: String(row.review_note ?? '').trim(),
+    reviewed_by_user_id: row.reviewed_by_user_id ? String(row.reviewed_by_user_id).trim() : null,
+    reviewed_by_display_name: String(row.reviewed_by_display_name ?? '').trim(),
+    created_at: String(row.created_at ?? '').trim(),
+    reviewed_at: row.reviewed_at ? String(row.reviewed_at).trim() : null
+  };
+};
+
+export const listAdminAccessRequests = async (
+  supabase: SupabaseClient,
+  status: 'pending' | 'approved' | 'rejected' | 'all' = 'all'
+): Promise<AdminAccessRequestRecord[]> => {
+  const rows = await expectRpcSuccess<Array<Record<string, unknown>>>(
+    supabase.rpc('list_admin_access_requests', {
+      p_status: status === 'all' ? null : status
+    })
+  );
+  return (Array.isArray(rows) ? rows : [])
+    .map(normalizeAdminAccessRequest)
+    .filter((row) => row.id && row.requester_user_id);
+};
+
+export const createAdminAccessRequest = async (
+  supabase: SupabaseClient,
+  payload: AdminAccessRequestCreatePayload
+) =>
+  expectRpcSuccess(
+    supabase.rpc('create_admin_access_request', {
+      p_requested_role: payload.requested_role,
+      p_requested_managed_agencies: payload.requested_managed_agencies,
+      p_requested_modules: payload.requested_modules,
+      p_reason: payload.reason
+    })
+  );
+
+export const reviewAdminAccessRequest = async (
+  supabase: SupabaseClient,
+  requestId: string,
+  action: 'approve' | 'reject',
+  reviewNote = ''
+) =>
+  expectRpcSuccess(
+    supabase.rpc('review_admin_access_request', {
+      p_request_id: requestId,
+      p_action: action,
+      p_review_note: reviewNote
     })
   );
 

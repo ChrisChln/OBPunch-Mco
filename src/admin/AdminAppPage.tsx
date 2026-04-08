@@ -19,7 +19,7 @@ import DailyListNewHireModal from './components/DailyListNewHireModal';
 import DevicesPage from './pages/DevicesPage';
 import EmployeeUploadPage from './pages/EmployeeUploadPage';
 import AccountManagementPage from './pages/AccountManagementPage';
-import AdminAccessManagementSection from './pages/AdminAccessManagementSection';
+import AdminPermissionsPage from './pages/AdminPermissionsPage';
 import EmployeesToolbar from './pages/EmployeesToolbar';
 import EmployeeAddModal from './pages/EmployeeAddModal';
 import EmployeesTableSection from './pages/EmployeesTableSection';
@@ -47,12 +47,17 @@ import {
   type AdminAccessContext
 } from '../shared/adminAccess';
 import {
+  createAdminAccessRequest,
   fetchAdminAccessContext,
   listAdminAccessAccounts,
+  listAdminAccessRequests,
   listEmployeeTerminationRequests,
+  reviewAdminAccessRequest,
   reviewEmployeeTerminationRequest,
   saveAdminAccessAccount,
   type AdminAccessAccountRecord,
+  type AdminAccessRequestCreatePayload,
+  type AdminAccessRequestRecord,
   type AdminAccessSavePayload,
   type AdminAccessUserOption,
   type TerminationRequestRecord
@@ -1010,6 +1015,7 @@ const getVisibleAdminPages = (accessContext: AdminAccessContext | null | undefin
   if (hasModuleAccess(moduleMap, 'home', 'view')) pages.push('home');
   if (hasModuleAccess(moduleMap, 'employees', 'view')) pages.push('employees');
   if (hasModuleAccess(moduleMap, 'accounts', 'view')) pages.push('accounts');
+  if (hasModuleAccess(moduleMap, 'permissions', 'view')) pages.push('permissions');
   if (hasModuleAccess(moduleMap, 'timecard', 'view')) pages.push('timecard');
   if (hasModuleAccess(moduleMap, 'leave_approval', 'view')) pages.push('leave_approval');
   if (hasModuleAccess(moduleMap, 'efficiency', 'view')) pages.push('work_hour_comparison');
@@ -1178,12 +1184,30 @@ export default function AdminAppPage() {
 
   const [page, setPage] = useState<AdminPage>('home');
   const [adminAccessContext, setAdminAccessContext] = useState<AdminAccessContext | null>(null);
+  const [adminAccessRequests, setAdminAccessRequests] = useState<AdminAccessRequestRecord[]>([]);
   const [terminationRequests, setTerminationRequests] = useState<TerminationRequestRecord[]>([]);
   const [adminAccessAccounts, setAdminAccessAccounts] = useState<AdminAccessAccountRecord[]>([]);
   const [adminAccessUserOptions, setAdminAccessUserOptions] = useState<AdminAccessUserOption[]>([]);
   const [leaveApprovalPendingCount, setLeaveApprovalPendingCount] = useState(0);
   const visibleAdminPages = useMemo(() => getVisibleAdminPages(adminAccessContext), [adminAccessContext]);
   const adminModuleMap = useMemo(() => getModuleMapFromContext(adminAccessContext), [adminAccessContext]);
+  const employeesCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'employees', 'operate'), [adminModuleMap]);
+  const accountsCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'accounts', 'operate'), [adminModuleMap]);
+  const scheduleCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'schedule', 'operate'), [adminModuleMap]);
+  const timecardCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'timecard', 'operate'), [adminModuleMap]);
+  const devicesCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'devices', 'operate'), [adminModuleMap]);
+  const forecastCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'forecast', 'operate'), [adminModuleMap]);
+  const predictionModelCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'prediction_model', 'operate'), [adminModuleMap]);
+  const efficiencyCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'efficiency', 'operate'), [adminModuleMap]);
+  const leaveApprovalCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'leave_approval', 'operate'), [adminModuleMap]);
+  const todoCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'todo', 'operate'), [adminModuleMap]);
+  const auditCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'audit', 'operate'), [adminModuleMap]);
+  const employeesReadOnly = isLocked || !employeesCanOperate;
+  const scheduleReadOnly = isLocked || !scheduleCanOperate;
+  const timecardReadOnly = isLocked || !timecardCanOperate;
+  const forecastReadOnly = isLocked || !forecastCanOperate;
+  const predictionModelReadOnly = isLocked || !predictionModelCanOperate;
+  const efficiencyReadOnly = isLocked || !efficiencyCanOperate;
   const scheduleCanReviewTermination = useMemo(
     () => canReviewTerminationRequests(adminAccessContext),
     [adminAccessContext]
@@ -2789,6 +2813,46 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     void fetchAdminAccessAccountsAndUsers({ lockUi: false });
   }, [page, user?.id, accountsCanManageAdminAccess]);
 
+  useEffect(() => {
+    if (page !== 'permissions') return;
+    if (!hasModuleAccess(adminModuleMap, 'permissions', 'view')) return;
+    void fetchAdminAccessRequests({ lockUi: false, status: 'all' });
+    if (accountsCanManageAdminAccess) {
+      void fetchAdminAccessAccountsAndUsers({ lockUi: false });
+    }
+  }, [page, user?.id, accountsCanManageAdminAccess, adminModuleMap]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!supabase || page !== 'permissions') return;
+    if (!hasModuleAccess(adminModuleMap, 'permissions', 'view')) return;
+
+    let disposed = false;
+    const refreshRequests = () => {
+      if (disposed) return;
+      void fetchAdminAccessRequests({ lockUi: false, status: 'all' });
+    };
+    const handleFocus = () => {
+      refreshRequests();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshRequests();
+      }
+    };
+
+    const timer = window.setInterval(refreshRequests, 10000);
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [page, supabase, user?.id, adminModuleMap]);
+
   const doLogin = async () => {
     if (!supabase) {
       setStatus({ tone: 'error', message: '缺少 Supabase 配置，请检查环境变量。' });
@@ -2869,6 +2933,33 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     await runLocked('admin_access_accounts', exec);
   };
 
+  const fetchAdminAccessRequests = async (options?: {
+    lockUi?: boolean;
+    status?: 'pending' | 'approved' | 'rejected' | 'all';
+  }) => {
+    if (!supabase || !hasModuleAccess(adminModuleMap, 'permissions', 'view')) {
+      setAdminAccessRequests([]);
+      return [];
+    }
+
+    const statusFilter = options?.status ?? 'all';
+    const exec = async () => {
+      const rows = await listAdminAccessRequests(supabase, statusFilter);
+      setAdminAccessRequests(rows);
+      return rows;
+    };
+
+    if (options?.lockUi === false) {
+      return exec();
+    }
+
+    let rows: AdminAccessRequestRecord[] = [];
+    await runLocked('admin_access_requests', async () => {
+      rows = await exec();
+    });
+    return rows;
+  };
+
   const reviewTerminationRequest = async (request: TerminationRequestRecord, action: 'approve' | 'reject') => {
     if (!supabase) {
       setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
@@ -2914,6 +3005,58 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       await fetchAdminAccessAccountsAndUsers({ lockUi: false });
       setStatus({ tone: 'success', message: t('权限已保存。', 'Access saved.') });
+    });
+  };
+
+  const submitAdminAccessRequest = async (payload: AdminAccessRequestCreatePayload) => {
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
+      return;
+    }
+
+    await runLocked('admin_access_request_create', async () => {
+      await createAdminAccessRequest(supabase, payload);
+      await fetchAdminAccessRequests({ lockUi: false, status: 'all' });
+      setStatus({ tone: 'success', message: t('申请已提交。', 'Request submitted.') });
+    });
+  };
+
+  const reviewAdminAccessRequestAction = async (
+    request: AdminAccessRequestRecord,
+    action: 'approve' | 'reject'
+  ) => {
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
+      return;
+    }
+    if (!accountsCanManageAdminAccess) {
+      setStatus({ tone: 'error', message: t('当前账号不能审批权限。', 'This account cannot review access requests.') });
+      return;
+    }
+
+    const ok = await askConfirm(
+      action === 'approve'
+        ? t(`确认批准 ${request.requester_display_name || request.requester_user_email} 的权限申请吗？`, `Approve access request for ${request.requester_display_name || request.requester_user_email}?`)
+        : t(`确认拒绝 ${request.requester_display_name || request.requester_user_email} 的权限申请吗？`, `Reject access request for ${request.requester_display_name || request.requester_user_email}?`),
+      action === 'approve' ? t('批准申请', 'Approve Request') : t('拒绝申请', 'Reject Request')
+    );
+    if (!ok) return;
+
+    await runLocked(`admin_access_request_${action}`, async () => {
+      await reviewAdminAccessRequest(supabase, request.id, action);
+      await fetchAdminAccessRequests({ lockUi: false, status: 'all' });
+      await fetchAdminAccessAccountsAndUsers({ lockUi: false });
+      if (user?.id && request.requester_user_id === user.id) {
+        const nextContext = await fetchAdminAccessContext(supabase, user.email);
+        setAdminAccessContext(nextContext);
+      }
+      setStatus({
+        tone: 'success',
+        message:
+          action === 'approve'
+            ? t('权限申请已批准。', 'Access request approved.')
+            : t('权限申请已拒绝。', 'Access request rejected.')
+      });
     });
   };
 
@@ -3401,6 +3544,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const onDeviceFileSelected = async (file: File | null) => {
+    if (!devicesCanOperate) {
+      setDeviceUploadError(t('设备模块当前为只读。', 'Devices is read-only.'));
+      return;
+    }
     if (!file) {
       setDeviceUploadError(null);
       return;
@@ -3421,6 +3568,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const uploadDevices = async () => {
+    if (!devicesCanOperate) {
+      setDeviceUploadError(t('设备模块当前为只读。', 'Devices is read-only.'));
+      return;
+    }
     if (!supabase) {
       setDeviceUploadError(t('缺少 Supabase 配置。', 'Missing Supabase configuration.'));
       return;
@@ -3552,6 +3703,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const toggleDeviceActive = async (row: DeviceRow) => {
+    if (!devicesCanOperate) {
+      setStatus({ tone: 'error', message: t('设备模块当前为只读。', 'Devices is read-only.') });
+      return;
+    }
     const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
     if (!sn || !supabase) return;
     const nextActive = !(row.active !== false);
@@ -3655,6 +3810,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const setSchedulePublishSetting = async (enabled: boolean) => {
+    if (!scheduleCanOperate) {
+      setScheduleError(t('排班模块当前为只读。', 'Schedule is read-only.'));
+      return;
+    }
     if (!supabase) {
       setScheduleError('Missing Supabase configuration.');
       return;
@@ -3697,6 +3856,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     _targetShift: 'early' | 'late',
     workDate?: string
   ) => {
+    if (!scheduleCanOperate) {
+      setScheduleError(t('排班模块当前为只读。', 'Schedule is read-only.'));
+      return;
+    }
     if (!supabase) {
       setScheduleError('Missing Supabase configuration.');
       return;
@@ -3962,6 +4125,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const scheduleWeekResetInFlightRef = useRef(false);
   const scheduleWeekResetDoneKeyRef = useRef('');
   const resetScheduleTransientStatesForWeek = async (options?: { lockUi?: boolean }) => {
+    if (!scheduleCanOperate) return;
     if (!supabase) return;
     const localNow = new Date(Date.now() + offsetMs);
     let gateNow = localNow;
@@ -4085,6 +4249,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const scheduleDailyPlanActivationInFlightRef = useRef(false);
   const scheduleDailyPlanActivationDoneDateRef = useRef('');
   const activatePlannedScheduleStatesForToday = async (options?: { lockUi?: boolean }) => {
+    if (!scheduleCanOperate) return;
     if (!supabase) return;
     const now = new Date(Date.now() + offsetMs);
     const dateKey = toDateOnly(now);
@@ -5109,6 +5274,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setScheduleMistakeDraft((prev) => ({ ...prev, open: false, saving: false }));
   };
   const saveScheduleMistakeCreate = async () => {
+    if (!scheduleCanOperate) {
+      setStatus({ tone: 'error', message: t('排班模块当前为只读。', 'Schedule is read-only.') });
+      return;
+    }
     if (!supabase) {
       setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
       return;
@@ -5543,6 +5712,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const addEmployeeRow = async () => {
+    if (!employeesCanOperate) {
+      setEmployeesError(t('员工模块当前为只读。', 'Employees is read-only.'));
+      return;
+    }
     if (!supabase) {
       setEmployeesError('缺少 Supabase 配置。');
       return;
@@ -5675,6 +5848,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const deleteEmployeeRow = async (staffId: string) => {
+    if (!employeesCanOperate) {
+      setEmployeesError(t('员工模块当前为只读。', 'Employees is read-only.'));
+      return;
+    }
     if (!supabase) {
       setEmployeesError('缺少 Supabase 配置。');
       return;
@@ -6881,6 +7058,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const saveEmployeeEdit = async () => {
+    if (!employeesCanOperate) {
+      setEmployeesError(t('员工模块当前为只读。', 'Employees is read-only.'));
+      return;
+    }
     if (!supabase) {
       setEmployeesError('Missing Supabase config.');
       return;
@@ -7472,6 +7653,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const undoAuditRow = async (row: AuditRow) => {
+    if (!auditCanOperate) {
+      setStatus({ tone: 'error', message: t('日志模块当前为只读。', 'Audit is read-only.') });
+      return;
+    }
     if (!supabase) {
       setStatus({ tone: 'error', message: 'Missing Supabase configuration.' });
       return;
@@ -10277,6 +10462,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const addTimecardPunchRow = async () => {
+    if (!timecardCanOperate) {
+      setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
+      return;
+    }
     const staff = timecardPunchStaffId;
     if (!staff) {
       return;
@@ -10328,6 +10517,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const saveAllTimecardPunchRows = async () => {
+    if (!timecardCanOperate) {
+      setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
+      return;
+    }
     if (!supabase) {
       setTimecardPunchError('缺少 Supabase 配置。');
       return;
@@ -10684,6 +10877,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     queueTimecardRefresh();
   };
   const deleteTimecardPunchRow = async (row: PunchRow) => {
+    if (!timecardCanOperate) {
+      setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
+      return;
+    }
     const rowId = String(row.id ?? '').trim();
     if (!rowId) return;
     const ok = await askConfirm(
@@ -11728,6 +11925,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const importTempAccounts = async (file: File | null) => {
+    if (!accountsCanOperate) {
+      setStatus({ tone: 'error', message: t('账号模块当前为只读。', 'Accounts is read-only.') });
+      return;
+    }
     if (!file) return;
     if (!supabase) {
       setStatus({ tone: 'error', message: '缺少 Supabase 配置。' });
@@ -11918,6 +12119,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     row: { staff: string; name: string; position: string; workAccount: string; workPassword: string },
     payload: { name: string; position: string; workAccount: string; workPassword: string }
   ) => {
+    if (!accountsCanOperate) {
+      setStatus({ tone: 'error', message: t('账号模块当前为只读。', 'Accounts is read-only.') });
+      return;
+    }
     if (!supabase) {
       setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase configuration.') });
       return;
@@ -12265,7 +12470,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     rows[toIdx] = tmp!;
     return rows;
   }, [timecardPunchCardsVisible, timecardPunchDraggingId, timecardPunchDragOverId]);
-  const timecardPunchReadOnly = timecardPunchDayIndex === null;
+  const timecardPunchReadOnly = timecardPunchDayIndex === null || !timecardCanOperate;
   const timecardPunchHeaderMeta = useMemo(() => {
     const staff = normalizeStaffId(String(timecardPunchStaffId ?? '').trim());
     if (!staff) {
@@ -13245,6 +13450,10 @@ ${rowsToHtml(late)}
   };
 
   const addDailyListNewHireDemand = async () => {
+    if (!scheduleCanOperate) {
+      setStatus({ tone: 'error', message: t('排班模块当前为只读。', 'Schedule is read-only.') });
+      return;
+    }
     if (!supabase) {
       setStatus({ tone: 'error', message: 'Missing Supabase config.' });
       return;
@@ -14077,6 +14286,7 @@ ${rowsToHtml(late)}
               <DevicesPage
                 t={t}
                 isLocked={isLocked}
+                isReadOnly={!devicesCanOperate}
                 deviceRowsFiltered={deviceRowsFiltered}
                 isAllFilteredDevicesSelected={isAllFilteredDevicesSelected}
                 setDeviceSelectedLabelSns={setDeviceSelectedLabelSns}
@@ -14115,16 +14325,17 @@ ${rowsToHtml(late)}
               />
             )}
             {page === 'forecast' && (
-              <ForecastPage t={t} isLocked={isLocked} serverTime={serverTime} supabase={supabase} themeMode={themeMode} />
+              <ForecastPage t={t} isLocked={forecastReadOnly} serverTime={serverTime} supabase={supabase} themeMode={themeMode} />
             )}
             {page === 'prediction_model' && (
-              <PredictionModelPage t={t} isLocked={isLocked} themeMode={themeMode} serverTime={serverTime} supabase={supabase} />
+              <PredictionModelPage t={t} isLocked={predictionModelReadOnly} themeMode={themeMode} serverTime={serverTime} supabase={supabase} />
             )}
-            {page === 'efficiency' && <EfficiencyPage t={t} isLocked={isLocked} supabase={supabase} themeMode={themeMode} serverTime={serverTime} />}
+            {page === 'efficiency' && <EfficiencyPage t={t} isLocked={efficiencyReadOnly} supabase={supabase} themeMode={themeMode} serverTime={serverTime} />}
             {page === 'leave_approval' && (
               <LeaveApprovalPage
                 t={t}
                 isLocked={isLocked}
+                isReadOnly={!leaveApprovalCanOperate}
                 supabase={supabase}
                 themeMode={themeMode}
                 serverTime={serverTime}
@@ -14137,6 +14348,7 @@ ${rowsToHtml(late)}
               <WorkHourComparisonPage
                 t={t}
                 isLocked={isLocked}
+                isReadOnly={!efficiencyCanOperate}
                 supabase={supabase}
                 themeMode={themeMode}
                 serverTime={serverTime}
@@ -14149,6 +14361,7 @@ ${rowsToHtml(late)}
               <TodoPage
                 t={t}
                 isLocked={isLocked}
+                isReadOnly={!todoCanOperate}
                 supabase={supabase}
                 themeMode={themeMode}
                 userId={String(user?.id ?? '')}
@@ -14176,6 +14389,7 @@ ${rowsToHtml(late)}
               <AuditPage
                 t={t}
                 isLocked={isLocked}
+                isReadOnly={!auditCanOperate}
                 auditSearch={auditSearch}
                 setAuditSearch={setAuditSearch}
                 fetchAudit={fetchAudit}
@@ -14199,6 +14413,7 @@ ${rowsToHtml(late)}
                 <ScheduleToolbar
                   t={t}
                   isLocked={isLocked}
+                  isReadOnly={!scheduleCanOperate}
                   schedulePublishTomorrow={schedulePublishTomorrow}
                   schedulePublishForDate={schedulePublishForDate}
                   setSchedulePublishSetting={setSchedulePublishSetting}
@@ -15559,7 +15774,7 @@ ${rowsToHtml(late)}
                   open={dailyListNewHireOpen}
                   t={t}
                   themeMode={themeMode}
-                  isLocked={isLocked}
+                  isLocked={scheduleReadOnly}
                   allowedPositions={ALLOWED_POSITIONS}
                   dailyListNewHirePosition={dailyListNewHirePosition}
                   setDailyListNewHirePosition={setDailyListNewHirePosition}
@@ -15589,6 +15804,7 @@ ${rowsToHtml(late)}
                   t={t}
                   themeMode={themeMode}
                   isLocked={isLocked}
+                  isReadOnly={!employeesCanOperate}
                   employeeBadgeBatchPrinting={employeeBadgeBatchPrinting}
                   employeeBadgeBatchSelectedStaffIds={employeeBadgeBatchSelectedStaffIds}
                   onPrintSelectedBadgeBatch={printSelectedEmployeeBadgeCards}
@@ -15621,7 +15837,7 @@ ${rowsToHtml(late)}
                   t={t}
                   themeMode={themeMode}
                   open={employeeAddOpen}
-                  isLocked={isLocked}
+                  isLocked={employeesReadOnly}
                   employeeNewStaffId={employeeNewStaffId}
                   setEmployeeNewStaffId={setEmployeeNewStaffId}
                   employeeNewName={employeeNewName}
@@ -15649,7 +15865,7 @@ ${rowsToHtml(late)}
 
                 <EmployeesTableSection
                   t={t}
-                  isLocked={isLocked}
+                  isLocked={employeesReadOnly}
                   themeMode={themeMode}
                   employeesError={employeesError}
                   employeesFiltered={employeesFiltered}
@@ -15704,7 +15920,7 @@ ${rowsToHtml(late)}
                   open={employeeEditOpen}
                   t={t}
                   themeMode={themeMode}
-                  isLocked={isLocked}
+                  isLocked={employeesReadOnly}
                   userEmail={String(user?.email ?? '')}
                   staffIdEditorEmail={STAFF_ID_EDITOR_EMAIL}
                   isNewHirePlaceholderStaffId={isNewHirePlaceholderStaffId}
@@ -15741,45 +15957,52 @@ ${rowsToHtml(late)}
             )}
 
             {page === 'accounts' && (
-              <>
-                {accountsCanManageAdminAccess && (
-                  <AdminAccessManagementSection
-                    t={t}
-                    themeMode={themeMode}
-                    isLocked={isLocked}
-                    rows={adminAccessAccounts}
-                    userOptions={adminAccessUserOptions}
-                    agencyOptions={employeeAgencyOptions}
-                    onRefresh={async () => {
-                      await fetchAdminAccessAccountsAndUsers({ lockUi: false });
-                    }}
-                    onSave={saveAdminAccessConfig}
-                  />
-                )}
+              <AccountManagementPage
+                t={t}
+                themeMode={themeMode}
+                isLocked={isLocked}
+                isReadOnly={!accountsCanOperate}
+                accountSearch={accountSearch}
+                setAccountSearch={setAccountSearch}
+                accountPositionFilter={accountPositionFilter}
+                setAccountPositionFilter={setAccountPositionFilter}
+                accountPositionOptions={accountPositionOptions}
+                accountRowsFiltered={accountRowsFiltered}
+                accountRowsRendered={accountRowsRendered}
+                setAccountRenderCount={setAccountRenderCount}
+                onRefreshEmployees={async () => {
+                  await fetchTempAccounts({ lockUi: false });
+                }}
+                onDownloadTemplate={downloadTempAccountTemplate}
+                onImportAccounts={importTempAccounts}
+                onExportAccounts={exportTempAccounts}
+                accountCardPrintingStaffId={accountCardPrintingStaffId}
+                onPrintAccountCard={printAccountCard}
+                onEditAccount={editTempAccount}
+              />
+            )}
 
-                <AccountManagementPage
-                  t={t}
-                  themeMode={themeMode}
-                  isLocked={isLocked}
-                  accountSearch={accountSearch}
-                  setAccountSearch={setAccountSearch}
-                  accountPositionFilter={accountPositionFilter}
-                  setAccountPositionFilter={setAccountPositionFilter}
-                  accountPositionOptions={accountPositionOptions}
-                  accountRowsFiltered={accountRowsFiltered}
-                  accountRowsRendered={accountRowsRendered}
-                  setAccountRenderCount={setAccountRenderCount}
-                  onRefreshEmployees={async () => {
-                    await fetchTempAccounts({ lockUi: false });
-                  }}
-                  onDownloadTemplate={downloadTempAccountTemplate}
-                  onImportAccounts={importTempAccounts}
-                  onExportAccounts={exportTempAccounts}
-                  accountCardPrintingStaffId={accountCardPrintingStaffId}
-                  onPrintAccountCard={printAccountCard}
-                  onEditAccount={editTempAccount}
-                />
-              </>
+            {page === 'permissions' && (
+              <AdminPermissionsPage
+                t={t}
+                themeMode={themeMode}
+                isLocked={isLocked}
+                canManage={accountsCanManageAdminAccess}
+                accessContext={adminAccessContext}
+                accessRows={adminAccessAccounts}
+                userOptions={adminAccessUserOptions}
+                agencyOptions={employeeAgencyOptions}
+                requestRows={adminAccessRequests}
+                onRefreshAccess={async () => {
+                  await fetchAdminAccessAccountsAndUsers({ lockUi: false });
+                }}
+                onSaveAccess={saveAdminAccessConfig}
+                onRefreshRequests={async () => {
+                  await fetchAdminAccessRequests({ lockUi: false, status: 'all' });
+                }}
+                onCreateRequest={submitAdminAccessRequest}
+                onReviewRequest={reviewAdminAccessRequestAction}
+              />
             )}
 
             {page === 'timecard' && (
@@ -15822,7 +16045,7 @@ ${rowsToHtml(late)}
                 <TimecardTableSection
                   t={t}
                   themeMode={themeMode}
-                  isLocked={isLocked}
+                  isLocked={timecardReadOnly}
                   timecardLoading={timecardLoading}
                   serverTime={serverTime}
                   timecardWeekOffset={timecardWeekOffset}
@@ -16159,7 +16382,7 @@ ${rowsToHtml(late)}
             {page === 'employee_upload' && (
               <EmployeeUploadPage
                 t={t}
-                isLocked={isLocked}
+                isLocked={employeesReadOnly}
                 uploadFillDuplicates={uploadFillDuplicates}
                 setUploadFillDuplicates={setUploadFillDuplicates}
                 fileInputRef={fileInputRef}
