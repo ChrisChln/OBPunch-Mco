@@ -285,7 +285,7 @@ const deriveInboundVolume = (rows: InboundMetric[]) => {
   return { totalPieces, totalPackages, singlePiece, multiPiece, singlePkgs, multiPkgs };
 };
 
-const calculateRequirement = (
+export const calculateRequirement = (
   workload: number,
   uphText: string,
   ewhText: string,
@@ -295,7 +295,7 @@ const calculateRequirement = (
   const uph = toNum(uphText);
   const ewh = toNum(ewhText);
   const lead = toNum(leadText);
-  if (!uph || !ewh || workload <= 0) return lead;
+  if (!uph || !ewh || workload <= 0) return 0;
   return roundRule(workload / (uph * ewh), mode) + lead;
 };
 
@@ -640,7 +640,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
 
       const pickCount = pick ? calculateRequirement(inbound.totalPieces, pick.uph, pick.ewh, pick.lead, 'ceil') : 0;
       const rebinCount = rebin ? calculateRequirement(inbound.multiPiece, rebin.uph, rebin.ewh, rebin.lead, 'ceil') : 0;
-      const consolidationCount = consolidation ? Math.max(1, calculateRequirement(inbound.multiPkgs, consolidation.uph, consolidation.ewh, consolidation.lead, 'ceil')) : 0;
+      const consolidationCount = consolidation ? calculateRequirement(inbound.multiPkgs, consolidation.uph, consolidation.ewh, consolidation.lead, 'ceil') : 0;
       const singlePackCount = singlePack ? calculateRequirement(inbound.singlePiece, singlePack.uph, singlePack.ewh, singlePack.lead, 'round') : 0;
       const multiPackCount = multiPack ? calculateRequirement(inbound.multiPiece, multiPack.uph, multiPack.ewh, multiPack.lead, 'round') : 0;
       const waterspiderCount = waterspider ? calculateRequirement(inbound.totalPackages, waterspider.uph, waterspider.ewh, waterspider.lead, 'floor') : 0;
@@ -704,7 +704,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
 
       const pickCount = pick ? calculateRequirement(inbound.totalPieces, pick.uph, pick.ewh, pick.lead, 'ceil') : 0;
       const rebinCount = rebin ? calculateRequirement(inbound.multiPiece, rebin.uph, rebin.ewh, rebin.lead, 'ceil') : 0;
-      const consolidationCount = consolidation ? Math.max(1, calculateRequirement(inbound.multiPkgs, consolidation.uph, consolidation.ewh, consolidation.lead, 'ceil')) : 0;
+      const consolidationCount = consolidation ? calculateRequirement(inbound.multiPkgs, consolidation.uph, consolidation.ewh, consolidation.lead, 'ceil') : 0;
       const singlePackCount = singlePack ? calculateRequirement(inbound.singlePiece, singlePack.uph, singlePack.ewh, singlePack.lead, 'round') : 0;
       const multiPackCount = multiPack ? calculateRequirement(inbound.multiPiece, multiPack.uph, multiPack.ewh, multiPack.lead, 'round') : 0;
       const waterspiderCount = waterspider ? calculateRequirement(inbound.totalPackages, waterspider.uph, waterspider.ewh, waterspider.lead, 'floor') : 0;

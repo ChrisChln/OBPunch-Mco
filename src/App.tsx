@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib/supabase';
 import { isValidStaffId, normalizeStaffId } from './lib/staffId';
 import { LABEL_TONE_KEYS, type LabelToneKey, loadLabelToneMap } from './lib/labelTone';
+import { isScheduleOnlyAgency } from './shared/agencyRules';
 
 type PunchAction = 'IN' | 'OUT';
 
@@ -83,7 +84,7 @@ type TomorrowListSetting = {
   publishForDate: string;
 };
 
-const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
+const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
 type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
@@ -349,6 +350,20 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   if (v === 'rebin') return 'Rebin';
   if (v === 'preship') return 'Preship';
   if (v === 'transfer') return 'Transfer';
+  if (
+    v === '兜底组' ||
+    v === '兜底' ||
+    v === 'flex team（机动组）' ||
+    v === 'flex team' ||
+    v === 'flexteam' ||
+    v === 'wrap-up team' ||
+    v === 'wrap up team' ||
+    v === 'wrapup team' ||
+    v === 'fallback' ||
+    v === 'backup'
+  ) {
+    return 'FLEX TEAM';
+  }
   return '';
 };
 
@@ -700,7 +715,8 @@ export default function App() {
     Pack: 'emerald',
     Rebin: 'amber',
     Preship: 'rose',
-    Transfer: 'violet'
+    Transfer: 'violet',
+    'FLEX TEAM': 'slate'
   });
   const [punchLogPositionFilter, setPunchLogPositionFilter] = useState<AllowedPosition | ''>('');
   const [dailyRoster, setDailyRoster] = useState<DailyRosterItem[]>([]);
@@ -907,18 +923,20 @@ export default function App() {
 
   const checkEmployeeRegistered = async (staff: string) => {
     if (!supabase) {
-      return { registered: false, error: 'Missing Supabase configuration.' };
+      return { registered: false, scheduleOnly: false, error: 'Missing Supabase configuration.' };
     }
 
-    const base = () => supabase.from(EMPLOYEE_TABLE).select('staff_id').eq('staff_id', staff).limit(1);
-    const attempt = await base().order('created_at', { ascending: false });
-    const resolved = attempt.error ? await base() : attempt;
-    if (resolved.error) {
-      return { registered: false, error: resolved.error.message };
+    const mapRes = await fetchEmployeeMap([staff]);
+    if (mapRes.error) {
+      return { registered: false, scheduleOnly: false, error: mapRes.error };
     }
 
-    const rows = (resolved.data as Array<{ staff_id?: string | null }> | null) ?? [];
-    return { registered: rows.length > 0, error: null as string | null };
+    const employee = mapRes.map[staff];
+    return {
+      registered: Boolean(employee),
+      scheduleOnly: isScheduleOnlyAgency(String(employee?.agency ?? '').trim()),
+      error: null as string | null
+    };
   };
 
   const fetchOutstandingDevicesByStaff = async (staff: string) => {
@@ -1645,18 +1663,21 @@ const fetchPunchBoardUph = async (
 
     const mapRes = await fetchEmployeeMap(staffIds);
     const employeeMap = mapRes.error ? {} : mapRes.map;
-    const list: DailyRosterItem[] = rows.map((row) => {
-      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-      const employeeInfo = staff ? employeeMap[staff] : undefined;
-      const position = String(employeeInfo?.position ?? '').trim();
-      return {
-        staff_id: staff,
-        name: employeeInfo?.name || staff,
-        agency: employeeInfo?.agency || '-',
-        position,
-        shift: String(employeeInfo?.shift ?? '').trim()
-      };
-    });
+    const list: DailyRosterItem[] = rows
+      .map((row) => {
+        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+        const employeeInfo = staff ? employeeMap[staff] : undefined;
+        if (!staff || !employeeInfo || isScheduleOnlyAgency(String(employeeInfo.agency ?? '').trim())) return null;
+        const position = String(employeeInfo?.position ?? '').trim();
+        return {
+          staff_id: staff,
+          name: employeeInfo?.name || staff,
+          agency: employeeInfo?.agency || '-',
+          position,
+          shift: String(employeeInfo?.shift ?? '').trim()
+        };
+      })
+      .filter(Boolean) as DailyRosterItem[];
     setDailyRoster(list);
   };
 
@@ -1725,6 +1746,7 @@ const fetchPunchBoardUph = async (
     const mapRes = await fetchEmployeeMap(scheduledStaff);
     const employeeMap = mapRes.error ? {} : mapRes.map;
     const list: AbsentRosterItem[] = scheduledStaff
+      .filter((staff) => !isScheduleOnlyAgency(String(employeeMap[staff]?.agency ?? '').trim()))
       .filter((staff) => !punchedStaff.has(staff))
       .filter((staff) => Boolean(employeeMap[staff]))
       .map((staff) => {
@@ -1786,6 +1808,7 @@ const fetchPunchBoardUph = async (
     for (const row of workScheduleRows) {
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       if (!staff) continue;
+      if (isScheduleOnlyAgency(String(employeePositionMap[staff]?.agency ?? '').trim())) continue;
       const latestPosition = normalizeAllowedPosition(String(employeePositionMap[staff]?.position ?? '').trim());
       const position = latestPosition;
       if (!position) continue;
@@ -1803,6 +1826,7 @@ const fetchPunchBoardUph = async (
     for (const row of restScheduleRows) {
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       if (!staff) continue;
+      if (isScheduleOnlyAgency(String(employeePositionMap[staff]?.agency ?? '').trim())) continue;
       const latestPosition = normalizeAllowedPosition(String(employeePositionMap[staff]?.position ?? '').trim());
       const position = latestPosition;
       if (!position) continue;
@@ -1844,6 +1868,7 @@ const fetchPunchBoardUph = async (
         const atRaw = String(r.created_at ?? '').trim();
         const atMs = atRaw ? new Date(atRaw).getTime() : Number.NaN;
         if (!staff) continue;
+        if (isScheduleOnlyAgency(String(employeePositionMap[staff]?.agency ?? '').trim())) continue;
         punchedStaff.add(staff);
         if (action) {
           const previous = latestPunchByStaff.get(staff);
@@ -1875,6 +1900,7 @@ const fetchPunchBoardUph = async (
       const positionMapRes = await fetchEmployeeMap(punchedStaffWithoutSchedule);
       const employeePositionMap = positionMapRes.error ? {} : positionMapRes.map;
       for (const staff of punchedStaffWithoutSchedule) {
+        if (isScheduleOnlyAgency(String(employeePositionMap[staff]?.agency ?? '').trim())) continue;
         const positionRaw = String(employeePositionMap[staff]?.position ?? '').trim();
         const position = normalizeAllowedPosition(positionRaw);
         if (!position) continue;
@@ -2020,7 +2046,8 @@ const fetchPunchBoardUph = async (
       Pack: 'emerald',
       Rebin: 'amber',
       Preship: 'rose',
-      Transfer: 'violet'
+      Transfer: 'violet',
+      'FLEX TEAM': 'slate'
     };
     for (const pos of ALLOWED_POSITIONS) {
       const tone = String(raw[pos] ?? '').trim() as LabelToneKey;
@@ -2210,6 +2237,10 @@ const fetchPunchBoardUph = async (
       const needle = pos.trim().toLowerCase();
       for (const staffId of Object.keys(staffPunches)) {
         const employee = employeeMap[staffId];
+        if (isScheduleOnlyAgency(String(employee?.agency ?? '').trim())) {
+          delete staffPunches[staffId];
+          continue;
+        }
         const staffPos = String(employee?.position ?? '').trim().toLowerCase();
         if (staffPos !== needle) {
           delete staffPunches[staffId];
@@ -2243,25 +2274,31 @@ const fetchPunchBoardUph = async (
     }
 
     const rows = loaded.rows;
-
-    setPunchBoard(rows);
-
     const staffIds = rows.map((r) => r.staff_id).filter(Boolean);
     const mapRes = await fetchEmployeeMap(staffIds);
     if (mapRes.error) {
+      setPunchBoard([]);
       setPunchBoardEmployeeMap({});
       setPunchBoardDeviceStatusByStaffId({});
       setPunchBoardUphByStaffId({});
       return;
     }
-    setPunchBoardEmployeeMap(mapRes.map);
-    await fetchPunchBoardDeviceStatus(staffIds);
-    const normalizedStaffIds = Array.from(new Set(staffIds.map((v) => normalizeStaffId(v)).filter(Boolean))).sort((a, b) =>
+
+    const filteredRows = rows.filter((row) => !isScheduleOnlyAgency(String(mapRes.map[row.staff_id]?.agency ?? '').trim()));
+    const filteredStaffIds = filteredRows.map((row) => row.staff_id).filter(Boolean);
+    const filteredEmployeeMap = Object.fromEntries(
+      Object.entries(mapRes.map).filter(([, employee]) => !isScheduleOnlyAgency(String(employee?.agency ?? '').trim()))
+    );
+
+    setPunchBoard(filteredRows);
+    setPunchBoardEmployeeMap(filteredEmployeeMap);
+    await fetchPunchBoardDeviceStatus(filteredStaffIds);
+    const normalizedStaffIds = Array.from(new Set(filteredStaffIds.map((v) => normalizeStaffId(v)).filter(Boolean))).sort((a, b) =>
       a.localeCompare(b, 'en-US')
     );
     const uphCacheKey = normalizedStaffIds
       .map((staff) => {
-        const profile = mapRes.map[staff];
+        const profile = filteredEmployeeMap[staff];
         return `${staff}:${String(profile?.position ?? '').trim()}:${String(profile?.name ?? '').trim()}`;
       })
       .join('|');
@@ -2272,7 +2309,7 @@ const fetchPunchBoardUph = async (
       return;
     }
 
-    const nextUphMap = await fetchPunchBoardUph(staffIds, mapRes.map);
+    const nextUphMap = await fetchPunchBoardUph(filteredStaffIds, filteredEmployeeMap);
     punchBoardUphCacheRef.current = {
       at: Date.now(),
       key: uphCacheKey,
@@ -2421,6 +2458,11 @@ const fetchPunchBoardUph = async (
       }
       if (!registered.registered) {
         setUiStatus({ tone: 'error', message: `Employee not registered: ${normalizedId}` });
+        playError();
+        return;
+      }
+      if (registered.scheduleOnly) {
+        setUiStatus({ tone: 'error', message: `Employee does not use punch: ${normalizedId}` });
         playError();
         return;
       }

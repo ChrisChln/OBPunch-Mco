@@ -111,14 +111,27 @@ const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? Math.max(0, Math.
 const FILTER_STORAGE_KEY = 'ob_work_hour_comparison_filters_v1';
 const CSV_ACCEPT_TYPES =
   '.csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
-const TRACKED_UNRESOLVED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
+const TRACKED_UNRESOLVED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
 const TIMECARD_PUNCH_SAVED_EVENT = 'ob-timecard-punch-saved';
 const IAMS_IMPORT_UPSERT_BATCH_SIZE = 500;
 const GLOBAL_IMPORT_FETCH_STAFF_BATCH_SIZE = 500;
 const ALL_SYSTEM_HOURS_COVERAGE_TOKEN = '__ALL_SYSTEM_HOURS__';
+const POSITION_DISPLAY_ORDER: readonly string[] = TRACKED_UNRESOLVED_POSITIONS;
 
 const buildEmptyUnresolvedByPosition = (): PositionCardStat[] =>
   TRACKED_UNRESOLVED_POSITIONS.map((position) => ({ position, count: 0, targets: [] }));
+
+const sortPositionsByDisplayOrder = (positions: string[]) => {
+  const rank = new Map(POSITION_DISPLAY_ORDER.map((position, index) => [position, index] as const));
+  return [...positions].sort((a, b) => {
+    const aRank = rank.get(a);
+    const bRank = rank.get(b);
+    if (aRank != null && bRank != null) return aRank - bRank;
+    if (aRank != null) return -1;
+    if (bRank != null) return 1;
+    return a.localeCompare(b);
+  });
+};
 
 const fetchAllRows = async (queryFactory: (from: number, to: number) => any, pageSize = 1000) => {
   const allRows: any[] = [];
@@ -1190,7 +1203,7 @@ export default function WorkHourComparisonPage({
   }, [rows]);
 
   const positionOptions = useMemo(() => {
-    return Array.from(new Set(rows.map((row) => row.position).filter((v) => String(v).trim()))).sort((a, b) => a.localeCompare(b));
+    return sortPositionsByDisplayOrder(Array.from(new Set(rows.map((row) => row.position).filter((v) => String(v).trim()))));
   }, [rows]);
 
   const filteredRows = useMemo(() => {
@@ -1496,7 +1509,7 @@ export default function WorkHourComparisonPage({
               <div className="text-lg font-semibold">{summary.gapCount}</div>
             </div>
           </div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-5">
+          <div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             {globalUnresolvedByPosition.map((item) => (
               <button
                 type="button"
@@ -1532,7 +1545,7 @@ export default function WorkHourComparisonPage({
             ))}
           </div>
 
-          <div className="mt-3 grid gap-3 sm:grid-cols-5">
+          <div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             {globalLargeDiffByPosition.map((item) => (
               <button
                 type="button"

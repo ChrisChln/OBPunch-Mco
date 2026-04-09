@@ -23,7 +23,8 @@ export type Status = {
   message: string;
 };
 
-export type AllowedPosition = 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer';
+export type AllowedPosition = 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer' | 'FLEX TEAM';
+export type EmploymentType = 'FT' | 'PT';
 
 // DeviceType 现在支持任意自定义值，允许用户在导入时定义新类型
 // 不再限制为固定的 'PDA' | 'CART'
@@ -47,6 +48,7 @@ export type EmployeeRow = {
   name?: string | null;
   agency?: string | null;
   position?: string | null;
+  employment_type?: EmploymentType | string | null;
   shift?: '' | 'early' | 'late' | null;
   label?: string | null;
   work_account?: string | null;
@@ -54,6 +56,7 @@ export type EmployeeRow = {
   shift_time?: string | null;
   Agency?: string | null;
   Position?: string | null;
+  EmploymentType?: EmploymentType | string | null;
   Label?: string | null;
   WorkAccount?: string | null;
   WorkPassword?: string | null;
