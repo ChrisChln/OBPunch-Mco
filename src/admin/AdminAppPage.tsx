@@ -95,6 +95,11 @@ import {
   type DailyCapacityProcKey,
   type DailyCapacityStaffStats
 } from './dailyCapacity';
+import {
+  applyFlexCoverageToRecommendedRows,
+  buildFlexCoverageByDayIndex,
+  normalizeFlexCoverageTargetPosition
+} from './flexCoverage';
 import type {
   AdminPage,
   AllowedPosition,
@@ -12844,6 +12849,62 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     return map;
   }, [scheduleRows, scheduleRowsWeekOffset]);
+  const flexCoverageByScheduleDayIndex = useMemo(() => {
+    const entries: Array<{ dayIndex: number; targetPosition: 'Pick' | 'Pack' | 'Rebin'; shift: 'early' | 'late' }> = [];
+    for (const employee of employees) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff) continue;
+      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+      if (position !== 'FLEX TEAM') continue;
+      const targetPosition = normalizeFlexCoverageTargetPosition(String(employee.label ?? employee.Label ?? '').trim());
+      if (!targetPosition) continue;
+      const assignedShift = normalizeShiftValue(String((employee as any).shift ?? (employee as any).Shift ?? '').trim());
+      const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
+      for (let dayIndex = 0; dayIndex < scheduleDays.length; dayIndex += 1) {
+        const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
+        if (!row || !isWorkingScheduleRow(row)) continue;
+        const rowShift = normalizeShiftValue(String(row.shift ?? '').trim());
+        const shift = rowShift || assignedShift || inferredShift;
+        if (shift !== 'early' && shift !== 'late') continue;
+        entries.push({ dayIndex, targetPosition, shift });
+      }
+    }
+    return buildFlexCoverageByDayIndex(entries);
+  }, [employees, employeeShiftByStaffId, scheduleDays, scheduleRowsByStaffDayIndex]);
+  const scheduleRecommendedAdjustedByDate = useMemo(() => {
+    const next: ScheduleRecommendedByDate = {};
+    for (const [date, rows] of Object.entries(scheduleRecommendedByDate)) {
+      const dayIndex = scheduleDays.findIndex((day) => toDateOnly(day) === date);
+      next[date] = applyFlexCoverageToRecommendedRows(rows, dayIndex >= 0 ? flexCoverageByScheduleDayIndex[dayIndex] : null);
+    }
+    return next;
+  }, [scheduleRecommendedByDate, scheduleDays, flexCoverageByScheduleDayIndex]);
+  const scheduleRecommendedTotalsByDate = useMemo(() => {
+    const next: Record<string, number | null> = {};
+    for (const [date, rows] of Object.entries(scheduleRecommendedAdjustedByDate)) {
+      let filteredRows = rows;
+      if (deferredSchedulePosition === 'Pick') filteredRows = rows.filter((item) => item.key === 'Pick');
+      else if (deferredSchedulePosition === 'Rebin') filteredRows = rows.filter((item) => item.key === 'Rebin');
+      else if (deferredSchedulePosition === 'Pack') filteredRows = rows.filter((item) => item.key === 'Pack');
+      else if (deferredSchedulePosition === 'Preship') filteredRows = rows.filter((item) => item.key === 'Preship');
+      else if (deferredSchedulePosition === 'Transfer') {
+        next[date] = null;
+        continue;
+      }
+
+      if (filteredRows.length === 0) {
+        next[date] = null;
+        continue;
+      }
+
+      next[date] = filteredRows.reduce((sum, item) => {
+        if (deferredScheduleShift === 'early') return sum + item.ds;
+        if (deferredScheduleShift === 'late') return sum + item.ns;
+        return sum + item.total;
+      }, 0);
+    }
+    return next;
+  }, [scheduleRecommendedAdjustedByDate, deferredSchedulePosition, deferredScheduleShift]);
   const employeeProfileByStaffId = useMemo(() => {
     const map = new Map<string, { name: string; agency: string; position: string; shiftTime: string }>();
     for (const employee of employees) {
@@ -12979,7 +13040,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       ALLOWED_POSITIONS.map((position) => {
         const early = tomorrowAttendanceCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
         const late = tomorrowAttendanceCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
-        const recommendedRows = scheduleRecommendedByDate[tomorrowDailyList.targetDate] ?? [];
+        const recommendedRows = scheduleRecommendedAdjustedByDate[tomorrowDailyList.targetDate] ?? [];
         const recommended = recommendedRows.find((item) => item.key === position);
         const earlyRecommended = recommended ? recommended.ds : null;
         const lateRecommended = recommended ? recommended.ns : null;
@@ -13010,7 +13071,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           total: early + late
         };
     }),
-    [tomorrowAttendanceCards, scheduleRecommendedByDate, tomorrowDailyList, dailyListCapacityByRowKey]
+    [tomorrowAttendanceCards, scheduleRecommendedAdjustedByDate, tomorrowDailyList, dailyListCapacityByRowKey]
   );
   const selectedDailyFilterPositions = useMemo(
     () => ALLOWED_POSITIONS.filter((position) => Boolean(dailyListFilterPositions[position])),
