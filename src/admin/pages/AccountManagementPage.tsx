@@ -19,6 +19,7 @@ type AccountManagementPageProps = {
   t: TranslateFn;
   themeMode: 'light' | 'dark';
   isLocked: boolean;
+  isReadOnly?: boolean;
   accountSearch: string;
   setAccountSearch: (value: string) => void;
   accountPositionFilter: string;
@@ -43,6 +44,7 @@ export default function AccountManagementPage({
   t,
   themeMode,
   isLocked,
+  isReadOnly = false,
   accountSearch,
   setAccountSearch,
   accountPositionFilter,
@@ -60,6 +62,7 @@ export default function AccountManagementPage({
   onEditAccount
 }: AccountManagementPageProps) {
   const isLight = themeMode === 'light';
+  const writeLocked = isLocked || isReadOnly;
   const [editingRow, setEditingRow] = useState<AccountRow | null>(null);
   const [editName, setEditName] = useState('');
   const [editPosition, setEditPosition] = useState('');
@@ -152,7 +155,7 @@ export default function AccountManagementPage({
                     <input
                       value={editName}
                       onChange={(e) => setEditName(e.target.value)}
-                      disabled={editSaving}
+                      disabled={editSaving || isReadOnly}
                       className={[
                         'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
                         isLight
@@ -166,7 +169,7 @@ export default function AccountManagementPage({
                     <input
                       value={editPosition}
                       onChange={(e) => setEditPosition(e.target.value)}
-                      disabled={editSaving}
+                      disabled={editSaving || isReadOnly}
                       className={[
                         'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
                         isLight
@@ -180,7 +183,7 @@ export default function AccountManagementPage({
                     <input
                       value={editWorkAccount}
                       onChange={(e) => setEditWorkAccount(e.target.value)}
-                      disabled={editSaving}
+                      disabled={editSaving || isReadOnly}
                       className={[
                         'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
                         isLight
@@ -194,7 +197,7 @@ export default function AccountManagementPage({
                     <input
                       value={editWorkPassword}
                       onChange={(e) => setEditWorkPassword(e.target.value)}
-                      disabled={editSaving}
+                      disabled={editSaving || isReadOnly}
                       className={[
                         'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
                         isLight
@@ -221,7 +224,7 @@ export default function AccountManagementPage({
                 <button
                   type="button"
                   onClick={() => void submitEdit()}
-                  disabled={editSaving || !canSubmitEdit}
+                  disabled={editSaving || isReadOnly || !canSubmitEdit}
                   className={[
                     'rounded-2xl bg-neon px-6 py-2 text-sm font-semibold shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50',
                     isLight ? 'text-slate-900' : 'text-white'
@@ -262,7 +265,7 @@ export default function AccountManagementPage({
             <input
               type="file"
               accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-              disabled={isLocked}
+              disabled={writeLocked}
               onChange={(e) => {
                 const file = e.target.files?.[0] ?? null;
                 void onImportAccounts(file);
@@ -273,7 +276,7 @@ export default function AccountManagementPage({
           </label>
           <button
             type="button"
-            disabled={isLocked}
+            disabled={writeLocked}
             onClick={() => void onExportAccounts()}
             className={[
               'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
@@ -352,7 +355,7 @@ export default function AccountManagementPage({
                 <td className="px-4 py-3 text-right">
                   <button
                     type="button"
-                    disabled={isLocked}
+                    disabled={writeLocked}
                     onClick={() => setEditingRow(row)}
                     className="mr-2 rounded-2xl bg-white/10 px-4 py-1.5 text-xs font-semibold text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                   >
@@ -360,7 +363,7 @@ export default function AccountManagementPage({
                   </button>
                   <button
                     type="button"
-                    disabled={isLocked || !row.workAccount || !row.workPassword || accountCardPrintingStaffId === row.staff}
+                    disabled={writeLocked || !row.workAccount || !row.workPassword || accountCardPrintingStaffId === row.staff}
                     onClick={() => void onPrintAccountCard(row)}
                     className="rounded-xl bg-neon px-4 py-1.5 text-xs font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
                   >

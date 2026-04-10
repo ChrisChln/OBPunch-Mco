@@ -5,6 +5,7 @@ type TranslateFn = (zh: string, en: string) => string;
 const DEFAULT_WORK_PASSWORD = 'Helloworld2!';
 const resolveDefaultWorkPassword = (workAccount: string, workPassword: string) =>
   workAccount && !workPassword ? DEFAULT_WORK_PASSWORD : workPassword;
+const normalizeEmploymentType = (value: unknown): 'FT' | 'PT' => String(value ?? '').trim().toUpperCase() === 'PT' ? 'PT' : 'FT';
 
 type EmployeesTableSectionProps = {
   t: TranslateFn;
@@ -53,6 +54,7 @@ type EmployeesTableSectionProps = {
     name: string;
     agency: string;
     position: string;
+    employmentType: 'FT' | 'PT';
     shift: '' | 'early' | 'late';
     shiftTime: string;
     label: string;
@@ -96,7 +98,7 @@ export default function EmployeesTableSection({
   const isLight = themeMode === 'light';
   const ROW_HEIGHT = 56;
   const OVERSCAN = 12;
-  const TABLE_COLS = 11;
+  const TABLE_COLS = 12;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -149,7 +151,7 @@ export default function EmployeesTableSection({
         className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30"
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
       >
-        <table className="min-w-[1570px] w-full text-left text-sm">
+        <table className="min-w-[1670px] w-full text-left text-sm">
           <thead
             className={[
               'sticky top-0 z-20 border-b text-xs uppercase tracking-[0.2em] backdrop-blur',
@@ -161,6 +163,7 @@ export default function EmployeesTableSection({
               <th className="w-[240px] px-4 py-3">Name</th>
               <th className="w-[130px] px-4 py-3 whitespace-nowrap">Agency</th>
               <th className="w-[120px] px-4 py-3 whitespace-nowrap">Position</th>
+              <th className="w-[90px] px-4 py-3 whitespace-nowrap">FT/PT</th>
               <th className="w-[130px] px-4 py-3 whitespace-nowrap">{t('标签', 'Label')}</th>
               <th className="w-[150px] px-4 py-3 whitespace-nowrap">{t('账号', 'Account')}</th>
               <th className="w-[130px] px-4 py-3 whitespace-nowrap">
@@ -207,6 +210,7 @@ export default function EmployeesTableSection({
               const name = String(e.name ?? '').trim();
               const agency = String(e.agency ?? e.Agency ?? '').trim();
               const position = String(e.position ?? e.Position ?? '').trim();
+              const employmentType = normalizeEmploymentType((e as any).employment_type ?? (e as any).EmploymentType ?? '');
               const label = String(e.label ?? e.Label ?? '').trim();
               const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
               const workPassword = resolveDefaultWorkPassword(
@@ -300,6 +304,7 @@ export default function EmployeesTableSection({
                       {position || '-'}
                     </span>
                   </td>
+                  <td className="w-[90px] px-4 py-3 text-slate-200 whitespace-nowrap">{employmentType}</td>
                   <td className="w-[130px] px-4 py-3 text-slate-200">
                     {label ? (
                       <span
@@ -367,6 +372,7 @@ export default function EmployeesTableSection({
                           name,
                           agency,
                           position,
+                          employmentType,
                           shift: shift as '' | 'early' | 'late',
                           shiftTime,
                           label,

@@ -15,6 +15,7 @@ type TranslateFn = (zh: string, en: string) => string;
 type Props = {
   t: TranslateFn;
   isLocked: boolean;
+  isReadOnly?: boolean;
   supabase: any;
   themeMode: 'light' | 'dark';
   serverTime: Date;
@@ -224,8 +225,9 @@ void parseDateCell;
 void parseSubmittedAtCell;
 void parseBooleanCell;
 
-export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, serverTime, userEmail = '', userDisplayName = '', onPendingCountChange }: Props) {
+export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, supabase, themeMode, serverTime, userEmail = '', userDisplayName = '', onPendingCountChange }: Props) {
   const isLight = themeMode === 'light';
+  const writeLocked = isLocked || isReadOnly;
   const [employeesByStaffId, setEmployeesByStaffId] = useState<Record<string, EmployeeLite>>({});
   const [rows, setRows] = useState<LeaveRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -651,8 +653,8 @@ export default function LeaveApprovalPage({ t, isLocked, supabase, themeMode, se
                         <td className="px-3 py-2">{row.leave_type}</td>
                         <td className="px-3 py-2">
                           <div className="flex items-center gap-2 whitespace-nowrap">
-                            <button type="button" disabled={isLocked || savingRowId === row.id || effectiveStatus !== 'pending'} onClick={() => void updateLeaveStatus(row, 'approved')} className={buttonPrimaryClass}>{savingRowId === row.id ? t('处理中...', 'Saving...') : t('批准', 'Approve')}</button>
-                            <button type="button" disabled={isLocked || savingRowId === row.id || effectiveStatus !== 'pending'} onClick={() => void updateLeaveStatus(row, 'rejected')} className={buttonSecondaryClass}>{t('拒绝', 'Reject')}</button>
+                            <button type="button" disabled={writeLocked || savingRowId === row.id || effectiveStatus !== 'pending'} onClick={() => void updateLeaveStatus(row, 'approved')} className={buttonPrimaryClass}>{savingRowId === row.id ? t('处理中...', 'Saving...') : t('批准', 'Approve')}</button>
+                            <button type="button" disabled={writeLocked || savingRowId === row.id || effectiveStatus !== 'pending'} onClick={() => void updateLeaveStatus(row, 'rejected')} className={buttonSecondaryClass}>{t('拒绝', 'Reject')}</button>
                           </div>
                           {row.reviewed_by ? <div className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-white/50'].join(' ')}>{row.reviewed_by} · {formatDateTime(row.reviewed_at)}</div> : null}
                         </td>

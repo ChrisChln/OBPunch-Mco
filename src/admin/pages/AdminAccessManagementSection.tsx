@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   ADMIN_MODULE_KEYS,
   getDefaultModuleAccess,
+  normalizeAdminRole,
   type AdminModuleAccessLevel,
   type AdminModuleKey,
   type AdminRole
@@ -48,6 +49,7 @@ const MODULE_LABELS: Record<AdminModuleKey, { zh: string; en: string }> = {
   forecast: { zh: '件量预测', en: 'Forecast' },
   prediction_model: { zh: '预测模型', en: 'Model' },
   efficiency: { zh: '人效', en: 'Efficiency' },
+  permissions: { zh: '权限', en: 'Permissions' },
   agency: { zh: 'Agency', en: 'Agency' }
 };
 
@@ -81,7 +83,37 @@ export default function AdminAccessManagementSection({
   );
   const [saving, setSaving] = useState(false);
 
-  const existingUserIds = useMemo(() => new Set(rows.map((row) => row.user_id)), [rows]);
+  const mergedRows = useMemo(() => {
+    const explicitRowMap = new Map(rows.map((row) => [row.user_id, row] as const));
+    const merged = userOptions.map((user) => {
+      const explicitRow = explicitRowMap.get(user.user_id);
+      if (explicitRow) return explicitRow;
+
+      const role = normalizeAdminRole('', user.user_email);
+      return {
+        user_id: user.user_id,
+        user_email: user.user_email,
+        display_name: user.display_name,
+        role,
+        is_active: true,
+        managed_agencies: [],
+        modules: buildDefaultModuleState(role)
+      } satisfies AdminAccessAccountRecord;
+    });
+
+    const knownUserIds = new Set(merged.map((row) => row.user_id));
+    for (const row of rows) {
+      if (!knownUserIds.has(row.user_id)) merged.push(row);
+    }
+
+    return merged.sort((left, right) => {
+      const leftLabel = (left.display_name || left.user_email || left.user_id).trim().toLowerCase();
+      const rightLabel = (right.display_name || right.user_email || right.user_id).trim().toLowerCase();
+      return leftLabel.localeCompare(rightLabel, 'en-US');
+    });
+  }, [rows, userOptions]);
+
+  const existingUserIds = useMemo(() => new Set(mergedRows.map((row) => row.user_id)), [mergedRows]);
 
   const selectableUsers = useMemo(
     () =>
@@ -365,7 +397,7 @@ export default function AdminAccessManagementSection({
             type="button"
             disabled={isLocked}
             onClick={() => setEditing({ mode: 'create', row: null })}
-            className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+            className="hidden rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
           >
             {t('新增账号', 'New Access')}
           </button>
@@ -383,7 +415,7 @@ export default function AdminAccessManagementSection({
         </div>
       </div>
 
-      {!rows.length ? (
+      {!mergedRows.length ? (
         <p className={['mt-4 text-sm', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
           {t('暂无权限账号', 'No access rows')}
         </p>
@@ -402,7 +434,7 @@ export default function AdminAccessManagementSection({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
+            {mergedRows.map((row) => {
               const operateCount = row.modules.filter((module) => module.access_level === 'operate').length;
               const viewCount = row.modules.filter((module) => module.access_level === 'view').length;
               const hiddenCount = row.modules.filter((module) => module.access_level === 'hidden').length;

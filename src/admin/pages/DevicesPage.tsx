@@ -6,6 +6,7 @@ type TranslateFn = (zh: string, en: string) => string;
 type DevicesPageProps = {
   t: TranslateFn;
   isLocked: boolean;
+  isReadOnly?: boolean;
   deviceRowsFiltered: any[];
   isAllFilteredDevicesSelected: boolean;
   setDeviceSelectedLabelSns: Dispatch<SetStateAction<string[]>>;
@@ -46,6 +47,7 @@ type DevicesPageProps = {
 export default function DevicesPage({
   t,
   isLocked,
+  isReadOnly = false,
   deviceRowsFiltered,
   isAllFilteredDevicesSelected,
   setDeviceSelectedLabelSns,
@@ -82,6 +84,7 @@ export default function DevicesPage({
   printDeviceLabel,
   toggleDeviceActive
 }: DevicesPageProps) {
+  const writeLocked = isLocked || isReadOnly;
   return (
     <section className="glass reveal rounded-3xl px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -141,14 +144,14 @@ export default function DevicesPage({
                   type="file"
                   accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                   className="hidden"
-                  disabled={isLocked}
+                  disabled={writeLocked}
                   onChange={(e) => void onDeviceFileSelected(e.target.files?.[0] ?? null)}
                 />
                 {t('选择设备文件', 'Choose file')}
               </label>
               <button
                 type="button"
-                disabled={isLocked}
+                disabled={writeLocked}
                 onClick={() => void uploadDevices()}
                 className="h-11 rounded-2xl bg-neon px-5 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -331,7 +334,7 @@ export default function DevicesPage({
                           </button>
                           <button
                             type="button"
-                            disabled={isLocked}
+                            disabled={writeLocked}
                             onClick={() => void toggleDeviceActive(row)}
                             className="rounded-xl bg-white/10 px-2 py-1 text-[11px] font-semibold text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                           >

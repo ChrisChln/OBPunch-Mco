@@ -21,6 +21,8 @@ type EmployeeEditModalProps = {
   employeeAgencyOptions: string[];
   employeeEditPosition: string;
   setEmployeeEditPosition: (value: string) => void;
+  employeeEditEmploymentType: 'FT' | 'PT';
+  setEmployeeEditEmploymentType: (value: 'FT' | 'PT') => void;
   employeeEditShift: '' | 'early' | 'late';
   setEmployeeEditShift: (value: '' | 'early' | 'late') => void;
   employeeEditShiftTime: string;
@@ -56,6 +58,8 @@ export default function EmployeeEditModal({
   employeeAgencyOptions,
   employeeEditPosition,
   setEmployeeEditPosition,
+  employeeEditEmploymentType,
+  setEmployeeEditEmploymentType,
   employeeEditShift,
   setEmployeeEditShift,
   employeeEditShiftTime,
@@ -172,6 +176,18 @@ export default function EmployeeEditModal({
                       {p}
                     </option>
                   ))}
+                </select>
+              </div>
+              <div>
+                <label className={['text-xs uppercase tracking-[0.25em]', labelClass].join(' ')}>FT/PT</label>
+                <select
+                  value={employeeEditEmploymentType}
+                  onChange={(e) => setEmployeeEditEmploymentType(((e.target.value as 'FT' | 'PT') || 'FT'))}
+                  disabled={isLocked}
+                  className={fieldClass}
+                >
+                  <option value="FT">FT</option>
+                  <option value="PT">PT</option>
                 </select>
               </div>
               <div>

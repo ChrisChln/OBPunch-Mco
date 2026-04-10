@@ -36,7 +36,7 @@ type EmployeeRow = {
   name?: string | null;
 };
 
-const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
+const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
 type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
@@ -104,6 +104,20 @@ const getDevicePositionToneClass = (value: string) => {
   if (pos === 'rebin') return 'border-emerald-300/22 bg-gradient-to-br from-emerald-400/[0.14] via-emerald-300/[0.05] to-transparent';
   if (pos === 'preship') return 'border-amber-300/22 bg-gradient-to-br from-amber-400/[0.14] via-amber-300/[0.05] to-transparent';
   if (pos === 'transfer') return 'border-violet-300/22 bg-gradient-to-br from-violet-400/[0.14] via-violet-300/[0.05] to-transparent';
+  if (
+    pos === '兜底组' ||
+    pos === '兜底' ||
+    pos === 'flex team（机动组）' ||
+    pos === 'flex team' ||
+    pos === 'flexteam' ||
+    pos === 'wrap-up team' ||
+    pos === 'wrap up team' ||
+    pos === 'wrapup team' ||
+    pos === 'fallback' ||
+    pos === 'backup'
+  ) {
+    return 'border-slate-300/22 bg-gradient-to-br from-slate-400/[0.14] via-slate-300/[0.05] to-transparent';
+  }
   return 'border-white/12 bg-white/[0.03]';
 };
 

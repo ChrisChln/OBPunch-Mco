@@ -2,6 +2,7 @@ export const ADMIN_MODULE_KEYS = [
   'home',
   'employees',
   'accounts',
+  'permissions',
   'timecard',
   'leave_approval',
   'todo',
@@ -40,7 +41,7 @@ export const normalizeAdminRole = (value: unknown, fallbackEmail?: string | null
   const role = String(value ?? '').trim().toLowerCase() as AdminRole;
   if (ADMIN_ROLE_VALUES.includes(role)) return role;
   if (String(fallbackEmail ?? '').trim().toLowerCase() === DEFAULT_LEVEL1_EMAIL) return 'level1';
-  return 'agency';
+  return 'level3';
 };
 
 export const normalizeModuleAccessLevel = (value: unknown): AdminModuleAccessLevel => {
@@ -51,7 +52,7 @@ export const normalizeModuleAccessLevel = (value: unknown): AdminModuleAccessLev
 export const getDefaultModuleAccess = (role: AdminRole, moduleKey: AdminModuleKey): AdminModuleAccessLevel => {
   if (role === 'level1' || role === 'level2') return 'operate';
   if (role === 'level3') return 'view';
-  return moduleKey === 'agency' ? 'view' : 'hidden';
+  return moduleKey === 'agency' || moduleKey === 'permissions' ? 'view' : 'hidden';
 };
 
 export const buildEffectiveModuleMap = (
@@ -106,14 +107,14 @@ export const normalizeAdminAccessContext = (
 };
 
 export const getModuleMapFromContext = (context: AdminAccessContext | null | undefined) =>
-  buildEffectiveModuleMap(context?.role ?? 'agency', context?.modules ?? []);
+  buildEffectiveModuleMap(context?.role ?? 'level3', context?.modules ?? []);
 
 export const getVisibleModules = (context: AdminAccessContext | null | undefined) =>
   ADMIN_MODULE_KEYS.filter((moduleKey) => hasModuleAccess(getModuleMapFromContext(context), moduleKey, 'view'));
 
 export const canManageAdminAccess = (context: AdminAccessContext | null | undefined) => {
   if (!context || context.role !== 'level1') return false;
-  return hasModuleAccess(getModuleMapFromContext(context), 'accounts', 'operate');
+  return hasModuleAccess(getModuleMapFromContext(context), 'permissions', 'operate');
 };
 
 export const canReviewTerminationRequests = (context: AdminAccessContext | null | undefined) => {

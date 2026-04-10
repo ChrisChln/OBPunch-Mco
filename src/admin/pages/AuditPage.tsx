@@ -3,6 +3,7 @@ type TranslateFn = (zh: string, en: string) => string;
 type AuditPageProps = {
   t: TranslateFn;
   isLocked: boolean;
+  isReadOnly?: boolean;
   auditSearch: string;
   setAuditSearch: (value: string) => void;
   fetchAudit: (params: { search: string }) => void | Promise<void>;
@@ -23,6 +24,7 @@ type AuditPageProps = {
 export default function AuditPage({
   t,
   isLocked,
+  isReadOnly = false,
   auditSearch,
   setAuditSearch,
   fetchAudit,
@@ -39,6 +41,7 @@ export default function AuditPage({
   isAuditRowUndone,
   undoAuditRow
 }: AuditPageProps) {
+  const writeLocked = isLocked || isReadOnly;
   return (
     <section className="glass reveal rounded-3xl px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -155,7 +158,7 @@ export default function AuditPage({
                   {undoable && (
                     <button
                       type="button"
-                      disabled={isLocked || undone}
+                      disabled={writeLocked || undone}
                       onClick={() => void undoAuditRow(row)}
                       className={`rounded-xl px-3 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
                         undone

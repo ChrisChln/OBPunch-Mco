@@ -14,6 +14,11 @@ describe('adminAccess', () => {
     expect(normalizeAdminRole('', 'lnchen4201@gmail.com')).toBe('level1');
   });
 
+  test('defaults unspecified accounts to level3', () => {
+    expect(normalizeAdminRole('', 'user@example.com')).toBe('level3');
+    expect(normalizeAdminAccessContext({ user_id: 'u0', modules: [] }).role).toBe('level3');
+  });
+
   test('applies role defaults and explicit overrides', () => {
     const map = buildEffectiveModuleMap('agency', [
       { module_key: 'agency', access_level: 'operate' },
@@ -26,6 +31,10 @@ describe('adminAccess', () => {
 
   test('level3 defaults to view-only', () => {
     expect(getDefaultModuleAccess('level3', 'schedule')).toBe('view');
+  });
+
+  test('agency keeps permissions page visible by default', () => {
+    expect(getDefaultModuleAccess('agency', 'permissions')).toBe('view');
   });
 
   test('checks view and operate access correctly', () => {
@@ -49,7 +58,7 @@ describe('adminAccess', () => {
     expect(context.modules.find((item) => item.module_key === 'schedule')?.access_level).toBe('hidden');
   });
 
-  test('only level1 with accounts operate can manage admin access', () => {
+  test('only level1 with permissions operate can manage admin access', () => {
     const level1 = normalizeAdminAccessContext({
       user_id: 'u1',
       role: 'level1',
@@ -60,9 +69,15 @@ describe('adminAccess', () => {
       role: 'level2',
       modules: []
     });
+    const level1WithoutPermission = normalizeAdminAccessContext({
+      user_id: 'u3',
+      role: 'level1',
+      modules: [{ module_key: 'permissions', access_level: 'hidden' }]
+    });
 
     expect(canManageAdminAccess(level1)).toBe(true);
     expect(canManageAdminAccess(level2)).toBe(false);
+    expect(canManageAdminAccess(level1WithoutPermission)).toBe(false);
   });
 
   test('termination review requires schedule operate', () => {

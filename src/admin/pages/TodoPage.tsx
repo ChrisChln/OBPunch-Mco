@@ -29,6 +29,7 @@ type TodoView = 'assigned' | 'completed' | 'created' | 'pending';
 type Props = {
   t: TranslateFn;
   isLocked: boolean;
+  isReadOnly?: boolean;
   supabase: any;
   themeMode: 'light' | 'dark';
   userId: string;
@@ -267,6 +268,7 @@ const buildTodoGroups = (items: TodoItemRecord[], userId: string) => {
 export default function TodoPage({
   t,
   isLocked,
+  isReadOnly = false,
   supabase,
   themeMode,
   userId,
@@ -275,6 +277,7 @@ export default function TodoPage({
   onPendingCountChange
 }: Props) {
   const isLight = themeMode === 'light';
+  const writeLocked = isLocked || isReadOnly;
   const [view, setView] = useState<TodoView>('assigned');
   const [profiles, setProfiles] = useState<TodoProfile[]>([]);
   const [assignedItems, setAssignedItems] = useState<TodoItemRecord[]>([]);
@@ -711,7 +714,7 @@ export default function TodoPage({
           {!group.isGroupedIndividual ? (
             <button
               type="button"
-              disabled={(mode !== 'assigned' && mode !== 'completed') || saving || isLocked || (item.status !== 'open' && item.status !== 'done')}
+              disabled={(mode !== 'assigned' && mode !== 'completed') || saving || writeLocked || (item.status !== 'open' && item.status !== 'done')}
               onClick={() => {
                 if (mode !== 'assigned' && mode !== 'completed') return;
                 if (item.status === 'done') {
@@ -776,7 +779,7 @@ export default function TodoPage({
           <button
             type="button"
             className={buttonSecondaryClass}
-            disabled={saving || isLocked}
+            disabled={saving || writeLocked}
             onClick={() => {
               if (mode === 'assigned' || mode === 'completed') {
                 void applyItemActionMany(currentUserItemIds, 'request_delete');
@@ -789,11 +792,11 @@ export default function TodoPage({
           </button>
         ) : null}
         {renderActionLinks(item)}
-        {item.creator_user_id === userId ? <button type="button" className={buttonSecondaryClass} disabled={saving || isLocked} onClick={() => openEditForm(item)}>{t('编辑', 'Edit')}</button> : null}
+        {item.creator_user_id === userId ? <button type="button" className={buttonSecondaryClass} disabled={saving || writeLocked} onClick={() => openEditForm(item)}>{t('编辑', 'Edit')}</button> : null}
         {mode === 'pending' ? (
           <>
-            <button type="button" className={buttonPrimaryClass} disabled={saving || isLocked} onClick={() => void applyItemActionMany(pendingItemIds, 'approve_delete')}>{t('确认删除', 'Approve delete')}</button>
-            <button type="button" className={buttonSecondaryClass} disabled={saving || isLocked} onClick={() => void applyItemActionMany(pendingItemIds, 'reject_delete')}>{t('驳回', 'Reject')}</button>
+            <button type="button" className={buttonPrimaryClass} disabled={saving || writeLocked} onClick={() => void applyItemActionMany(pendingItemIds, 'approve_delete')}>{t('确认删除', 'Approve delete')}</button>
+            <button type="button" className={buttonSecondaryClass} disabled={saving || writeLocked} onClick={() => void applyItemActionMany(pendingItemIds, 'reject_delete')}>{t('驳回', 'Reject')}</button>
           </>
         ) : null}
       </div>
@@ -815,7 +818,7 @@ export default function TodoPage({
         <div><h2 className="font-display text-2xl tracking-[0.08em]">{t('待办', 'ToDo')}</h2></div>
         <div className="flex flex-wrap gap-2">
           <button type="button" className={buttonSecondaryClass} disabled={loading || isLocked} onClick={() => void refreshAll()}>{t('刷新', 'Refresh')}</button>
-          <button type="button" className={buttonPrimaryClass} disabled={isLocked} onClick={resetForm}>{t('新建任务', 'New Task')}</button>
+          <button type="button" className={buttonPrimaryClass} disabled={writeLocked} onClick={resetForm}>{t('新建任务', 'New Task')}</button>
         </div>
       </div>
 
@@ -848,8 +851,8 @@ export default function TodoPage({
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-lg font-semibold">{form.templateId ? t('编辑任务', 'Edit Task') : t('新建任务', 'New Task')}</h3>
                   <div className="flex flex-wrap justify-end gap-2">
-                    <button type="button" className={buttonPrimaryClass} disabled={saving || isLocked} onClick={() => void saveTask()}>{form.templateId ? t('保存修改', 'Save') : t('创建任务', 'Create')}</button>
-                    <button type="button" className={buttonSecondaryClass} disabled={saving || isLocked} onClick={clearFormFields}>{t('重置', 'Reset')}</button>
+                    <button type="button" className={buttonPrimaryClass} disabled={saving || writeLocked} onClick={() => void saveTask()}>{form.templateId ? t('保存修改', 'Save') : t('创建任务', 'Create')}</button>
+                    <button type="button" className={buttonSecondaryClass} disabled={saving || writeLocked} onClick={clearFormFields}>{t('重置', 'Reset')}</button>
                     <button type="button" className={buttonSecondaryClass} disabled={saving} onClick={closeForm}>{t('关闭', 'Close')}</button>
                   </div>
                 </div>

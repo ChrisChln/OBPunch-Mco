@@ -237,7 +237,7 @@ const normalizeShiftValue = (value: unknown): '' | 'early' | 'late' => {
   if (v === 'late' || v === 'night' || v === 'pm') return 'late';
   return '';
 };
-const normalizePositionKey = (value: string): '' | 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer' => {
+const normalizePositionKey = (value: string): '' | 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer' | 'FLEX TEAM' => {
   const v = String(value ?? '').trim().toLowerCase();
   if (!v) return '';
   if (v === 'pick' || v.includes('pick')) return 'Pick';
@@ -245,6 +245,20 @@ const normalizePositionKey = (value: string): '' | 'Pick' | 'Pack' | 'Rebin' | '
   if (v === 'rebin' || v.includes('rebin')) return 'Rebin';
   if (v === 'preship' || v.includes('preship')) return 'Preship';
   if (v === 'transfer' || v.includes('transfer')) return 'Transfer';
+  if (
+    v === '兜底组' ||
+    v === '兜底' ||
+    v === 'flex team（机动组）' ||
+    v === 'flex team' ||
+    v === 'flexteam' ||
+    v.includes('wrap-up') ||
+    v.includes('wrap up') ||
+    v.includes('wrapup') ||
+    v.includes('fallback') ||
+    v.includes('backup')
+  ) {
+    return 'FLEX TEAM';
+  }
   return '';
 };
 const getPositionBadgeClass = (value: string) => {
@@ -254,6 +268,7 @@ const getPositionBadgeClass = (value: string) => {
   if (pos === 'Rebin') return 'border-emerald-300/35 text-emerald-100 bg-emerald-400/[0.14]';
   if (pos === 'Preship') return 'border-amber-300/35 text-amber-100 bg-amber-400/[0.14]';
   if (pos === 'Transfer') return 'border-violet-300/35 text-violet-100 bg-violet-400/[0.14]';
+  if (pos === 'FLEX TEAM') return 'border-slate-300/35 text-slate-100 bg-slate-400/[0.14]';
   return 'border-white/15 text-stone-100 bg-white/[0.04]';
 };
 const getShiftBadgeClass = (value: string) => {
@@ -262,7 +277,7 @@ const getShiftBadgeClass = (value: string) => {
   if (v === 'late') return 'border-stone-500/25 text-stone-200 bg-stone-400/[0.08]';
   return 'border-white/15 text-stone-100 bg-white/[0.04]';
 };
-const DEFAULT_CARD_POSITIONS: string[] = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'];
+const DEFAULT_CARD_POSITIONS: string[] = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'];
 const getAttendanceCardClass = (position: string) => {
   const pos = normalizePositionKey(position);
   if (pos === 'Pick') return 'border-sky-300/20 bg-gradient-to-br from-sky-400/[0.14] via-sky-300/[0.06] to-transparent';
@@ -270,6 +285,7 @@ const getAttendanceCardClass = (position: string) => {
   if (pos === 'Rebin') return 'border-amber-300/20 bg-gradient-to-br from-amber-400/[0.16] via-amber-300/[0.07] to-transparent';
   if (pos === 'Preship') return 'border-rose-300/20 bg-gradient-to-br from-rose-400/[0.14] via-rose-300/[0.06] to-transparent';
   if (pos === 'Transfer') return 'border-violet-300/20 bg-gradient-to-br from-violet-400/[0.14] via-violet-300/[0.06] to-transparent';
+  if (pos === 'FLEX TEAM') return 'border-slate-300/20 bg-gradient-to-br from-slate-400/[0.14] via-slate-300/[0.06] to-transparent';
   return 'border-white/12 bg-white/[0.03]';
 };
 const getAttendanceCardValueClass = (position: string) => {
@@ -279,6 +295,7 @@ const getAttendanceCardValueClass = (position: string) => {
   if (pos === 'Rebin') return 'text-amber-100';
   if (pos === 'Preship') return 'text-rose-100';
   if (pos === 'Transfer') return 'text-violet-100';
+  if (pos === 'FLEX TEAM') return 'text-slate-100';
   return 'text-stone-100';
 };
 
@@ -843,7 +860,7 @@ export default function DashboardPage() {
               : !isPlannedWork && workHoursToday > 0
                 ? 'Off Worked'
                 : 'Normal';
-          const currentPosition = String(employee?.position ?? '').trim();
+          const currentPosition = normalizePositionKey(String(employee?.position ?? '').trim()) || String(employee?.position ?? '').trim();
           return {
             staff_id: staffId,
             name: employee?.name ?? '',
@@ -1178,7 +1195,10 @@ export default function DashboardPage() {
   }, []);
 
   const positionOptions = useMemo(
-    () => Array.from(new Set(rows.map((row) => String(row.position ?? '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    () =>
+      Array.from(
+        new Set(rows.map((row) => normalizePositionKey(String(row.position ?? '').trim()) || String(row.position ?? '').trim()).filter(Boolean))
+      ).sort((a, b) => a.localeCompare(b)),
     [rows]
   );
   const shiftOptions = useMemo(
@@ -1193,7 +1213,7 @@ export default function DashboardPage() {
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((row) => {
-      if (positionFilter && String(row.position ?? '').trim() !== positionFilter) return false;
+      if (positionFilter && (normalizePositionKey(String(row.position ?? '').trim()) || String(row.position ?? '').trim()) !== positionFilter) return false;
       if (shiftFilter && String(row.display_shift ?? row.shift ?? '').trim().toLowerCase() !== shiftFilter) return false;
       if (absentOnly && row.attendance !== 'Absent') return false;
       if (onClockOnly) {
@@ -1219,7 +1239,9 @@ export default function DashboardPage() {
   const filteredAccountUsageRows = useMemo(() => {
     const q = accountUsageSearch.trim().toLowerCase();
     const rowsByPosition = accountUsagePositionFilter
-      ? accountUsageRows.filter((row) => String(row.position ?? '').trim() === accountUsagePositionFilter)
+      ? accountUsageRows.filter(
+          (row) => (normalizePositionKey(String(row.position ?? '').trim()) || String(row.position ?? '').trim()) === accountUsagePositionFilter
+        )
       : accountUsageRows;
     if (!q) return rowsByPosition;
     return rowsByPosition.filter((row) => {
@@ -1237,9 +1259,11 @@ export default function DashboardPage() {
   }, [accountUsageRows, accountUsageSearch, accountUsagePositionFilter]);
   const accountUsagePositionOptions = useMemo(
     () =>
-      Array.from(new Set(accountUsageRows.map((row) => String(row.position ?? '').trim()).filter(Boolean))).sort((a, b) =>
-        a.localeCompare(b)
-      ),
+      Array.from(
+        new Set(
+          accountUsageRows.map((row) => normalizePositionKey(String(row.position ?? '').trim()) || String(row.position ?? '').trim()).filter(Boolean)
+        )
+      ).sort((a, b) => a.localeCompare(b)),
     [accountUsageRows]
   );
   const attendanceCards = useMemo(() => {
@@ -1265,6 +1289,14 @@ export default function DashboardPage() {
     }
     return cards;
   }, [rows, cardPositions, cardStatsByKey]);
+  const attendanceCardGroups = useMemo(
+    () =>
+      (['early', 'late'] as const).map((shift) => ({
+        shift,
+        cards: attendanceCards.filter((card) => card.shift === shift)
+      })),
+    [attendanceCards]
+  );
   const outboundShiftCards = useMemo(() => {
     const shifts: Array<'early' | 'late'> = ['early', 'late'];
     const summaryPositions = cardPositions.filter((position) => normalizePositionKey(position) !== 'Transfer');
@@ -1965,54 +1997,58 @@ export default function DashboardPage() {
             })}
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            {attendanceCards.map((card) => {
-              const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
-              return (
-                <div key={`${card.position}:${card.shift}`} className={['rounded-[24px] border px-4 py-4', getAttendanceCardClass(card.position)].join(' ')}>
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <div className="text-sm font-semibold text-stone-100">
-                        {card.shift === 'early' ? 'Morning' : 'Night'} {card.position}
-                      </div>
-                      <div className="mt-2 text-xs text-stone-400">
-                        {card.present}/{card.expected}
-                        <span
+          <div className="space-y-3">
+            {attendanceCardGroups.map((group) => (
+              <div key={`attendance:${group.shift}`} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                {group.cards.map((card) => {
+                  const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
+                  return (
+                    <div key={`${card.position}:${card.shift}`} className={['rounded-[24px] border px-4 py-4', getAttendanceCardClass(card.position)].join(' ')}>
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div className="text-sm font-semibold text-stone-100">
+                            {card.shift === 'early' ? 'Morning' : 'Night'} {card.position}
+                          </div>
+                          <div className="mt-2 text-xs text-stone-400">
+                            {card.present}/{card.expected}
+                            <span
+                              className={[
+                                'ml-2 font-semibold',
+                                ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'
+                              ].join(' ')}
+                            >
+                              {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
+                            </span>
+                          </div>
+                          {card.offWorked > 0 && <div className="mt-2 text-xs font-medium text-stone-300">+{card.offWorked} off worked</div>}
+                        </div>
+                        <div
                           className={[
-                            'ml-2 font-semibold',
-                            ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'
+                            'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
+                            card.position === 'Pick'
+                              ? 'border-sky-300/20 bg-sky-400/[0.10]'
+                              : card.position === 'Pack'
+                                ? 'border-emerald-300/20 bg-emerald-400/[0.10]'
+                                : card.position === 'Rebin'
+                                  ? 'border-amber-300/20 bg-amber-400/[0.10]'
+                                  : card.position === 'Preship'
+                                    ? 'border-rose-300/20 bg-rose-400/[0.10]'
+                                    : card.position === 'Transfer'
+                                      ? 'border-violet-300/20 bg-violet-400/[0.10]'
+                                      : 'border-white/10 bg-white/[0.04]'
                           ].join(' ')}
                         >
-                          {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
-                        </span>
-                      </div>
-                      {card.offWorked > 0 && <div className="mt-2 text-xs font-medium text-stone-300">+{card.offWorked} off worked</div>}
-                    </div>
-                    <div
-                      className={[
-                        'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
-                        card.position === 'Pick'
-                          ? 'border-sky-300/20 bg-sky-400/[0.10]'
-                          : card.position === 'Pack'
-                            ? 'border-emerald-300/20 bg-emerald-400/[0.10]'
-                            : card.position === 'Rebin'
-                              ? 'border-amber-300/20 bg-amber-400/[0.10]'
-                              : card.position === 'Preship'
-                                ? 'border-rose-300/20 bg-rose-400/[0.10]'
-                                : card.position === 'Transfer'
-                                  ? 'border-violet-300/20 bg-violet-400/[0.10]'
-                                  : 'border-white/10 bg-white/[0.04]'
-                      ].join(' ')}
-                    >
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">On Clock</div>
-                      <div className={['mt-1 text-3xl font-semibold leading-none', getAttendanceCardValueClass(card.position)].join(' ')}>
-                        {card.onClock}
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">On Clock</div>
+                          <div className={['mt-1 text-3xl font-semibold leading-none', getAttendanceCardValueClass(card.position)].join(' ')}>
+                            {card.onClock}
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </div>
-              );
-            })}
+                  );
+                })}
+              </div>
+            ))}
           </div>
 
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1.5fr)_220px_220px_repeat(3,minmax(0,160px))]">
