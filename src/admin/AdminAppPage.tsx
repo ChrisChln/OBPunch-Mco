@@ -1821,32 +1821,6 @@ export default function AdminAppPage() {
       } as DeviceLoanRow & { action: 'borrow' | 'return' };
     });
   }, [deviceLoans]);
-  const scheduleRecommendedTotalsByDate = useMemo(() => {
-    const next: Record<string, number | null> = {};
-    for (const [date, rows] of Object.entries(scheduleRecommendedByDate)) {
-      let filteredRows = rows;
-      if (deferredSchedulePosition === 'Pick') filteredRows = rows.filter((item) => item.key === 'Pick');
-      else if (deferredSchedulePosition === 'Rebin') filteredRows = rows.filter((item) => item.key === 'Rebin');
-      else if (deferredSchedulePosition === 'Pack') filteredRows = rows.filter((item) => item.key === 'Pack');
-      else if (deferredSchedulePosition === 'Preship') filteredRows = rows.filter((item) => item.key === 'Preship');
-      else if (deferredSchedulePosition === 'Transfer') {
-        next[date] = null;
-        continue;
-      }
-
-      if (filteredRows.length === 0) {
-        next[date] = null;
-        continue;
-      }
-
-      next[date] = filteredRows.reduce((sum, item) => {
-        if (deferredScheduleShift === 'early') return sum + item.ds;
-        if (deferredScheduleShift === 'late') return sum + item.ns;
-        return sum + item.total;
-      }, 0);
-    }
-    return next;
-  }, [scheduleRecommendedByDate, deferredSchedulePosition, deferredScheduleShift]);
   const employeeNameByStaffId = useMemo(() => {
     const map = new Map<string, string>();
     for (const [staffRaw, profile] of Object.entries(employeeByStaffId)) {
