@@ -2,6 +2,7 @@
 import type { User } from '@supabase/supabase-js';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
+import { matchesLooseSearch } from '../lib/textSearch';
 import {
   LABEL_TONE_KEYS,
   type LabelToneKey,
@@ -3301,10 +3302,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     await runLocked('audit', async () => {
       setAuditError(null);
-      const searchLower = searchValue.toLowerCase();
+      const auditEmployees =
+        employees.length > 0
+          ? employees
+          : ((await fetchEmployees({ reset: true, lockUi: false, includePunchMeta: false, streamPartialState: false })) ?? []);
+      const employeeNameByAuditStaffId = new Map<string, string>();
+      for (const employee of auditEmployees) {
+        const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+        const name = String(employee.name ?? '').trim();
+        if (!staff || !name) continue;
+        employeeNameByAuditStaffId.set(staff, name);
+      }
       const matchedStaffIds = searchValue
-        ? employees
-            .filter((employee) => String(employee.name ?? '').trim().toLowerCase().includes(searchLower))
+        ? auditEmployees
+            .filter((employee) => matchesLooseSearch(String(employee.name ?? '').trim(), searchValue))
             .map((employee) => normalizeStaffId(String(employee.staff_id ?? '').trim()))
             .filter(Boolean)
         : [];
@@ -3352,11 +3363,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         .filter((row) => {
           if (!searchValue) return true;
           const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-          const employeeName = staff ? String(employees.find((employee) => normalizeStaffId(String(employee.staff_id ?? '').trim()) === staff)?.name ?? '').trim() : '';
-          const haystack = [staff, employeeName, String(row.actor ?? '').trim(), String(row.action ?? '').trim(), String(row.target ?? '').trim()]
-            .join(' ')
-            .toLowerCase();
-          return haystack.includes(searchLower);
+          const employeeName = staff ? String(employeeNameByAuditStaffId.get(staff) ?? '').trim() : '';
+          const haystack = [staff, employeeName, String(row.actor ?? '').trim(), String(row.action ?? '').trim(), String(row.target ?? '').trim()].join(
+            ' '
+          );
+          return matchesLooseSearch(haystack, searchValue);
         })
         .slice(0, 200);
       setAuditRows(nextAuditRows);
