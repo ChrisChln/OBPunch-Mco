@@ -1,10 +1,11 @@
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { createPortal } from 'react-dom';
 import { createSupabaseClient } from '../lib/supabase';
 import { hasModuleAccess, getModuleMapFromContext, type AdminAccessContext } from '../shared/adminAccess';
 import { addDays, startOfWeekMonday, toDateOnly, type AgencyShift } from '../shared/agencyShared';
 import {
+  cancelAgencyTerminationRequest,
   createAgencyTerminationRequest,
   deleteAgencyNewHireDemand,
   fetchAdminAccessContext,
@@ -23,6 +24,23 @@ import type {
 } from './types';
 
 type ModalState = 'new_hire' | 'termination' | null;
+type NoticeTone = 'error' | 'success' | 'info';
+
+type NoticeState = {
+  title: string;
+  message: string;
+  tone: NoticeTone;
+} | null;
+
+type DeleteNewHireConfirmState = {
+  staffId: string;
+  displayName: string;
+} | null;
+
+type CancelTerminationConfirmState = {
+  staffId: string;
+  displayName: string;
+} | null;
 
 type SchedulePickerState = {
   open: boolean;
@@ -52,12 +70,6 @@ const newYorkClockFormatter = new Intl.DateTimeFormat('en-CA', {
   minute: '2-digit',
   hour12: false
 });
-
-const formatDateTime = (value: string) => {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('en-US', { hour12: false });
-};
 
 const formatWeekLabel = (value: string, dayIndex: number) => {
   const date = new Date(`${value}T00:00:00`);
@@ -256,6 +268,69 @@ const LoginPanel = ({
   </section>
 );
 
+type ScheduleCellProps = {
+  staffId: string;
+  employeeName: string;
+  workDate: string;
+  state: AgencyScheduleState;
+  isSelectedWorkDate: boolean;
+  isLastEmployeeRow: boolean;
+  cellOptions: SchedulePickerOption[];
+  canEditCell: boolean;
+  isDeadlineLocked: boolean;
+  busy: boolean;
+  selectedDateColumnClass: string;
+  onCellClick: (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    staffId: string,
+    workDate: string,
+    cellOptions: SchedulePickerOption[],
+    state: AgencyScheduleState
+  ) => void;
+};
+
+const ScheduleCell = memo(function ScheduleCell({
+  staffId,
+  employeeName,
+  workDate,
+  state,
+  isSelectedWorkDate,
+  isLastEmployeeRow,
+  cellOptions,
+  canEditCell,
+  isDeadlineLocked,
+  busy,
+  selectedDateColumnClass,
+  onCellClick
+}: ScheduleCellProps) {
+  const useMutedCellStyle = !canEditCell || isDeadlineLocked;
+
+  return (
+    <td
+      className={[
+        'px-0.5 py-1.5 text-center',
+        isSelectedWorkDate ? selectedDateColumnClass : '',
+        isSelectedWorkDate && isLastEmployeeRow ? 'shadow-[inset_3px_0_0_rgba(255,255,255,0.95),inset_-3px_0_0_rgba(255,255,255,0.95),inset_0_-3px_0_rgba(255,255,255,0.95)]' : ''
+      ].join(' ')}
+    >
+      <button
+        type="button"
+        data-agency-schedule-trigger="true"
+        disabled={busy || !canEditCell}
+        onClick={(event) => onCellClick(event, staffId, workDate, cellOptions, state)}
+        className={[
+          'h-8 w-[74px] rounded-md px-1 text-[9px] font-semibold leading-none transition disabled:cursor-not-allowed disabled:opacity-100',
+          !canEditCell ? 'saturate-50 brightness-90' : '',
+          stateCellClass(state, useMutedCellStyle)
+        ].join(' ')}
+        title={`${employeeName} 路 ${workDate}${isDeadlineLocked ? ' 路 Cutoff locked' : ''}`}
+      >
+        {stateLabel(state)}
+      </button>
+    </td>
+  );
+});
+
 export default function AgencyAppPage() {
   const [supabase] = useState(() => createSupabaseClient({ persistSession: true }));
   const [user, setUser] = useState<User | null>(null);
@@ -263,9 +338,10 @@ export default function AgencyAppPage() {
   const [displayName, setDisplayName] = useState('');
   const [board, setBoard] = useState<AgencyBoard | null>(null);
   const [weekSchedule, setWeekSchedule] = useState<AgencyWeekSchedule | null>(null);
-  const [status, setStatus] = useState('Ready');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<NoticeState>(null);
+  const [deleteNewHireConfirm, setDeleteNewHireConfirm] = useState<DeleteNewHireConfirmState>(null);
+  const [cancelTerminationConfirm, setCancelTerminationConfirm] = useState<CancelTerminationConfirmState>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [selectedDate, setSelectedDate] = useState(getDefaultSelectedDate);
@@ -304,10 +380,18 @@ export default function AgencyAppPage() {
     anchorTop: 0
   });
 
+  const openNotice = useCallback((tone: NoticeTone, message: string, title?: string) => {
+    const fallbackTitle = tone === 'error' ? 'Error' : tone === 'success' ? 'Done' : 'Notice';
+    setNotice({
+      title: title?.trim() || fallbackTitle,
+      message,
+      tone
+    });
+  }, []);
+
   const moduleMap = useMemo(() => getModuleMapFromContext(access), [access]);
   const canViewAgency = hasModuleAccess(moduleMap, 'agency', 'view');
   const canOperateAgency = hasModuleAccess(moduleMap, 'agency', 'operate');
-  const todayDate = useMemo(() => toDateOnly(new Date()), []);
   const newYorkNowContext = useMemo(() => getNewYorkNowContext(), [selectedDate, weekSchedule]);
 
   useEffect(() => {
@@ -344,7 +428,7 @@ export default function AgencyAppPage() {
         setDisplayName(nextDisplayName);
       } catch (nextError) {
         if (!active) return;
-        setError(nextError instanceof Error ? nextError.message : 'Failed to load access context.');
+        openNotice('error', nextError instanceof Error ? nextError.message : 'Failed to load access context.');
       }
     };
     void loadContext();
@@ -385,27 +469,25 @@ export default function AgencyAppPage() {
     };
   }, [schedulePicker.open]);
 
-  const refreshBoard = async () => {
+  const refreshBoard = useCallback(async () => {
     if (!supabase || !user || !canViewAgency) return;
     setBusy(true);
-    setError(null);
     setBoard(null);
     try {
       const nextWeekSchedule = await fetchAgencyScheduleWeek(supabase, selectedDate);
       setWeekSchedule(nextWeekSchedule);
-      setStatus(`Loaded ${nextWeekSchedule.employees.length} employees`);
     } catch (nextError) {
       setWeekSchedule(null);
       setBoard(null);
-      setError(nextError instanceof Error ? nextError.message : 'Failed to load board.');
+      openNotice('error', nextError instanceof Error ? nextError.message : 'Failed to load board.');
     } finally {
       setBusy(false);
     }
-  };
+  }, [canViewAgency, openNotice, selectedDate, supabase, user]);
 
   useEffect(() => {
     void refreshBoard();
-  }, [selectedDate, supabase, user?.id, canViewAgency]);
+  }, [refreshBoard]);
 
   useEffect(() => {
     setSchedulePicker((prev) => ({ ...prev, open: false }));
@@ -414,14 +496,12 @@ export default function AgencyAppPage() {
   const doLogin = async () => {
     if (!supabase) return;
     setBusy(true);
-    setError(null);
     try {
       const result = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (result.error) throw new Error(result.error.message);
       setPassword('');
-      setStatus('Signed in');
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Sign in failed.');
+      openNotice('error', nextError instanceof Error ? nextError.message : 'Sign in failed.');
     } finally {
       setBusy(false);
     }
@@ -430,12 +510,11 @@ export default function AgencyAppPage() {
   const doLogout = async () => {
     if (!supabase) return;
     await supabase.auth.signOut();
-    setStatus('Signed out');
   };
 
   const openCreateNewHire = (overrideAgency?: string, overridePosition?: string, overrideShift?: 'early' | 'late') => {
     if (!hasOpenGapForSelectedDate && !overrideAgency) {
-      setStatus('No GAP');
+      openNotice('info', 'No GAP for the selected date.');
       return;
     }
     setSelectedNewHire(null);
@@ -493,26 +572,42 @@ export default function AgencyAppPage() {
     setTerminationReason('');
   };
 
+  const closeDeleteNewHireConfirm = () => {
+    setDeleteNewHireConfirm(null);
+  };
+
+  const closeCancelTerminationConfirm = () => {
+    setCancelTerminationConfirm(null);
+  };
+
   const openTerminationModal = (employee: AgencyEmployeeRow) => {
     setSelectedEmployee(employee);
     setTerminationReason('');
     setModal('termination');
   };
 
+  const requestCancelTermination = (employee: AgencyEmployeeRow) => {
+    const displayName = String(employee.name ?? '').trim() || employee.staff_id;
+    setCancelTerminationConfirm({
+      staffId: employee.staff_id,
+      displayName
+    });
+  };
+
   const submitNewHire = async () => {
     if (!supabase) return;
     if (!selectedNewHire && newHireSelectedOpenSlots <= 0) {
-      setError('No GAP for selected Agency / Position / Shift.');
+      openNotice('error', 'No GAP for selected Agency / Position / Shift.');
       return;
     }
     setBusy(true);
     try {
       await upsertAgencyNewHireDemand(supabase, newHireForm);
-      setStatus(selectedNewHire ? 'NEW updated' : 'NEW created');
+      openNotice('success', selectedNewHire ? 'NEW updated.' : 'NEW created.');
       closeModal();
       await refreshBoard();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'New request save failed.');
+      openNotice('error', nextError instanceof Error ? nextError.message : 'New request save failed.');
     } finally {
       setBusy(false);
     }
@@ -520,20 +615,27 @@ export default function AgencyAppPage() {
 
   const deleteNewHire = async (row: AgencyNewHireRequestRow) => {
     if (!supabase || !canOperateAgency) return;
+    if (!row.can_delete) return;
     const displayName = String(row.name ?? '').trim() || row.staff_id;
-    const confirmed = window.confirm(`Delete NEW request ${displayName} (${row.staff_id})?`);
-    if (!confirmed) return;
+    setDeleteNewHireConfirm({
+      staffId: row.staff_id,
+      displayName
+    });
+  };
+
+  const confirmDeleteNewHire = async () => {
+    if (!supabase || !canOperateAgency || !deleteNewHireConfirm) return;
     setBusy(true);
-    setError(null);
     try {
-      await deleteAgencyNewHireDemand(supabase, row.staff_id, selectedDate);
-      setStatus('NEW deleted');
-      if (selectedNewHire?.staff_id === row.staff_id) {
+      await deleteAgencyNewHireDemand(supabase, deleteNewHireConfirm.staffId, selectedDate);
+      openNotice('success', 'NEW deleted.');
+      if (selectedNewHire?.staff_id === deleteNewHireConfirm.staffId) {
         closeModal();
       }
+      closeDeleteNewHireConfirm();
       await refreshBoard();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Delete NEW failed.');
+      openNotice('error', nextError instanceof Error ? nextError.message : 'Delete NEW failed.');
     } finally {
       setBusy(false);
     }
@@ -544,11 +646,26 @@ export default function AgencyAppPage() {
     setBusy(true);
     try {
       await createAgencyTerminationRequest(supabase, selectedEmployee.staff_id, terminationReason.trim());
-      setStatus('Termination request submitted');
+      openNotice('success', 'Termination request submitted.');
       closeModal();
       await refreshBoard();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Termination request failed.');
+      openNotice('error', nextError instanceof Error ? nextError.message : 'Termination request failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmCancelTermination = async () => {
+    if (!supabase || !canOperateAgency || !cancelTerminationConfirm) return;
+    setBusy(true);
+    try {
+      await cancelAgencyTerminationRequest(supabase, cancelTerminationConfirm.staffId);
+      openNotice('success', 'Termination request withdrawn.');
+      closeCancelTerminationConfirm();
+      await refreshBoard();
+    } catch (nextError) {
+      openNotice('error', nextError instanceof Error ? nextError.message : 'Withdraw termination request failed.');
     } finally {
       setBusy(false);
     }
@@ -558,23 +675,22 @@ export default function AgencyAppPage() {
     async (staffId: string, workDate: string, state: AgencyScheduleState) => {
       if (!supabase || !canOperateAgency) return;
       setBusy(true);
-      setError(null);
       setSchedulePicker((prev) => ({ ...prev, open: false }));
       try {
         await setAgencyScheduleState(supabase, staffId, workDate, state);
-        setStatus(`Updated ${staffId} on ${workDate}`);
+        openNotice('success', `Updated ${staffId} on ${workDate}.`);
         await refreshBoard();
       } catch (nextError) {
-        setError(nextError instanceof Error ? nextError.message : 'Schedule update failed.');
+        openNotice('error', nextError instanceof Error ? nextError.message : 'Schedule update failed.');
       } finally {
         setBusy(false);
       }
     },
-    [supabase, canOperateAgency, refreshBoard]
+    [supabase, canOperateAgency, openNotice, refreshBoard]
   );
 
   const handleScheduleCellClick = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>, staffId: string, workDate: string, cellOptions: SchedulePickerOption[], state: AgencyScheduleState) => {
+    (event: ReactMouseEvent<HTMLButtonElement>, staffId: string, workDate: string, cellOptions: SchedulePickerOption[], state: AgencyScheduleState) => {
       if (cellOptions.length === 0) return;
       if (cellOptions.length === 1) {
         void submitScheduleState(staffId, workDate, cellOptions[0].key);
@@ -594,27 +710,12 @@ export default function AgencyAppPage() {
     [submitScheduleState, setSchedulePicker]
   );
 
-  type ScheduleCellProps = {
-    staffId: string;
-    employeeName: string;
-    workDate: string;
-    state: AgencyScheduleState;
-    baseState: AgencyScheduleState;
-    isSelectedWorkDate: boolean;
-    isLastEmployeeRow: boolean;
-    cellOptions: SchedulePickerOption[];
-    canEditCell: boolean;
-    isDeadlineLocked: boolean;
-    busy: boolean;
-    selectedDateColumnClass: string;
-  };
-
-  const ScheduleCell = memo(function ScheduleCell({
+  /*
+  const LegacyScheduleCell = memo(function LegacyScheduleCell({
     staffId,
     employeeName,
     workDate,
     state,
-    baseState,
     isSelectedWorkDate,
     isLastEmployeeRow,
     cellOptions,
@@ -622,7 +723,7 @@ export default function AgencyAppPage() {
     isDeadlineLocked,
     busy,
     selectedDateColumnClass
-  }: ScheduleCellProps) {
+  }: LegacyScheduleCellProps) {
     const displayState = state;
     const useMutedCellStyle = !canEditCell || isDeadlineLocked;
     
@@ -652,6 +753,7 @@ export default function AgencyAppPage() {
       </td>
     );
   });
+  */
 
   const weekDates = useMemo(() => {
     if (weekSchedule && weekSchedule.week_dates.length === 7) return weekSchedule.week_dates;
@@ -741,7 +843,8 @@ export default function AgencyAppPage() {
           shift: row.shift,
           start_time: row.start_time,
           label: row.label,
-          state: ''
+          state: '',
+          can_delete: row.can_delete
         })),
     [selectedDate, weekSchedule]
   );
@@ -896,8 +999,8 @@ export default function AgencyAppPage() {
 
   const newHireShiftOptions = useMemo(() => {
     const scoped = newHireGapGroups.filter((gap) => gap.position === newHireForm.position);
-    const shifts = Array.from(new Set(scoped.map((gap) => normalizeAgencyShift(String(gap.shift ?? '')))));
-    return shifts.length ? shifts : ['early', 'late'];
+    const shifts = Array.from(new Set(scoped.map((gap) => normalizeAgencyShift(String(gap.shift ?? ''))))) as AgencyShift[];
+    return shifts.length ? shifts : (['early', 'late'] as AgencyShift[]);
   }, [newHireGapGroups, newHireForm.position]);
 
   const newHireSelectedOpenSlots = useMemo(() => {
@@ -979,8 +1082,6 @@ export default function AgencyAppPage() {
           </section>
         ) : null}
 
-        {error ? <section className={cardClass}><div className="text-sm text-rose-200">{error}</div></section> : null}
-
         {user && canViewAgency && weekSchedule ? (
           <>
             <section className="grid gap-4 md:grid-cols-4">
@@ -1009,25 +1110,59 @@ export default function AgencyAppPage() {
                   <h2 className="font-display text-3xl tracking-[0.04em] text-white">NEW</h2>
                 </div>
                 <div className="space-y-3">
-                  {filteredNewHireRequests.length === 0 ? <div className="text-sm text-slate-400">No new requests.</div> : null}
+                  {gapsByGroupOnSelectedDate.length > 0 ? (
+                    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                      {gapsByGroupOnSelectedDate.map((gap, idx) => (
+                        <div key={`${gap.agency}__${gap.position}__${gap.shift}__${idx}`} className="rounded-[18px] border border-white/10 bg-white/[0.03] p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="flex-1">
+                              <div className="text-sm font-semibold text-white">Need Replacement</div>
+                              <div className="mt-1 text-sm text-slate-300">{gap.agency}</div>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                <span className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]', positionChipClass(gap.position)].join(' ')}>
+                                  {gap.position}
+                                </span>
+                                <span className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold', shiftChipClass(normalizeAgencyShift(String(gap.shift ?? 'early')))].join(' ')}>
+                                  {shiftLabel(normalizeAgencyShift(String(gap.shift ?? 'early')))}
+                                </span>
+                              </div>
+                              <div className="mt-2 text-xs text-slate-400">Needed: {gap.count}</div>
+                            </div>
+                            <button
+                              type="button"
+                              className={neonButtonClass}
+                              disabled={busy || !canOperateAgency}
+                              onClick={() => openCreateNewHire(gap.agency, gap.position, gap.shift as 'early' | 'late')}
+                            >
+                              + Add
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {filteredNewHireRequests.length === 0 && gapsByGroupOnSelectedDate.length === 0 ? <div className="text-sm text-slate-400">No new requests.</div> : null}
                   {filteredNewHireRequests.length > 0 ? (
                     <div className="overflow-x-auto rounded-[22px] border border-white/10 bg-white/[0.03]">
-                      <div className="min-w-[780px]">
-                        <div className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_180px] items-center gap-3 px-4 py-2 text-[11px] uppercase tracking-[0.16em] text-slate-400">
+                      <div className="min-w-[900px]">
+                        <div className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_96px_180px] items-center gap-3 px-4 py-2 text-[11px] uppercase tracking-[0.16em] text-slate-400">
                           <div>Name</div>
                           <div>Agency</div>
                           <div>Position</div>
                           <div>Shift</div>
+                          <div className="text-center">Start Time</div>
                           <div className="text-right">Actions</div>
                         </div>
                         <div className="h-px bg-white/10" />
                         {filteredNewHireRequests.map((row) => (
-                          <div key={row.staff_id} className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_180px] items-center gap-3 px-4 py-4">
-                            <div className="min-w-0 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1 text-sm text-slate-100">
-                              <span className="truncate block">{String(row.name ?? '').trim() || '-'}</span>
+                          <div key={row.staff_id} className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_96px_180px] items-center gap-3 px-4 py-4">
+                            <div className="min-w-0 text-sm text-slate-100">
+                              <span className="block truncate">{String(row.name ?? '').trim() || '-'}</span>
                             </div>
-                            <div className="rounded-full border border-cyan-400/35 bg-cyan-500/10 px-3 py-1 text-sm text-cyan-200">
-                              {row.agency || '-'}
+                            <div>
+                              <span className="inline-flex max-w-full items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 px-3 py-1 text-sm text-cyan-200">
+                                <span className="truncate">{row.agency || '-'}</span>
+                              </span>
                             </div>
                             <div>
                               <span className={[
@@ -1045,10 +1180,14 @@ export default function AgencyAppPage() {
                                 {shiftLabel(row.shift)}
                               </span>
                             </div>
+                            <div className="text-center font-mono text-sm text-slate-300">
+                              {formatStartTime(row.start_time)}
+                            </div>
                             <div className="flex items-center justify-end gap-2">
                               <button type="button" className={buttonClass} disabled={busy || !canOperateAgency} onClick={() => openEditNewHire(row)}>
                                 Edit
                               </button>
+                              {row.can_delete ? (
                               <button
                                 type="button"
                                 className="inline-flex h-10 items-center justify-center rounded-2xl border border-rose-300/30 bg-rose-500/10 px-4 text-sm font-medium text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1057,6 +1196,7 @@ export default function AgencyAppPage() {
                               >
                                 撤销
                               </button>
+                              ) : null}
                             </div>
                           </div>
                         ))}
@@ -1064,18 +1204,6 @@ export default function AgencyAppPage() {
                     </div>
                   ) : null}
                 </div>
-                {filteredNewHireRequests.length > 0 ? (
-                  <div className="mt-4 flex justify-end">
-                    <button
-                      type="button"
-                      className={buttonClass}
-                      disabled={busy || !canOperateAgency || !hasOpenGapForSelectedDate}
-                      onClick={openCreateNewHire}
-                    >
-                      Create
-                    </button>
-                  </div>
-                ) : null}
               </div>
             </section>
 
@@ -1092,14 +1220,6 @@ export default function AgencyAppPage() {
                     />
                     <button type="button" onClick={() => void refreshBoard()} className={buttonClass} disabled={busy || !canViewAgency}>
                       Refresh
-                    </button>
-                    <button
-                      type="button"
-                      onClick={openCreateNewHire}
-                      className={neonButtonClass}
-                      disabled={busy || !canOperateAgency || !hasOpenGapForSelectedDate}
-                    >
-                      NEW
                     </button>
                     <button type="button" onClick={() => void doLogout()} className={buttonClass} disabled={busy}>
                       Logout
@@ -1181,9 +1301,19 @@ export default function AgencyAppPage() {
                         <td className="py-2 pl-4 pr-1 font-mono text-slate-200">{employee.staff_id}</td>
                         <td className="px-1 py-2 text-slate-200">
                           <div className="truncate font-medium">{employee.name || '-'}</div>
-                          <div className="mt-1 flex items-center gap-2">
+                          <div className="mt-1 flex min-h-[38px] flex-col items-start justify-center gap-1">
                             {isPendingTermination ? (
-                              <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">Pending departure</span>
+                              <>
+                                <button
+                                  type="button"
+                                  className="rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                                  disabled={busy || !canOperateAgency}
+                                  onClick={() => requestCancelTermination(employee)}
+                                >
+                                  Withdraw
+                                </button>
+                                <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">Pending departure</span>
+                              </>
                             ) : canOperateAgency ? (
                               <button
                                 type="button"
@@ -1226,7 +1356,6 @@ export default function AgencyAppPage() {
                               employeeName={employee.name || '-'}
                               workDate={workDate}
                               state={state}
-                              baseState={baseState}
                               isSelectedWorkDate={isSelectedWorkDate}
                               isLastEmployeeRow={isLastEmployeeRow}
                               cellOptions={cellOptions}
@@ -1234,6 +1363,7 @@ export default function AgencyAppPage() {
                               isDeadlineLocked={isDeadlineLocked}
                               busy={busy}
                               selectedDateColumnClass={selectedDateColumnClass}
+                              onCellClick={handleScheduleCellClick}
                             />
                           );
                         })}
@@ -1261,44 +1391,9 @@ export default function AgencyAppPage() {
               ) : null}
             </section>
 
-            {gapsByGroupOnSelectedDate.length > 0 ? (
-              <section className={cardClass}>
-                <h2 className="mb-4 font-display text-3xl tracking-[0.04em] text-white">Open Gaps - {selectedDate}</h2>
-                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                  {gapsByGroupOnSelectedDate.map((gap, idx) => (
-                    <div key={`${gap.agency}__${gap.position}__${gap.shift}__${idx}`} className="rounded-[18px] border border-white/10 bg-white/[0.03] p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="flex-1">
-                          <div className="text-sm font-semibold text-white">{gap.agency}</div>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <span className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]', positionChipClass(gap.position)].join(' ')}>
-                              {gap.position}
-                            </span>
-                            <span className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold', shiftChipClass(gap.shift)].join(' ')}>
-                              {shiftLabel(gap.shift)}
-                            </span>
-                          </div>
-                          <div className="mt-2 text-xs text-slate-400">Needed: {gap.count}</div>
-                        </div>
-                        <button
-                          type="button"
-                          className={neonButtonClass}
-                          disabled={busy || !canOperateAgency}
-                          onClick={() => openCreateNewHire(gap.agency, gap.position, gap.shift as 'early' | 'late')}
-                        >
-                          + Add
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            ) : null}
-
           </>
         ) : null}
 
-        <div className="text-center text-xs text-slate-500">{status}</div>
       </div>
 
       {schedulePicker.open &&
@@ -1444,6 +1539,64 @@ export default function AgencyAppPage() {
             <button type="button" onClick={closeModal} className={buttonClass}>Close</button>
             <button type="button" onClick={() => void submitTermination()} className={neonButtonClass} disabled={busy || !terminationReason.trim()}>
               Submit
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={deleteNewHireConfirm !== null} title="Delete NEW">
+        <div className="space-y-5">
+          <p className="text-sm text-slate-300">
+            Delete NEW request for{' '}
+            <span className="font-semibold text-white">
+              {deleteNewHireConfirm ? `${deleteNewHireConfirm.displayName} (${deleteNewHireConfirm.staffId})` : ''}
+            </span>
+            ?
+          </p>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={closeDeleteNewHireConfirm} className={buttonClass} disabled={busy}>
+              Close
+            </button>
+            <button type="button" onClick={() => void confirmDeleteNewHire()} className={neonButtonClass} disabled={busy}>
+              Delete
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={cancelTerminationConfirm !== null} title="Withdraw Termination">
+        <div className="space-y-5">
+          <p className="text-sm text-slate-300">
+            Withdraw termination request for{' '}
+            <span className="font-semibold text-white">
+              {cancelTerminationConfirm ? `${cancelTerminationConfirm.displayName} (${cancelTerminationConfirm.staffId})` : ''}
+            </span>
+            ?
+          </p>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={closeCancelTerminationConfirm} className={buttonClass} disabled={busy}>
+              Close
+            </button>
+            <button type="button" onClick={() => void confirmCancelTermination()} className={neonButtonClass} disabled={busy}>
+              Withdraw
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={notice !== null} title={notice?.title ?? 'Notice'}>
+        <div className="space-y-5">
+          <p
+            className={[
+              'text-sm leading-6',
+              notice?.tone === 'error' ? 'text-rose-200' : notice?.tone === 'success' ? 'text-emerald-200' : 'text-slate-300'
+            ].join(' ')}
+          >
+            {notice?.message ?? ''}
+          </p>
+          <div className="flex justify-end">
+            <button type="button" onClick={() => setNotice(null)} className={notice?.tone === 'error' ? buttonClass : neonButtonClass}>
+              Close
             </button>
           </div>
         </div>

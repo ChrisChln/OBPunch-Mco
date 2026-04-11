@@ -240,7 +240,7 @@ begin
   left join public.ob_schedules as schedule_row
     on schedule_row.staff_id = employee.staff_id
    and schedule_row.date between v_week_start and (v_week_start + 6)
-   and public.schedule_note_to_state(schedule_row.note) in ('work', 'fixed_work', 'temp_work', 'planned_temp_work')
+   and public.schedule_note_to_state(schedule_row.note) in ('new', 'work', 'fixed_work', 'temp_work', 'planned_temp_work')
   group by employee.staff_id;
 
   create temporary table if not exists tmp_agency_latest_termination_status (
@@ -457,7 +457,15 @@ begin
         'shift', employee.shift,
         'start_time', employee.start_time,
         'label', employee.label,
-        'work_date', day_row.work_date
+        'work_date', day_row.work_date,
+        'can_delete',
+          exists (
+            select 1
+            from public.ob_schedules as schedule_row
+            where schedule_row.staff_id = employee.staff_id
+              and schedule_row.date = day_row.template_date
+              and coalesce(nullif(btrim(coalesce(schedule_row.operator, '')), ''), '') = 'agency_new_hire'
+          )
       )
       order by day_row.day_index, employee.position, employee.staff_id
     ),
@@ -545,7 +553,7 @@ begin
   v_agency := public.employee_record_text(to_jsonb(v_employee), 'agency', 'Agency');
   v_position := public.employee_record_text(to_jsonb(v_employee), 'position', 'Position');
   v_leave_request_key := v_staff_id || ':' || v_work_date::text;
-  v_is_worklike_request := v_requested_state in ('work', 'fixed_work', 'temp_work', 'planned_temp_work');
+  v_is_worklike_request := v_requested_state in ('new', 'work', 'fixed_work', 'temp_work', 'planned_temp_work');
   v_is_offlike_request := v_requested_state in ('rest', 'temp_rest', 'planned_temp_rest');
 
   if v_requested_state in ('leave', 'planned_leave') then
@@ -622,11 +630,18 @@ begin
   v_has_pending_leave_request := found;
 
   if v_has_pending_leave_request and v_is_worklike_request then
-    if v_current_state not in ('work', 'fixed_work', 'temp_work', 'planned_temp_work') then
+    if v_current_state not in ('new', 'work', 'fixed_work', 'temp_work', 'planned_temp_work') then
       raise exception 'Pending leave can only be restored to a working schedule state.';
     end if;
     if v_requested_state <> v_current_state then
       raise exception 'Pending leave can only be restored to the current schedule state.';
+    end if;
+
+    select public.agency_open_substitute_slots(v_agency, v_position, v_shift, v_work_date, v_template_date)
+    into v_open_substitute_slots;
+
+    if coalesce(v_open_substitute_slots, 0) <= 0 then
+      raise exception 'This leave slot has already been covered by replacement or NEW.';
     end if;
 
     update public.ob_leave_requests
@@ -665,7 +680,7 @@ begin
   end if;
 
   if v_next_state = 'planned_leave' then
-    if v_current_state not in ('work', 'fixed_work', 'temp_work') then
+    if v_current_state not in ('new', 'work', 'fixed_work', 'temp_work') then
       raise exception 'Only fixed/work/temp states can be changed to planned leave from Agency.';
     end if;
 
@@ -773,7 +788,7 @@ begin
     where s.staff_id = v_staff_id
       and s.date between (v_work_date - (((extract(isodow from v_work_date)::int) + 6) % 7))
                      and ((v_work_date - (((extract(isodow from v_work_date)::int) + 6) % 7)) + 6)
-      and public.schedule_note_to_state(s.note) in ('work', 'fixed_work', 'temp_work', 'planned_temp_work');
+      and public.schedule_note_to_state(s.note) in ('new', 'work', 'fixed_work', 'temp_work', 'planned_temp_work');
 
     if v_fixed_work_count >= 5 then
       raise exception 'Substitute weekly work count has reached the limit.';
@@ -1322,7 +1337,7 @@ begin
         else 'work'
       end;
 
-      v_should_apply_leave := v_existing_state in ('work', 'fixed_work', 'temp_work', 'planned_temp_work');
+      v_should_apply_leave := v_existing_state in ('new', 'work', 'fixed_work', 'temp_work', 'planned_temp_work');
       v_existing_excuse_state := v_existing_state in ('leave', 'planned_leave');
 
       if v_should_apply_leave then

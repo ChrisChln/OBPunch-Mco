@@ -56,7 +56,7 @@ export const getAgencyTemplateDateByActualDate = (actualDateOnly: string, todayD
 };
 
 export const isAgencyWorkingState = (state: string) =>
-  state === 'work' || state === 'fixed_work' || state === 'temp_work' || state === 'planned_temp_work';
+  state === 'new' || state === 'work' || state === 'fixed_work' || state === 'temp_work' || state === 'planned_temp_work';
 
 export const isAgencyNewHireRequestStaffId = (staffId: string, workDate: string) => {
   const prefix = workDate.replace(/-/g, '').slice(4);

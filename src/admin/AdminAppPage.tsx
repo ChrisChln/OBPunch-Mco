@@ -320,7 +320,7 @@ const getScheduleNoteFromBaseState = (state: ScheduleBaseState): string | null =
 };
 
 const isWorkingScheduleBaseState = (state: ScheduleBaseState) =>
-  state === 'work' || state === 'fixed_work' || state === 'temp_work' || state === 'planned_temp_work';
+  state === 'new' || state === 'work' || state === 'fixed_work' || state === 'temp_work' || state === 'planned_temp_work';
 const isRestLikeScheduleBaseState = (state: ScheduleBaseState) =>
   state === 'rest' || state === 'temp_rest' || state === 'leave' || state === 'planned_temp_rest' || state === 'planned_leave';
 
@@ -2947,7 +2947,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   };
 
-  const fetchTerminationRequests = async (options?: { lockUi?: boolean; status?: 'pending' | 'approved' | 'rejected' | 'all' }) => {
+  const fetchTerminationRequests = async (options?: { lockUi?: boolean; status?: 'pending' | 'approved' | 'rejected' | 'cancelled' | 'all' }) => {
     if (!supabase || !hasModuleAccess(adminModuleMap, 'schedule', 'view')) {
       setTerminationRequests([]);
       return [];
@@ -3417,8 +3417,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       agency_new_hire_create: t('中介新人需求', 'Agency New Hire Create'),
       agency_new_hire_update: t('中介新人需求更新', 'Agency New Hire Update'),
       agency_termination_request: t('中介离职申请', 'Agency Termination Request'),
+      agency_termination_request_cancel: t('中介撤回离职申请', 'Agency Termination Cancel'),
       admin_access_save: t('权限更新', 'Access Updated'),
       employee_termination_approve: t('确认离职', 'Termination Approved'),
+      employee_termination_cancel: t('撤回离职申请', 'Termination Request Cancelled'),
       employee_termination_reject: t('拒绝离职', 'Termination Rejected'),
       timecard_week_switch: t('打卡切换周', 'Timecard Week Switch'),
       timecard_refresh: t('打卡刷新', 'Timecard Refresh'),

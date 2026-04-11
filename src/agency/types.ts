@@ -53,6 +53,7 @@ export type AgencyWeekNewHireRequest = {
   start_time: string;
   label: string;
   work_date: string;
+  can_delete: boolean;
 };
 
 export type AgencyWeekScheduleRow = {
@@ -83,6 +84,7 @@ export type AgencyNewHireRequestRow = {
   start_time: string;
   label: string;
   state: string;
+  can_delete: boolean;
 };
 
 export type AgencyLogRow = {

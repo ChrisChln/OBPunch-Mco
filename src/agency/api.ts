@@ -68,7 +68,8 @@ export const fetchAgencyScheduleWeek = async (supabase: SupabaseClient, workDate
           shift: String(row?.shift ?? '').trim() === 'late' ? 'late' : String(row?.shift ?? '').trim() === 'early' ? 'early' : '',
           start_time: String(row?.start_time ?? '').trim(),
           label: String(row?.label ?? '').trim(),
-          work_date: String(row?.work_date ?? '').trim()
+          work_date: String(row?.work_date ?? '').trim(),
+          can_delete: Boolean(row?.can_delete)
         }))
       : []
   };
@@ -136,6 +137,13 @@ export const createAgencyTerminationRequest = async (
     supabase.rpc('agency_create_termination_request', {
       p_staff_id: staffId,
       p_reason: reason
+    })
+  );
+
+export const cancelAgencyTerminationRequest = async (supabase: SupabaseClient, staffId: string) =>
+  expectRpcSuccess(
+    supabase.rpc('agency_cancel_termination_request', {
+      p_staff_id: staffId
     })
   );
 

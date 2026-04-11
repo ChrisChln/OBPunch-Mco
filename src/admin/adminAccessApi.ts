@@ -77,7 +77,7 @@ export type TerminationRequestRecord = {
   agency: string;
   requested_by_display: string;
   reason: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
   review_note: string;
   created_at: string;
   reviewed_at: string | null;
@@ -201,7 +201,7 @@ export const reviewAdminAccessRequest = async (
 const normalizeTerminationRequest = (row: Record<string, unknown>): TerminationRequestRecord => {
   const statusRaw = String(row.status ?? 'pending').trim().toLowerCase();
   const status: TerminationRequestRecord['status'] =
-    statusRaw === 'approved' || statusRaw === 'rejected' ? statusRaw : 'pending';
+    statusRaw === 'approved' || statusRaw === 'rejected' || statusRaw === 'cancelled' ? statusRaw : 'pending';
 
   return {
     id: String(row.id ?? '').trim(),
@@ -223,7 +223,7 @@ const normalizeTerminationRequest = (row: Record<string, unknown>): TerminationR
 
 export const listEmployeeTerminationRequests = async (
   supabase: SupabaseClient,
-  status: 'pending' | 'approved' | 'rejected' | 'all' = 'pending'
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled' | 'all' = 'pending'
 ): Promise<TerminationRequestRecord[]> => {
   const rows = await expectRpcSuccess<Array<Record<string, unknown>>>(
     supabase.rpc('list_employee_termination_requests', {
