@@ -24,7 +24,7 @@ import type {
 } from './types';
 
 type ModalState = 'new_hire' | 'termination' | null;
-type NoticeTone = 'error' | 'success' | 'info';
+type NoticeTone = 'error' | 'info';
 
 type NoticeState = {
   title: string;
@@ -123,7 +123,7 @@ const isAgencyDeadlineLockedState = (
 const stateLabel = (state: AgencyScheduleState) => {
   if (state === 'new') return 'NEW';
   if (state === 'fixed_work') return 'Work';
-  if (state === 'temp_work') return 'Replacement';
+  if (state === 'temp_work') return 'Temp Work';
   if (state === 'planned_temp_work') return 'Replacement';
   if (state === 'leave_pending') return 'Excuse Pending';
   if (state === 'leave') return 'Excuse';
@@ -132,6 +132,30 @@ const stateLabel = (state: AgencyScheduleState) => {
   if (state === 'planned_temp_rest') return 'Off';
   if (state === 'rest') return 'Off';
   return 'Work';
+};
+
+const normalizeServerScheduleState = (value: unknown, fallback: AgencyScheduleState): AgencyScheduleState => {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase();
+  const allowedStates: AgencyScheduleState[] = [
+    'new',
+    'work',
+    'fixed_work',
+    'temp_work',
+    'planned_temp_work',
+    'leave_pending',
+    'leave',
+    'planned_leave',
+    'temp_rest',
+    'planned_temp_rest',
+    'rest'
+  ];
+  if (allowedStates.includes(normalized as AgencyScheduleState)) {
+    return normalized as AgencyScheduleState;
+  }
+  if (fallback === 'planned_leave') return 'leave_pending';
+  return fallback;
 };
 
 const stateCellClass = (state: AgencyScheduleState, muted = false) => {
@@ -234,6 +258,29 @@ const Modal = ({
   );
 };
 
+const LoadingOverlay = ({ open, label }: { open: boolean; label: string }) => {
+  if (!open || typeof document === 'undefined') return null;
+  return createPortal(
+    <div className="pointer-events-none fixed inset-0 z-[110] flex items-center justify-center px-6">
+      <div className="agency-loading-shell">
+        <div className="agency-loading-orbit agency-loading-orbit-a" />
+        <div className="agency-loading-orbit agency-loading-orbit-b" />
+        <div className="agency-loading-core">
+          <div className="agency-loading-pulse" />
+          <div className="agency-loading-dot agency-loading-dot-a" />
+          <div className="agency-loading-dot agency-loading-dot-b" />
+          <div className="agency-loading-dot agency-loading-dot-c" />
+        </div>
+        <div className="agency-loading-copy">
+          <div className="agency-loading-label">Working</div>
+          <div className="agency-loading-text">{label}</div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
 const LoginPanel = ({
   email,
   password,
@@ -329,16 +376,29 @@ const ScheduleCell = memo(function ScheduleCell({
       </button>
     </td>
   );
-});
+}, (previousProps, nextProps) =>
+  previousProps.staffId === nextProps.staffId &&
+  previousProps.employeeName === nextProps.employeeName &&
+  previousProps.workDate === nextProps.workDate &&
+  previousProps.state === nextProps.state &&
+  previousProps.isSelectedWorkDate === nextProps.isSelectedWorkDate &&
+  previousProps.isLastEmployeeRow === nextProps.isLastEmployeeRow &&
+  previousProps.canEditCell === nextProps.canEditCell &&
+  previousProps.isDeadlineLocked === nextProps.isDeadlineLocked &&
+  previousProps.busy === nextProps.busy &&
+  previousProps.selectedDateColumnClass === nextProps.selectedDateColumnClass &&
+  previousProps.onCellClick === nextProps.onCellClick);
 
 export default function AgencyAppPage() {
   const [supabase] = useState(() => createSupabaseClient({ persistSession: true }));
   const [user, setUser] = useState<User | null>(null);
   const [access, setAccess] = useState<AdminAccessContext | null>(null);
   const [displayName, setDisplayName] = useState('');
-  const [board, setBoard] = useState<AgencyBoard | null>(null);
+  const [board] = useState<AgencyBoard | null>(null);
   const [weekSchedule, setWeekSchedule] = useState<AgencyWeekSchedule | null>(null);
+  const [scheduleStateOverrides, setScheduleStateOverrides] = useState(() => new Map<string, AgencyScheduleState>());
   const [busy, setBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState('Syncing board');
   const [notice, setNotice] = useState<NoticeState>(null);
   const [deleteNewHireConfirm, setDeleteNewHireConfirm] = useState<DeleteNewHireConfirmState>(null);
   const [cancelTerminationConfirm, setCancelTerminationConfirm] = useState<CancelTerminationConfirmState>(null);
@@ -381,12 +441,22 @@ export default function AgencyAppPage() {
   });
 
   const openNotice = useCallback((tone: NoticeTone, message: string, title?: string) => {
-    const fallbackTitle = tone === 'error' ? 'Error' : tone === 'success' ? 'Done' : 'Notice';
+    const fallbackTitle = tone === 'error' ? 'Error' : 'Notice';
     setNotice({
       title: title?.trim() || fallbackTitle,
       message,
       tone
     });
+  }, []);
+
+  const beginBusy = useCallback((label: string) => {
+    setBusyLabel(label);
+    setBusy(true);
+  }, []);
+
+  const endBusy = useCallback(() => {
+    setBusy(false);
+    setBusyLabel('');
   }, []);
 
   const moduleMap = useMemo(() => getModuleMapFromContext(access), [access]);
@@ -471,19 +541,28 @@ export default function AgencyAppPage() {
 
   const refreshBoard = useCallback(async () => {
     if (!supabase || !user || !canViewAgency) return;
-    setBusy(true);
-    setBoard(null);
+    beginBusy('Syncing board');
     try {
       const nextWeekSchedule = await fetchAgencyScheduleWeek(supabase, selectedDate);
       setWeekSchedule(nextWeekSchedule);
+      setScheduleStateOverrides(new Map());
     } catch (nextError) {
-      setWeekSchedule(null);
-      setBoard(null);
       openNotice('error', nextError instanceof Error ? nextError.message : 'Failed to load board.');
     } finally {
-      setBusy(false);
+      endBusy();
     }
-  }, [canViewAgency, openNotice, selectedDate, supabase, user]);
+  }, [beginBusy, canViewAgency, endBusy, openNotice, selectedDate, supabase, user]);
+
+  const refreshBoardSilent = useCallback(async () => {
+    if (!supabase || !user || !canViewAgency) return;
+    try {
+      const nextWeekSchedule = await fetchAgencyScheduleWeek(supabase, selectedDate);
+      setWeekSchedule(nextWeekSchedule);
+      setScheduleStateOverrides(new Map());
+    } catch {
+      // Keep current board state when silent refresh fails.
+    }
+  }, [canViewAgency, selectedDate, supabase, user]);
 
   useEffect(() => {
     void refreshBoard();
@@ -495,7 +574,7 @@ export default function AgencyAppPage() {
 
   const doLogin = async () => {
     if (!supabase) return;
-    setBusy(true);
+    beginBusy('Signing in');
     try {
       const result = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (result.error) throw new Error(result.error.message);
@@ -503,7 +582,7 @@ export default function AgencyAppPage() {
     } catch (nextError) {
       openNotice('error', nextError instanceof Error ? nextError.message : 'Sign in failed.');
     } finally {
-      setBusy(false);
+      endBusy();
     }
   };
 
@@ -600,16 +679,15 @@ export default function AgencyAppPage() {
       openNotice('error', 'No GAP for selected Agency / Position / Shift.');
       return;
     }
-    setBusy(true);
+    beginBusy(selectedNewHire ? 'Saving request' : 'Creating request');
     try {
       await upsertAgencyNewHireDemand(supabase, newHireForm);
-      openNotice('success', selectedNewHire ? 'NEW updated.' : 'NEW created.');
       closeModal();
       await refreshBoard();
     } catch (nextError) {
       openNotice('error', nextError instanceof Error ? nextError.message : 'New request save failed.');
     } finally {
-      setBusy(false);
+      endBusy();
     }
   };
 
@@ -625,10 +703,9 @@ export default function AgencyAppPage() {
 
   const confirmDeleteNewHire = async () => {
     if (!supabase || !canOperateAgency || !deleteNewHireConfirm) return;
-    setBusy(true);
+    beginBusy('Removing request');
     try {
       await deleteAgencyNewHireDemand(supabase, deleteNewHireConfirm.staffId, selectedDate);
-      openNotice('success', 'NEW deleted.');
       if (selectedNewHire?.staff_id === deleteNewHireConfirm.staffId) {
         closeModal();
       }
@@ -637,56 +714,76 @@ export default function AgencyAppPage() {
     } catch (nextError) {
       openNotice('error', nextError instanceof Error ? nextError.message : 'Delete NEW failed.');
     } finally {
-      setBusy(false);
+      endBusy();
     }
   };
 
   const submitTermination = async () => {
     if (!supabase || !selectedEmployee || !terminationReason.trim()) return;
-    setBusy(true);
+    beginBusy('Submitting termination');
     try {
       await createAgencyTerminationRequest(supabase, selectedEmployee.staff_id, terminationReason.trim());
-      openNotice('success', 'Termination request submitted.');
       closeModal();
       await refreshBoard();
     } catch (nextError) {
       openNotice('error', nextError instanceof Error ? nextError.message : 'Termination request failed.');
     } finally {
-      setBusy(false);
+      endBusy();
     }
   };
 
   const confirmCancelTermination = async () => {
     if (!supabase || !canOperateAgency || !cancelTerminationConfirm) return;
-    setBusy(true);
+    beginBusy('Withdrawing termination');
     try {
       await cancelAgencyTerminationRequest(supabase, cancelTerminationConfirm.staffId);
-      openNotice('success', 'Termination request withdrawn.');
       closeCancelTerminationConfirm();
       await refreshBoard();
     } catch (nextError) {
       openNotice('error', nextError instanceof Error ? nextError.message : 'Withdraw termination request failed.');
     } finally {
-      setBusy(false);
+      endBusy();
     }
   };
 
   const submitScheduleState = useCallback(
     async (staffId: string, workDate: string, state: AgencyScheduleState) => {
       if (!supabase || !canOperateAgency) return;
-      setBusy(true);
       setSchedulePicker((prev) => ({ ...prev, open: false }));
+      const overrideKey = `${staffId}__${workDate}`;
+      const previousState = scheduleStateOverrides.get(overrideKey);
+      setScheduleStateOverrides((previous) => {
+        const next = new Map(previous);
+        next.set(overrideKey, state);
+        return next;
+      });
       try {
-        await setAgencyScheduleState(supabase, staffId, workDate, state);
-        openNotice('success', `Updated ${staffId} on ${workDate}.`);
-        await refreshBoard();
+        const response = await setAgencyScheduleState(supabase, staffId, workDate, state);
+        const nextState = normalizeServerScheduleState(response?.state, state);
+        setScheduleStateOverrides((previous) => {
+          const next = new Map(previous);
+          next.set(overrideKey, nextState);
+          return next;
+        });
+        void refreshBoardSilent();
       } catch (nextError) {
+        if (previousState === undefined) {
+          setScheduleStateOverrides((previous) => {
+            const next = new Map(previous);
+            next.delete(overrideKey);
+            return next;
+          });
+        } else {
+          setScheduleStateOverrides((previous) => {
+            const next = new Map(previous);
+            next.set(overrideKey, previousState);
+            return next;
+          });
+        }
         openNotice('error', nextError instanceof Error ? nextError.message : 'Schedule update failed.');
-      } finally {
-        setBusy(false);
       }
     },
-    [supabase, canOperateAgency, openNotice, refreshBoard]
+    [canOperateAgency, openNotice, refreshBoardSilent, scheduleStateOverrides, supabase]
   );
 
   const handleScheduleCellClick = useCallback(
@@ -792,15 +889,6 @@ export default function AgencyAppPage() {
     return next;
   }, [weekSchedule]);
 
-  const currentDayStateByStaffId = useMemo(() => {
-    const next = new Map<string, AgencyScheduleState>();
-    for (const row of weekSchedule?.employees ?? []) {
-      const day = row.days.find((item) => item.work_date === selectedDate);
-      next.set(row.staff_id, day?.state ?? 'rest');
-    }
-    return next;
-  }, [selectedDate, weekSchedule]);
-
   const weeklyWorkCountByStaffId = useMemo(() => {
     const next = new Map<string, number>();
     for (const row of weekSchedule?.employees ?? []) {
@@ -822,13 +910,13 @@ export default function AgencyAppPage() {
         shift: row.shift,
         start_time: row.start_time,
         label: row.label,
-        state: currentDayStateByStaffId.get(row.staff_id) ?? 'rest',
+        state: row.days.find((item) => item.work_date === selectedDate)?.state ?? 'rest',
         fixed_work_count: weeklyWorkCountByStaffId.get(row.staff_id) ?? row.fixed_work_count,
         has_absent: false,
         has_late: false,
         termination_status: row.termination_status
       })),
-    [currentDayStateByStaffId, weekSchedule, weeklyWorkCountByStaffId]
+    [selectedDate, weekSchedule, weeklyWorkCountByStaffId]
   );
 
   const selectedDateNewHireRequests = useMemo<AgencyNewHireRequestRow[]>(
@@ -883,7 +971,7 @@ export default function AgencyAppPage() {
         const isFuture = workDate > newYorkNowContext.date;
         options.push({
           key: isFuture ? 'planned_temp_work' : 'temp_work',
-          label: isFuture ? 'Planned Sub' : 'Substitute',
+          label: isFuture ? 'Replacement' : 'Temp Work',
           cls: isFuture ? 'bg-emerald-500 text-white' : 'bg-emerald-700 text-white'
         });
       }
@@ -1342,13 +1430,12 @@ export default function AgencyAppPage() {
                         </td>
                         {weekDates.map((workDate) => {
                           const cell = scheduleCellByStaffDate.get(`${employee.staff_id}__${workDate}`);
-                          const state = cell?.state ?? 'rest';
+                          const state = scheduleStateOverrides.get(`${employee.staff_id}__${workDate}`) ?? cell?.state ?? 'rest';
                           const baseState = cell?.base_state ?? state;
                           const isSelectedWorkDate = workDate === selectedDate;
                           const cellOptions = canOperateAgency ? getCellOptions(employee, state, baseState, workDate) : [];
                           const canEditCell = cellOptions.length > 0;
                           const isDeadlineLocked = isAgencyDeadlineLockedState(employee.shift, workDate, newYorkNowContext);
-                          
                           return (
                             <ScheduleCell
                               key={`${employee.staff_id}__${workDate}`}
@@ -1584,23 +1671,24 @@ export default function AgencyAppPage() {
         </div>
       </Modal>
 
-      <Modal open={notice !== null} title={notice?.title ?? 'Notice'}>
-        <div className="space-y-5">
-          <p
-            className={[
-              'text-sm leading-6',
-              notice?.tone === 'error' ? 'text-rose-200' : notice?.tone === 'success' ? 'text-emerald-200' : 'text-slate-300'
-            ].join(' ')}
-          >
-            {notice?.message ?? ''}
-          </p>
-          <div className="flex justify-end">
-            <button type="button" onClick={() => setNotice(null)} className={notice?.tone === 'error' ? buttonClass : neonButtonClass}>
-              Close
-            </button>
+      {notice ? (
+        <div className="fixed right-5 top-5 z-[105] w-[min(420px,calc(100vw-2.5rem))]">
+          <div className="rounded-[24px] border border-rose-400/20 bg-slate-950/88 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+            <div className="flex items-start gap-3">
+              <div className="mt-1 h-2.5 w-2.5 rounded-full bg-rose-300 shadow-[0_0_18px_rgba(253,164,175,0.65)]" />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-white">{notice.title}</div>
+                <div className="mt-1 text-sm leading-6 text-slate-300">{notice.message}</div>
+              </div>
+              <button type="button" onClick={() => setNotice(null)} className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 transition hover:text-white">
+                Close
+              </button>
+            </div>
           </div>
         </div>
-      </Modal>
+      ) : null}
+
+      <LoadingOverlay open={busy} label={busyLabel || 'Syncing board'} />
     </div>
   );
 }

@@ -637,13 +637,6 @@ begin
       raise exception 'Pending leave can only be restored to the current schedule state.';
     end if;
 
-    select public.agency_open_substitute_slots(v_agency, v_position, v_shift, v_work_date, v_template_date)
-    into v_open_substitute_slots;
-
-    if coalesce(v_open_substitute_slots, 0) <= 0 then
-      raise exception 'This leave slot has already been covered by replacement or NEW.';
-    end if;
-
     update public.ob_leave_requests
     set
       status = 'cancelled',
