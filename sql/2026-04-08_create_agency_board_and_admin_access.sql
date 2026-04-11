@@ -991,7 +991,7 @@ begin
       from public.ob_schedules as s2
       where s2.staff_id = e.staff_id
         and s2.date between (v_template_date - (((extract(isodow from v_template_date)::int) + 6) % 7)) and ((v_template_date - (((extract(isodow from v_template_date)::int) + 6) % 7)) + 6)
-        and public.schedule_note_to_state(s2.note) = 'fixed_work'
+        and public.schedule_note_to_state(s2.note) in ('work', 'fixed_work', 'temp_work', 'planned_temp_work')
     ) as fixed_work_count,
     exists (
       select 1
@@ -1371,10 +1371,10 @@ begin
   from public.ob_schedules as s
   where s.staff_id = v_substitute_staff_id
     and s.date between (v_template_date - (((extract(isodow from v_template_date)::int) + 6) % 7)) and ((v_template_date - (((extract(isodow from v_template_date)::int) + 6) % 7)) + 6)
-    and public.schedule_note_to_state(s.note) = 'fixed_work';
+    and public.schedule_note_to_state(s.note) in ('work', 'fixed_work', 'temp_work', 'planned_temp_work');
 
   if v_substitute_fixed_count >= 5 then
-    raise exception 'Substitute fixed-work count has reached the weekly limit.';
+    raise exception 'Substitute weekly work count has reached the limit.';
   end if;
 
   v_next_state := case

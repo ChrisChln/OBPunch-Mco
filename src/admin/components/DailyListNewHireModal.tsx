@@ -17,6 +17,7 @@ type DailyListNewHireModalProps = {
   setDailyListNewHireCount: (value: number) => void;
   dailyListNewHireAgency: string;
   setDailyListNewHireAgency: (value: string) => void;
+  dailyListAgencyOptions: string[];
   dailyListNewHireLabel: string;
   setDailyListNewHireLabel: (value: string) => void;
   dailyListLabelOptions: string[];
@@ -43,6 +44,7 @@ export default function DailyListNewHireModal({
   setDailyListNewHireCount,
   dailyListNewHireAgency,
   setDailyListNewHireAgency,
+  dailyListAgencyOptions,
   dailyListNewHireLabel,
   setDailyListNewHireLabel,
   dailyListLabelOptions,
@@ -136,13 +138,19 @@ export default function DailyListNewHireModal({
 
           <div>
             <label className={['text-xs uppercase tracking-[0.2em]', labelClass].join(' ')}>Agency</label>
-            <input
+            <select
               value={dailyListNewHireAgency}
               onChange={(e) => setDailyListNewHireAgency(e.target.value)}
               disabled={isLocked}
               className={fieldClass}
-              placeholder="Agency"
-            />
+            >
+              <option value="">{t('选择中介(可选)', 'Select agency (optional)')}</option>
+              {dailyListAgencyOptions.map((agency) => (
+                <option key={agency} value={agency}>
+                  {agency}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>

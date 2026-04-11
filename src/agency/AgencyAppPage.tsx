@@ -1,25 +1,57 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { createPortal } from 'react-dom';
 import { createSupabaseClient } from '../lib/supabase';
 import { hasModuleAccess, getModuleMapFromContext, type AdminAccessContext } from '../shared/adminAccess';
-import {
-  canEditAgencyPlannedLeave,
-  isAgencyWorkingState,
-  type AgencyShift
-} from '../shared/agencyShared';
+import { addDays, startOfWeekMonday, toDateOnly, type AgencyShift } from '../shared/agencyShared';
 import {
   createAgencyTerminationRequest,
+  deleteAgencyNewHireDemand,
   fetchAdminAccessContext,
-  fetchAgencyBoard,
+  fetchAgencyScheduleWeek,
   fetchAgencyUserDisplayName,
-  submitAgencyPlannedLeave,
-  submitAgencySubstitute,
+  setAgencyScheduleState,
   upsertAgencyNewHireDemand
 } from './api';
-import type { AgencyBoard, AgencyEmployeeRow, AgencyNewHireRequestRow, AgencyUpsertNewHireInput } from './types';
+import type {
+  AgencyBoard,
+  AgencyEmployeeRow,
+  AgencyNewHireRequestRow,
+  AgencyScheduleState,
+  AgencyUpsertNewHireInput,
+  AgencyWeekSchedule
+} from './types';
 
-type ModalState = 'leave' | 'substitute' | 'new_hire' | 'termination' | null;
+type ModalState = 'new_hire' | 'termination' | null;
+
+type SchedulePickerState = {
+  open: boolean;
+  staffId: string;
+  workDate: string;
+  currentState: AgencyScheduleState;
+  options: SchedulePickerOption[];
+  anchorLeft: number;
+  anchorTop: number;
+};
+
+type SchedulePickerOption = {
+  key: AgencyScheduleState;
+  label: string;
+  cls: string;
+};
+
+const EMPLOYEE_RENDER_PAGE_SIZE = 80;
+
+const NEW_YORK_TIMEZONE = 'America/New_York';
+const newYorkClockFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: NEW_YORK_TIMEZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false
+});
 
 const formatDateTime = (value: string) => {
   const date = new Date(value);
@@ -27,22 +59,133 @@ const formatDateTime = (value: string) => {
   return date.toLocaleString('en-US', { hour12: false });
 };
 
-const stateLabel = (state: string) => {
-  if (state === 'fixed_work') return 'Fixed';
-  if (state === 'temp_work') return 'Substitute';
-  if (state === 'planned_temp_work') return 'Planned Substitute';
-  if (state === 'planned_leave') return 'Planned Leave';
-  if (state === 'temp_rest') return 'Temp Rest';
-  if (state === 'planned_temp_rest') return 'Planned Rest';
-  return state.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+const formatWeekLabel = (value: string, dayIndex: number) => {
+  const date = new Date(`${value}T00:00:00`);
+  const weekday = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][dayIndex] ?? 'Day';
+  if (Number.isNaN(date.getTime())) return `${weekday} ${value}`;
+  return `${weekday} ${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 };
 
-const stateChipClass = (state: string) => {
-  if (state === 'planned_leave' || state === 'leave') return 'border-rose-400/30 bg-rose-500/10 text-rose-200';
-  if (state === 'temp_work' || state === 'planned_temp_work' || state === 'fixed_work' || state === 'work')
-    return 'border-sky-400/30 bg-sky-500/10 text-sky-200';
+const getNewYorkNowContext = (now: Date = new Date()) => {
+  const parts = newYorkClockFormatter.formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const date = `${values.year ?? '0000'}-${values.month ?? '01'}-${values.day ?? '01'}`;
+  const minutes = Number(values.hour ?? '0') * 60 + Number(values.minute ?? '0');
+  return { date, minutes };
+};
+
+const getDefaultSelectedDate = () => {
+  const { date } = getNewYorkNowContext();
+  const [year, month, day] = date.split('-').map((value) => Number(value) || 0);
+  const next = new Date(Date.UTC(year, Math.max(month - 1, 0), day + 1, 12, 0, 0));
+  return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`;
+};
+
+const isAgencyLeaveCutoffPassed = (
+  shift: AgencyShift | '',
+  workDate: string,
+  context: ReturnType<typeof getNewYorkNowContext> = getNewYorkNowContext()
+) => {
+  if (shift !== 'early' && shift !== 'late') return false;
+  if (workDate < context.date) return true;
+  if (workDate > context.date) return false;
+  const cutoffMinutes = shift === 'early' ? 10 * 60 : 17 * 60;
+  return context.minutes > cutoffMinutes;
+};
+
+const isAgencyScheduleCutoffPassed = (
+  shift: AgencyShift | '',
+  workDate: string,
+  context: ReturnType<typeof getNewYorkNowContext> = getNewYorkNowContext()
+) => {
+  if (workDate < context.date) return true;
+  return isAgencyLeaveCutoffPassed(shift, workDate, context);
+};
+
+const isAgencyDeadlineLockedState = (
+  shift: AgencyShift | '',
+  workDate: string,
+  context: ReturnType<typeof getNewYorkNowContext>
+) => isAgencyScheduleCutoffPassed(shift, workDate, context);
+
+const stateLabel = (state: AgencyScheduleState) => {
+  if (state === 'new') return 'NEW';
+  if (state === 'fixed_work') return 'Work';
+  if (state === 'temp_work') return 'Replacement';
+  if (state === 'planned_temp_work') return 'Replacement';
+  if (state === 'leave_pending') return 'Excuse Pending';
+  if (state === 'leave') return 'Excuse';
+  if (state === 'planned_leave') return 'Excuse';
+  if (state === 'temp_rest') return 'Off';
+  if (state === 'planned_temp_rest') return 'Off';
+  if (state === 'rest') return 'Off';
+  return 'Work';
+};
+
+const stateCellClass = (state: AgencyScheduleState, muted = false) => {
+  if (state === 'new') return muted ? 'border border-cyan-500/40 bg-cyan-950/40 text-cyan-100' : 'border border-cyan-300/60 bg-cyan-500/20 text-cyan-100';
+  if (state === 'work') return muted ? 'bg-lime-700/70 text-lime-100' : 'bg-neon text-white shadow-glow';
+  if (state === 'fixed_work') return muted ? 'border-2 border-[#b6912e]/70 bg-[#153428] text-[#e3c772]' : 'border-2 border-[#d4a017] bg-[#0f3f2b] text-[#ffd24d]';
+  if (state === 'temp_work') return muted ? 'bg-emerald-900/70 text-emerald-100' : 'bg-emerald-700 text-white';
+  if (state === 'planned_temp_work') return muted ? 'bg-emerald-800/70 text-emerald-100' : 'bg-emerald-500 text-white';
+  if (state === 'leave_pending') return muted ? 'border border-amber-500/30 bg-amber-900/35 text-amber-100' : 'border border-amber-400/50 bg-amber-500/15 text-amber-100';
+  if (state === 'leave') return muted ? 'bg-violet-900/70 text-violet-100' : 'bg-violet-500 text-white';
+  if (state === 'planned_leave') return muted ? 'bg-fuchsia-950/70 text-fuchsia-200' : 'bg-fuchsia-600 text-white';
+  if (state === 'temp_rest') return muted ? 'bg-slate-700/70 text-slate-300' : 'bg-red-800 text-red-100';
+  if (state === 'planned_temp_rest') return muted ? 'bg-slate-700/70 text-slate-300' : 'bg-rose-600 text-white';
+  return muted ? 'bg-slate-700/70 text-slate-300' : 'bg-ember text-white';
+};
+
+const shiftLabel = (shift: AgencyEmployeeRow['shift']) => {
+  if (shift === 'early') return 'Morning';
+  if (shift === 'late') return 'Night';
+  return '-';
+};
+
+const normalizeAgencyShift = (shift: string): AgencyShift => (shift === 'late' ? 'late' : 'early');
+
+const shiftChipClass = (shift: AgencyEmployeeRow['shift']) => {
+  if (shift === 'early') return 'border-amber-400/50 bg-amber-500/10 text-amber-200';
+  if (shift === 'late') return 'border-violet-400/50 bg-violet-500/10 text-violet-200';
   return 'border-white/10 bg-white/5 text-slate-300';
 };
+
+const formatStartTime = (value: string) => {
+  const match = String(value ?? '').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return '-';
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return '-';
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return '-';
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+};
+
+const normalizeAgencyValue = (value: unknown) => {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value).trim();
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const candidate = record.agency ?? record.Agency ?? record.name ?? record.label ?? record.value ?? record.text ?? '';
+    return String(candidate ?? '').trim();
+  }
+  return '';
+};
+
+const positionChipClass = (position: string) => {
+  const key = String(position ?? '').trim().toLowerCase();
+  if (key === 'pick') return 'border-sky-400/50 bg-sky-500/10 text-sky-200';
+  if (key === 'rebin') return 'border-emerald-400/50 bg-emerald-500/10 text-emerald-200';
+  if (key === 'pack') return 'border-rose-400/50 bg-rose-500/10 text-rose-200';
+  if (key === 'preship') return 'border-amber-400/50 bg-amber-500/10 text-amber-200';
+  if (key === 'transfer') return 'border-violet-400/50 bg-violet-500/10 text-violet-200';
+  return 'border-white/10 bg-white/5 text-slate-300';
+};
+
+const canRequestAgencyLeave = (state: AgencyScheduleState) =>
+  state === 'work' || state === 'fixed_work' || state === 'temp_work';
+
+const canAssignAgencySubstitute = (state: AgencyScheduleState) =>
+  state === 'rest' || state === 'temp_rest' || state === 'planned_temp_rest';
 
 const cardClass = 'rounded-[28px] border border-white/10 bg-black/20 p-5 shadow-[0_18px_40px_rgba(0,0,0,0.25)]';
 const inputClass =
@@ -51,6 +194,10 @@ const buttonClass =
   'inline-flex h-10 items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-medium text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50';
 const neonButtonClass =
   'inline-flex h-10 items-center justify-center rounded-2xl bg-neon px-4 text-sm font-semibold text-slate-950 transition hover:shadow-[0_12px_30px_rgba(158,255,0,0.25)] disabled:cursor-not-allowed disabled:opacity-50';
+const selectedDateColumnClass =
+  'bg-white/[0.03] shadow-[inset_3px_0_0_rgba(255,255,255,0.95),inset_-3px_0_0_rgba(255,255,255,0.95)]';
+const selectedDateHeaderLabelClass =
+  'inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-white';
 
 const Modal = ({
   open,
@@ -115,36 +262,53 @@ export default function AgencyAppPage() {
   const [access, setAccess] = useState<AdminAccessContext | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [board, setBoard] = useState<AgencyBoard | null>(null);
+  const [weekSchedule, setWeekSchedule] = useState<AgencyWeekSchedule | null>(null);
   const [status, setStatus] = useState('Ready');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [selectedDate, setSelectedDate] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  });
+  const [selectedDate, setSelectedDate] = useState(getDefaultSelectedDate);
+  const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const [agencyFilter, setAgencyFilter] = useState('all');
+  const [positionFilter, setPositionFilter] = useState('all');
+  const [shiftFilter, setShiftFilter] = useState<'all' | 'early' | 'late'>('all');
   const [modal, setModal] = useState<ModalState>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<AgencyEmployeeRow | null>(null);
   const [selectedNewHire, setSelectedNewHire] = useState<AgencyNewHireRequestRow | null>(null);
-  const [leaveReason, setLeaveReason] = useState('');
   const [terminationReason, setTerminationReason] = useState('');
-  const [substituteStaffId, setSubstituteStaffId] = useState('');
   const [newHireForm, setNewHireForm] = useState<AgencyUpsertNewHireInput>({
     staffId: null,
     workDate: selectedDate,
     position: 'Pick',
     shift: 'early',
-    agency: '',
+    agency: String(agencyFilter !== 'all' ? agencyFilter : access?.managed_agencies[0] ?? ''),
     label: '',
     entryTime: '',
     note: '',
-    count: 1
+    count: 1,
+    employeeName: '',
+    lockedAgency: false,
+    lockedPosition: false,
+    lockedShift: false,
+    lockedWorkDate: false
+  });
+  const [schedulePicker, setSchedulePicker] = useState<SchedulePickerState>({
+    open: false,
+    staffId: '',
+    workDate: '',
+    currentState: 'rest',
+    options: [],
+    anchorLeft: 0,
+    anchorTop: 0
   });
 
   const moduleMap = useMemo(() => getModuleMapFromContext(access), [access]);
   const canViewAgency = hasModuleAccess(moduleMap, 'agency', 'view');
   const canOperateAgency = hasModuleAccess(moduleMap, 'agency', 'operate');
+  const todayDate = useMemo(() => toDateOnly(new Date()), []);
+  const newYorkNowContext = useMemo(() => getNewYorkNowContext(), [selectedDate, weekSchedule]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -191,18 +355,48 @@ export default function AgencyAppPage() {
 
   useEffect(() => {
     if (!selectedDate) return;
-    setNewHireForm((prev) => ({ ...prev, workDate: selectedDate, agency: access?.managed_agencies[0] ?? prev.agency }));
-  }, [selectedDate, access?.managed_agencies]);
+    setNewHireForm((prev) => ({
+      ...prev,
+      workDate: selectedDate,
+      agency: normalizeAgencyValue(agencyFilter !== 'all' ? agencyFilter : access?.managed_agencies[0] ?? prev.agency),
+      entryTime: '09:00',
+      note: prev.note || 'NEW'
+    }));
+  }, [selectedDate, access?.managed_agencies, agencyFilter]);
+
+  useEffect(() => {
+    if (!schedulePicker.open) return;
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-agency-schedule-popover="true"]') || target?.closest('[data-agency-schedule-trigger="true"]')) return;
+      setSchedulePicker((prev) => ({ ...prev, open: false }));
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setSchedulePicker((prev) => ({ ...prev, open: false }));
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [schedulePicker.open]);
 
   const refreshBoard = async () => {
     if (!supabase || !user || !canViewAgency) return;
     setBusy(true);
     setError(null);
+    setBoard(null);
     try {
-      const nextBoard = await fetchAgencyBoard(supabase, selectedDate);
-      setBoard(nextBoard);
-      setStatus(`Loaded ${nextBoard.employees.length} employees`);
+      const nextWeekSchedule = await fetchAgencyScheduleWeek(supabase, selectedDate);
+      setWeekSchedule(nextWeekSchedule);
+      setStatus(`Loaded ${nextWeekSchedule.employees.length} employees`);
     } catch (nextError) {
+      setWeekSchedule(null);
+      setBoard(null);
       setError(nextError instanceof Error ? nextError.message : 'Failed to load board.');
     } finally {
       setBusy(false);
@@ -212,6 +406,10 @@ export default function AgencyAppPage() {
   useEffect(() => {
     void refreshBoard();
   }, [selectedDate, supabase, user?.id, canViewAgency]);
+
+  useEffect(() => {
+    setSchedulePicker((prev) => ({ ...prev, open: false }));
+  }, [selectedDate]);
 
   const doLogin = async () => {
     if (!supabase) return;
@@ -235,47 +433,34 @@ export default function AgencyAppPage() {
     setStatus('Signed out');
   };
 
-  const eligibleSubstitutes = useMemo(() => {
-    if (!selectedEmployee || !board) return [];
-    return board.employees.filter(
-      (employee) =>
-        employee.staff_id !== selectedEmployee.staff_id &&
-        employee.position === selectedEmployee.position &&
-        employee.fixed_work_count < 5 &&
-        !['work', 'fixed_work', 'temp_work'].includes(employee.state)
-    );
-  }, [board, selectedEmployee]);
-
-  const openLeaveModal = (employee: AgencyEmployeeRow) => {
-    setSelectedEmployee(employee);
-    setLeaveReason('');
-    setModal('leave');
-  };
-
-  const openSubstituteModal = (employee: AgencyEmployeeRow) => {
-    setSelectedEmployee(employee);
-    setSubstituteStaffId('');
-    setModal('substitute');
-  };
-
-  const openTerminationModal = (employee: AgencyEmployeeRow) => {
-    setSelectedEmployee(employee);
-    setTerminationReason('');
-    setModal('termination');
-  };
-
-  const openCreateNewHire = () => {
+  const openCreateNewHire = (overrideAgency?: string, overridePosition?: string, overrideShift?: 'early' | 'late') => {
+    if (!hasOpenGapForSelectedDate && !overrideAgency) {
+      setStatus('No GAP');
+      return;
+    }
     setSelectedNewHire(null);
+    const defaultGap = gapsByGroupOnSelectedDate[0];
+    const msgAgency = normalizeAgencyValue(
+      overrideAgency ?? defaultGap?.agency ?? (agencyFilter !== 'all' ? agencyFilter : access?.managed_agencies[0] ?? agencyOptions[0] ?? '')
+    );
+    const hasLockedAgency = Boolean(overrideAgency) && Boolean(msgAgency);
+    const msgPosition = String(overridePosition ?? defaultGap?.position ?? 'Pick');
+    const msgShift = (overrideShift ?? normalizeAgencyShift(String(defaultGap?.shift ?? 'early'))) as 'early' | 'late';
     setNewHireForm({
       staffId: null,
       workDate: selectedDate,
-      position: 'Pick',
-      shift: 'early',
-      agency: access?.managed_agencies[0] ?? '',
+      position: msgPosition,
+      shift: msgShift,
+      agency: msgAgency,
       label: '',
-      entryTime: '',
-      note: '',
-      count: 1
+      entryTime: '09:00',
+      note: 'NEW',
+      count: 1,
+      employeeName: '',
+      lockedAgency: hasLockedAgency,
+      lockedPosition: Boolean(overridePosition),
+      lockedShift: Boolean(overrideShift),
+      lockedWorkDate: Boolean(overrideAgency)
     });
     setModal('new_hire');
   };
@@ -285,13 +470,18 @@ export default function AgencyAppPage() {
     setNewHireForm({
       staffId: row.staff_id,
       workDate: selectedDate,
-      position: row.position,
-      shift: row.shift === 'late' ? 'late' : 'early',
-      agency: row.agency,
-      label: row.label,
-      entryTime: '',
-      note: row.name,
-      count: 1
+      position: String(row.position),
+      shift: (row.shift === 'late' ? 'late' : 'early') as 'early' | 'late',
+      agency: normalizeAgencyValue(row.agency),
+      label: '',
+      entryTime: '09:00',
+      note: 'NEW',
+      count: 1,
+      employeeName: String(row.name ?? ''),
+      lockedAgency: true,
+      lockedPosition: true,
+      lockedShift: true,
+      lockedWorkDate: true
     });
     setModal('new_hire');
   };
@@ -300,48 +490,50 @@ export default function AgencyAppPage() {
     setModal(null);
     setSelectedEmployee(null);
     setSelectedNewHire(null);
+    setTerminationReason('');
   };
 
-  const submitLeave = async () => {
-    if (!supabase || !selectedEmployee) return;
-    setBusy(true);
-    try {
-      await submitAgencyPlannedLeave(supabase, selectedEmployee.staff_id, selectedDate, leaveReason);
-      setStatus(`Planned leave saved for ${selectedEmployee.name}`);
-      closeModal();
-      await refreshBoard();
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Leave update failed.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const submitSubstitute = async () => {
-    if (!supabase || !selectedEmployee || !substituteStaffId) return;
-    setBusy(true);
-    try {
-      await submitAgencySubstitute(supabase, selectedEmployee.staff_id, substituteStaffId, selectedDate);
-      setStatus('Substitute assigned');
-      closeModal();
-      await refreshBoard();
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Substitute update failed.');
-    } finally {
-      setBusy(false);
-    }
+  const openTerminationModal = (employee: AgencyEmployeeRow) => {
+    setSelectedEmployee(employee);
+    setTerminationReason('');
+    setModal('termination');
   };
 
   const submitNewHire = async () => {
     if (!supabase) return;
+    if (!selectedNewHire && newHireSelectedOpenSlots <= 0) {
+      setError('No GAP for selected Agency / Position / Shift.');
+      return;
+    }
     setBusy(true);
     try {
       await upsertAgencyNewHireDemand(supabase, newHireForm);
-      setStatus(selectedNewHire ? 'New request updated' : 'New request created');
+      setStatus(selectedNewHire ? 'NEW updated' : 'NEW created');
       closeModal();
       await refreshBoard();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'New request save failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteNewHire = async (row: AgencyNewHireRequestRow) => {
+    if (!supabase || !canOperateAgency) return;
+    const displayName = String(row.name ?? '').trim() || row.staff_id;
+    const confirmed = window.confirm(`Delete NEW request ${displayName} (${row.staff_id})?`);
+    if (!confirmed) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteAgencyNewHireDemand(supabase, row.staff_id, selectedDate);
+      setStatus('NEW deleted');
+      if (selectedNewHire?.staff_id === row.staff_id) {
+        closeModal();
+      }
+      await refreshBoard();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Delete NEW failed.');
     } finally {
       setBusy(false);
     }
@@ -362,6 +554,408 @@ export default function AgencyAppPage() {
     }
   };
 
+  const submitScheduleState = useCallback(
+    async (staffId: string, workDate: string, state: AgencyScheduleState) => {
+      if (!supabase || !canOperateAgency) return;
+      setBusy(true);
+      setError(null);
+      setSchedulePicker((prev) => ({ ...prev, open: false }));
+      try {
+        await setAgencyScheduleState(supabase, staffId, workDate, state);
+        setStatus(`Updated ${staffId} on ${workDate}`);
+        await refreshBoard();
+      } catch (nextError) {
+        setError(nextError instanceof Error ? nextError.message : 'Schedule update failed.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [supabase, canOperateAgency, refreshBoard]
+  );
+
+  const handleScheduleCellClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>, staffId: string, workDate: string, cellOptions: SchedulePickerOption[], state: AgencyScheduleState) => {
+      if (cellOptions.length === 0) return;
+      if (cellOptions.length === 1) {
+        void submitScheduleState(staffId, workDate, cellOptions[0].key);
+        return;
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      setSchedulePicker({
+        open: true,
+        staffId,
+        workDate,
+        currentState: state,
+        options: cellOptions,
+        anchorLeft: rect.left + rect.width / 2,
+        anchorTop: rect.bottom + 10
+      });
+    },
+    [submitScheduleState, setSchedulePicker]
+  );
+
+  type ScheduleCellProps = {
+    staffId: string;
+    employeeName: string;
+    workDate: string;
+    state: AgencyScheduleState;
+    baseState: AgencyScheduleState;
+    isSelectedWorkDate: boolean;
+    isLastEmployeeRow: boolean;
+    cellOptions: SchedulePickerOption[];
+    canEditCell: boolean;
+    isDeadlineLocked: boolean;
+    busy: boolean;
+    selectedDateColumnClass: string;
+  };
+
+  const ScheduleCell = memo(function ScheduleCell({
+    staffId,
+    employeeName,
+    workDate,
+    state,
+    baseState,
+    isSelectedWorkDate,
+    isLastEmployeeRow,
+    cellOptions,
+    canEditCell,
+    isDeadlineLocked,
+    busy,
+    selectedDateColumnClass
+  }: ScheduleCellProps) {
+    const displayState = state;
+    const useMutedCellStyle = !canEditCell || isDeadlineLocked;
+    
+    return (
+      <td
+        key={`${staffId}__${workDate}`}
+        className={[
+          'px-0.5 py-1.5 text-center',
+          isSelectedWorkDate ? selectedDateColumnClass : '',
+          isSelectedWorkDate && isLastEmployeeRow ? 'shadow-[inset_3px_0_0_rgba(255,255,255,0.95),inset_-3px_0_0_rgba(255,255,255,0.95),inset_0_-3px_0_rgba(255,255,255,0.95)]' : ''
+        ].join(' ')}
+      >
+        <button
+          type="button"
+          data-agency-schedule-trigger="true"
+          disabled={busy || !canEditCell}
+          onClick={(event) => handleScheduleCellClick(event, staffId, workDate, cellOptions, state)}
+          className={[
+            'h-8 w-[74px] rounded-md px-1 text-[9px] font-semibold leading-none transition disabled:cursor-not-allowed disabled:opacity-100',
+            !canEditCell ? 'saturate-50 brightness-90' : '',
+            stateCellClass(displayState, useMutedCellStyle)
+          ].join(' ')}
+          title={`${employeeName} · ${workDate}${isDeadlineLocked ? ' · Cutoff locked' : ''}`}
+        >
+          {stateLabel(displayState)}
+        </button>
+      </td>
+    );
+  });
+
+  const weekDates = useMemo(() => {
+    if (weekSchedule && weekSchedule.week_dates.length === 7) return weekSchedule.week_dates;
+    const anchor = new Date(`${selectedDate}T00:00:00`);
+    const weekStart = startOfWeekMonday(Number.isNaN(anchor.getTime()) ? new Date() : anchor);
+    return Array.from({ length: 7 }, (_, index) => toDateOnly(addDays(weekStart, index)));
+  }, [selectedDate, weekSchedule]);
+
+  const scheduleCellByStaffDate = useMemo(() => {
+    const next = new Map<string, AgencyWeekSchedule['employees'][number]['days'][number]>();
+    for (const row of weekSchedule?.employees ?? []) {
+      for (const day of row.days) {
+        if (!row.staff_id || !day.work_date) continue;
+        next.set(`${row.staff_id}__${day.work_date}`, day);
+      }
+    }
+    return next;
+  }, [weekSchedule]);
+
+  const weekEmployeeByStaffId = useMemo(() => {
+    const next = new Map<string, AgencyWeekSchedule['employees'][number]>();
+    for (const row of weekSchedule?.employees ?? []) {
+      if (!row.staff_id) continue;
+      next.set(row.staff_id, row);
+    }
+    return next;
+  }, [weekSchedule]);
+
+  const openSubstituteSlotsByStaffDate = useMemo(() => {
+    const next = new Map<string, number>();
+    for (const row of weekSchedule?.employees ?? []) {
+      for (const day of row.days) {
+        next.set(`${row.staff_id}__${day.work_date}`, Number(day.substitute_open_count ?? 0) || 0);
+      }
+    }
+    return next;
+  }, [weekSchedule]);
+
+  const currentDayStateByStaffId = useMemo(() => {
+    const next = new Map<string, AgencyScheduleState>();
+    for (const row of weekSchedule?.employees ?? []) {
+      const day = row.days.find((item) => item.work_date === selectedDate);
+      next.set(row.staff_id, day?.state ?? 'rest');
+    }
+    return next;
+  }, [selectedDate, weekSchedule]);
+
+  const weeklyWorkCountByStaffId = useMemo(() => {
+    const next = new Map<string, number>();
+    for (const row of weekSchedule?.employees ?? []) {
+      const workCount = row.days.filter((day) =>
+        ['work', 'fixed_work', 'temp_work', 'planned_temp_work'].includes(day.base_state ?? day.state)
+      ).length;
+      next.set(row.staff_id, workCount);
+    }
+    return next;
+  }, [weekSchedule]);
+
+  const employeeRows = useMemo<AgencyEmployeeRow[]>(
+    () =>
+      (weekSchedule?.employees ?? []).map((row) => ({
+        staff_id: row.staff_id,
+        name: row.name,
+        agency: row.agency,
+        position: row.position,
+        shift: row.shift,
+        start_time: row.start_time,
+        label: row.label,
+        state: currentDayStateByStaffId.get(row.staff_id) ?? 'rest',
+        fixed_work_count: weeklyWorkCountByStaffId.get(row.staff_id) ?? row.fixed_work_count,
+        has_absent: false,
+        has_late: false,
+        termination_status: row.termination_status
+      })),
+    [currentDayStateByStaffId, weekSchedule, weeklyWorkCountByStaffId]
+  );
+
+  const selectedDateNewHireRequests = useMemo<AgencyNewHireRequestRow[]>(
+    () =>
+      (weekSchedule?.new_hire_requests ?? [])
+        .filter((row) => row.work_date === selectedDate)
+        .map((row) => ({
+          staff_id: row.staff_id,
+          name: row.name,
+          agency: row.agency,
+          position: row.position,
+          shift: row.shift,
+          start_time: row.start_time,
+          label: row.label,
+          state: ''
+        })),
+    [selectedDate, weekSchedule]
+  );
+
+  const getCellOptions = useCallback(
+    (
+      employee: AgencyEmployeeRow,
+      state: AgencyScheduleState,
+      baseState: AgencyScheduleState,
+      workDate: string
+    ): SchedulePickerOption[] => {
+      if (employee.termination_status === 'pending') return [];
+      if (isAgencyScheduleCutoffPassed(employee.shift, workDate, newYorkNowContext)) return [];
+      if (state === 'leave_pending' && (baseState === 'work' || baseState === 'fixed_work' || baseState === 'temp_work' || baseState === 'planned_temp_work')) {
+        return [
+          {
+            key: baseState,
+            label: `Restore ${stateLabel(baseState)}`,
+            cls: stateCellClass(baseState, false)
+          }
+        ];
+      }
+      const options: SchedulePickerOption[] = [];
+      if (canRequestAgencyLeave(state) && !isAgencyLeaveCutoffPassed(employee.shift, workDate, newYorkNowContext)) {
+        options.push({ key: 'planned_leave', label: 'Leave', cls: 'bg-amber-500 text-slate-950' });
+      }
+      if (state === 'temp_work' || state === 'planned_temp_work') {
+        options.push({
+          key: state === 'planned_temp_work' ? 'planned_temp_rest' : 'temp_rest',
+          label: 'Off',
+          cls: 'bg-slate-600 text-white'
+        });
+      }
+      const openSlots = openSubstituteSlotsByStaffDate.get(`${employee.staff_id}__${workDate}`) ?? 0;
+      if (canAssignAgencySubstitute(state) && employee.fixed_work_count < 5 && openSlots > 0) {
+        const isFuture = workDate > newYorkNowContext.date;
+        options.push({
+          key: isFuture ? 'planned_temp_work' : 'temp_work',
+          label: isFuture ? 'Planned Sub' : 'Substitute',
+          cls: isFuture ? 'bg-emerald-500 text-white' : 'bg-emerald-700 text-white'
+        });
+      }
+      return options;
+    },
+    [newYorkNowContext, openSubstituteSlotsByStaffDate]
+  );
+
+  const agencyOptions = useMemo(
+    () => Array.from(new Set(employeeRows.map((employee) => String(employee.agency ?? '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [employeeRows]
+  );
+
+  const positionOptions = useMemo(
+    () =>
+      Array.from(new Set(employeeRows.map((employee) => String(employee.position ?? '').trim()).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b)
+      ),
+    [employeeRows]
+  );
+
+  const activeFilterQuery = deferredSearchQuery.trim().toLowerCase();
+
+  const filteredEmployees = useMemo(() => {
+    return employeeRows.filter((employee) => {
+      if (agencyFilter !== 'all' && employee.agency !== agencyFilter) return false;
+      if (positionFilter !== 'all' && employee.position !== positionFilter) return false;
+      if (shiftFilter !== 'all' && employee.shift !== shiftFilter) return false;
+      if (!activeFilterQuery) return true;
+      const name = String(employee.name ?? '').toLowerCase();
+      const staffId = String(employee.staff_id ?? '').toLowerCase();
+      return name.includes(activeFilterQuery) || staffId.includes(activeFilterQuery);
+    });
+  }, [activeFilterQuery, agencyFilter, employeeRows, positionFilter, shiftFilter]);
+
+  const [visibleEmployeeCount, setVisibleEmployeeCount] = useState(EMPLOYEE_RENDER_PAGE_SIZE);
+
+  useEffect(() => {
+    setVisibleEmployeeCount(EMPLOYEE_RENDER_PAGE_SIZE);
+  }, [filteredEmployees.length]);
+
+  const visibleFilteredEmployees = useMemo(
+    () => filteredEmployees.slice(0, visibleEmployeeCount),
+    [filteredEmployees, visibleEmployeeCount]
+  );
+
+  const hasMoreEmployees = visibleFilteredEmployees.length < filteredEmployees.length;
+
+  const filteredNewHireRequests = useMemo(
+    () =>
+      selectedDateNewHireRequests.filter((row) => {
+        if (agencyFilter !== 'all' && row.agency !== agencyFilter) return false;
+        if (positionFilter !== 'all' && row.position !== positionFilter) return false;
+        if (shiftFilter !== 'all' && row.shift !== shiftFilter) return false;
+        if (!activeFilterQuery) return true;
+        const name = String(row.name ?? '').toLowerCase();
+        const staffId = String(row.staff_id ?? '').toLowerCase();
+        return name.includes(activeFilterQuery) || staffId.includes(activeFilterQuery);
+      }),
+    [activeFilterQuery, agencyFilter, positionFilter, selectedDateNewHireRequests, shiftFilter]
+  );
+  const filteredGapCount = useMemo(() => {
+    const groupSlots = new Map<string, number>();
+    for (const employee of filteredEmployees) {
+      const groupKey = [employee.agency, employee.position, employee.shift].join('__');
+      const openSlots = openSubstituteSlotsByStaffDate.get(`${employee.staff_id}__${selectedDate}`) ?? 0;
+      groupSlots.set(groupKey, Math.max(groupSlots.get(groupKey) ?? 0, openSlots));
+    }
+    return Array.from(groupSlots.values()).reduce((total, value) => total + value, 0);
+  }, [filteredEmployees, openSubstituteSlotsByStaffDate, selectedDate]);
+
+  const hasOpenGapForSelectedDate = useMemo(
+    () => filteredGapCount > 0,
+    [filteredGapCount]
+  );
+
+  const gapsByGroupOnSelectedDate = useMemo(() => {
+    const groupMap = new Map<string, { agency: string; position: string; shift: string; count: number }>();
+    for (const employee of filteredEmployees) {
+      const groupKey = [employee.agency, employee.position, employee.shift].join('__');
+      const openSlots = openSubstituteSlotsByStaffDate.get(`${employee.staff_id}__${selectedDate}`) ?? 0;
+      if (openSlots > 0) {
+        groupMap.set(groupKey, { agency: employee.agency, position: employee.position, shift: employee.shift, count: openSlots });
+      }
+    }
+    return Array.from(groupMap.values());
+  }, [filteredEmployees, openSubstituteSlotsByStaffDate, selectedDate]);
+
+  const newHireAgencyOptions = useMemo(() => {
+    const fromGaps = Array.from(
+      new Set(gapsByGroupOnSelectedDate.map((gap) => normalizeAgencyValue(gap.agency)).filter(Boolean))
+    ).sort((a, b) => a.localeCompare(b));
+    if (fromGaps.length > 0) return fromGaps;
+
+    return Array.from(
+      new Set(
+        [...agencyOptions, ...(access?.managed_agencies ?? [])]
+          .map((agency) => normalizeAgencyValue(agency))
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }, [access?.managed_agencies, agencyOptions, gapsByGroupOnSelectedDate]);
+
+  const newHireGapGroups = useMemo(() => {
+    const scoped = gapsByGroupOnSelectedDate.filter((gap) => gap.agency === newHireForm.agency);
+    return scoped.length ? scoped : gapsByGroupOnSelectedDate;
+  }, [gapsByGroupOnSelectedDate, newHireForm.agency]);
+
+  const newHirePositionOptions = useMemo(
+    () => Array.from(new Set(newHireGapGroups.map((gap) => String(gap.position ?? '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [newHireGapGroups]
+  );
+
+  const newHireShiftOptions = useMemo(() => {
+    const scoped = newHireGapGroups.filter((gap) => gap.position === newHireForm.position);
+    const shifts = Array.from(new Set(scoped.map((gap) => normalizeAgencyShift(String(gap.shift ?? '')))));
+    return shifts.length ? shifts : ['early', 'late'];
+  }, [newHireGapGroups, newHireForm.position]);
+
+  const newHireSelectedOpenSlots = useMemo(() => {
+    const matched = gapsByGroupOnSelectedDate.find(
+      (gap) =>
+        String(gap.agency ?? '').trim() === String(newHireForm.agency ?? '').trim() &&
+        String(gap.position ?? '').trim() === String(newHireForm.position ?? '').trim() &&
+        normalizeAgencyShift(String(gap.shift ?? '')) === newHireForm.shift
+    );
+    return Number(matched?.count ?? 0) || 0;
+  }, [gapsByGroupOnSelectedDate, newHireForm.agency, newHireForm.position, newHireForm.shift]);
+
+  useEffect(() => {
+    if (modal !== 'new_hire' || selectedNewHire || newHireForm.lockedAgency) return;
+    if (newHireAgencyOptions.length === 0) return;
+    if (newHireAgencyOptions.includes(newHireForm.agency)) return;
+    setNewHireForm((prev) => ({ ...prev, agency: newHireAgencyOptions[0] }));
+  }, [modal, newHireAgencyOptions, newHireForm.agency, newHireForm.lockedAgency, selectedNewHire]);
+
+  useEffect(() => {
+    if (modal !== 'new_hire' || selectedNewHire || newHireForm.lockedPosition) return;
+    if (newHirePositionOptions.length === 0) return;
+    const nextPosition = newHirePositionOptions.includes(newHireForm.position) ? newHireForm.position : newHirePositionOptions[0];
+    const scopedShifts = newHireGapGroups
+      .filter((gap) => gap.position === nextPosition)
+      .map((gap) => normalizeAgencyShift(String(gap.shift ?? '')));
+    const shiftOptions = Array.from(new Set(scopedShifts));
+    const nextShift = shiftOptions.includes(newHireForm.shift) ? newHireForm.shift : (shiftOptions[0] ?? newHireForm.shift);
+    if (nextPosition === newHireForm.position && nextShift === newHireForm.shift) return;
+    setNewHireForm((prev) => ({
+      ...prev,
+      position: nextPosition,
+      shift: nextShift
+    }));
+  }, [
+    modal,
+    selectedNewHire,
+    newHireForm.lockedPosition,
+    newHireForm.position,
+    newHireForm.shift,
+    newHirePositionOptions,
+    newHireGapGroups
+  ]);
+
+  const derivedSummaryCards = useMemo(() => {
+    const newRequestCount = filteredNewHireRequests.length;
+    const scheduledCount = filteredEmployees.filter((row) =>
+      ['work', 'fixed_work', 'temp_work', 'planned_temp_work'].includes(row.state)
+    ).length;
+    const requiredCount = scheduledCount + newRequestCount + filteredGapCount;
+    return [
+      { key: 'required', label: 'Required', value: requiredCount },
+      { key: 'scheduled', label: 'Scheduled', value: scheduledCount },
+      { key: 'new_requests', label: 'New Requests', value: newRequestCount },
+      { key: 'gap', label: 'Gap', value: filteredGapCount }
+    ];
+  }, [filteredEmployees, filteredGapCount, filteredNewHireRequests.length]);
+
   if (!supabase) {
     return <div className="min-h-screen px-6 py-10 text-white">Missing Supabase configuration.</div>;
   }
@@ -369,27 +963,11 @@ export default function AgencyAppPage() {
   return (
     <div className="min-h-screen px-5 py-8 text-paper">
       <div className="mx-auto flex max-w-[1480px] flex-col gap-6">
-        <header className={[cardClass, 'flex flex-wrap items-start justify-between gap-6'].join(' ')}>
+        <header className={cardClass}>
           <div>
             <div className="text-[11px] uppercase tracking-[0.28em] text-slate-400">ObPunch Agency</div>
             <h1 className="mt-4 font-display text-5xl tracking-[0.04em] text-white">Agency Board</h1>
             <div className="mt-3 text-sm text-slate-400">{displayName || user?.email || 'Signed out'}</div>
-          </div>
-          <div className="flex items-center gap-3">
-            <input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} className={inputClass} />
-            {user ? (
-              <>
-                <button type="button" onClick={() => void refreshBoard()} className={buttonClass} disabled={busy || !canViewAgency}>
-                  Refresh
-                </button>
-                <button type="button" onClick={openCreateNewHire} className={neonButtonClass} disabled={busy || !canOperateAgency}>
-                  New Request
-                </button>
-                <button type="button" onClick={() => void doLogout()} className={buttonClass} disabled={busy}>
-                  Logout
-                </button>
-              </>
-            ) : null}
           </div>
         </header>
 
@@ -403,10 +981,10 @@ export default function AgencyAppPage() {
 
         {error ? <section className={cardClass}><div className="text-sm text-rose-200">{error}</div></section> : null}
 
-        {user && canViewAgency && board ? (
+        {user && canViewAgency && weekSchedule ? (
           <>
             <section className="grid gap-4 md:grid-cols-4">
-              {board.summary_cards.map((card) => (
+              {(board?.summary_cards?.length ? board.summary_cards : derivedSummaryCards).map((card) => (
                 <div key={card.key} className={cardClass}>
                   <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">{card.label}</div>
                   <div className="mt-4 text-4xl font-semibold text-white">{card.value}</div>
@@ -414,163 +992,446 @@ export default function AgencyAppPage() {
               ))}
             </section>
 
-            <section className="grid gap-4 md:grid-cols-3">
-              {board.attendance_cards.map((card) => (
-                <div key={card.key} className={cardClass}>
-                  <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">{card.label}</div>
-                  <div className="mt-4 text-4xl font-semibold text-white">{card.value}</div>
+            {board?.attendance_cards?.length ? (
+              <section className="grid gap-4 md:grid-cols-3">
+                {board.attendance_cards.map((card) => (
+                  <div key={card.key} className={cardClass}>
+                    <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">{card.label}</div>
+                    <div className="mt-4 text-4xl font-semibold text-white">{card.value}</div>
+                  </div>
+                ))}
+              </section>
+            ) : null}
+
+            <section className={cardClass}>
+              <div>
+                <div className="mb-4 flex items-center justify-between gap-4">
+                  <h2 className="font-display text-3xl tracking-[0.04em] text-white">NEW</h2>
                 </div>
-              ))}
+                <div className="space-y-3">
+                  {filteredNewHireRequests.length === 0 ? <div className="text-sm text-slate-400">No new requests.</div> : null}
+                  {filteredNewHireRequests.length > 0 ? (
+                    <div className="overflow-x-auto rounded-[22px] border border-white/10 bg-white/[0.03]">
+                      <div className="min-w-[780px]">
+                        <div className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_180px] items-center gap-3 px-4 py-2 text-[11px] uppercase tracking-[0.16em] text-slate-400">
+                          <div>Name</div>
+                          <div>Agency</div>
+                          <div>Position</div>
+                          <div>Shift</div>
+                          <div className="text-right">Actions</div>
+                        </div>
+                        <div className="h-px bg-white/10" />
+                        {filteredNewHireRequests.map((row) => (
+                          <div key={row.staff_id} className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_180px] items-center gap-3 px-4 py-4">
+                            <div className="min-w-0 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1 text-sm text-slate-100">
+                              <span className="truncate block">{String(row.name ?? '').trim() || '-'}</span>
+                            </div>
+                            <div className="rounded-full border border-cyan-400/35 bg-cyan-500/10 px-3 py-1 text-sm text-cyan-200">
+                              {row.agency || '-'}
+                            </div>
+                            <div>
+                              <span className={[
+                                'inline-flex items-center rounded-full border px-3 py-1 text-sm',
+                                positionChipClass(row.position)
+                              ].join(' ')}>
+                                {row.position || '-'}
+                              </span>
+                            </div>
+                            <div>
+                              <span className={[
+                                'inline-flex items-center rounded-full border px-3 py-1 text-sm',
+                                shiftChipClass(row.shift)
+                              ].join(' ')}>
+                                {shiftLabel(row.shift)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-end gap-2">
+                              <button type="button" className={buttonClass} disabled={busy || !canOperateAgency} onClick={() => openEditNewHire(row)}>
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="inline-flex h-10 items-center justify-center rounded-2xl border border-rose-300/30 bg-rose-500/10 px-4 text-sm font-medium text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={busy || !canOperateAgency}
+                                onClick={() => void deleteNewHire(row)}
+                              >
+                                撤销
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                {filteredNewHireRequests.length > 0 ? (
+                  <div className="mt-4 flex justify-end">
+                    <button
+                      type="button"
+                      className={buttonClass}
+                      disabled={busy || !canOperateAgency || !hasOpenGapForSelectedDate}
+                      onClick={openCreateNewHire}
+                    >
+                      Create
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </section>
 
             <section className={cardClass}>
-              <div className="mb-5 flex items-center justify-between gap-4">
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
                 <h2 className="font-display text-3xl tracking-[0.04em] text-white">Employees</h2>
-                <div className="text-sm text-slate-400">{board.employees.length} rows</div>
+                {user ? (
+                  <div className="flex max-w-full items-center justify-end gap-3 overflow-x-auto">
+                    <input
+                      type="date"
+                      value={selectedDate}
+                      onChange={(event) => setSelectedDate(event.target.value)}
+                      className={[inputClass, 'w-[196px] shrink-0'].join(' ')}
+                    />
+                    <button type="button" onClick={() => void refreshBoard()} className={buttonClass} disabled={busy || !canViewAgency}>
+                      Refresh
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openCreateNewHire}
+                      className={neonButtonClass}
+                      disabled={busy || !canOperateAgency || !hasOpenGapForSelectedDate}
+                    >
+                      NEW
+                    </button>
+                    <button type="button" onClick={() => void doLogout()} className={buttonClass} disabled={busy}>
+                      Logout
+                    </button>
+                  </div>
+                ) : null}
               </div>
-              <div className="space-y-3">
-                {board.employees.map((employee) => {
-                  const leaveLocked = !canEditAgencyPlannedLeave((employee.shift || 'early') as AgencyShift, selectedDate, new Date());
-                  return (
-                    <div key={employee.staff_id} className="rounded-[24px] border border-white/10 bg-white/[0.03] p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
-                          <div className="text-lg font-semibold text-white">{employee.name}</div>
-                          <div className="mt-1 text-sm text-slate-400">
-                            {employee.staff_id} · {employee.agency || '-'} · {employee.position || '-'} · {employee.shift || '-'}
+              <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search Name / USID"
+                  className={inputClass}
+                />
+                <select value={agencyFilter} onChange={(event) => setAgencyFilter(event.target.value)} className={inputClass}>
+                  <option value="all">All Agency</option>
+                  {agencyOptions.map((agency) => (
+                    <option key={agency} value={agency}>
+                      {agency}
+                    </option>
+                  ))}
+                </select>
+                <select value={positionFilter} onChange={(event) => setPositionFilter(event.target.value)} className={inputClass}>
+                  <option value="all">All Position</option>
+                  {positionOptions.map((position) => (
+                    <option key={position} value={position}>
+                      {position}
+                    </option>
+                  ))}
+                </select>
+                <select value={shiftFilter} onChange={(event) => setShiftFilter((event.target.value as 'all' | 'early' | 'late') || 'all')} className={inputClass}>
+                  <option value="all">All Shift</option>
+                  <option value="early">Morning</option>
+                  <option value="late">Night</option>
+                </select>
+              </div>
+              <div className="overflow-x-auto rounded-2xl border border-white/10 bg-black/30 py-1">
+                <table className="min-w-[1350px] w-full table-fixed text-left text-xs leading-tight">
+                  <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
+                    <tr>
+                      <th className="w-[104px] py-2 pl-4 pr-1">ID</th>
+                      <th className="w-[184px] px-1 py-2">Name</th>
+                      <th className="w-[92px] px-1 py-2">Agency</th>
+                      <th className="w-[96px] px-1 py-2">Position</th>
+                      <th className="w-[72px] px-1 py-2 text-center">Shift</th>
+                      <th className="w-[86px] px-1 py-2 text-center">Start time</th>
+                      {weekDates.map((workDate, dayIndex) => (
+                        <th
+                          key={workDate}
+                          className={[
+                            'w-[86px] px-0.5 py-2 text-center',
+                            workDate === selectedDate
+                              ? `${selectedDateColumnClass} shadow-[inset_3px_0_0_rgba(255,255,255,0.95),inset_-3px_0_0_rgba(255,255,255,0.95),inset_0_3px_0_rgba(255,255,255,0.95)]`
+                              : ''
+                          ].join(' ')}
+                        >
+                          <span className={workDate === selectedDate ? selectedDateHeaderLabelClass : ''}>{formatWeekLabel(workDate, dayIndex)}</span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredEmployees.length === 0 ? (
+                      <tr>
+                        <td colSpan={6 + weekDates.length} className="px-4 py-8 text-center text-sm text-slate-400">
+                          No matches.
+                        </td>
+                      </tr>
+                    ) : null}
+                    {visibleFilteredEmployees.map((employee, employeeIndex) => {
+                      const weekEmployee = weekEmployeeByStaffId.get(employee.staff_id);
+                      const isPendingTermination = employee.termination_status === 'pending' || weekEmployee?.termination_status === 'pending';
+                      const isLastEmployeeRow = employeeIndex === visibleFilteredEmployees.length - 1;
+                      const rowClass = isPendingTermination
+                        ? 'border-b border-white/5 bg-slate-800/60 transition-colors hover:bg-slate-800/70 last:border-b-0'
+                        : 'border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-b-0';
+                      return (
+                      <tr key={employee.staff_id} className={rowClass}>
+                        <td className="py-2 pl-4 pr-1 font-mono text-slate-200">{employee.staff_id}</td>
+                        <td className="px-1 py-2 text-slate-200">
+                          <div className="truncate font-medium">{employee.name || '-'}</div>
+                          <div className="mt-1 flex items-center gap-2">
+                            {isPendingTermination ? (
+                              <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">Pending departure</span>
+                            ) : canOperateAgency ? (
+                              <button
+                                type="button"
+                                className="text-[10px] uppercase tracking-[0.16em] text-rose-300 transition hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={busy}
+                                onClick={() => openTerminationModal(employee)}
+                              >
+                                Depart
+                              </button>
+                            ) : null}
                           </div>
-                        </div>
-                        <span className={['rounded-full border px-3 py-1 text-xs font-semibold', stateChipClass(employee.state)].join(' ')}>
-                          {stateLabel(employee.state)}
-                        </span>
-                      </div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          className={buttonClass}
-                          disabled={busy || !canOperateAgency || !isAgencyWorkingState(employee.state) || leaveLocked}
-                          onClick={() => openLeaveModal(employee)}
-                        >
-                          Plan Leave
-                        </button>
-                        <button
-                          type="button"
-                          className={buttonClass}
-                          disabled={busy || !canOperateAgency || !['leave', 'planned_leave'].includes(employee.state)}
-                          onClick={() => openSubstituteModal(employee)}
-                        >
-                          Replace
-                        </button>
-                        <button
-                          type="button"
-                          className={buttonClass}
-                          disabled={busy || !canOperateAgency || employee.termination_status === 'pending'}
-                          onClick={() => openTerminationModal(employee)}
-                        >
-                          {employee.termination_status === 'pending' ? 'Pending Termination' : 'Terminate'}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                        </td>
+                        <td className="truncate px-1 py-2 text-slate-300">{employee.agency || '-'}</td>
+                        <td className="px-1 py-2">
+                          <span className={['inline-flex max-w-full items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]', positionChipClass(employee.position)].join(' ')}>
+                            <span className="truncate">{employee.position || '-'}</span>
+                          </span>
+                        </td>
+                        <td className="px-1 py-2 text-center">
+                          <span className={['inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold', shiftChipClass(employee.shift)].join(' ')}>
+                            {shiftLabel(employee.shift)}
+                          </span>
+                        </td>
+                        <td className="px-1 py-2 text-center font-mono text-slate-300">
+                          {formatStartTime(employee.start_time)}
+                        </td>
+                        {weekDates.map((workDate) => {
+                          const cell = scheduleCellByStaffDate.get(`${employee.staff_id}__${workDate}`);
+                          const state = cell?.state ?? 'rest';
+                          const baseState = cell?.base_state ?? state;
+                          const isSelectedWorkDate = workDate === selectedDate;
+                          const cellOptions = canOperateAgency ? getCellOptions(employee, state, baseState, workDate) : [];
+                          const canEditCell = cellOptions.length > 0;
+                          const isDeadlineLocked = isAgencyDeadlineLockedState(employee.shift, workDate, newYorkNowContext);
+                          
+                          return (
+                            <ScheduleCell
+                              key={`${employee.staff_id}__${workDate}`}
+                              staffId={employee.staff_id}
+                              employeeName={employee.name || '-'}
+                              workDate={workDate}
+                              state={state}
+                              baseState={baseState}
+                              isSelectedWorkDate={isSelectedWorkDate}
+                              isLastEmployeeRow={isLastEmployeeRow}
+                              cellOptions={cellOptions}
+                              canEditCell={canEditCell}
+                              isDeadlineLocked={isDeadlineLocked}
+                              busy={busy}
+                              selectedDateColumnClass={selectedDateColumnClass}
+                            />
+                          );
+                        })}
+                      </tr>
+                    )})}
+                  </tbody>
+                </table>
               </div>
+              {filteredEmployees.length > 0 ? (
+                <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-400">
+                  <div>
+                    Showing {visibleFilteredEmployees.length} / {filteredEmployees.length} employees
+                  </div>
+                  {hasMoreEmployees ? (
+                    <button
+                      type="button"
+                      className={buttonClass}
+                      disabled={busy}
+                      onClick={() => setVisibleEmployeeCount((current) => current + EMPLOYEE_RENDER_PAGE_SIZE)}
+                    >
+                      Load 80 more
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </section>
 
-            <section className={[cardClass, 'grid gap-5 lg:grid-cols-[1.3fr_1fr]'].join(' ')}>
-              <div>
-                <div className="mb-4 flex items-center justify-between gap-4">
-                  <h2 className="font-display text-3xl tracking-[0.04em] text-white">New Requests</h2>
-                  <button type="button" className={buttonClass} disabled={busy || !canOperateAgency} onClick={openCreateNewHire}>
-                    Create
-                  </button>
-                </div>
-                <div className="space-y-3">
-                  {board.new_hire_requests.length === 0 ? <div className="text-sm text-slate-400">No new requests.</div> : null}
-                  {board.new_hire_requests.map((row) => (
-                    <div key={row.staff_id} className="rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
+            {gapsByGroupOnSelectedDate.length > 0 ? (
+              <section className={cardClass}>
+                <h2 className="mb-4 font-display text-3xl tracking-[0.04em] text-white">Open Gaps - {selectedDate}</h2>
+                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                  {gapsByGroupOnSelectedDate.map((gap, idx) => (
+                    <div key={`${gap.agency}__${gap.position}__${gap.shift}__${idx}`} className="rounded-[18px] border border-white/10 bg-white/[0.03] p-4">
                       <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <div className="font-semibold text-white">{row.staff_id}</div>
-                          <div className="mt-1 text-sm text-slate-400">
-                            {row.agency || '-'} · {row.position || '-'} · {row.shift || '-'}
+                        <div className="flex-1">
+                          <div className="text-sm font-semibold text-white">{gap.agency}</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <span className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]', positionChipClass(gap.position)].join(' ')}>
+                              {gap.position}
+                            </span>
+                            <span className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold', shiftChipClass(gap.shift)].join(' ')}>
+                              {shiftLabel(gap.shift)}
+                            </span>
                           </div>
+                          <div className="mt-2 text-xs text-slate-400">Needed: {gap.count}</div>
                         </div>
-                        <button type="button" className={buttonClass} disabled={busy || !canOperateAgency} onClick={() => openEditNewHire(row)}>
-                          Edit
+                        <button
+                          type="button"
+                          className={neonButtonClass}
+                          disabled={busy || !canOperateAgency}
+                          onClick={() => openCreateNewHire(gap.agency, gap.position, gap.shift as 'early' | 'late')}
+                        >
+                          + Add
                         </button>
                       </div>
                     </div>
                   ))}
                 </div>
-              </div>
+              </section>
+            ) : null}
 
-              <div>
-                <h2 className="mb-4 font-display text-3xl tracking-[0.04em] text-white">Logs</h2>
-                <div className="space-y-3">
-                  {board.logs.length === 0 ? <div className="text-sm text-slate-400">No logs.</div> : null}
-                  {board.logs.map((log) => (
-                    <div key={String(log.id)} className="rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
-                      <div className="text-xs uppercase tracking-[0.24em] text-slate-500">{log.action}</div>
-                      <div className="mt-2 text-sm text-white">{log.actor || '-'}</div>
-                      <div className="mt-1 text-xs text-slate-400">{formatDateTime(log.created_at)}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </section>
           </>
         ) : null}
 
         <div className="text-center text-xs text-slate-500">{status}</div>
       </div>
 
-      <Modal open={modal === 'leave'} title="Plan Leave">
-        <div className="space-y-4">
-          <textarea value={leaveReason} onChange={(event) => setLeaveReason(event.target.value)} rows={4} className={[inputClass, 'h-auto py-3'].join(' ')} placeholder="Reason" />
-          <div className="flex justify-end gap-2">
-            <button type="button" onClick={closeModal} className={buttonClass}>Close</button>
-            <button type="button" onClick={() => void submitLeave()} className={neonButtonClass} disabled={busy}>Save</button>
-          </div>
-        </div>
-      </Modal>
-
-      <Modal open={modal === 'substitute'} title="Assign Substitute">
-        <div className="space-y-4">
-          <select value={substituteStaffId} onChange={(event) => setSubstituteStaffId(event.target.value)} className={inputClass}>
-            <option value="">Select employee</option>
-            {eligibleSubstitutes.map((employee) => (
-              <option key={employee.staff_id} value={employee.staff_id}>
-                {employee.name} ({employee.staff_id})
-              </option>
+      {schedulePicker.open &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            data-agency-schedule-popover="true"
+            className="fixed z-[90] w-44 -translate-x-1/2 rounded-xl border border-white/10 bg-slate-950/95 p-1.5 shadow-2xl backdrop-blur"
+            style={{ left: schedulePicker.anchorLeft, top: schedulePicker.anchorTop }}
+          >
+            {schedulePicker.options.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => void submitScheduleState(schedulePicker.staffId, schedulePicker.workDate, option.key)}
+                className={[
+                  'mb-1 flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs font-semibold transition hover:brightness-110 last:mb-0',
+                  option.cls,
+                  schedulePicker.currentState === option.key ? 'ring-2 ring-white/70' : ''
+                ].join(' ')}
+              >
+                <span>{option.label}</span>
+                {schedulePicker.currentState === option.key ? <span className="text-[10px] uppercase tracking-[0.16em]">Now</span> : null}
+              </button>
             ))}
-          </select>
-          <div className="flex justify-end gap-2">
-            <button type="button" onClick={closeModal} className={buttonClass}>Close</button>
-            <button type="button" onClick={() => void submitSubstitute()} className={neonButtonClass} disabled={busy || !substituteStaffId}>
-              Save
-            </button>
-          </div>
-        </div>
-      </Modal>
+          </div>,
+          document.body
+        )}
 
-      <Modal open={modal === 'new_hire'} title={selectedNewHire ? 'Edit Request' : 'New Request'}>
-        <div className="grid gap-4 md:grid-cols-2">
-          <input value={newHireForm.staffId ?? ''} readOnly placeholder="Employee ID" className={inputClass} />
-          <input value={newHireForm.agency} onChange={(event) => setNewHireForm((prev) => ({ ...prev, agency: event.target.value }))} placeholder="Agency" className={inputClass} />
-          <input value={newHireForm.position} onChange={(event) => setNewHireForm((prev) => ({ ...prev, position: event.target.value }))} placeholder="Position" className={inputClass} />
-          <select value={newHireForm.shift} onChange={(event) => setNewHireForm((prev) => ({ ...prev, shift: event.target.value as 'early' | 'late' }))} className={inputClass}>
-            <option value="early">Morning</option>
-            <option value="late">Night</option>
-          </select>
-          <input value={newHireForm.label} onChange={(event) => setNewHireForm((prev) => ({ ...prev, label: event.target.value }))} placeholder="Label" className={inputClass} />
-          <input value={newHireForm.entryTime} onChange={(event) => setNewHireForm((prev) => ({ ...prev, entryTime: event.target.value }))} placeholder="Entry time" className={inputClass} />
-          <input value={newHireForm.count} type="number" min={1} max={200} onChange={(event) => setNewHireForm((prev) => ({ ...prev, count: Math.max(1, Math.min(200, Number(event.target.value) || 1)) }))} className={inputClass} disabled={Boolean(selectedNewHire)} />
-          <input value={newHireForm.workDate} readOnly className={inputClass} />
-          <textarea value={newHireForm.note} onChange={(event) => setNewHireForm((prev) => ({ ...prev, note: event.target.value }))} rows={4} className={['md:col-span-2', inputClass, 'h-auto py-3'].join(' ')} placeholder="Note" />
+      <Modal open={modal === 'new_hire'} title={selectedNewHire ? 'Edit NEW' : 'NEW'}>
+        <div className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <input
+              type="text"
+              value={newHireForm.employeeName}
+              onChange={(event) => setNewHireForm((prev) => ({ ...prev, employeeName: event.target.value }))}
+              placeholder="Employee Name *"
+              className={inputClass}
+            />
+            {newHireForm.lockedAgency && String(newHireForm.agency ?? '').trim() ? (
+              <div className={[inputClass, 'flex items-center pl-3'].join(' ')}>
+                <span className="text-white">{newHireForm.agency || '-'}</span>
+              </div>
+            ) : (
+              <select
+                value={newHireForm.agency}
+                onChange={(event) => setNewHireForm((prev) => ({ ...prev, agency: event.target.value }))}
+                className={inputClass}
+              >
+                {newHireAgencyOptions.map((agency) => (
+                  <option key={agency} value={agency}>
+                    {normalizeAgencyValue(agency) || '-'}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            {newHireForm.lockedPosition ? (
+              <div className={[inputClass, 'flex items-center pl-3'].join(' ')}>
+                <span className="text-white">{newHireForm.position}</span>
+              </div>
+            ) : (
+              <select
+                value={newHireForm.position}
+                onChange={(event) => setNewHireForm((prev) => ({ ...prev, position: event.target.value }))}
+                className={inputClass}
+              >
+                {newHirePositionOptions.map((position) => (
+                  <option key={position} value={position}>
+                    {position}
+                  </option>
+                ))}
+              </select>
+            )}
+            {newHireForm.lockedShift ? (
+              <div className={[inputClass, 'flex items-center pl-3'].join(' ')}>
+                <span className="text-white">{shiftLabel(newHireForm.shift)}</span>
+              </div>
+            ) : (
+              <select
+                value={newHireForm.shift}
+                onChange={(event) => setNewHireForm((prev) => ({ ...prev, shift: event.target.value as AgencyShift }))}
+                className={inputClass}
+              >
+                {newHireShiftOptions.map((shift) => (
+                  <option key={shift} value={shift}>
+                    {shiftLabel(shift)}
+                  </option>
+                ))}
+              </select>
+            )}
+            <input
+              value="09:00"
+              type="text"
+              className={inputClass}
+              readOnly
+              aria-label="Entry time"
+            />
+            {newHireForm.lockedWorkDate ? (
+              <div className={[inputClass, 'flex items-center pl-3'].join(' ')}>
+                <span className="text-white">{newHireForm.workDate}</span>
+              </div>
+            ) : (
+              <input
+                value={newHireForm.workDate}
+                type="date"
+                onChange={(event) => setNewHireForm((prev) => ({ ...prev, workDate: event.target.value }))}
+                className={inputClass}
+              />
+            )}
+          </div>
+          {!selectedNewHire ? (
+            <div className="text-xs text-slate-400">
+              Available GAP for this selection:{' '}
+              <span className={newHireSelectedOpenSlots > 0 ? 'text-emerald-300' : 'text-rose-300'}>{newHireSelectedOpenSlots}</span>
+            </div>
+          ) : null}
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={closeModal} className={buttonClass}>Close</button>
-          <button type="button" onClick={() => void submitNewHire()} className={neonButtonClass} disabled={busy || !newHireForm.agency.trim() || !newHireForm.position.trim()}>
+          <button
+            type="button"
+            onClick={() => void submitNewHire()}
+            className={neonButtonClass}
+            disabled={
+              busy ||
+              !String(newHireForm.agency ?? '').trim() ||
+              !String(newHireForm.position ?? '').trim() ||
+              !String(newHireForm.employeeName ?? '').trim() ||
+              (!selectedNewHire && newHireSelectedOpenSlots <= 0)
+            }
+          >
             Save
           </button>
         </div>

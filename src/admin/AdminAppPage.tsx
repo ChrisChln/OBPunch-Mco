@@ -230,6 +230,7 @@ const DAILY_LIST_LIGHTS_KEY = 'daily_list_position_lights';
 const SCHEDULE_LABEL_TONES_KEY = 'schedule_label_tones_v1';
 const SCHEDULE_POSITION_TONES_KEY = 'schedule_position_tones_v1';
 const SCHEDULE_REST_NOTE = '__rest__';
+const SCHEDULE_NEW_NOTE = '__new__';
 const SCHEDULE_FIXED_WORK_NOTE = '__fixed_work__';
 const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
@@ -293,6 +294,7 @@ type ScheduleRecommendedByDate = Record<string, ScheduleRecommendedPosition[]>;
 
 const getScheduleBaseStateFromNote = (note: unknown): ScheduleBaseState => {
   const value = String(note ?? '').trim();
+  if (value === SCHEDULE_NEW_NOTE) return 'new';
   if (value === SCHEDULE_FIXED_WORK_NOTE) return 'fixed_work';
   if (value === SCHEDULE_TEMP_WORK_NOTE) return 'temp_work';
   if (value === SCHEDULE_LEAVE_NOTE) return 'leave';
@@ -305,6 +307,7 @@ const getScheduleBaseStateFromNote = (note: unknown): ScheduleBaseState => {
 };
 
 const getScheduleNoteFromBaseState = (state: ScheduleBaseState): string | null => {
+  if (state === 'new') return SCHEDULE_NEW_NOTE;
   if (state === 'work') return null;
   if (state === 'fixed_work') return SCHEDULE_FIXED_WORK_NOTE;
   if (state === 'temp_work') return SCHEDULE_TEMP_WORK_NOTE;
@@ -841,6 +844,24 @@ const isNewHirePlaceholderStaffId = (value: string) => {
   return /^\d{4}[A-Z]+\d{3,}$/i.test(staff); // MMDD + POSITION + SEQ
 };
 const isNewHirePlaceholderName = (value: string) => /^\d{2}\/\d{2}NEW\s+[A-Z]+(\d+)$/i.test(String(value ?? '').trim());
+const isNewHireFirstWorkDate = (staffId: string, workDate: Date | string) => {
+  const staff = String(staffId ?? '').trim().toUpperCase();
+  if (!staff) return false;
+  const dateText = typeof workDate === 'string' ? workDate : toDateOnly(workDate);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateText)) return false;
+
+  const compactDate = dateText.replace(/-/g, '');
+  const legacyMatch = staff.match(/^NEWREQ-(\d{8})(?:-[A-Z]+)?-\d{3,}$/i);
+  if (legacyMatch?.[1]) {
+    return legacyMatch[1] === compactDate;
+  }
+
+  const match = staff.match(/^(\d{2})(\d{2})[A-Z]+\d{3,}$/);
+  if (!match) return false;
+  const month = match[1];
+  const day = match[2];
+  return dateText.slice(5, 7) === month && dateText.slice(8, 10) === day;
+};
 const displayStaffId = (value: string) => String(value ?? '').trim();
 const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperCase();
 const normalizeDeviceType = (value: string): DeviceType => {
@@ -1755,7 +1776,10 @@ export default function AdminAppPage() {
         const dsValues = {
           pick: effCalcRequirement(derivedDs.totalPieces, payload.areaEfficiencyDs.pick, 'ceil'),
           rebin: effCalcRequirement(derivedDs.multiPiece, payload.areaEfficiencyDs.rebin, 'ceil'),
-          con: Math.max(1, effCalcRequirement(derivedDs.multiPkgs, payload.areaEfficiencyDs.consolidation, 'ceil')),
+          con:
+            derivedDs.multiPkgs > 0
+              ? Math.max(1, effCalcRequirement(derivedDs.multiPkgs, payload.areaEfficiencyDs.consolidation, 'ceil'))
+              : 0,
           pack:
             effCalcRequirement(derivedDs.singlePiece, payload.areaEfficiencyDs.single_pack, 'round') +
             effCalcRequirement(derivedDs.multiPiece, payload.areaEfficiencyDs.multi_pack, 'round'),
@@ -1764,7 +1788,10 @@ export default function AdminAppPage() {
         const nsValues = {
           pick: effCalcRequirement(derivedNs.totalPieces, payload.areaEfficiencyNs.pick, 'ceil'),
           rebin: effCalcRequirement(derivedNs.multiPiece, payload.areaEfficiencyNs.rebin, 'ceil'),
-          con: Math.max(1, effCalcRequirement(derivedNs.multiPkgs, payload.areaEfficiencyNs.consolidation, 'ceil')),
+          con:
+            derivedNs.multiPkgs > 0
+              ? Math.max(1, effCalcRequirement(derivedNs.multiPkgs, payload.areaEfficiencyNs.consolidation, 'ceil'))
+              : 0,
           pack:
             effCalcRequirement(derivedNs.singlePiece, payload.areaEfficiencyNs.single_pack, 'round') +
             effCalcRequirement(derivedNs.multiPiece, payload.areaEfficiencyNs.multi_pack, 'round'),
@@ -3131,6 +3158,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       action === 'schedule_planned_leave' ||
       action === 'schedule_temp_rest' ||
       action === 'schedule_planned_temp_rest' ||
+      action === 'agency_schedule_state_set' ||
       action === 'schedule_auto_week_reset' ||
       action === 'schedule_auto_daily_activation' ||
       action === 'schedule_rest' ||
@@ -3383,6 +3411,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       schedule_clear: t('清空排班', 'Schedule Clear'),
       agency_planned_leave: t('中介计划请假', 'Agency Planned Leave'),
       agency_substitute_assign: t('中介替补安排', 'Agency Substitute'),
+      agency_leave_request_create: t('中介请假申请', 'Agency Leave Request'),
+      agency_leave_request_cancel: t('中介撤回请假申请', 'Agency Leave Cancel'),
+      agency_schedule_state_set: t('中介排班更新', 'Agency Schedule Update'),
       agency_new_hire_create: t('中介新人需求', 'Agency New Hire Create'),
       agency_new_hire_update: t('中介新人需求更新', 'Agency New Hire Update'),
       agency_termination_request: t('中介离职申请', 'Agency Termination Request'),
@@ -3481,6 +3512,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       'schedule_planned_leave',
       'schedule_temp_rest',
       'schedule_planned_temp_rest',
+      'agency_schedule_state_set',
       'schedule_auto_week_reset',
       'schedule_auto_daily_activation',
       'schedule_rest',
@@ -7508,6 +7540,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!state || state === '-' || state === 'null' || state === 'undefined' || state === 'none' || state === 'n/a') {
         return t('休息', 'Off');
       }
+      if (state === 'new') return t('新人', 'NEW');
       if (state === 'work') return t('工作', 'Work');
       if (state === 'fixed_work') return t('固定排班', 'Fixed Shift');
       if (state === 'temp_work') return t('临时工作', 'Temporary Work');
@@ -7520,6 +7553,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (state === 'rest_worked') return t('休息', 'Off');
       if (state === 'absent') return t('缺勤', 'Absent');
       if (state === 'empty') return t('休息', 'Off');
+      if (state === '新人') return t('新人', 'NEW');
       if (state === '工作') return t('工作', 'Work');
       if (state === '固定排班') return t('固定排班', 'Fixed Shift');
       if (state === '临时工作') return t('临时工作', 'Temporary Work');
@@ -7987,6 +8021,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     const validState = (value: string): value is 'empty' | ScheduleBaseState =>
       value === 'empty' ||
+      value === 'new' ||
       value === 'work' ||
       value === 'fixed_work' ||
       value === 'temp_work' ||
@@ -13820,7 +13855,7 @@ ${rowsToHtml(late)}
           staff_id: internalStaffId,
           date: templateDate,
           position,
-          note: null,
+          note: SCHEDULE_NEW_NOTE,
           operator: user?.email ?? null,
           updated_at: nowIso
         });
@@ -13838,7 +13873,7 @@ ${rowsToHtml(late)}
           staff_id: internalStaffId,
           date: templateDate,
           position,
-          note: null,
+          note: SCHEDULE_NEW_NOTE,
           operator: user?.email ?? null,
           updated_at: nowIso
         });
@@ -13941,6 +13976,7 @@ ${rowsToHtml(late)}
               const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
               if (!row) return '休息';
               const state = getScheduleBaseStateFromNote(row.note);
+              if (state === 'new') return '新人';
               if (state === 'work') return shift === 'late' ? '晚1' : '早1';
               if (state === 'fixed_work') return '固定排班';
               if (state === 'temp_work') return '临时工作';
@@ -15385,6 +15421,14 @@ ${rowsToHtml(late)}
                                   !hasPunch &&
                                   (isPastOperationalDay || (isCurrentOperationalDay && !hideLateAbsent));
                                 const state: ScheduleDisplayState = getScheduleDisplayState(row, hasPunch, { showAbsent });
+                                const isImplicitNew =
+                                  state === 'work' &&
+                                  row &&
+                                  !String(row.note ?? '').trim() &&
+                                  isNewHirePlaceholderStaffId(staff) &&
+                                  isNewHirePlaceholderName(String(employee.name ?? '').trim()) &&
+                                  isNewHireFirstWorkDate(staff, scheduleDays[dayIndex] as Date);
+                                const displayState: ScheduleDisplayState = isImplicitNew ? 'new' : state;
                                 const scheduleAuditKey = `${staff}__${getTemplateDateByDayIndex(dayIndex, scheduleWeekOffset)}`;
                                 const scheduleCellAudit = scheduleAuditByStaffDate.get(scheduleAuditKey) ?? [];
                                 const lateInfo = attendanceTrackingDisabled
@@ -15408,59 +15452,63 @@ ${rowsToHtml(late)}
                                               dayIndex,
                                               toDateOnly(scheduleDays[dayIndex] as Date),
                                               targetShift,
-                                              state,
+                                              displayState,
                                               rect
                                             );
                                           }}
                                           className={[
                                             'h-7 min-w-[36px] rounded-md px-0.5 text-[9px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55',
-                                            state === 'work'
+                                            displayState === 'new'
+                                              ? 'border border-cyan-300/60 bg-cyan-500/20 text-cyan-100'
+                                              : displayState === 'work'
                                               ? 'bg-neon text-white shadow-glow'
-                                              : state === 'fixed_work'
+                                              : displayState === 'fixed_work'
                                                 ? themeMode === 'light'
                                                   ? 'border-2 border-[#d4a017] bg-[#000000] text-[#ffd24d]'
                                                   : 'border-2 border-[#d4a017] bg-[#0f3f2b] text-[#ffd24d]'
-                                              : state === 'temp_work'
+                                              : displayState === 'temp_work'
                                                 ? 'bg-emerald-700 text-white'
-                                              : state === 'planned_temp_work'
+                                              : displayState === 'planned_temp_work'
                                                 ? 'bg-emerald-500 text-white'
-                                              : state === 'leave'
+                                              : displayState === 'leave'
                                                 ? 'bg-violet-500 text-white'
-                                              : state === 'planned_leave'
+                                              : displayState === 'planned_leave'
                                                 ? 'bg-fuchsia-600 text-white'
-                                              : state === 'rest_worked'
+                                              : displayState === 'rest_worked'
                                                 ? 'bg-sky-500 text-white'
-                                              : state === 'absent'
+                                              : displayState === 'absent'
                                                 ? themeMode === 'light'
                                                   ? 'bg-white text-slate-900 border border-slate-900/70'
                                                   : 'bg-white text-slate-900'
-                                              : state === 'temp_rest'
+                                              : displayState === 'temp_rest'
                                                 ? 'bg-red-800 text-red-100'
-                                              : state === 'planned_temp_rest'
+                                              : displayState === 'planned_temp_rest'
                                                 ? 'bg-rose-600 text-white'
                                               : 'bg-ember text-white'
                                           ].join(' ')}
                                           title={lateTitle || undefined}
                                         >
-                                          {state === 'work'
+                                          {displayState === 'work'
                                             ? t('工作', 'Work')
-                                            : state === 'fixed_work'
+                                            : displayState === 'new'
+                                              ? t('新人', 'NEW')
+                                            : displayState === 'fixed_work'
                                               ? t('固定排班', 'Fixed Shift')
-                                            : state === 'temp_work'
+                                            : displayState === 'temp_work'
                                               ? t('临时工作', 'Tem Work')
-                                            : state === 'planned_temp_work'
+                                            : displayState === 'planned_temp_work'
                                               ? t('计划临时工作', 'Planned Tem Work')
-                                            : state === 'leave'
+                                            : displayState === 'leave'
                                               ? t('请假', 'Excuse')
-                                            : state === 'planned_leave'
+                                            : displayState === 'planned_leave'
                                               ? t('计划请假', 'Planned Leave')
-                                            : state === 'rest_worked'
+                                            : displayState === 'rest_worked'
                                               ? t('排休出勤', 'Off Worked')
-                                            : state === 'absent'
+                                            : displayState === 'absent'
                                               ? t('缺勤', 'Absent')
-                                            : state === 'temp_rest'
+                                            : displayState === 'temp_rest'
                                                 ? t('临时排休', 'Tem Off')
-                                              : state === 'planned_temp_rest'
+                                              : displayState === 'planned_temp_rest'
                                                 ? t('计划临时排休', 'Planned Tem Off')
                                               : t('休息', 'Off')}
                                         </button>
@@ -15471,8 +15519,8 @@ ${rowsToHtml(late)}
                                           <span
                                             className={[
                                               'pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full',
-                                              state === 'rest' || state === 'temp_rest'
-                                                || state === 'planned_temp_rest'
+                                              displayState === 'rest' || displayState === 'temp_rest'
+                                                || displayState === 'planned_temp_rest'
                                                 ? 'bg-neon shadow-glow'
                                                 : 'bg-rose-500 shadow-[0_0_0_1px_rgba(244,63,94,0.55)]'
                                             ].join(' ')}
@@ -16071,6 +16119,7 @@ ${rowsToHtml(late)}
                   setDailyListNewHireCount={setDailyListNewHireCount}
                   dailyListNewHireAgency={dailyListNewHireAgency}
                   setDailyListNewHireAgency={setDailyListNewHireAgency}
+                  dailyListAgencyOptions={employeeAgencyOptions}
                   dailyListNewHireLabel={dailyListNewHireLabel}
                   setDailyListNewHireLabel={setDailyListNewHireLabel}
                   dailyListLabelOptions={dailyListNewHireLabelOptions}

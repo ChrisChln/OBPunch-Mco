@@ -1,5 +1,6 @@
 export type AgencyShift = 'early' | 'late';
 export type AgencyBoardEmployeeState =
+  | 'new'
   | 'work'
   | 'fixed_work'
   | 'temp_work'
