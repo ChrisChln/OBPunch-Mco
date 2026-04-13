@@ -31,6 +31,7 @@ export type EmploymentType = 'FT' | 'PT';
 export type DeviceType = string;
 
 export type ScheduleBaseState =
+  | 'new'
   | 'work'
   | 'fixed_work'
   | 'temp_work'

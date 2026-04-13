@@ -28,6 +28,7 @@ type EmployeeLite = {
   staffId: string;
   name: string;
   position: string;
+  shift: string;
 };
 
 type LeaveRow = {
@@ -85,8 +86,11 @@ const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
 const SCHEDULE_PLANNED_TEMP_WORK_NOTE = '__planned_temp_work__';
 const SCHEDULE_PLANNED_LEAVE_NOTE = '__planned_leave__';
 const SCHEDULE_PLANNED_TEMP_REST_NOTE = '__planned_temp_rest__';
+const SCHEDULE_NEW_NOTE = '__new__';
+const NEW_YORK_TIMEZONE = 'America/New_York';
 const getScheduleBaseStateFromNote = (note: unknown) => {
   const value = String(note ?? '').trim();
+  if (value === SCHEDULE_NEW_NOTE) return 'new';
   if (value === SCHEDULE_FIXED_WORK_NOTE) return 'fixed_work';
   if (value === SCHEDULE_TEMP_WORK_NOTE) return 'temp_work';
   if (value === SCHEDULE_LEAVE_NOTE) return 'leave';
@@ -99,6 +103,32 @@ const getScheduleBaseStateFromNote = (note: unknown) => {
 };
 const isLeaveWritableScheduleState = (state: string) =>
   state === 'work' || state === 'fixed_work' || state === 'temp_work' || state === 'planned_temp_work';
+
+const getNewYorkClock = (value: Date) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: NEW_YORK_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).formatToParts(value);
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    date: `${map.year ?? '0000'}-${map.month ?? '01'}-${map.day ?? '01'}`,
+    minutes: Number(map.hour ?? '0') * 60 + Number(map.minute ?? '0')
+  };
+};
+
+const shouldApprovedLeaveBecomePastLeave = (leaveDate: string, operationalDate: string, shift: string, reviewedAt: Date) => {
+  if (leaveDate < operationalDate) return true;
+  if (leaveDate > operationalDate) return false;
+  const nyClock = getNewYorkClock(reviewedAt);
+  if (nyClock.date !== leaveDate) return false;
+  const cutoffMinutes = String(shift ?? '').trim().toLowerCase() === 'late' ? 17 * 60 : 10 * 60;
+  return nyClock.minutes > cutoffMinutes;
+};
 
 const readEmployeeField = (row: Record<string, unknown>, ...keys: string[]) => {
   for (const key of keys) {
@@ -251,7 +281,8 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
       next[staffId] = {
         staffId,
         name: readEmployeeField(row as Record<string, unknown>, 'name', 'Name', 'NAME'),
-        position: readEmployeeField(row as Record<string, unknown>, 'position', 'Position', 'POSITION')
+        position: readEmployeeField(row as Record<string, unknown>, 'position', 'Position', 'POSITION'),
+        shift: readEmployeeField(row as Record<string, unknown>, 'shift', 'Shift', 'SHIFT')
       };
     }
     setEmployeesByStaffId(next);
@@ -389,7 +420,13 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
       } else if (row.leave_date > approveWindow.editableEnd) {
         throw new Error(`Approval is only allowed for this week and next week (${approveWindow.editableStart} to ${approveWindow.editableEnd}).`);
       } else {
-        const isPastLeaveDate = row.leave_date < approveWindow.operationalDate;
+        const reviewedAtDate = new Date(serverTime);
+        const isPastLeaveDate = shouldApprovedLeaveBecomePastLeave(
+          row.leave_date,
+          approveWindow.operationalDate,
+          String(employee?.shift ?? '').trim(),
+          reviewedAtDate
+        );
         const nextNote = isPastLeaveDate ? '__leave__' : '__planned_leave__';
         const scheduleAction = isPastLeaveDate ? 'schedule_leave' : 'schedule_planned_leave';
         const leaveDateValue = new Date(`${row.leave_date}T00:00:00`);

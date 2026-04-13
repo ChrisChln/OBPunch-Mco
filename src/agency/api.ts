@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizeAdminAccessContext, type AdminAccessContext } from '../shared/adminAccess';
-import type { AgencyBoard, AgencyUpsertNewHireInput } from './types';
+import type { AgencyBoard, AgencyUpsertNewHireInput, AgencyWeekSchedule, AgencyScheduleState } from './types';
 
 const PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 
@@ -30,6 +30,48 @@ export const fetchAgencyBoard = async (supabase: SupabaseClient, workDate: strin
     employees: Array.isArray(payload.employees) ? payload.employees : [],
     new_hire_requests: Array.isArray(payload.new_hire_requests) ? payload.new_hire_requests : [],
     logs: Array.isArray(payload.logs) ? payload.logs : []
+  };
+};
+
+export const fetchAgencyScheduleWeek = async (supabase: SupabaseClient, workDate: string): Promise<AgencyWeekSchedule> => {
+  const payload = await expectRpcSuccess<AgencyWeekSchedule>(supabase.rpc('agency_get_schedule_week', { p_work_date: workDate }));
+  return {
+    week_dates: Array.isArray(payload.week_dates) ? payload.week_dates.map((item) => String(item ?? '').trim()).filter(Boolean) : [],
+    employees: Array.isArray(payload.employees)
+      ? payload.employees.map((row) => ({
+          staff_id: String(row?.staff_id ?? '').trim(),
+          name: String(row?.name ?? '').trim(),
+          agency: String(row?.agency ?? '').trim(),
+          position: String(row?.position ?? '').trim(),
+          shift: String(row?.shift ?? '').trim() === 'late' ? 'late' : String(row?.shift ?? '').trim() === 'early' ? 'early' : '',
+          start_time: String(row?.start_time ?? '').trim(),
+          label: String(row?.label ?? '').trim(),
+          fixed_work_count: Number(row?.fixed_work_count ?? 0) || 0,
+          termination_status: row?.termination_status == null ? null : String(row.termination_status).trim() || null,
+          days: Array.isArray(row?.days)
+            ? row.days.map((cell) => ({
+                work_date: String(cell?.work_date ?? '').trim(),
+                template_date: String(cell?.template_date ?? '').trim(),
+                state: String(cell?.state ?? 'rest').trim() as AgencyScheduleState,
+                base_state: String(cell?.base_state ?? cell?.state ?? 'rest').trim() as AgencyScheduleState,
+                substitute_open_count: Number(cell?.substitute_open_count ?? 0) || 0
+              }))
+            : []
+        }))
+      : [],
+    new_hire_requests: Array.isArray(payload.new_hire_requests)
+      ? payload.new_hire_requests.map((row) => ({
+          staff_id: String(row?.staff_id ?? '').trim(),
+          name: String(row?.name ?? '').trim(),
+          agency: String(row?.agency ?? '').trim(),
+          position: String(row?.position ?? '').trim(),
+          shift: String(row?.shift ?? '').trim() === 'late' ? 'late' : String(row?.shift ?? '').trim() === 'early' ? 'early' : '',
+          start_time: String(row?.start_time ?? '').trim(),
+          label: String(row?.label ?? '').trim(),
+          work_date: String(row?.work_date ?? '').trim(),
+          can_delete: Boolean(row?.can_delete)
+        }))
+      : []
   };
 };
 
@@ -73,7 +115,16 @@ export const upsertAgencyNewHireDemand = async (supabase: SupabaseClient, input:
       p_label: input.label,
       p_entry_time: input.entryTime,
       p_note: input.note,
-      p_count: input.count
+      p_count: input.count,
+      p_employee_name: input.employeeName
+    })
+  );
+
+export const deleteAgencyNewHireDemand = async (supabase: SupabaseClient, staffId: string, workDate: string) =>
+  expectRpcSuccess(
+    supabase.rpc('agency_delete_new_hire_demand', {
+      p_staff_id: staffId,
+      p_work_date: workDate
     })
   );
 
@@ -86,5 +137,27 @@ export const createAgencyTerminationRequest = async (
     supabase.rpc('agency_create_termination_request', {
       p_staff_id: staffId,
       p_reason: reason
+    })
+  );
+
+export const cancelAgencyTerminationRequest = async (supabase: SupabaseClient, staffId: string) =>
+  expectRpcSuccess(
+    supabase.rpc('agency_cancel_termination_request', {
+      p_staff_id: staffId
+    })
+  );
+
+export const setAgencyScheduleState = async (
+  supabase: SupabaseClient,
+  staffId: string,
+  workDate: string,
+  state: AgencyScheduleState
+) =>
+  expectRpcSuccess(
+    supabase.rpc('agency_set_schedule_state', {
+      p_staff_id: staffId,
+      p_work_date: workDate,
+      p_state: state,
+      p_reason: ''
     })
   );

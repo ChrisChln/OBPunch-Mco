@@ -120,5 +120,5 @@ export const canManageAdminAccess = (context: AdminAccessContext | null | undefi
 export const canReviewTerminationRequests = (context: AdminAccessContext | null | undefined) => {
   if (!context) return false;
   if (!hasModuleAccess(getModuleMapFromContext(context), 'schedule', 'operate')) return false;
-  return context.role === 'level1' || context.role === 'level2' || context.role === 'level3';
+  return context.role === 'level1' || context.role === 'level2';
 };
