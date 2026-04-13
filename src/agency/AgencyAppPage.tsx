@@ -1299,12 +1299,12 @@ export default function AgencyAppPage() {
               <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
                 <h2 className="font-display text-3xl tracking-[0.04em] text-white">Employees</h2>
                 {user ? (
-                  <div className="flex max-w-full items-center justify-end gap-3 overflow-x-auto">
+                  <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:justify-end">
                     <input
                       type="date"
                       value={selectedDate}
                       onChange={(event) => setSelectedDate(event.target.value)}
-                      className={[inputClass, 'w-[196px] shrink-0'].join(' ')}
+                      className={[inputClass, 'w-full min-w-0 md:w-[196px] md:shrink-0'].join(' ')}
                     />
                     <button type="button" onClick={() => void refreshBoard()} className={buttonClass} disabled={busy || !canViewAgency}>
                       Refresh
