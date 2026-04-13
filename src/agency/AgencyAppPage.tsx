@@ -296,21 +296,57 @@ const LoginPanel = ({
   onLogin: () => void | Promise<void>;
   busy: boolean;
 }) => (
-  <section className={[cardClass, 'mx-auto max-w-md'].join(' ')}>
-    <div className="text-sm uppercase tracking-[0.24em] text-slate-400">Agency Board</div>
-    <h1 className="mt-4 font-display text-4xl tracking-[0.04em] text-white">Sign In</h1>
-    <div className="mt-6 grid gap-4">
-      <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" className={inputClass} />
-      <input
-        value={password}
-        onChange={(event) => setPassword(event.target.value)}
-        type="password"
-        placeholder="Password"
-        className={inputClass}
-      />
-      <button type="button" disabled={busy || !email.trim() || !password} onClick={() => void onLogin()} className={neonButtonClass}>
-        Sign In
-      </button>
+  <section className="relative mx-auto w-full max-w-[1120px] overflow-hidden rounded-[36px] border border-white/10 bg-[linear-gradient(135deg,rgba(5,7,10,0.92),rgba(11,13,16,0.84))] shadow-[0_40px_120px_rgba(0,0,0,0.45)]">
+    <div className="pointer-events-none absolute inset-0">
+      <div className="absolute -left-20 top-[-72px] h-64 w-64 rounded-full bg-[#9eff00]/10 blur-3xl" />
+      <div className="absolute bottom-[-96px] right-[-56px] h-72 w-72 rounded-full bg-sky-400/10 blur-3xl" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_32%)]" />
+    </div>
+    <div className="relative grid min-h-[520px] gap-8 px-6 py-6 md:grid-cols-[minmax(0,1.3fr)_minmax(380px,0.9fr)] md:px-8 md:py-8 xl:px-10 xl:py-10">
+      <div className="flex min-h-[240px] flex-col justify-between rounded-[28px] border border-white/8 bg-white/[0.03] p-6 md:p-8">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.32em] text-sky-200/80">ObPunch Agency</div>
+          <h1 className="mt-6 max-w-[9ch] font-display text-5xl leading-[0.92] tracking-[0.03em] text-white md:text-6xl xl:text-7xl">
+            Secure Agency Access
+          </h1>
+        </div>
+      </div>
+      <div className="flex items-center">
+        <div className="w-full rounded-[30px] border border-white/10 bg-black/35 p-6 shadow-[0_28px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl md:p-8">
+          <div className="text-[11px] uppercase tracking-[0.3em] text-slate-400">Sign In</div>
+          <div className="mt-4 font-display text-4xl tracking-[0.03em] text-white md:text-5xl">Agency Board</div>
+          <div className="mt-8 grid gap-5">
+            <label className="grid gap-2">
+              <span className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">Email</span>
+              <input
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                type="email"
+                autoComplete="email"
+                className={[inputClass, 'h-14 rounded-[20px] border-white/12 bg-black/30 px-5 text-base placeholder:text-slate-500'].join(' ')}
+              />
+            </label>
+            <label className="grid gap-2">
+              <span className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">Password</span>
+              <input
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                type="password"
+                autoComplete="current-password"
+                className={[inputClass, 'h-14 rounded-[20px] border-white/12 bg-black/30 px-5 text-base placeholder:text-slate-500'].join(' ')}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={busy || !email.trim() || !password}
+              onClick={() => void onLogin()}
+              className={[neonButtonClass, 'mt-2 h-14 rounded-[20px] text-base font-semibold'].join(' ')}
+            >
+              Sign In
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 );
@@ -370,7 +406,7 @@ const ScheduleCell = memo(function ScheduleCell({
           !canEditCell ? 'saturate-50 brightness-90' : '',
           stateCellClass(state, useMutedCellStyle)
         ].join(' ')}
-        title={`${employeeName} 路 ${workDate}${isDeadlineLocked ? ' 路 Cutoff locked' : ''}`}
+        title={`${employeeName} · ${workDate}${isDeadlineLocked ? ' · Cutoff locked' : ''}`}
       >
         {stateLabel(state)}
       </button>
@@ -1162,7 +1198,11 @@ export default function AgencyAppPage() {
           </div>
         </header>
 
-        {!user ? <LoginPanel email={email} password={password} setEmail={setEmail} setPassword={setPassword} onLogin={doLogin} busy={busy} /> : null}
+        {!user ? (
+          <div className="flex flex-1 items-center py-4 md:min-h-[calc(100vh-240px)] md:py-8">
+            <LoginPanel email={email} password={password} setEmail={setEmail} setPassword={setPassword} onLogin={doLogin} busy={busy} />
+          </div>
+        ) : null}
 
         {user && !canViewAgency ? (
           <section className={cardClass}>
@@ -1299,12 +1339,12 @@ export default function AgencyAppPage() {
               <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
                 <h2 className="font-display text-3xl tracking-[0.04em] text-white">Employees</h2>
                 {user ? (
-                  <div className="flex max-w-full items-center justify-end gap-3 overflow-x-auto">
+                  <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:justify-end">
                     <input
                       type="date"
                       value={selectedDate}
                       onChange={(event) => setSelectedDate(event.target.value)}
-                      className={[inputClass, 'w-[196px] shrink-0'].join(' ')}
+                      className={[inputClass, 'w-full min-w-0 md:w-[196px] md:shrink-0'].join(' ')}
                     />
                     <button type="button" onClick={() => void refreshBoard()} className={buttonClass} disabled={busy || !canViewAgency}>
                       Refresh
