@@ -83,6 +83,7 @@ const SCHEDULE_FIXED_WORK_NOTE = '__fixed_work__';
 const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
 const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
+const SCHEDULE_REPLACEMENT_NOTE = '__replacement__';
 const SCHEDULE_PLANNED_TEMP_WORK_NOTE = '__planned_temp_work__';
 const SCHEDULE_PLANNED_LEAVE_NOTE = '__planned_leave__';
 const SCHEDULE_PLANNED_TEMP_REST_NOTE = '__planned_temp_rest__';
@@ -95,6 +96,7 @@ const getScheduleBaseStateFromNote = (note: unknown) => {
   if (value === SCHEDULE_TEMP_WORK_NOTE) return 'temp_work';
   if (value === SCHEDULE_LEAVE_NOTE) return 'leave';
   if (value === SCHEDULE_TEMP_REST_NOTE) return 'temp_rest';
+  if (value === SCHEDULE_REPLACEMENT_NOTE) return 'planned_temp_work';
   if (value === SCHEDULE_PLANNED_TEMP_WORK_NOTE) return 'planned_temp_work';
   if (value === SCHEDULE_PLANNED_LEAVE_NOTE) return 'planned_leave';
   if (value === SCHEDULE_PLANNED_TEMP_REST_NOTE) return 'planned_temp_rest';

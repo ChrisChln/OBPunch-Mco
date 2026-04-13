@@ -235,6 +235,7 @@ const SCHEDULE_FIXED_WORK_NOTE = '__fixed_work__';
 const SCHEDULE_TEMP_WORK_NOTE = '__temp_work__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
 const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
+const SCHEDULE_REPLACEMENT_NOTE = '__replacement__';
 const SCHEDULE_PLANNED_TEMP_WORK_NOTE = '__planned_temp_work__';
 const SCHEDULE_PLANNED_LEAVE_NOTE = '__planned_leave__';
 const SCHEDULE_PLANNED_TEMP_REST_NOTE = '__planned_temp_rest__';
@@ -299,6 +300,7 @@ const getScheduleBaseStateFromNote = (note: unknown): ScheduleBaseState => {
   if (value === SCHEDULE_TEMP_WORK_NOTE) return 'temp_work';
   if (value === SCHEDULE_LEAVE_NOTE) return 'leave';
   if (value === SCHEDULE_TEMP_REST_NOTE) return 'temp_rest';
+  if (value === SCHEDULE_REPLACEMENT_NOTE) return 'planned_temp_work';
   if (value === SCHEDULE_PLANNED_TEMP_WORK_NOTE) return 'planned_temp_work';
   if (value === SCHEDULE_PLANNED_LEAVE_NOTE) return 'planned_leave';
   if (value === SCHEDULE_PLANNED_TEMP_REST_NOTE) return 'planned_temp_rest';
@@ -313,7 +315,7 @@ const getScheduleNoteFromBaseState = (state: ScheduleBaseState): string | null =
   if (state === 'temp_work') return SCHEDULE_TEMP_WORK_NOTE;
   if (state === 'leave') return SCHEDULE_LEAVE_NOTE;
   if (state === 'temp_rest') return SCHEDULE_TEMP_REST_NOTE;
-  if (state === 'planned_temp_work') return SCHEDULE_PLANNED_TEMP_WORK_NOTE;
+  if (state === 'planned_temp_work') return SCHEDULE_REPLACEMENT_NOTE;
   if (state === 'planned_leave') return SCHEDULE_PLANNED_LEAVE_NOTE;
   if (state === 'planned_temp_rest') return SCHEDULE_PLANNED_TEMP_REST_NOTE;
   return SCHEDULE_REST_NOTE;
@@ -3396,7 +3398,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       schedule_work: t('排班工作', 'Schedule Work'),
       schedule_fixed_work: t('固定排班', 'Fixed Shift'),
       schedule_temp_work: t('临时工作', 'Temp Work'),
-      schedule_planned_temp_work: t('计划临时工作', 'Planned Temp Work'),
+      schedule_planned_temp_work: t('替补', 'Replacement'),
       schedule_leave: t('请假', 'Leave'),
       schedule_planned_leave: t('计划请假', 'Planned Leave'),
       schedule_temp_rest: t('临时排休', 'Temp Off'),
@@ -4731,7 +4733,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         mode: 'all'
       },
       { key: 'temp_work', labelZh: '临时工作', labelEn: 'Tem Work', cls: 'bg-emerald-700 text-white', mode: 'current' },
-      { key: 'planned_temp_work', labelZh: '计划临时工作', labelEn: 'Planned Tem Work', cls: 'bg-emerald-500 text-white', mode: 'future' },
+      { key: 'planned_temp_work', labelZh: '替补', labelEn: 'Replacement', cls: 'border border-sky-300/50 bg-sky-500/20 text-sky-100', mode: 'future' },
       { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white', mode: 'current' },
       { key: 'planned_leave', labelZh: '计划请假', labelEn: 'Planned Leave', cls: 'bg-fuchsia-600 text-white', mode: 'future' },
       { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Tem Off', cls: 'bg-red-800 text-red-100', mode: 'current' },
@@ -7546,7 +7548,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (state === 'work') return t('工作', 'Work');
       if (state === 'fixed_work') return t('固定排班', 'Fixed Shift');
       if (state === 'temp_work') return t('临时工作', 'Temporary Work');
-      if (state === 'planned_temp_work') return t('计划临时工作', 'Planned Temporary Work');
+      if (state === 'planned_temp_work') return t('替补', 'Replacement');
       if (state === 'leave') return t('请假', 'Excuse');
       if (state === 'planned_leave') return t('计划请假', 'Planned Leave');
       if (state === 'temp_rest') return t('临时排休', 'Temporary Off');
@@ -7559,7 +7561,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (state === '工作') return t('工作', 'Work');
       if (state === '固定排班') return t('固定排班', 'Fixed Shift');
       if (state === '临时工作') return t('临时工作', 'Temporary Work');
-      if (state === '计划临时工作') return t('计划临时工作', 'Planned Temporary Work');
+      if (state === '计划临时工作' || state === '替补') return t('替补', 'Replacement');
       if (state === '请假') return t('请假', 'Excuse');
       if (state === '计划请假') return t('计划请假', 'Planned Leave');
       if (state === '临时排休') return t('临时排休', 'Temporary Off');
@@ -13982,7 +13984,7 @@ ${rowsToHtml(late)}
               if (state === 'work') return shift === 'late' ? '晚1' : '早1';
               if (state === 'fixed_work') return '固定排班';
               if (state === 'temp_work') return '临时工作';
-              if (state === 'planned_temp_work') return '计划临时工作';
+              if (state === 'planned_temp_work') return '替补';
               if (state === 'leave') return '请假';
               if (state === 'planned_leave') return '计划请假';
               if (state === 'temp_rest') return '临时排休';
@@ -15471,7 +15473,7 @@ ${rowsToHtml(late)}
                                               : displayState === 'temp_work'
                                                 ? 'bg-emerald-700 text-white'
                                               : displayState === 'planned_temp_work'
-                                                ? 'bg-emerald-500 text-white'
+                                                ? 'border border-sky-300/50 bg-sky-500/20 text-sky-100'
                                               : displayState === 'leave'
                                                 ? 'bg-violet-500 text-white'
                                               : displayState === 'planned_leave'
@@ -15499,7 +15501,7 @@ ${rowsToHtml(late)}
                                             : displayState === 'temp_work'
                                               ? t('临时工作', 'Tem Work')
                                             : displayState === 'planned_temp_work'
-                                              ? t('计划临时工作', 'Planned Tem Work')
+                                              ? t('替补', 'Replacement')
                                             : displayState === 'leave'
                                               ? t('请假', 'Excuse')
                                             : displayState === 'planned_leave'
