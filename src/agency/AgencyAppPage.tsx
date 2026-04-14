@@ -646,6 +646,13 @@ export default function AgencyAppPage() {
           fetchAgencyUserDisplayName(supabase, user.id)
         ]);
         if (!active) return;
+        if (!nextAccess.is_active) {
+          setAccess(null);
+          setDisplayName('');
+          openNotice('error', '账号已停用，无法登录。', '账号已停用');
+          await supabase.auth.signOut();
+          return;
+        }
         setAccess(nextAccess);
         setDisplayName(nextDisplayName);
       } catch (nextError) {
@@ -841,8 +848,16 @@ export default function AgencyAppPage() {
     if (!supabase) return;
     beginBusy('Signing in');
     try {
-      const result = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      const nextEmail = email.trim();
+      const result = await supabase.auth.signInWithPassword({ email: nextEmail, password });
       if (result.error) throw new Error(result.error.message);
+      const context = await fetchAdminAccessContext(supabase, nextEmail);
+      if (!context.is_active) {
+        await supabase.auth.signOut();
+        openNotice('error', '账号已停用，无法登录。', '账号已停用');
+        setPassword('');
+        return;
+      }
       setPassword('');
     } catch (nextError) {
       openNotice('error', nextError instanceof Error ? nextError.message : 'Sign in failed.');

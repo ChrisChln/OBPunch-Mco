@@ -6,9 +6,6 @@ type ScheduleToolbarProps = {
   t: TranslateFn;
   isLocked: boolean;
   isReadOnly?: boolean;
-  schedulePublishTomorrow: boolean;
-  schedulePublishForDate: string;
-  setSchedulePublishSetting: (value: boolean) => void | Promise<void>;
   scheduleWeekOffset: number;
   changeScheduleWeek: (value: number, source: string) => void;
   openScheduleDailyList: (source: string) => void;
@@ -24,8 +21,6 @@ export default function ScheduleToolbar({
   t,
   isLocked,
   isReadOnly = false,
-  schedulePublishTomorrow,
-  setSchedulePublishSetting,
   scheduleWeekOffset,
   changeScheduleWeek,
   openScheduleDailyList,
@@ -47,23 +42,6 @@ export default function ScheduleToolbar({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          disabled={writeLocked}
-          onClick={() => void setSchedulePublishSetting(!schedulePublishTomorrow)}
-          className={[
-            `${actionButtonClass} min-w-[136px] font-semibold`,
-            schedulePublishTomorrow
-              ? 'border border-emerald-400/60 bg-emerald-500/20 text-emerald-200'
-              : 'bg-white/10 text-slate-200 hover:bg-white/15'
-          ].join(' ')}
-          title={t('手动发布明日名单', 'Manual publish tomorrow roster')}
-        >
-          {schedulePublishTomorrow
-            ? t('明日名单已开启', 'Tomorrow list ON')
-            : t('明日名单已关闭', 'Tomorrow list OFF')}
-        </button>
-
         <button
           type="button"
           disabled={isLocked}

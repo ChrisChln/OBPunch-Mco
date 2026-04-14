@@ -197,6 +197,7 @@ as $$
 declare
   v_user_id uuid := auth.uid();
   v_role text := null;
+  v_is_active boolean := false;
   v_managed_agencies text[] := '{}'::text[];
   v_modules jsonb := '[]'::jsonb;
 begin
@@ -213,36 +214,58 @@ begin
     and account.is_active = true
   limit 1;
 
-  select coalesce(
-    jsonb_agg(
-      jsonb_build_object(
-        'module_key', prepared.module_key,
-        'access_level', prepared.access_level
-      )
-      order by prepared.module_key
-    ),
-    '[]'::jsonb
-  )
-  into v_modules
-  from (
-    select
-      allowed.module_key,
-      coalesce(
-        (
-          select override_row.access_level
-          from public.ob_admin_account_modules as override_row
-          where override_row.user_id = v_user_id
-            and override_row.module_key = allowed.module_key
-          limit 1
-        ),
-        public.default_admin_module_access(v_role, allowed.module_key)
-      ) as access_level
-    from unnest(public.admin_module_keys()) as allowed(module_key)
-  ) as prepared;
+  select coalesce(account.is_active, false)
+  into v_is_active
+  from public.ob_admin_accounts as account
+  where account.user_id = v_user_id
+  limit 1;
+
+  if v_is_active then
+    select coalesce(
+      jsonb_agg(
+        jsonb_build_object(
+          'module_key', prepared.module_key,
+          'access_level', prepared.access_level
+        )
+        order by prepared.module_key
+      ),
+      '[]'::jsonb
+    )
+    into v_modules
+    from (
+      select
+        allowed.module_key,
+        coalesce(
+          (
+            select override_row.access_level
+            from public.ob_admin_account_modules as override_row
+            where override_row.user_id = v_user_id
+              and override_row.module_key = allowed.module_key
+            limit 1
+          ),
+          public.default_admin_module_access(v_role, allowed.module_key)
+        ) as access_level
+      from unnest(public.admin_module_keys()) as allowed(module_key)
+    ) as prepared;
+  else
+    select coalesce(
+      jsonb_agg(
+        jsonb_build_object(
+          'module_key', allowed.module_key,
+          'access_level', 'hidden'
+        )
+        order by allowed.module_key
+      ),
+      '[]'::jsonb
+    )
+    into v_modules
+    from unnest(public.admin_module_keys()) as allowed(module_key);
+  end if;
 
   return jsonb_build_object(
     'user_id', v_user_id,
     'role', coalesce(v_role, 'level3'),
+    'is_active', v_is_active,
     'managed_agencies', to_jsonb(v_managed_agencies),
     'modules', v_modules
   );
