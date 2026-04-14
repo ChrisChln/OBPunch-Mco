@@ -130,7 +130,7 @@ const fetchAllPagedRows = async <T,>(
   return { rows, error: null as string | null };
 };
 
-const supabase = createSupabaseClient({ persistSession: false });
+const supabase = createSupabaseClient({ persistSession: true });
 const obupSupabase = createSupabaseClientWithCredentials({
   persistSession: false,
   url: import.meta.env.VITE_OBUP_SUPABASE_URL as string | undefined,
@@ -1309,19 +1309,24 @@ export default function App() {
         return;
       }
 
+      const rejectAndSignOut = async (message: string) => {
+        setUnlockStatus({ tone: 'error', message });
+        await supabase.auth.signOut();
+      };
+
       const accessRes = await supabase.rpc('get_admin_access_context');
       if (accessRes.error) {
-        setUnlockStatus({ tone: 'error', message: `权限读取失败：${accessRes.error.message}` });
+        await rejectAndSignOut(`权限读取失败：${accessRes.error.message}`);
         return;
       }
 
       const context = normalizeAdminAccessContext(accessRes.data, email);
       if (!context.is_active) {
-        setUnlockStatus({ tone: 'error', message: '账号已停用，无法解锁。' });
+        await rejectAndSignOut('账号已停用，无法解锁。');
         return;
       }
       if (!canUnlockPunchScreen(context)) {
-        setUnlockStatus({ tone: 'error', message: 'Only level 2 or level 1 admins can unlock this screen.' });
+        await rejectAndSignOut('Only level 2 or level 1 admins can unlock this screen.');
         return;
       }
 
@@ -1331,8 +1336,13 @@ export default function App() {
       setUnlockPassword('');
       setUnlockStatus({ tone: 'success', message: `Unlocked by admin: ${display}` });
       setUiStatus({ tone: 'idle', message: defaultUiStatusMessage });
-    } finally {
+    } catch (error) {
+      setUnlockStatus({
+        tone: 'error',
+        message: error instanceof Error ? `登录失败：${error.message}` : '登录失败，请重试。'
+      });
       await supabase.auth.signOut();
+    } finally {
       setUnlockBusy(false);
     }
   };
@@ -1346,6 +1356,61 @@ export default function App() {
     setPage('punch');
     setUiStatus({ tone: 'idle', message: defaultUiStatusMessage });
   };
+
+  useEffect(() => {
+    if (!supabase) return;
+    let active = true;
+
+    const restoreUnlockSession = async () => {
+      const sessionRes = await supabase.auth.getSession();
+      const sessionUser = sessionRes.data.session?.user;
+      const sessionEmail = String(sessionUser?.email ?? '').trim();
+      if (!active || !sessionEmail) return;
+
+      setUnlockBusy(true);
+      setUnlockStatus({ tone: 'pending', message: 'Restoring previous admin session...' });
+      try {
+        const accessRes = await supabase.rpc('get_admin_access_context');
+        if (accessRes.error) {
+          setUnlockStatus({ tone: 'error', message: `权限读取失败：${accessRes.error.message}` });
+          await supabase.auth.signOut();
+          return;
+        }
+
+        const context = normalizeAdminAccessContext(accessRes.data, sessionEmail);
+        if (!context.is_active || !canUnlockPunchScreen(context)) {
+          setUnlockStatus({ tone: 'error', message: '当前账号无解锁权限，请重新登录。' });
+          await supabase.auth.signOut();
+          return;
+        }
+
+        setPunchUnlocked(true);
+        setUnlockByLabel(sessionEmail);
+        setUnlockStatus({ tone: 'success', message: `Unlocked by admin: ${sessionEmail}` });
+        setUiStatus({ tone: 'idle', message: defaultUiStatusMessage });
+      } finally {
+        if (active) {
+          setUnlockBusy(false);
+        }
+      }
+    };
+
+    void restoreUnlockSession();
+
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (!active) return;
+      if (event !== 'SIGNED_OUT') return;
+      setPunchUnlocked(false);
+      setUnlockByLabel('');
+      setUnlockPassword('');
+      setUnlockStatus({ tone: 'idle', message: '' });
+    });
+
+    return () => {
+      active = false;
+      data.subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     if (!supabase || !isValidId) {
