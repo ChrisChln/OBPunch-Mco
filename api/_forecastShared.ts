@@ -5,8 +5,7 @@ const supabaseUrl =
   (process.env.SUPABASE_URL as string | undefined) ??
   (!isProduction ? ((process.env.VITE_SUPABASE_URL as string | undefined) ?? undefined) : undefined);
 const supabaseServiceRoleKey =
-  (process.env.SUPABASE_SERVICE_ROLE_KEY as string | undefined) ??
-  (!isProduction ? ((process.env.VITE_SUPABASE_ANON_KEY as string | undefined) ?? undefined) : undefined);
+  (process.env.SUPABASE_SERVICE_ROLE_KEY as string | undefined);
 const adminToken = process.env.ADMIN_TOKEN as string | undefined;
 const cronSecret = process.env.CRON_SECRET as string | undefined;
 
