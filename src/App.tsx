@@ -3,6 +3,7 @@ import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib
 import { isValidStaffId, normalizeStaffId } from './lib/staffId';
 import { LABEL_TONE_KEYS, type LabelToneKey, loadLabelToneMap } from './lib/labelTone';
 import { isScheduleOnlyAgency } from './shared/agencyRules';
+import { canUnlockPunchScreen, normalizeAdminAccessContext } from './shared/adminAccess';
 
 type PunchAction = 'IN' | 'OUT';
 
@@ -11,6 +12,11 @@ type Page = 'punch' | 'log' | 'employee' | 'edit';
 type StatusTone = 'idle' | 'pending' | 'success' | 'error';
 
 type Status = {
+  tone: StatusTone;
+  message: string;
+};
+
+type UnlockStatus = {
   tone: StatusTone;
   message: string;
 };
@@ -524,6 +530,15 @@ export default function App() {
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
 
   const [page, setPage] = useState<Page>('punch');
+  const [punchUnlocked, setPunchUnlocked] = useState(false);
+  const [unlockEmail, setUnlockEmail] = useState('');
+  const [unlockPassword, setUnlockPassword] = useState('');
+  const [unlockBusy, setUnlockBusy] = useState(false);
+  const [unlockByLabel, setUnlockByLabel] = useState('');
+  const [unlockStatus, setUnlockStatus] = useState<UnlockStatus>({
+    tone: 'idle',
+    message: ''
+  });
 
   const [staffId, setStaffId] = useState('');
   const normalizedId = useMemo(() => normalizeStaffId(staffId), [staffId]);
@@ -533,6 +548,8 @@ export default function App() {
   const [uiStatus, setUiStatus] = useState<Status>({ tone: 'idle', message: defaultUiStatusMessage });
   const [statusToast, setStatusToast] = useState<Status | null>(null);
   const [punchSuccessOverlay, setPunchSuccessOverlay] = useState<{ title: string; name: string; at: number } | null>(null);
+  const unlockEmailRef = useRef<HTMLInputElement | null>(null);
+  const unlockPasswordRef = useRef<HTMLInputElement | null>(null);
 
   const getSoundSourceCandidates = (kind: SoundKind) => {
     if (kind === 'successIn') {
@@ -849,6 +866,14 @@ export default function App() {
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    if (punchUnlocked) {
+      inputRef.current?.focus();
+      return;
+    }
+    unlockEmailRef.current?.focus();
+  }, [punchUnlocked]);
 
   useEffect(() => {
     if (!isLocked) {
@@ -1282,6 +1307,60 @@ export default function App() {
     }
     void fetchDeviceQuickLogs();
     void fetchPunchBoardDeviceStatus(punchBoard.map((row) => row.staff_id));
+  };
+
+  const doUnlockPunchScreen = async () => {
+    if (!supabase) {
+      setUnlockStatus({ tone: 'error', message: '缺少 Supabase 配置，请检查环境变量。' });
+      return;
+    }
+    const email = String(unlockEmail ?? '').trim();
+    if (!email || !unlockPassword) {
+      setUnlockStatus({ tone: 'error', message: 'Please enter admin email and password.' });
+      return;
+    }
+
+    setUnlockBusy(true);
+    setUnlockStatus({ tone: 'pending', message: 'Verifying admin permissions...' });
+    try {
+      const signInRes = await supabase.auth.signInWithPassword({ email, password: unlockPassword });
+      if (signInRes.error) {
+        setUnlockStatus({ tone: 'error', message: `登录失败：${signInRes.error.message}` });
+        return;
+      }
+
+      const accessRes = await supabase.rpc('get_admin_access_context');
+      if (accessRes.error) {
+        setUnlockStatus({ tone: 'error', message: `权限读取失败：${accessRes.error.message}` });
+        return;
+      }
+
+      const context = normalizeAdminAccessContext(accessRes.data, email);
+      if (!canUnlockPunchScreen(context)) {
+        setUnlockStatus({ tone: 'error', message: 'Only level 2 or level 1 admins can unlock this screen.' });
+        return;
+      }
+
+      const display = String(signInRes.data.user?.email ?? email).trim();
+      setPunchUnlocked(true);
+      setUnlockByLabel(display);
+      setUnlockPassword('');
+      setUnlockStatus({ tone: 'success', message: `Unlocked by admin: ${display}` });
+      setUiStatus({ tone: 'idle', message: defaultUiStatusMessage });
+    } finally {
+      await supabase.auth.signOut();
+      setUnlockBusy(false);
+    }
+  };
+
+  const relockPunchScreen = () => {
+    setPunchUnlocked(false);
+    setUnlockPassword('');
+    setUnlockByLabel('');
+    setUnlockStatus({ tone: 'idle', message: '' });
+    setStaffId('');
+    setPage('punch');
+    setUiStatus({ tone: 'idle', message: defaultUiStatusMessage });
   };
 
   useEffect(() => {
@@ -2892,6 +2971,105 @@ const fetchPunchBoardUph = async (
       isLocked ? 'cursor-not-allowed opacity-60' : ''
     ].join(' ');
 
+  const unlockToneClass: Record<StatusTone, string> = {
+    idle: 'text-slate-300',
+    pending: 'text-sky-300',
+    success: 'text-emerald-300',
+    error: 'text-rose-300'
+  };
+
+  if (!punchUnlocked) {
+    return (
+      <div className="min-h-screen px-5 py-8 text-paper">
+        <main className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-[1480px] items-center justify-center">
+          <section className="relative mx-auto w-full max-w-[1120px] overflow-hidden rounded-[36px] border border-white/10 bg-[linear-gradient(135deg,rgba(5,7,10,0.92),rgba(11,13,16,0.84))] shadow-[0_40px_120px_rgba(0,0,0,0.45)]">
+            <div className="pointer-events-none absolute inset-0">
+              <div className="absolute -left-20 top-[-72px] h-64 w-64 rounded-full bg-[#9eff00]/10 blur-3xl" />
+              <div className="absolute bottom-[-96px] right-[-56px] h-72 w-72 rounded-full bg-sky-400/10 blur-3xl" />
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_32%)]" />
+            </div>
+
+            <div className="relative grid min-h-[520px] gap-8 px-6 py-6 md:grid-cols-[minmax(0,1.3fr)_minmax(380px,0.9fr)] md:px-8 md:py-8 xl:px-10 xl:py-10">
+              <div className="flex min-h-[240px] flex-col justify-between rounded-[28px] border border-white/8 bg-white/[0.03] p-6 md:p-8">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.32em] text-sky-200/80">ObPunch Security</div>
+                  <h1 className="mt-6 max-w-[10ch] font-display text-5xl leading-[0.92] tracking-[0.03em] text-white md:text-6xl xl:text-7xl">
+                    Punch Screen
+                    <br />
+                    Unlock
+                  </h1>
+                </div>
+                <div />
+              </div>
+
+              <div className="flex items-center">
+                <div className="w-full rounded-[30px] border border-white/10 bg-black/35 p-6 shadow-[0_28px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl md:p-8">
+                  <div className="text-[11px] uppercase tracking-[0.3em] text-slate-400">Sign In</div>
+                  <div className="mt-4 font-display text-4xl tracking-[0.03em] text-white md:text-5xl">Administrator Unlock</div>
+
+                  <div className="mt-8 grid gap-5">
+                    <label className="grid gap-2">
+                      <span className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">Email</span>
+                      <input
+                        ref={unlockEmailRef}
+                        type="email"
+                        value={unlockEmail}
+                        onChange={(event) => setUnlockEmail(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            unlockPasswordRef.current?.focus();
+                          }
+                        }}
+                        autoComplete="email"
+                        disabled={unlockBusy}
+                        placeholder="Admin email"
+                        className="h-14 w-full rounded-[20px] border border-white/12 bg-black/30 px-5 text-base text-white outline-none transition placeholder:text-slate-500 focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                    </label>
+
+                    <label className="grid gap-2">
+                      <span className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">Password</span>
+                      <input
+                        ref={unlockPasswordRef}
+                        type="password"
+                        value={unlockPassword}
+                        onChange={(event) => setUnlockPassword(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            void doUnlockPunchScreen();
+                          }
+                        }}
+                        autoComplete="current-password"
+                        disabled={unlockBusy}
+                        placeholder="Password"
+                        className="h-14 w-full rounded-[20px] border border-white/12 bg-black/30 px-5 text-base text-white outline-none transition placeholder:text-slate-500 focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={() => void doUnlockPunchScreen()}
+                      disabled={unlockBusy || unlockEmail.trim() === '' || unlockPassword === ''}
+                      className="mt-2 h-14 w-full rounded-[20px] bg-neon text-base font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {unlockBusy ? 'Verifying...' : 'Unlock Punch Screen'}
+                    </button>
+                  </div>
+
+                  {unlockStatus.message ? (
+                    <p className={['mt-5 min-h-[1.25rem] text-sm', unlockToneClass[unlockStatus.tone]].join(' ')}>{unlockStatus.message}</p>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen px-5 py-8 text-paper">
       {page === 'punch' && punchSuccessOverlay && !deviceReturnReminder && (
@@ -3221,6 +3399,13 @@ const fetchPunchBoardUph = async (
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
+                      onClick={relockPunchScreen}
+                      className="rounded-2xl border border-amber-300/35 bg-amber-400/[0.08] px-4 py-2 text-sm font-medium text-amber-100 transition hover:bg-amber-400/[0.14]"
+                    >
+                      Lock
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => {
                         window.location.href = '/admin.html';
                       }}
@@ -3256,6 +3441,7 @@ const fetchPunchBoardUph = async (
                     </button>
                   </div>
                 </div>
+                <div className="mt-2 text-xs text-slate-400">Unlocked by {unlockByLabel || '-'}</div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   {ALLOWED_POSITIONS.map((pos) => (
                     <button

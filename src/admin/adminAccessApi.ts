@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   ADMIN_MODULE_KEYS,
+  buildEffectiveModuleMap,
+  normalizeAdminRole,
   normalizeAdminAccessContext,
   normalizeModuleAccessLevel,
   type AdminAccessContext,
@@ -93,22 +95,90 @@ export const fetchAdminAccessContext = async (
   return normalizeAdminAccessContext(payload, fallbackEmail);
 };
 
+const parseStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item ?? '').trim()).filter(Boolean);
+  }
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map((item) => String(item ?? '').trim()).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+};
+
+const normalizeModuleOverrides = (
+  value: unknown
+): Array<{ module_key: AdminModuleKey; access_level: AdminModuleAccessLevel }> => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        const module = item as Record<string, unknown>;
+        const moduleKey = String(module?.module_key ?? '').trim() as AdminModuleKey;
+        if (!ADMIN_MODULE_KEYS.includes(moduleKey)) return null;
+        return {
+          module_key: moduleKey,
+          access_level: normalizeModuleAccessLevel(module?.access_level)
+        };
+      })
+      .filter((item): item is { module_key: AdminModuleKey; access_level: AdminModuleAccessLevel } => Boolean(item));
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return normalizeModuleOverrides(parsed);
+    } catch {
+      return [];
+    }
+  }
+
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    if ('modules' in obj) {
+      return normalizeModuleOverrides(obj.modules);
+    }
+    if ('module_key' in obj || 'access_level' in obj) {
+      return normalizeModuleOverrides([obj]);
+    }
+    if (Object.keys(obj).every((key) => /^\d+$/.test(key))) {
+      return normalizeModuleOverrides(Object.values(obj));
+    }
+    return Object.entries(obj)
+      .map(([key, rawAccess]) => {
+        const moduleKey = String(key ?? '').trim() as AdminModuleKey;
+        if (!ADMIN_MODULE_KEYS.includes(moduleKey)) return null;
+        const nestedAccess =
+          rawAccess && typeof rawAccess === 'object' ? (rawAccess as Record<string, unknown>).access_level : rawAccess;
+        return {
+          module_key: moduleKey,
+          access_level: normalizeModuleAccessLevel(nestedAccess)
+        };
+      })
+      .filter((item): item is { module_key: AdminModuleKey; access_level: AdminModuleAccessLevel } => Boolean(item));
+  }
+
+  return [];
+};
+
 const normalizeAdminAccessAccount = (row: Record<string, unknown>): AdminAccessAccountRecord => {
-  const context = normalizeAdminAccessContext({
-    user_id: row.user_id,
-    role: row.role,
-    managed_agencies: row.managed_agencies,
-    modules: row.modules
-  });
+  const role = normalizeAdminRole(row.role, String(row.user_email ?? '').trim());
+  const managedAgencies = parseStringArray(row.managed_agencies);
+  const moduleOverrides = normalizeModuleOverrides(row.modules);
+  const moduleMap = buildEffectiveModuleMap(role, moduleOverrides);
 
   return {
-    user_id: context.user_id,
+    user_id: String(row.user_id ?? '').trim(),
     user_email: String(row.user_email ?? '').trim(),
     display_name: String(row.display_name ?? '').trim(),
-    role: context.role,
+    role,
     is_active: Boolean(row.is_active ?? true),
-    managed_agencies: context.managed_agencies,
-    modules: context.modules
+    managed_agencies: managedAgencies,
+    modules: ADMIN_MODULE_KEYS.map((moduleKey) => ({
+      module_key: moduleKey,
+      access_level: moduleMap[moduleKey]
+    }))
   };
 };
 

@@ -3,6 +3,8 @@ import { normalizeAdminAccessContext, type AdminAccessContext } from '../shared/
 import type { AgencyBoard, AgencyUpsertNewHireInput, AgencyWeekSchedule, AgencyScheduleState } from './types';
 
 const PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
+const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
+const PUNCHES_TABLE = (import.meta.env.VITE_PUNCHES_TABLE as string | undefined) ?? 'ob_punches';
 
 const expectRpcSuccess = async <T>(promise: PromiseLike<{ data: T | null; error: { message: string } | null }>) => {
   const result = await promise;
@@ -79,6 +81,57 @@ export const fetchAgencyUserDisplayName = async (supabase: SupabaseClient, userI
   const result = await supabase.from(PROFILE_TABLE).select('display_name').eq('user_id', userId).maybeSingle();
   if (result.error) return '';
   return String((result.data as { display_name?: string | null } | null)?.display_name ?? '').trim();
+};
+
+export const fetchAgencyAbsentMarkKeys = async (
+  supabase: SupabaseClient,
+  staffIds: string[],
+  workDates: string[]
+): Promise<string[]> => {
+  const scopedStaffIds = staffIds.map((item) => String(item ?? '').trim()).filter(Boolean);
+  const scopedWorkDates = workDates.map((item) => String(item ?? '').trim()).filter(Boolean);
+  if (scopedStaffIds.length === 0 || scopedWorkDates.length === 0) return [];
+  const result = await supabase
+    .from(ATTENDANCE_MARKS_TABLE)
+    .select('staff_id, work_date')
+    .in('staff_id', scopedStaffIds)
+    .in('work_date', scopedWorkDates)
+    .eq('mark_type', 'absent');
+  if (result.error) {
+    throw new Error(String(result.error.message ?? 'Failed to load absence marks.'));
+  }
+  return Array.isArray(result.data)
+    ? result.data
+        .map((row) => `${String((row as { staff_id?: string | null }).staff_id ?? '').trim()}__${String((row as { work_date?: string | null }).work_date ?? '').trim()}`)
+        .filter((item) => item !== '__')
+    : [];
+};
+
+export const fetchAgencyPunchPresenceStaffIds = async (
+  supabase: SupabaseClient,
+  staffIds: string[],
+  startIso: string,
+  endIso: string
+): Promise<string[]> => {
+  const scopedStaffIds = staffIds.map((item) => String(item ?? '').trim()).filter(Boolean);
+  if (scopedStaffIds.length === 0) return [];
+  const result = await supabase
+    .from(PUNCHES_TABLE)
+    .select('staff_id')
+    .in('staff_id', scopedStaffIds)
+    .gte('created_at', startIso)
+    .lte('created_at', endIso)
+    .limit(2000);
+  if (result.error) {
+    throw new Error(String(result.error.message ?? 'Failed to load punch presence.'));
+  }
+  return Array.from(
+    new Set(
+      Array.isArray(result.data)
+        ? result.data.map((row) => String((row as { staff_id?: string | null }).staff_id ?? '').trim()).filter(Boolean)
+        : []
+    )
+  );
 };
 
 export const submitAgencyPlannedLeave = async (supabase: SupabaseClient, staffId: string, workDate: string, reason: string) =>

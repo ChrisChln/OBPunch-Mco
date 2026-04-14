@@ -55,6 +55,78 @@ export const getDefaultModuleAccess = (role: AdminRole, moduleKey: AdminModuleKe
   return moduleKey === 'agency' || moduleKey === 'permissions' ? 'view' : 'hidden';
 };
 
+const parseJsonArray = (value: unknown): unknown[] => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('[')) return [];
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const normalizeModuleEntries = (
+  value: unknown
+): { modules: Array<Partial<AdminAccessModule>>; malformed: boolean } => {
+  if (Array.isArray(value)) {
+    return { modules: value as Array<Partial<AdminAccessModule>>, malformed: false };
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return { modules: [], malformed: false };
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      return normalizeModuleEntries(parsed);
+    } catch {
+      return { modules: [], malformed: true };
+    }
+  }
+
+  if (isPlainObject(value)) {
+    if ('modules' in value) {
+      return normalizeModuleEntries((value as Record<string, unknown>).modules);
+    }
+
+    // Some RPC responses can serialize JSON arrays as objects with numeric keys.
+    const objectValues = Object.values(value);
+    if (objectValues.length > 0 && Object.keys(value).every((key) => /^\d+$/.test(key))) {
+      return normalizeModuleEntries(objectValues);
+    }
+
+    if ('module_key' in value || 'access_level' in value) {
+      return { modules: [value], malformed: false };
+    }
+
+    const mapped = Object.entries(value)
+      .filter(([moduleKey]) => ADMIN_MODULE_KEYS.includes(moduleKey as AdminModuleKey))
+      .map(([module_key, access_level]) => {
+        const nestedAccess =
+          access_level && typeof access_level === 'object'
+            ? (access_level as Record<string, unknown>).access_level
+            : access_level;
+        return { module_key, access_level: nestedAccess };
+      });
+
+    return mapped.length > 0 ? { modules: mapped, malformed: false } : { modules: [], malformed: true };
+  }
+
+  if (value == null) {
+    return { modules: [], malformed: false };
+  }
+
+  return { modules: [], malformed: true };
+};
+
 export const buildEffectiveModuleMap = (
   role: AdminRole,
   overrides: Array<Partial<AdminAccessModule>> | null | undefined
@@ -89,11 +161,13 @@ export const normalizeAdminAccessContext = (
 ): AdminAccessContext => {
   const raw = (payload ?? {}) as Record<string, unknown>;
   const role = normalizeAdminRole(raw.role, fallbackEmail);
-  const managedAgencies = Array.isArray(raw.managed_agencies)
-    ? raw.managed_agencies.map((item) => String(item ?? '').trim()).filter(Boolean)
-    : [];
-  const modulesRaw = Array.isArray(raw.modules) ? raw.modules : [];
-  const moduleMap = buildEffectiveModuleMap(role, modulesRaw as Array<Partial<AdminAccessModule>>);
+  const managedAgencies = parseJsonArray(raw.managed_agencies)
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean);
+  const hasModulesField = Object.prototype.hasOwnProperty.call(raw, 'modules');
+  const { modules: moduleEntries, malformed } = normalizeModuleEntries(raw.modules);
+  const moduleMap =
+    hasModulesField && malformed && moduleEntries.length === 0 ? buildHiddenModuleMap() : buildEffectiveModuleMap(role, moduleEntries);
 
   return {
     user_id: String(raw.user_id ?? '').trim(),
@@ -106,8 +180,14 @@ export const normalizeAdminAccessContext = (
   };
 };
 
+const buildHiddenModuleMap = () =>
+  Object.fromEntries(ADMIN_MODULE_KEYS.map((moduleKey) => [moduleKey, 'hidden'])) as Record<
+    AdminModuleKey,
+    AdminModuleAccessLevel
+  >;
+
 export const getModuleMapFromContext = (context: AdminAccessContext | null | undefined) =>
-  buildEffectiveModuleMap(context?.role ?? 'level3', context?.modules ?? []);
+  context ? buildEffectiveModuleMap(context.role, context.modules ?? []) : buildHiddenModuleMap();
 
 export const getVisibleModules = (context: AdminAccessContext | null | undefined) =>
   ADMIN_MODULE_KEYS.filter((moduleKey) => hasModuleAccess(getModuleMapFromContext(context), moduleKey, 'view'));
@@ -120,5 +200,10 @@ export const canManageAdminAccess = (context: AdminAccessContext | null | undefi
 export const canReviewTerminationRequests = (context: AdminAccessContext | null | undefined) => {
   if (!context) return false;
   if (!hasModuleAccess(getModuleMapFromContext(context), 'schedule', 'operate')) return false;
+  return context.role === 'level1' || context.role === 'level2';
+};
+
+export const canUnlockPunchScreen = (context: AdminAccessContext | null | undefined) => {
+  if (!context) return false;
   return context.role === 'level1' || context.role === 'level2';
 };

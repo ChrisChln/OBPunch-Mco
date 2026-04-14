@@ -1,4 +1,4 @@
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+﻿import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { createPortal } from 'react-dom';
 import { createSupabaseClient } from '../lib/supabase';
@@ -9,11 +9,14 @@ import {
   createAgencyTerminationRequest,
   deleteAgencyNewHireDemand,
   fetchAdminAccessContext,
+  fetchAgencyAbsentMarkKeys,
+  fetchAgencyPunchPresenceStaffIds,
   fetchAgencyScheduleWeek,
   fetchAgencyUserDisplayName,
   setAgencyScheduleState,
   upsertAgencyNewHireDemand
 } from './api';
+import { computeAgencySummaryCards, isAgencyWorklikeState } from './boardMetrics';
 import type {
   AgencyBoard,
   AgencyEmployeeRow,
@@ -59,6 +62,12 @@ type SchedulePickerOption = {
 };
 
 const EMPLOYEE_RENDER_PAGE_SIZE = 80;
+const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
+const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? Math.min(Math.max(DAY_CUTOFF_HOUR_RAW, 0), 23) : 5;
+const TIMECARD_ABSENT_VISIBLE_HOUR_RAW = Number(import.meta.env.VITE_TIMECARD_ABSENT_VISIBLE_HOUR ?? 12);
+const TIMECARD_ABSENT_VISIBLE_HOUR = Number.isFinite(TIMECARD_ABSENT_VISIBLE_HOUR_RAW)
+  ? Math.min(Math.max(TIMECARD_ABSENT_VISIBLE_HOUR_RAW, 0), 23)
+  : 12;
 
 const NEW_YORK_TIMEZONE = 'America/New_York';
 const newYorkClockFormatter = new Intl.DateTimeFormat('en-CA', {
@@ -84,6 +93,50 @@ const getNewYorkNowContext = (now: Date = new Date()) => {
   const date = `${values.year ?? '0000'}-${values.month ?? '01'}-${values.day ?? '01'}`;
   const minutes = Number(values.hour ?? '0') * 60 + Number(values.minute ?? '0');
   return { date, minutes };
+};
+
+const shiftDateOnlyByDays = (value: string, deltaDays: number) => {
+  const [year, month, day] = value.split('-').map((item) => Number(item) || 0);
+  const next = new Date(Date.UTC(year, Math.max(month - 1, 0), day + deltaDays, 12, 0, 0));
+  return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`;
+};
+
+const getTimeZoneOffsetMinutes = (date: Date, timeZone: string) => {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  const parts = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
+  const asUtcMs = Date.UTC(
+    Number(parts.year ?? '0'),
+    Math.max(Number(parts.month ?? '1') - 1, 0),
+    Number(parts.day ?? '1'),
+    Number(parts.hour ?? '0'),
+    Number(parts.minute ?? '0'),
+    Number(parts.second ?? '0')
+  );
+  return Math.round((asUtcMs - date.getTime()) / 60000);
+};
+
+const getNewYorkDateTimeUtc = (dateOnly: string, hour: number, minute = 0, second = 0) => {
+  const [year, month, day] = dateOnly.split('-').map((item) => Number(item) || 0);
+  const approximateUtc = new Date(Date.UTC(year, Math.max(month - 1, 0), day, hour, minute, second));
+  const offsetMinutes = getTimeZoneOffsetMinutes(approximateUtc, NEW_YORK_TIMEZONE);
+  return new Date(approximateUtc.getTime() - offsetMinutes * 60 * 1000);
+};
+
+const getAgencyOperationalNowContext = (now: Date = new Date()) => {
+  const current = getNewYorkNowContext(now);
+  return {
+    ...current,
+    operationalDate: current.minutes < DAY_CUTOFF_HOUR * 60 ? shiftDateOnlyByDays(current.date, -1) : current.date
+  };
 };
 
 const getDefaultSelectedDate = () => {
@@ -120,11 +173,33 @@ const isAgencyDeadlineLockedState = (
   context: ReturnType<typeof getNewYorkNowContext>
 ) => isAgencyScheduleCutoffPassed(shift, workDate, context);
 
+const shouldShowAgencyLiveAbsent = ({
+  shift,
+  workDate,
+  state,
+  operationalDate,
+  currentMinutes,
+  hasPunch
+}: {
+  shift: AgencyShift | '';
+  workDate: string;
+  state: AgencyScheduleState;
+  operationalDate: string;
+  currentMinutes: number;
+  hasPunch: boolean;
+}) => {
+  if (!isWorklikeState(state)) return false;
+  if (workDate !== operationalDate) return false;
+  if (hasPunch) return false;
+  if (shift === 'late') return currentMinutes >= 16 * 60 + 30;
+  return currentMinutes >= TIMECARD_ABSENT_VISIBLE_HOUR * 60;
+};
+
 const stateLabel = (state: AgencyScheduleState) => {
   if (state === 'new') return 'NEW';
   if (state === 'fixed_work') return 'Work';
-  if (state === 'temp_work') return 'Temp Work';
-  if (state === 'planned_temp_work') return 'Replacement';
+  if (state === 'temp_work') return 'Temp';
+  if (state === 'planned_temp_work') return 'Replace';
   if (state === 'leave_pending') return 'Excuse Pending';
   if (state === 'leave') return 'Excuse';
   if (state === 'planned_leave') return 'Excuse';
@@ -133,6 +208,8 @@ const stateLabel = (state: AgencyScheduleState) => {
   if (state === 'rest') return 'Off';
   return 'Work';
 };
+
+const isWorklikeState = (state: AgencyScheduleState) => isAgencyWorklikeState(state);
 
 const normalizeServerScheduleState = (value: unknown, fallback: AgencyScheduleState): AgencyScheduleState => {
   const normalized = String(value ?? '')
@@ -162,8 +239,8 @@ const stateCellClass = (state: AgencyScheduleState, muted = false) => {
   if (state === 'new') return muted ? 'border border-cyan-500/40 bg-cyan-950/40 text-cyan-100' : 'border border-cyan-300/60 bg-cyan-500/20 text-cyan-100';
   if (state === 'work') return muted ? 'bg-lime-700/70 text-lime-100' : 'bg-neon text-white shadow-glow';
   if (state === 'fixed_work') return muted ? 'border-2 border-[#b6912e]/70 bg-[#153428] text-[#e3c772]' : 'border-2 border-[#d4a017] bg-[#0f3f2b] text-[#ffd24d]';
-  if (state === 'temp_work') return muted ? 'bg-emerald-900/70 text-emerald-100' : 'bg-emerald-700 text-white';
-  if (state === 'planned_temp_work') return muted ? 'bg-emerald-800/70 text-emerald-100' : 'bg-emerald-500 text-white';
+  if (state === 'temp_work') return muted ? 'border border-emerald-500/35 bg-emerald-950/80 text-emerald-100' : 'border border-emerald-400/40 bg-emerald-700 text-white shadow-[0_10px_24px_rgba(16,185,129,0.22)]';
+  if (state === 'planned_temp_work') return muted ? 'border border-sky-500/35 bg-sky-950/75 text-sky-100' : 'border border-sky-300/50 bg-sky-500/20 text-sky-100 shadow-[0_10px_24px_rgba(56,189,248,0.18)]';
   if (state === 'leave_pending') return muted ? 'border border-amber-500/30 bg-amber-900/35 text-amber-100' : 'border border-amber-400/50 bg-amber-500/15 text-amber-100';
   if (state === 'leave') return muted ? 'bg-violet-900/70 text-violet-100' : 'bg-violet-500 text-white';
   if (state === 'planned_leave') return muted ? 'bg-fuchsia-950/70 text-fuchsia-200' : 'bg-fuchsia-600 text-white';
@@ -196,6 +273,12 @@ const formatStartTime = (value: string) => {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 };
 
+const formatNewHireStartTime = (value: string) => {
+  const normalized = formatStartTime(value);
+  if (normalized !== '-') return normalized;
+  return '09:00';
+};
+
 const normalizeAgencyValue = (value: unknown) => {
   if (typeof value === 'string') return value.trim();
   if (typeof value === 'number' || typeof value === 'boolean') return String(value).trim();
@@ -217,11 +300,36 @@ const positionChipClass = (position: string) => {
   return 'border-white/10 bg-white/5 text-slate-300';
 };
 
+const summaryCardStatusClass = (
+  key: string,
+  value: number,
+  summaryValues: { required: number; scheduled: number; gap: number }
+) => {
+  if (key === 'required' || key === 'scheduled') {
+    return summaryValues.required === summaryValues.scheduled
+      ? 'border-2 border-emerald-400/80 bg-[linear-gradient(180deg,rgba(16,185,129,0.16),rgba(0,0,0,0.18))] shadow-[0_0_0_1px_rgba(16,185,129,0.18),0_22px_56px_rgba(16,185,129,0.18)]'
+      : 'border-2 border-amber-400/85 bg-[linear-gradient(180deg,rgba(245,158,11,0.16),rgba(0,0,0,0.18))] shadow-[0_0_0_1px_rgba(245,158,11,0.16),0_22px_56px_rgba(245,158,11,0.16)]';
+  }
+  if (key === 'gap') {
+    return value === 0
+      ? 'border-2 border-emerald-400/80 bg-[linear-gradient(180deg,rgba(16,185,129,0.16),rgba(0,0,0,0.18))] shadow-[0_0_0_1px_rgba(16,185,129,0.18),0_22px_56px_rgba(16,185,129,0.18)]'
+      : 'border-2 border-rose-400/85 bg-[linear-gradient(180deg,rgba(244,63,94,0.18),rgba(0,0,0,0.18))] shadow-[0_0_0_1px_rgba(244,63,94,0.2),0_22px_56px_rgba(244,63,94,0.18)]';
+  }
+  if (key === 'new_requests') {
+    return 'border-2 border-emerald-400/80 bg-[linear-gradient(180deg,rgba(16,185,129,0.14),rgba(0,0,0,0.18))] shadow-[0_0_0_1px_rgba(16,185,129,0.16),0_22px_56px_rgba(16,185,129,0.16)]';
+  }
+  return 'border-white/10';
+};
+
 const canRequestAgencyLeave = (state: AgencyScheduleState) =>
   state === 'work' || state === 'fixed_work' || state === 'temp_work';
 
 const canAssignAgencySubstitute = (state: AgencyScheduleState) =>
   state === 'rest' || state === 'temp_rest' || state === 'planned_temp_rest';
+
+const isCurrentTempWorkState = (state: AgencyScheduleState) => state === 'temp_work';
+
+const isReplacementState = (state: AgencyScheduleState) => state === 'planned_temp_work';
 
 const cardClass = 'rounded-[28px] border border-white/10 bg-black/20 p-5 shadow-[0_18px_40px_rgba(0,0,0,0.25)]';
 const inputClass =
@@ -356,6 +464,7 @@ type ScheduleCellProps = {
   employeeName: string;
   workDate: string;
   state: AgencyScheduleState;
+  showAbsent: boolean;
   isSelectedWorkDate: boolean;
   isLastEmployeeRow: boolean;
   cellOptions: SchedulePickerOption[];
@@ -377,6 +486,7 @@ const ScheduleCell = memo(function ScheduleCell({
   employeeName,
   workDate,
   state,
+  showAbsent,
   isSelectedWorkDate,
   isLastEmployeeRow,
   cellOptions,
@@ -404,11 +514,13 @@ const ScheduleCell = memo(function ScheduleCell({
         className={[
           'h-8 w-[74px] rounded-md px-1 text-[9px] font-semibold leading-none transition disabled:cursor-not-allowed disabled:opacity-100',
           !canEditCell ? 'saturate-50 brightness-90' : '',
-          stateCellClass(state, useMutedCellStyle)
+          showAbsent
+            ? 'border border-slate-300 bg-white text-slate-900'
+            : stateCellClass(state, useMutedCellStyle)
         ].join(' ')}
-        title={`${employeeName} · ${workDate}${isDeadlineLocked ? ' · Cutoff locked' : ''}`}
+        title={`${employeeName} · ${workDate}${showAbsent ? ' · Absent' : ''}${isDeadlineLocked ? ' · Cutoff locked' : ''}`}
       >
-        {stateLabel(state)}
+        {showAbsent ? 'Absent' : stateLabel(state)}
       </button>
     </td>
   );
@@ -417,6 +529,7 @@ const ScheduleCell = memo(function ScheduleCell({
   previousProps.employeeName === nextProps.employeeName &&
   previousProps.workDate === nextProps.workDate &&
   previousProps.state === nextProps.state &&
+  previousProps.showAbsent === nextProps.showAbsent &&
   previousProps.isSelectedWorkDate === nextProps.isSelectedWorkDate &&
   previousProps.isLastEmployeeRow === nextProps.isLastEmployeeRow &&
   previousProps.canEditCell === nextProps.canEditCell &&
@@ -432,6 +545,8 @@ export default function AgencyAppPage() {
   const [displayName, setDisplayName] = useState('');
   const [board] = useState<AgencyBoard | null>(null);
   const [weekSchedule, setWeekSchedule] = useState<AgencyWeekSchedule | null>(null);
+  const [absentMarkKeys, setAbsentMarkKeys] = useState<Set<string>>(() => new Set());
+  const [currentOperationalPunchStaffIds, setCurrentOperationalPunchStaffIds] = useState<Set<string>>(() => new Set());
   const [scheduleStateOverrides, setScheduleStateOverrides] = useState(() => new Map<string, AgencyScheduleState>());
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState('Syncing board');
@@ -499,6 +614,7 @@ export default function AgencyAppPage() {
   const canViewAgency = hasModuleAccess(moduleMap, 'agency', 'view');
   const canOperateAgency = hasModuleAccess(moduleMap, 'agency', 'operate');
   const newYorkNowContext = useMemo(() => getNewYorkNowContext(), [selectedDate, weekSchedule]);
+  const operationalNowContext = useMemo(() => getAgencyOperationalNowContext(), [selectedDate, weekSchedule]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -603,6 +719,119 @@ export default function AgencyAppPage() {
   useEffect(() => {
     void refreshBoard();
   }, [refreshBoard]);
+
+  useEffect(() => {
+    let active = true;
+    const loadAbsentMarks = async () => {
+      if (!supabase || !user || !canViewAgency || !weekSchedule) {
+        setAbsentMarkKeys(new Set());
+        return;
+      }
+      const staffIds = (weekSchedule.employees ?? []).map((row) => row.staff_id).filter(Boolean);
+      const workDates = (weekSchedule.week_dates ?? []).filter(Boolean);
+      if (staffIds.length === 0 || workDates.length === 0) {
+        setAbsentMarkKeys(new Set());
+        return;
+      }
+      try {
+        const keys = await fetchAgencyAbsentMarkKeys(supabase, staffIds, workDates);
+        if (!active) return;
+        setAbsentMarkKeys(new Set(keys));
+      } catch {
+        if (!active) return;
+        setAbsentMarkKeys(new Set());
+      }
+    };
+    void loadAbsentMarks();
+    return () => {
+      active = false;
+    };
+  }, [canViewAgency, supabase, user, weekSchedule]);
+
+  useEffect(() => {
+    let active = true;
+    const loadCurrentOperationalPunchPresence = async () => {
+      if (!supabase || !user || !canViewAgency || !weekSchedule) {
+        setCurrentOperationalPunchStaffIds(new Set());
+        return;
+      }
+      if (!(weekSchedule.week_dates ?? []).includes(operationalNowContext.operationalDate)) {
+        setCurrentOperationalPunchStaffIds(new Set());
+        return;
+      }
+      const staffIds = (weekSchedule.employees ?? []).map((row) => row.staff_id).filter(Boolean);
+      if (staffIds.length === 0) {
+        setCurrentOperationalPunchStaffIds(new Set());
+        return;
+      }
+      try {
+        const rangeStartIso = getNewYorkDateTimeUtc(operationalNowContext.operationalDate, DAY_CUTOFF_HOUR).toISOString();
+        const rangeEndIso = new Date().toISOString();
+        const staffWithPunches = await fetchAgencyPunchPresenceStaffIds(supabase, staffIds, rangeStartIso, rangeEndIso);
+        if (!active) return;
+        setCurrentOperationalPunchStaffIds(new Set(staffWithPunches));
+      } catch {
+        if (!active) return;
+        setCurrentOperationalPunchStaffIds(new Set());
+      }
+    };
+    void loadCurrentOperationalPunchPresence();
+    const timer = window.setInterval(() => {
+      void loadCurrentOperationalPunchPresence();
+    }, 60000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [canViewAgency, operationalNowContext.operationalDate, supabase, user, weekSchedule]);
+
+  useEffect(() => {
+    if (!supabase || !user || !canViewAgency || !weekSchedule) return;
+    const staffIds = new Set((weekSchedule.employees ?? []).map((row) => row.staff_id).filter(Boolean));
+    const workDates = new Set((weekSchedule.week_dates ?? []).filter(Boolean));
+    const refreshAbsentMarks = async () => {
+      const keys = await fetchAgencyAbsentMarkKeys(supabase, Array.from(staffIds), Array.from(workDates));
+      setAbsentMarkKeys(new Set(keys));
+    };
+    const refreshPunchPresence = async () => {
+      if (!workDates.has(operationalNowContext.operationalDate)) {
+        setCurrentOperationalPunchStaffIds(new Set());
+        return;
+      }
+      const rangeStartIso = getNewYorkDateTimeUtc(operationalNowContext.operationalDate, DAY_CUTOFF_HOUR).toISOString();
+      const rangeEndIso = new Date().toISOString();
+      const staffWithPunches = await fetchAgencyPunchPresenceStaffIds(supabase, Array.from(staffIds), rangeStartIso, rangeEndIso);
+      setCurrentOperationalPunchStaffIds(new Set(staffWithPunches));
+    };
+    const channel = supabase
+      .channel(`agency-live-attendance-${selectedDate}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'ob_attendance_marks' },
+        (payload) => {
+          const row = (payload.new ?? payload.old) as { staff_id?: string | null; work_date?: string | null; mark_type?: string | null } | null;
+          const staffId = String(row?.staff_id ?? '').trim();
+          const workDate = String(row?.work_date ?? '').trim();
+          const markType = String(row?.mark_type ?? '').trim();
+          if (!staffIds.has(staffId) || !workDates.has(workDate) || markType !== 'absent') return;
+          void refreshAbsentMarks();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'ob_punches' },
+        (payload) => {
+          const row = (payload.new ?? payload.old) as { staff_id?: string | null } | null;
+          const staffId = String(row?.staff_id ?? '').trim();
+          if (!staffIds.has(staffId)) return;
+          void refreshPunchPresence();
+        }
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [canViewAgency, operationalNowContext.operationalDate, selectedDate, supabase, user, weekSchedule]);
 
   useEffect(() => {
     setSchedulePicker((prev) => ({ ...prev, open: false }));
@@ -928,9 +1157,7 @@ export default function AgencyAppPage() {
   const weeklyWorkCountByStaffId = useMemo(() => {
     const next = new Map<string, number>();
     for (const row of weekSchedule?.employees ?? []) {
-      const workCount = row.days.filter((day) =>
-        ['work', 'fixed_work', 'temp_work', 'planned_temp_work'].includes(day.base_state ?? day.state)
-      ).length;
+      const workCount = row.days.filter((day) => isWorklikeState((day.base_state ?? day.state) as AgencyScheduleState)).length;
       next.set(row.staff_id, workCount);
     }
     return next;
@@ -948,11 +1175,11 @@ export default function AgencyAppPage() {
         label: row.label,
         state: row.days.find((item) => item.work_date === selectedDate)?.state ?? 'rest',
         fixed_work_count: weeklyWorkCountByStaffId.get(row.staff_id) ?? row.fixed_work_count,
-        has_absent: false,
+        has_absent: absentMarkKeys.has(`${row.staff_id}__${selectedDate}`),
         has_late: false,
         termination_status: row.termination_status
       })),
-    [selectedDate, weekSchedule, weeklyWorkCountByStaffId]
+    [absentMarkKeys, selectedDate, weekSchedule, weeklyWorkCountByStaffId]
   );
 
   const selectedDateNewHireRequests = useMemo<AgencyNewHireRequestRow[]>(
@@ -1053,6 +1280,38 @@ export default function AgencyAppPage() {
     () => filteredEmployees.slice(0, visibleEmployeeCount),
     [filteredEmployees, visibleEmployeeCount]
   );
+
+  const dailyCountsByDate = useMemo(() => {
+    const next = new Map<string, { work: number; temp: number; replacement: number }>();
+    for (const workDate of weekDates) {
+      next.set(workDate, { work: 0, temp: 0, replacement: 0 });
+    }
+    for (const employee of filteredEmployees) {
+      for (const workDate of weekDates) {
+        const state =
+          scheduleStateOverrides.get(`${employee.staff_id}__${workDate}`) ??
+          scheduleCellByStaffDate.get(`${employee.staff_id}__${workDate}`)?.state ??
+          'rest';
+        const current = next.get(workDate) ?? { work: 0, temp: 0, replacement: 0 };
+        if (isReplacementState(state)) {
+          current.replacement += 1;
+          current.work += 1;
+          next.set(workDate, current);
+          continue;
+        }
+        if (isCurrentTempWorkState(state)) {
+          current.temp += 1;
+          current.work += 1;
+          next.set(workDate, current);
+          continue;
+        }
+        if (!isWorklikeState(state)) continue;
+        current.work += 1;
+        next.set(workDate, current);
+      }
+    }
+    return next;
+  }, [filteredEmployees, scheduleCellByStaffDate, scheduleStateOverrides, weekDates]);
 
   const hasMoreEmployees = visibleFilteredEmployees.length < filteredEmployees.length;
 
@@ -1169,19 +1428,29 @@ export default function AgencyAppPage() {
     newHireGapGroups
   ]);
 
-  const derivedSummaryCards = useMemo(() => {
-    const newRequestCount = filteredNewHireRequests.length;
-    const scheduledCount = filteredEmployees.filter((row) =>
-      ['work', 'fixed_work', 'temp_work', 'planned_temp_work'].includes(row.state)
-    ).length;
-    const requiredCount = scheduledCount + newRequestCount + filteredGapCount;
-    return [
-      { key: 'required', label: 'Required', value: requiredCount },
-      { key: 'scheduled', label: 'Scheduled', value: scheduledCount },
-      { key: 'new_requests', label: 'New Requests', value: newRequestCount },
-      { key: 'gap', label: 'Gap', value: filteredGapCount }
-    ];
-  }, [filteredEmployees, filteredGapCount, filteredNewHireRequests.length]);
+  const derivedSummaryCards = useMemo(
+    () =>
+      computeAgencySummaryCards({
+        employees: employeeRows,
+        newHireRequests: selectedDateNewHireRequests,
+        openSlotsByStaffDate: openSubstituteSlotsByStaffDate,
+        selectedDate
+      }),
+    [employeeRows, openSubstituteSlotsByStaffDate, selectedDate, selectedDateNewHireRequests]
+  );
+
+  const summaryCards = useMemo(() => derivedSummaryCards, [derivedSummaryCards]);
+
+  const summaryCardValues = useMemo(() => {
+    const getValue = (key: string) => Number(summaryCards.find((card) => card.key === key)?.value ?? 0) || 0;
+    return {
+      required: getValue('required'),
+      scheduled: getValue('scheduled'),
+      gap: getValue('gap')
+    };
+  }, [summaryCards]);
+
+  const useCompactNewSection = gapsByGroupOnSelectedDate.length > 0 && filteredNewHireRequests.length === 0;
 
   if (!supabase) {
     return <div className="min-h-screen px-6 py-10 text-white">Missing Supabase configuration.</div>;
@@ -1191,10 +1460,28 @@ export default function AgencyAppPage() {
     <div className="min-h-screen px-5 py-8 text-paper">
       <div className="mx-auto flex max-w-[1480px] flex-col gap-6">
         <header className={cardClass}>
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.28em] text-slate-400">ObPunch Agency</div>
-            <h1 className="mt-4 font-display text-5xl tracking-[0.04em] text-white">Agency Board</h1>
-            <div className="mt-3 text-sm text-slate-400">{displayName || user?.email || 'Signed out'}</div>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.28em] text-slate-400">ObPunch Agency</div>
+              <h1 className="mt-4 font-display text-5xl tracking-[0.04em] text-white">Agency Board</h1>
+              <div className="mt-3 text-sm text-slate-400">{displayName || user?.email || 'Signed out'}</div>
+            </div>
+            {user ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.location.href = '/';
+                  }}
+                  className={buttonClass}
+                >
+                  Back to Punch
+                </button>
+                <button type="button" onClick={() => void doLogout()} className={buttonClass} disabled={busy}>
+                  Logout
+                </button>
+              </div>
+            ) : null}
           </div>
         </header>
 
@@ -1213,8 +1500,14 @@ export default function AgencyAppPage() {
         {user && canViewAgency && weekSchedule ? (
           <>
             <section className="grid gap-4 md:grid-cols-4">
-              {(board?.summary_cards?.length ? board.summary_cards : derivedSummaryCards).map((card) => (
-                <div key={card.key} className={cardClass}>
+              {summaryCards.map((card) => (
+                <div
+                  key={card.key}
+                  className={[
+                    cardClass,
+                    summaryCardStatusClass(card.key, Number(card.value ?? 0) || 0, summaryCardValues)
+                  ].join(' ')}
+                >
                   <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">{card.label}</div>
                   <div className="mt-4 text-4xl font-semibold text-white">{card.value}</div>
                 </div>
@@ -1232,16 +1525,22 @@ export default function AgencyAppPage() {
               </section>
             ) : null}
 
-            <section className={cardClass}>
+            <section className={[cardClass, useCompactNewSection ? 'w-fit max-w-full self-start' : ''].join(' ')}>
               <div>
                 <div className="mb-4 flex items-center justify-between gap-4">
                   <h2 className="font-display text-3xl tracking-[0.04em] text-white">NEW</h2>
                 </div>
                 <div className="space-y-3">
                   {gapsByGroupOnSelectedDate.length > 0 ? (
-                    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                    <div className={useCompactNewSection ? 'grid w-fit gap-3' : 'grid gap-3 md:grid-cols-2 lg:grid-cols-3'}>
                       {gapsByGroupOnSelectedDate.map((gap, idx) => (
-                        <div key={`${gap.agency}__${gap.position}__${gap.shift}__${idx}`} className="rounded-[18px] border border-white/10 bg-white/[0.03] p-4">
+                        <div
+                          key={`${gap.agency}__${gap.position}__${gap.shift}__${idx}`}
+                          className={[
+                            'rounded-[18px] border border-white/10 bg-white/[0.03] p-4',
+                            useCompactNewSection ? 'min-w-[470px] max-w-[470px]' : ''
+                          ].join(' ')}
+                        >
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="flex-1">
                               <div className="text-sm font-semibold text-white">Need Replacement</div>
@@ -1309,7 +1608,7 @@ export default function AgencyAppPage() {
                               </span>
                             </div>
                             <div className="text-center font-mono text-sm text-slate-300">
-                              {formatStartTime(row.start_time)}
+                              {formatNewHireStartTime(row.start_time)}
                             </div>
                             <div className="flex items-center justify-end gap-2">
                               <button type="button" className={buttonClass} disabled={busy || !canOperateAgency} onClick={() => openEditNewHire(row)}>
@@ -1322,7 +1621,7 @@ export default function AgencyAppPage() {
                                 disabled={busy || !canOperateAgency}
                                 onClick={() => void deleteNewHire(row)}
                               >
-                                撤销
+                                Delete
                               </button>
                               ) : null}
                             </div>
@@ -1404,7 +1703,12 @@ export default function AgencyAppPage() {
                               : ''
                           ].join(' ')}
                         >
-                          <span className={workDate === selectedDate ? selectedDateHeaderLabelClass : ''}>{formatWeekLabel(workDate, dayIndex)}</span>
+                              <div className="flex flex-col items-center gap-1">
+                                <span className={workDate === selectedDate ? selectedDateHeaderLabelClass : ''}>{formatWeekLabel(workDate, dayIndex)}</span>
+                                <span className="text-[11px] font-semibold normal-case tracking-normal text-[#9eff00]">
+                              Work {dailyCountsByDate.get(workDate)?.work ?? 0}
+                                </span>
+                              </div>
                         </th>
                       ))}
                     </tr>
@@ -1471,6 +1775,15 @@ export default function AgencyAppPage() {
                         {weekDates.map((workDate) => {
                           const cell = scheduleCellByStaffDate.get(`${employee.staff_id}__${workDate}`);
                           const state = scheduleStateOverrides.get(`${employee.staff_id}__${workDate}`) ?? cell?.state ?? 'rest';
+                          const hasAbsentMark = absentMarkKeys.has(`${employee.staff_id}__${workDate}`);
+                          const showLiveAbsent = shouldShowAgencyLiveAbsent({
+                            shift: employee.shift,
+                            workDate,
+                            state,
+                            operationalDate: operationalNowContext.operationalDate,
+                            currentMinutes: operationalNowContext.minutes,
+                            hasPunch: currentOperationalPunchStaffIds.has(employee.staff_id)
+                          });
                           const baseState = cell?.base_state ?? state;
                           const isSelectedWorkDate = workDate === selectedDate;
                           const cellOptions = canOperateAgency ? getCellOptions(employee, state, baseState, workDate) : [];
@@ -1483,6 +1796,7 @@ export default function AgencyAppPage() {
                               employeeName={employee.name || '-'}
                               workDate={workDate}
                               state={state}
+                              showAbsent={hasAbsentMark || showLiveAbsent}
                               isSelectedWorkDate={isSelectedWorkDate}
                               isLastEmployeeRow={isLastEmployeeRow}
                               cellOptions={cellOptions}
@@ -1732,3 +2046,5 @@ export default function AgencyAppPage() {
     </div>
   );
 }
+
+

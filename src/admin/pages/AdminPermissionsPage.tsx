@@ -166,8 +166,7 @@ export default function AdminPermissionsPage({
     );
   };
 
-  const resetModulesToRoleDefaults = (nextRole: AdminRole) => {
-    setRequestedRole(nextRole);
+  const applyRequestedRoleDefaults = (nextRole: AdminRole = requestedRole) => {
     setRequestedModules(buildDefaultModuleState(nextRole));
   };
 
@@ -208,7 +207,12 @@ export default function AdminPermissionsPage({
             : 'border-amber-500/40 bg-amber-500/10 text-amber-200';
 
     return (
-      <span className={['inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.12em]', className].join(' ')}>
+      <span
+        className={[
+          'inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.12em]',
+          className
+        ].join(' ')}
+      >
         {status}
       </span>
     );
@@ -301,7 +305,7 @@ export default function AdminPermissionsPage({
               </div>
               <select
                 value={requestedRole}
-                onChange={(event) => resetModulesToRoleDefaults(event.target.value as AdminRole)}
+                onChange={(event) => setRequestedRole(event.target.value as AdminRole)}
                 disabled={isLocked || savingRequest || Boolean(pendingOwnRequest)}
                 className={[
                   'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
@@ -377,13 +381,13 @@ export default function AdminPermissionsPage({
               <button
                 type="button"
                 disabled={isLocked || savingRequest || Boolean(pendingOwnRequest)}
-                onClick={() => setRequestedModules(buildDefaultModuleState(requestedRole))}
+                onClick={() => applyRequestedRoleDefaults()}
                 className={[
                   'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
                   isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                 ].join(' ')}
               >
-                {t('重置默认', 'Reset')}
+                {t('应用默认', 'Apply Defaults')}
               </button>
             </div>
             <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -516,9 +520,7 @@ export default function AdminPermissionsPage({
                         </div>
                       ) : null}
                     </td>
-                    <td className="px-4 py-3">
-                      {renderStatusPill(row.status)}
-                    </td>
+                    <td className="px-4 py-3">{renderStatusPill(row.status)}</td>
                     <td className="px-4 py-3">
                       <div>{formatDateTime(row.created_at)}</div>
                       {row.reviewed_at ? (
