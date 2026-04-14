@@ -116,7 +116,10 @@ const normalizeModuleEntries = (
           access_level && typeof access_level === 'object'
             ? (access_level as Record<string, unknown>).access_level
             : access_level;
-        return { module_key: normalizedModuleKey, access_level: nestedAccess };
+        return {
+          module_key: normalizedModuleKey,
+          access_level: normalizeModuleAccessLevel(nestedAccess)
+        };
       });
 
     return mapped.length > 0 ? { modules: mapped, malformed: false } : { modules: [], malformed: true };
