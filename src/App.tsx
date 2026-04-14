@@ -1347,8 +1347,12 @@ export default function App() {
     }
   };
 
-  const relockPunchScreen = () => {
+  const logoutPunchScreen = async () => {
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
     setPunchUnlocked(false);
+    setUnlockEmail('');
     setUnlockPassword('');
     setUnlockByLabel('');
     setUnlockStatus({ tone: 'idle', message: '' });
@@ -3412,10 +3416,10 @@ const fetchPunchBoardUph = async (
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={relockPunchScreen}
+                      onClick={() => void logoutPunchScreen()}
                       className="rounded-2xl border border-amber-300/35 bg-amber-400/[0.08] px-4 py-2 text-sm font-medium text-amber-100 transition hover:bg-amber-400/[0.14]"
                     >
-                      Lock
+                      Logout
                     </button>
                     <button
                       type="button"
