@@ -85,11 +85,6 @@ type PunchBoardDeviceStatus = {
   tone: 'none' | 'borrowed' | 'overdue';
 };
 
-type TomorrowListSetting = {
-  enabled: boolean;
-  publishForDate: string;
-};
-
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
 type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 
@@ -103,7 +98,6 @@ const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | 
 const OBUP_REPORT_DETAILS_TABLE =
   (import.meta.env.VITE_OBUP_REPORT_DETAILS_TABLE as string | undefined) ?? 'report_details';
 const OBUP_ACCOUNT_LINKS_TABLE = (import.meta.env.VITE_OBUP_ACCOUNT_LINKS_TABLE as string | undefined) ?? 'account_links';
-const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
 const SCHEDULE_LABEL_TONES_KEY = 'schedule_label_tones_v1';
 const SCHEDULE_POSITION_TONES_KEY = 'schedule_position_tones_v1';
 const SCHEDULE_REST_NOTE = '__rest__';
@@ -245,12 +239,6 @@ const getDayIndexByCutoff = (now: Date, cutoffHour: number) => {
   return (operationalStart.getDay() + 6) % 7; // Monday=0 ... Sunday=6
 };
 const getTomorrowListTargetDate = (now: Date) => (now.getHours() >= 15 ? addDays(now, 1) : now);
-const getManualTomorrowListVisible = (setting: TomorrowListSetting, now: Date) => {
-  if (!setting.enabled || !setting.publishForDate) return false;
-  const cutoff = new Date(`${setting.publishForDate}T05:00:00`);
-  if (Number.isNaN(cutoff.getTime())) return false;
-  return now.getTime() < cutoff.getTime();
-};
 
 const createEmptyArrivalMetrics = (): ArrivalMetric[] =>
   ['early', 'late'].flatMap((shift) =>
@@ -757,10 +745,6 @@ export default function App() {
     }
   });
   const [attendanceHoverSearchByKey, setAttendanceHoverSearchByKey] = useState<Record<string, string>>({});
-  const [tomorrowListSetting, setTomorrowListSetting] = useState<TomorrowListSetting>({
-    enabled: false,
-    publishForDate: ''
-  });
   useEffect(() => {
     const sync = () => setLabelToneByName(loadLabelToneMap());
     window.addEventListener('storage', sync);
@@ -817,10 +801,6 @@ export default function App() {
     () => Array.from(new Set(dailyRoster.map((row) => row.staff_id).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'en-US')),
     [dailyRoster]
   );
-  const showTomorrowListData = useMemo(() => {
-    const now = new Date();
-    return getManualTomorrowListVisible(tomorrowListSetting, now);
-  }, [serverTime, tomorrowListSetting]);
   const [lastPunchActionLoading, setLastPunchActionLoading] = useState(false);
 
   const [editName, setEditName] = useState('');
@@ -1707,14 +1687,14 @@ const fetchPunchBoardUph = async (
     }
     return nextMap;
   };
-  const fetchDailyRoster = async (publishForDate?: string) => {
+  const fetchDailyRoster = async () => {
     if (!supabase) {
       setDailyRosterError('Missing Supabase configuration.');
       setDailyRoster([]);
       return;
     }
 
-    const targetDate = publishForDate ? new Date(`${publishForDate}T00:00:00`) : getTomorrowListTargetDate(new Date());
+    const targetDate = getTomorrowListTargetDate(new Date());
     const dayIndex = getRosterDayIndex(targetDate);
     const templateDate = getTemplateDateByDayIndex(dayIndex);
 
@@ -2165,29 +2145,6 @@ const fetchPunchBoardUph = async (
     const value = (row?.value ?? {}) as Record<string, unknown>;
     setLabelToneByName(normalizeLabelToneMap(value.tones ?? {}));
   };
-  const fetchTomorrowListSetting = async () => {
-    if (!supabase) {
-      setTomorrowListSetting({ enabled: false, publishForDate: '' });
-      return;
-    }
-    const res = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('key, value, updated_at')
-      .eq('key', TOMORROW_LIST_PUBLISH_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    if (res.error) {
-      setTomorrowListSetting({ enabled: false, publishForDate: '' });
-      return;
-    }
-    const row = (((res.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-    const value = (row?.value ?? {}) as Record<string, unknown>;
-    setTomorrowListSetting({
-      enabled: Boolean(value.enabled),
-      publishForDate: String(value.publish_for_date ?? '')
-    });
-  };
-
   const fetchRosterShiftByPunches = async (staffIds: string[]) => {
     if (!supabase || staffIds.length === 0) {
       setRosterShiftByStaffId({});
@@ -2412,7 +2369,7 @@ const fetchPunchBoardUph = async (
       void fetchDeviceQuickLogs();
       void fetchScheduleLabelToneSetting();
       void fetchSchedulePositionToneSetting();
-      void fetchTomorrowListSetting();
+      void fetchDailyRoster();
     };
 
     refreshPunchPage();
@@ -2476,19 +2433,6 @@ const fetchPunchBoardUph = async (
       void supabase.removeChannel(channel);
     };
   }, [page, punchLogPositionFilter]);
-
-  useEffect(() => {
-    if (page !== 'punch') return;
-    if (!showTomorrowListData) {
-      setDailyRoster([]);
-      setDailyRosterError(null);
-      setRosterShiftByStaffId({});
-      return;
-    }
-    const now = new Date();
-    const manualVisible = getManualTomorrowListVisible(tomorrowListSetting, now);
-    void fetchDailyRoster(manualVisible ? tomorrowListSetting.publishForDate : undefined);
-  }, [page, showTomorrowListData, tomorrowListSetting.publishForDate]);
 
   useEffect(() => {
     if (page !== 'punch') return;

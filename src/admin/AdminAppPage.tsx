@@ -221,7 +221,6 @@ const NON_LATE_ATTENDANCE_MARK_TYPES = ['absent', 'excuse', 'temporary_leave'] a
 const DEFAULT_TIMECARD_ATTENDANCE_SYNC_TABLES = ATTENDANCE_MARKS_TABLE === 'ob_attendance_marks';
 const LATE_LOOKBACK_DAYS = 120;
 const LATE_MIN_VALID_PUNCH_COUNT = 2;
-const TOMORROW_LIST_PUBLISH_KEY = 'publish_tomorrow_list';
 const SCHEDULE_WEEK_RESET_KEY = 'schedule_transient_reset_week';
 const SCHEDULE_WEEK_ROLLOVER_KEY = 'schedule_week_rollover_marker';
 const SCHEDULE_DAILY_PLAN_ACTIVATION_KEY = 'schedule_daily_plan_activation_marker';
@@ -1614,8 +1613,6 @@ export default function AdminAppPage() {
   const [scheduleSortByUphDesc, setScheduleSortByUphDesc] = useState(false);
   const [scheduleWorkDayFilter, setScheduleWorkDayFilter] = useState<number | null>(null);
   const [scheduleRenderCount, setScheduleRenderCount] = useState(120);
-  const [schedulePublishTomorrow, setSchedulePublishTomorrow] = useState(false);
-  const [schedulePublishForDate, setSchedulePublishForDate] = useState<string>('');
   const [scheduleRecommendedByDate, setScheduleRecommendedByDate] = useState<ScheduleRecommendedByDate>({});
   const [schedulePicker, setSchedulePicker] = useState<SchedulePickerState>({
     open: false,
@@ -3925,68 +3922,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   // Save fetchSchedule reference for use in realtime callbacks
   fetchScheduleRef.current = fetchSchedule;
 
-  const fetchSchedulePublishSetting = async () => {
-    if (!supabase) return;
-    const res = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('id, key, value, updated_at')
-      .eq('key', TOMORROW_LIST_PUBLISH_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    if (res.error) return;
-
-    const row = (((res.data as any[]) ?? [])[0] ?? null) as AppSettingRow | null;
-    if (!row) {
-      setSchedulePublishTomorrow(false);
-      setSchedulePublishForDate('');
-      return;
-    }
-
-    const value = (row.value ?? {}) as Record<string, unknown>;
-    setSchedulePublishTomorrow(Boolean(value.enabled));
-    setSchedulePublishForDate(String(value.publish_for_date ?? ''));
-  };
-
-  const setSchedulePublishSetting = async (enabled: boolean) => {
-    if (!scheduleCanOperate) {
-      setScheduleError(t('排班模块当前为只读。', 'Schedule is read-only.'));
-      return;
-    }
-    if (!supabase) {
-      setScheduleError('Missing Supabase configuration.');
-      return;
-    }
-    const tomorrow = addDays(new Date(serverTime), 1);
-    const publishForDate = toDateOnly(tomorrow);
-    const payload = {
-      key: TOMORROW_LIST_PUBLISH_KEY,
-      value: {
-        enabled,
-        publish_for_date: enabled ? publishForDate : '',
-        updated_at: new Date(serverTime).toISOString(),
-        operator: user?.email ?? null
-      },
-      updated_at: new Date(serverTime).toISOString()
-    };
-
-    await runLocked('schedule_publish_toggle', async () => {
-      setScheduleError(null);
-      const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
-      if (upsertRes.error) {
-        const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', TOMORROW_LIST_PUBLISH_KEY);
-        if (updateRes.error) {
-          const insertRes = await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
-          if (insertRes.error) {
-            setScheduleError(insertRes.error.message);
-            return;
-          }
-        }
-      }
-      setSchedulePublishTomorrow(enabled);
-      setSchedulePublishForDate(enabled ? publishForDate : '');
-    });
-  };
-
   const setScheduleCellState = async (
     employee: EmployeeRow,
     dayIndex: number,
@@ -4580,10 +4515,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const exec = async () => {
       await resetScheduleTransientStatesForWeek({ lockUi: false });
       await activatePlannedScheduleStatesForToday({ lockUi: false });
-      const [latestScheduleRows] = await Promise.all([
-        fetchSchedule({ lockUi: false }),
-        fetchSchedulePublishSetting()
-      ]);
+      const latestScheduleRows = await fetchSchedule({ lockUi: false });
       const latestEmployees = await fetchEmployees({
         reset: true,
         search: '',
@@ -14755,9 +14687,6 @@ ${rowsToHtml(late)}
                   t={t}
                   isLocked={isLocked}
                   isReadOnly={!scheduleCanOperate}
-                  schedulePublishTomorrow={schedulePublishTomorrow}
-                  schedulePublishForDate={schedulePublishForDate}
-                  setSchedulePublishSetting={setSchedulePublishSetting}
                   scheduleWeekOffset={scheduleWeekOffset}
                   changeScheduleWeek={changeScheduleWeek}
                   openScheduleDailyList={openScheduleDailyList}
