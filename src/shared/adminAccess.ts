@@ -28,6 +28,7 @@ export type AdminAccessModule = {
 export type AdminAccessContext = {
   user_id: string;
   role: AdminRole;
+  is_active: boolean;
   managed_agencies: string[];
   modules: AdminAccessModule[];
 };
@@ -161,17 +162,21 @@ export const normalizeAdminAccessContext = (
 ): AdminAccessContext => {
   const raw = (payload ?? {}) as Record<string, unknown>;
   const role = normalizeAdminRole(raw.role, fallbackEmail);
+  const isActive = Boolean(raw.is_active ?? true);
   const managedAgencies = parseJsonArray(raw.managed_agencies)
     .map((item) => String(item ?? '').trim())
     .filter(Boolean);
   const hasModulesField = Object.prototype.hasOwnProperty.call(raw, 'modules');
   const { modules: moduleEntries, malformed } = normalizeModuleEntries(raw.modules);
   const moduleMap =
-    hasModulesField && malformed && moduleEntries.length === 0 ? buildHiddenModuleMap() : buildEffectiveModuleMap(role, moduleEntries);
+    !isActive || (hasModulesField && malformed && moduleEntries.length === 0)
+      ? buildHiddenModuleMap()
+      : buildEffectiveModuleMap(role, moduleEntries);
 
   return {
     user_id: String(raw.user_id ?? '').trim(),
     role,
+    is_active: isActive,
     managed_agencies: managedAgencies,
     modules: ADMIN_MODULE_KEYS.map((moduleKey) => ({
       module_key: moduleKey,
@@ -187,7 +192,7 @@ const buildHiddenModuleMap = () =>
   >;
 
 export const getModuleMapFromContext = (context: AdminAccessContext | null | undefined) =>
-  context ? buildEffectiveModuleMap(context.role, context.modules ?? []) : buildHiddenModuleMap();
+  context && context.is_active ? buildEffectiveModuleMap(context.role, context.modules ?? []) : buildHiddenModuleMap();
 
 export const getVisibleModules = (context: AdminAccessContext | null | undefined) =>
   ADMIN_MODULE_KEYS.filter((moduleKey) => hasModuleAccess(getModuleMapFromContext(context), moduleKey, 'view'));

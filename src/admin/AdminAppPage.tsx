@@ -1355,6 +1355,7 @@ export default function AdminAppPage() {
     message: ''
   });
   const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
+  const suppressNextSignedOutStatusRef = useRef(false);
   const askConfirm = (message: string, title?: string) =>
     new Promise<boolean>((resolve) => {
       confirmResolverRef.current = resolve;
@@ -2784,7 +2785,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
       if (event === 'SIGNED_OUT') {
-        setStatus({ tone: 'idle', message: 'Signed out' });
+        if (suppressNextSignedOutStatusRef.current) {
+          suppressNextSignedOutStatusRef.current = false;
+        } else {
+          setStatus({ tone: 'idle', message: 'Signed out' });
+        }
       }
     });
 
@@ -2834,6 +2839,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       try {
         const context = await fetchAdminAccessContext(supabase, user.email);
         if (!active) return;
+        if (!context.is_active) {
+          suppressNextSignedOutStatusRef.current = true;
+          setAdminAccessContext(null);
+          setStatus({ tone: 'error', message: '账号已停用，无法登录。' });
+          await supabase.auth.signOut();
+          return;
+        }
         setAdminAccessContext(context);
       } catch (error) {
         if (!active) return;
@@ -2919,9 +2931,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     await runLocked('login', async () => {
       setStatus({ tone: 'pending', message: '登录中...' });
-      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      const nextEmail = email.trim();
+      const { error } = await supabase.auth.signInWithPassword({ email: nextEmail, password });
       if (error) {
         setStatus({ tone: 'error', message: `登录失败：${error.message}` });
+        return;
+      }
+      const context = await fetchAdminAccessContext(supabase, nextEmail);
+      if (!context.is_active) {
+        suppressNextSignedOutStatusRef.current = true;
+        await supabase.auth.signOut();
+        setStatus({ tone: 'error', message: '账号已停用，无法登录。' });
+        setPassword('');
         return;
       }
       setStatus({ tone: 'success', message: '登录成功' });

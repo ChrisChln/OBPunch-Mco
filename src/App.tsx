@@ -1336,6 +1336,10 @@ export default function App() {
       }
 
       const context = normalizeAdminAccessContext(accessRes.data, email);
+      if (!context.is_active) {
+        setUnlockStatus({ tone: 'error', message: '账号已停用，无法解锁。' });
+        return;
+      }
       if (!canUnlockPunchScreen(context)) {
         setUnlockStatus({ tone: 'error', message: 'Only level 2 or level 1 admins can unlock this screen.' });
         return;
