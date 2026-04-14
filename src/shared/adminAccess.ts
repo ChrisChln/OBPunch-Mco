@@ -111,11 +111,15 @@ const normalizeModuleEntries = (
     const mapped = Object.entries(value)
       .filter(([moduleKey]) => ADMIN_MODULE_KEYS.includes(moduleKey as AdminModuleKey))
       .map(([module_key, access_level]) => {
+        const normalizedModuleKey = module_key as AdminModuleKey;
         const nestedAccess =
           access_level && typeof access_level === 'object'
             ? (access_level as Record<string, unknown>).access_level
             : access_level;
-        return { module_key, access_level: nestedAccess };
+        return {
+          module_key: normalizedModuleKey,
+          access_level: normalizeModuleAccessLevel(nestedAccess)
+        };
       });
 
     return mapped.length > 0 ? { modules: mapped, malformed: false } : { modules: [], malformed: true };

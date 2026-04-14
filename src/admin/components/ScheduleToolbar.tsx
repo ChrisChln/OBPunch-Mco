@@ -44,7 +44,7 @@ export default function ScheduleToolbar({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          disabled={isLocked}
+          disabled={writeLocked}
           onClick={() => changeScheduleWeek(scheduleWeekOffset - 1, 'toolbar_prev')}
           className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
         >
@@ -53,7 +53,7 @@ export default function ScheduleToolbar({
 
         <button
           type="button"
-          disabled={isLocked}
+          disabled={writeLocked}
           onClick={() => changeScheduleWeek(0, 'toolbar_this_week')}
           className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
         >
@@ -62,7 +62,7 @@ export default function ScheduleToolbar({
 
         <button
           type="button"
-          disabled={isLocked}
+          disabled={writeLocked}
           onClick={() => changeScheduleWeek(scheduleWeekOffset + 1, 'toolbar_next')}
           className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
         >
@@ -71,7 +71,7 @@ export default function ScheduleToolbar({
 
         <button
           type="button"
-          disabled={isLocked}
+          disabled={writeLocked}
           onClick={() => openScheduleDailyList('toolbar_daily_list')}
           className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
         >
@@ -81,14 +81,14 @@ export default function ScheduleToolbar({
         <StyledDateInput
           themeMode="dark"
           value={schedulePrintDate}
-          disabled={isLocked}
+          disabled={writeLocked}
           onChange={setSchedulePrintDate}
           title={t('签到表日期', 'Sign-in print date')}
         />
 
         <button
           type="button"
-          disabled={isLocked || scheduleEmployeesFilteredLength === 0}
+          disabled={writeLocked || scheduleEmployeesFilteredLength === 0}
           onClick={printScheduleSignInSheet}
           className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
         >
@@ -97,7 +97,7 @@ export default function ScheduleToolbar({
 
         <button
           type="button"
-          disabled={isLocked || scheduleEmployeesFilteredLength === 0}
+          disabled={writeLocked || scheduleEmployeesFilteredLength === 0}
           onClick={() => void exportScheduleTemplate()}
           className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
         >
@@ -106,7 +106,7 @@ export default function ScheduleToolbar({
 
         <button
           type="button"
-          disabled={isLocked}
+          disabled={writeLocked}
           onClick={() => void refreshSchedulePanelWithAudit('toolbar_refresh')}
           className={[
             actionButtonClass,
