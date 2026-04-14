@@ -148,10 +148,13 @@ export default function EmployeesTableSection({
 
       <div
         ref={containerRef}
-        className="mt-5 max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30"
+        className={[
+          'no-scrollbar mt-5 max-h-[68vh] overflow-y-auto overflow-x-hidden rounded-2xl border',
+          isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/30'
+        ].join(' ')}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
       >
-        <table className="min-w-[1670px] w-full text-left text-sm">
+        <table className="w-full table-fixed text-left text-sm">
           <thead
             className={[
               'sticky top-0 z-20 border-b text-xs uppercase tracking-[0.2em] backdrop-blur',
@@ -159,14 +162,14 @@ export default function EmployeesTableSection({
             ].join(' ')}
           >
             <tr>
-              <th className="w-[150px] px-4 py-3 whitespace-nowrap">Employee ID</th>
-              <th className="w-[240px] px-4 py-3">Name</th>
-              <th className="w-[130px] px-4 py-3 whitespace-nowrap">Agency</th>
-              <th className="w-[120px] px-4 py-3 whitespace-nowrap">Position</th>
-              <th className="w-[90px] px-4 py-3 whitespace-nowrap">FT/PT</th>
-              <th className="w-[130px] px-4 py-3 whitespace-nowrap">{t('标签', 'Label')}</th>
-              <th className="w-[150px] px-4 py-3 whitespace-nowrap">{t('账号', 'Account')}</th>
-              <th className="w-[130px] px-4 py-3 whitespace-nowrap">
+              <th className="w-[118px] px-3 py-3 whitespace-nowrap">Employee ID</th>
+              <th className="w-[180px] px-3 py-3">Name</th>
+              <th className="w-[92px] px-3 py-3 whitespace-nowrap">Agency</th>
+              <th className="w-[112px] px-3 py-3 whitespace-nowrap">Position</th>
+              <th className="w-[72px] px-3 py-3 whitespace-nowrap">FT/PT</th>
+              <th className="w-[120px] px-3 py-3 whitespace-nowrap">{t('标签', 'Label')}</th>
+              <th className="w-[112px] px-3 py-3 whitespace-nowrap">{t('账号', 'Account')}</th>
+              <th className="w-[112px] px-3 py-3 whitespace-nowrap">
                 <button
                   type="button"
                   onClick={onToggleHireDateSort}
@@ -180,9 +183,9 @@ export default function EmployeesTableSection({
                   {employeeSortByHireDateDesc ? ' ↓' : ''}
                 </button>
               </th>
-              <th className="w-[100px] px-4 py-3 whitespace-nowrap">{t('班次', 'Shift')}</th>
-              <th className="w-[120px] px-4 py-3 whitespace-nowrap">{t('班次时间', 'Shift time')}</th>
-              <th className="w-[130px] px-4 py-3 whitespace-nowrap">
+              <th className="w-[86px] px-3 py-3 whitespace-nowrap">{t('班次', 'Shift')}</th>
+              <th className="w-[96px] px-3 py-3 whitespace-nowrap">{t('班次时间', 'Shift time')}</th>
+              <th className="w-[96px] px-3 py-3 whitespace-nowrap">
                 <button
                   type="button"
                   onClick={onToggleSort}
@@ -196,7 +199,7 @@ export default function EmployeesTableSection({
                   {employeeSortByLastPunchDesc ? ' ↓' : ''}
                 </button>
               </th>
-              <th className="w-[240px] px-4 py-3 text-right whitespace-nowrap">{t('操作', 'Actions')}</th>
+              <th className="w-[188px] px-3 py-3 text-right whitespace-nowrap">{t('操作', 'Actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -289,12 +292,12 @@ export default function EmployeesTableSection({
                     isSelected ? '' : 'hover:bg-white/5'
                   ].join(' ')}
                 >
-                  <td className="w-[150px] px-4 py-3 font-mono text-slate-200 whitespace-nowrap">{displayStaffId(staff)}</td>
-                  <td className="w-[240px] max-w-[240px] px-4 py-3 text-slate-200">
+                  <td className={['w-[118px] px-3 py-3 font-mono whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{displayStaffId(staff)}</td>
+                  <td className={['w-[180px] max-w-[180px] px-3 py-3', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
                     <span className="block truncate" title={name || '-'}>{name || '-'}</span>
                   </td>
-                  <td className="w-[130px] px-4 py-3 text-slate-200 whitespace-nowrap">{agency || '-'}</td>
-                  <td className="w-[120px] px-4 py-3 text-slate-200 whitespace-nowrap">
+                  <td className={['w-[92px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{agency || '-'}</td>
+                  <td className={['w-[112px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
                     <span
                       className={[
                         'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
@@ -304,8 +307,8 @@ export default function EmployeesTableSection({
                       {position || '-'}
                     </span>
                   </td>
-                  <td className="w-[90px] px-4 py-3 text-slate-200 whitespace-nowrap">{employmentType}</td>
-                  <td className="w-[130px] px-4 py-3 text-slate-200">
+                  <td className={['w-[72px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{employmentType}</td>
+                  <td className={['w-[120px] px-3 py-3', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
                     {label ? (
                       <span
                         className={[
@@ -319,9 +322,11 @@ export default function EmployeesTableSection({
                       '-'
                     )}
                   </td>
-                  <td className="w-[150px] px-4 py-3 text-slate-200 whitespace-nowrap">{workAccount || '-'}</td>
-                  <td className="w-[130px] px-4 py-3 text-slate-200 whitespace-nowrap">{hireDate}</td>
-                  <td className="w-[100px] px-4 py-3 text-slate-200 whitespace-nowrap">
+                  <td className={['w-[112px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
+                    <span className="block truncate" title={workAccount || '-'}>{workAccount || '-'}</span>
+                  </td>
+                  <td className={['w-[112px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{hireDate}</td>
+                  <td className={['w-[86px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
                     <span
                       title={shiftTitle}
                       className={[
@@ -332,9 +337,9 @@ export default function EmployeesTableSection({
                       {shiftLabel}
                     </span>
                   </td>
-                  <td className="w-[120px] px-4 py-3 font-mono text-slate-200 whitespace-nowrap">{shiftTime || '-'}</td>
-                  <td className="w-[130px] px-4 py-3 text-slate-200 whitespace-nowrap">{lastPunchDaysText}</td>
-                  <td className="w-[240px] px-4 py-3 text-right whitespace-nowrap">
+                  <td className={['w-[96px] px-3 py-3 font-mono whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{shiftTime || '-'}</td>
+                  <td className={['w-[96px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{lastPunchDaysText}</td>
+                  <td className="w-[188px] px-3 py-3 text-right whitespace-nowrap">
                     <button
                       type="button"
                       disabled={isLocked}
@@ -343,7 +348,7 @@ export default function EmployeesTableSection({
                         void openEmployeeAuditLog(staff, name);
                       }}
                       className={[
-                        'mr-2 rounded-xl px-4 py-1.5 text-xs font-semibold transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60',
+                        'mr-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60',
                         themeMode === 'light'
                           ? 'border border-cyan-300 bg-cyan-50 text-cyan-700 hover:bg-cyan-100'
                           : 'bg-cyan-500/20 text-cyan-200 hover:bg-cyan-500/30'
@@ -358,7 +363,7 @@ export default function EmployeesTableSection({
                         evt.stopPropagation();
                         void printEmployeeTempBadge({ staff, name, agency, position, workAccount, workPassword });
                       }}
-                      className="mr-2 rounded-xl bg-neon px-4 py-1.5 text-xs font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                      className="mr-1.5 rounded-xl bg-neon px-3 py-1.5 text-xs font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {employeeBadgePrintingStaffId === staff ? t('生成中...', 'Generating...') : t('工牌', 'Badge')}
                     </button>
@@ -381,7 +386,7 @@ export default function EmployeesTableSection({
                         });
                       }}
                       className={[
-                        'mr-2 rounded-xl px-4 py-1.5 text-xs font-semibold transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60',
+                        'mr-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60',
                         themeMode === 'light'
                           ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
                           : 'bg-white/10 text-slate-200 hover:bg-white/15'
@@ -396,9 +401,9 @@ export default function EmployeesTableSection({
                         evt.stopPropagation();
                         void deleteEmployeeRow(staff);
                       }}
-                      className="rounded-xl bg-ember px-4 py-1.5 text-xs font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="rounded-xl bg-ember px-3 py-1.5 text-xs font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {t('删除', 'Delete')}
+                      {t('删', 'Del')}
                     </button>
                   </td>
                 </tr>

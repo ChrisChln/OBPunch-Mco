@@ -1460,10 +1460,28 @@ export default function AgencyAppPage() {
     <div className="min-h-screen px-5 py-8 text-paper">
       <div className="mx-auto flex max-w-[1480px] flex-col gap-6">
         <header className={cardClass}>
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.28em] text-slate-400">ObPunch Agency</div>
-            <h1 className="mt-4 font-display text-5xl tracking-[0.04em] text-white">Agency Board</h1>
-            <div className="mt-3 text-sm text-slate-400">{displayName || user?.email || 'Signed out'}</div>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.28em] text-slate-400">ObPunch Agency</div>
+              <h1 className="mt-4 font-display text-5xl tracking-[0.04em] text-white">Agency Board</h1>
+              <div className="mt-3 text-sm text-slate-400">{displayName || user?.email || 'Signed out'}</div>
+            </div>
+            {user ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.location.href = '/';
+                  }}
+                  className={buttonClass}
+                >
+                  Back to Punch
+                </button>
+                <button type="button" onClick={() => void doLogout()} className={buttonClass} disabled={busy}>
+                  Logout
+                </button>
+              </div>
+            ) : null}
           </div>
         </header>
 

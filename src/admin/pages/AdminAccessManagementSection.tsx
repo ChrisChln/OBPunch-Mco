@@ -89,15 +89,15 @@ export default function AdminAccessManagementSection({
       const explicitRow = explicitRowMap.get(user.user_id);
       if (explicitRow) return explicitRow;
 
-      const role = normalizeAdminRole('', user.user_email);
+      const nextRole = normalizeAdminRole('', user.user_email);
       return {
         user_id: user.user_id,
         user_email: user.user_email,
         display_name: user.display_name,
-        role,
+        role: nextRole,
         is_active: true,
         managed_agencies: [],
-        modules: buildDefaultModuleState(role)
+        modules: buildDefaultModuleState(nextRole)
       } satisfies AdminAccessAccountRecord;
     });
 
@@ -116,8 +116,7 @@ export default function AdminAccessManagementSection({
   const existingUserIds = useMemo(() => new Set(mergedRows.map((row) => row.user_id)), [mergedRows]);
 
   const selectableUsers = useMemo(
-    () =>
-      userOptions.filter((option) => editing?.mode === 'edit' || !existingUserIds.has(option.user_id)),
+    () => userOptions.filter((option) => editing?.mode === 'edit' || !existingUserIds.has(option.user_id)),
     [editing?.mode, existingUserIds, userOptions]
   );
 
@@ -128,7 +127,14 @@ export default function AdminAccessManagementSection({
     setRole(sourceRow?.role ?? 'agency');
     setIsActive(sourceRow?.is_active ?? true);
     setManagedAgencies(sourceRow?.managed_agencies ?? []);
-    setModules(sourceRow?.modules?.length ? sourceRow.modules : buildDefaultModuleState(sourceRow?.role ?? 'agency'));
+    setModules(
+      sourceRow?.modules?.length
+        ? sourceRow.modules.map((module) => ({
+            module_key: module.module_key,
+            access_level: module.access_level
+          }))
+        : buildDefaultModuleState(sourceRow?.role ?? 'agency')
+    );
   }, [editing]);
 
   const closeModal = () => {
@@ -138,7 +144,9 @@ export default function AdminAccessManagementSection({
 
   const toggleAgency = (agency: string) => {
     setManagedAgencies((prev) =>
-      prev.includes(agency) ? prev.filter((item) => item !== agency) : [...prev, agency].sort((a, b) => a.localeCompare(b, 'en-US'))
+      prev.includes(agency)
+        ? prev.filter((item) => item !== agency)
+        : [...prev, agency].sort((a, b) => a.localeCompare(b, 'en-US'))
     );
   };
 
@@ -148,8 +156,7 @@ export default function AdminAccessManagementSection({
     );
   };
 
-  const resetModulesToRoleDefaults = (nextRole: AdminRole) => {
-    setRole(nextRole);
+  const applyRoleDefaults = (nextRole: AdminRole = role) => {
     setModules(buildDefaultModuleState(nextRole));
   };
 
@@ -173,7 +180,12 @@ export default function AdminAccessManagementSection({
   const modal =
     editing && typeof document !== 'undefined'
       ? createPortal(
-          <div className={['fixed inset-0 z-40 flex items-center justify-center overflow-y-auto px-4 py-10', isLight ? 'bg-slate-900/35' : 'bg-black/60'].join(' ')}>
+          <div
+            className={[
+              'fixed inset-0 z-40 flex items-center justify-center overflow-y-auto px-4 py-10',
+              isLight ? 'bg-slate-900/35' : 'bg-black/60'
+            ].join(' ')}
+          >
             <div
               className={[
                 'w-full max-w-5xl rounded-3xl border p-6 shadow-2xl',
@@ -183,7 +195,7 @@ export default function AdminAccessManagementSection({
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
-                    {editing.mode === 'create' ? t('新建权限', 'New Access') : t('编辑权限', 'Edit Access')}
+                    {editing.mode === 'create' ? t('新增权限', 'New Access') : t('编辑权限', 'Edit Access')}
                   </div>
                   <div className={['mt-2 text-sm', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                     {editing.mode === 'edit'
@@ -235,7 +247,7 @@ export default function AdminAccessManagementSection({
                   </label>
                   <select
                     value={role}
-                    onChange={(e) => resetModulesToRoleDefaults(e.target.value as AdminRole)}
+                    onChange={(e) => setRole(e.target.value as AdminRole)}
                     disabled={saving}
                     className={[
                       'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
@@ -314,14 +326,14 @@ export default function AdminAccessManagementSection({
                   </div>
                   <button
                     type="button"
-                    onClick={() => setModules(buildDefaultModuleState(role))}
+                    onClick={() => applyRoleDefaults()}
                     disabled={saving}
                     className={[
                       'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
                       isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                     ].join(' ')}
                   >
-                    {t('重置默认', 'Reset')}
+                    {t('应用默认', 'Apply Defaults')}
                   </button>
                 </div>
                 <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">

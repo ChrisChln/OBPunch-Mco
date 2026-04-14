@@ -44,7 +44,6 @@ import {
   canReviewTerminationRequests,
   getModuleMapFromContext,
   hasModuleAccess,
-  normalizeAdminAccessContext,
   type AdminAccessContext
 } from '../shared/adminAccess';
 import { isScheduleOnlyAgency } from '../shared/agencyRules';
@@ -2836,19 +2835,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const context = await fetchAdminAccessContext(supabase, user.email);
         if (!active) return;
         setAdminAccessContext(context);
-      } catch {
+      } catch (error) {
         if (!active) return;
-        setAdminAccessContext(
-          normalizeAdminAccessContext(
-            {
-              user_id: user.id,
-              role: user.email?.trim().toLowerCase() === STAFF_ID_EDITOR_EMAIL ? 'level1' : 'level3',
-              managed_agencies: [],
-              modules: []
-            },
-            user.email
-          )
-        );
+        console.error('Failed to load admin access context.', error);
+        setAdminAccessContext(null);
       }
     };
     void loadAdminAccessContext();
@@ -2977,7 +2967,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (!supabase || !accountsCanManageAdminAccess) {
       setAdminAccessAccounts([]);
       setAdminAccessUserOptions([]);
-      return;
+      return [] as AdminAccessAccountRecord[];
     }
 
     const exec = async () => {
@@ -2992,14 +2982,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           }))
           .filter((item) => item.user_id)
       );
+      return rows;
     };
 
     if (options?.lockUi === false) {
-      await exec();
-      return;
+      return exec();
     }
 
-    await runLocked('admin_access_accounts', exec);
+    let rows: AdminAccessAccountRecord[] = [];
+    await runLocked('admin_access_accounts', async () => {
+      rows = await exec();
+    });
+    return rows;
   };
 
   const fetchAdminAccessRequests = async (options?: {
@@ -3072,7 +3066,37 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const nextContext = await fetchAdminAccessContext(supabase, user.email);
         setAdminAccessContext(nextContext);
       }
-      await fetchAdminAccessAccountsAndUsers({ lockUi: false });
+      const refreshedRows = await fetchAdminAccessAccountsAndUsers({ lockUi: false });
+
+      const expectedModules = new Map(
+        payload.modules.map((module) => [module.module_key, module.access_level] as const)
+      );
+      const refreshed = refreshedRows.find((row) => row.user_id === payload.user_id) ?? null;
+      const actualModules = new Map(
+        (refreshed?.modules ?? []).map((module) => [module.module_key, module.access_level] as const)
+      );
+      const mismatchedModules: string[] = [];
+      for (const [moduleKey, expectedAccess] of expectedModules.entries()) {
+        const actualAccess = actualModules.get(moduleKey);
+        if (actualAccess !== expectedAccess) {
+          mismatchedModules.push(`${moduleKey}:${expectedAccess}->${actualAccess ?? 'missing'}`);
+        }
+      }
+
+      if (
+        refreshed &&
+        (refreshed.role !== payload.role || refreshed.is_active !== payload.is_active || mismatchedModules.length > 0)
+      ) {
+        setStatus({
+          tone: 'error',
+          message: t(
+            `保存后回读不一致：${mismatchedModules.slice(0, 3).join(', ') || '角色或启用状态被重写'}`,
+            `Saved but backend returned different values: ${mismatchedModules.slice(0, 3).join(', ') || 'role/active overwritten'}`
+          )
+        });
+        return;
+      }
+
       setStatus({ tone: 'success', message: t('权限已保存。', 'Access saved.') });
     });
   };
