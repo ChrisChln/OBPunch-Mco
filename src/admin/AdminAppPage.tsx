@@ -1348,11 +1348,22 @@ export default function AdminAppPage() {
   const t = (zh: string, en: string) => (lang === 'en' ? en : zh);
 
   const [status, setStatus] = useState<Status>({ tone: 'idle', message: '请登录后台' });
+  const [loginErrorDialog, setLoginErrorDialog] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: ''
+  });
   const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; title: string; message: string }>({
     open: false,
     title: '',
     message: ''
   });
+  const openLoginErrorDialog = (message: string) => {
+    setLoginErrorDialog({ open: true, title: t('登录失败', 'Login Failed'), message });
+  };
+  const closeLoginErrorDialog = () => {
+    setLoginErrorDialog((prev) => ({ ...prev, open: false }));
+  };
   const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
   const suppressNextSignedOutStatusRef = useRef(false);
   const askConfirm = (message: string, title?: string) =>
@@ -2839,7 +2850,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (!context.is_active) {
           suppressNextSignedOutStatusRef.current = true;
           setAdminAccessContext(null);
-          setStatus({ tone: 'error', message: '账号已停用，无法登录。' });
+          setStatus({ tone: 'error', message: 'Account was locked' });
           await supabase.auth.signOut();
           return;
         }
@@ -2923,7 +2934,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
   const doLogin = async () => {
     if (!supabase) {
-      setStatus({ tone: 'error', message: '缺少 Supabase 配置，请检查环境变量。' });
+      const message = '缺少 Supabase 配置，请检查环境变量。';
+      setStatus({ tone: 'error', message });
+      openLoginErrorDialog(message);
       return;
     }
     await runLocked('login', async () => {
@@ -2931,18 +2944,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const nextEmail = email.trim();
       const { error } = await supabase.auth.signInWithPassword({ email: nextEmail, password });
       if (error) {
-        setStatus({ tone: 'error', message: `登录失败：${error.message}` });
+        const message = `登录失败：${error.message}`;
+        setStatus({ tone: 'error', message });
+        openLoginErrorDialog(message);
         return;
       }
       const context = await fetchAdminAccessContext(supabase, nextEmail);
       if (!context.is_active) {
         suppressNextSignedOutStatusRef.current = true;
         await supabase.auth.signOut();
-        setStatus({ tone: 'error', message: '账号已停用，无法登录。' });
+        const message = 'Account was locked';
+        setStatus({ tone: 'error', message });
+        openLoginErrorDialog(message);
         setPassword('');
         return;
       }
       setStatus({ tone: 'success', message: '登录成功' });
+      setLoginErrorDialog({ open: false, title: '', message: '' });
       setPassword('');
     });
   };
@@ -14495,37 +14513,40 @@ ${rowsToHtml(late)}
       ].join(' ')}
     >
       <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-6">
-        <AdminHeader
-          t={t}
-          isLocked={isLocked}
-          themeMode={themeMode}
-          setThemeMode={setThemeMode}
-          lang={lang}
-          setLang={setLang}
-          status={status}
-          toneColor={toneColor}
-          serverTimeText={formatTime(serverTime, locale)}
-          user={user}
-          userDisplayName={userDisplayName}
-          attendanceError={attendanceError}
-          onBack={() => {
-            window.location.href = '/';
-          }}
-          onLogout={doLogout}
-        />
-
         {!user ? (
-          <AdminLoginPanel
-            isLocked={isLocked}
-            email={email}
-            password={password}
-            setEmail={setEmail}
-            setPassword={setPassword}
-            doLogin={doLogin}
-            t={t}
-          />
+          <main className="flex min-h-[calc(100vh-4rem)] items-center justify-center">
+            <AdminLoginPanel
+              isLocked={isLocked}
+              email={email}
+              password={password}
+              setEmail={setEmail}
+              setPassword={setPassword}
+              doLogin={doLogin}
+              themeMode={themeMode}
+              t={t}
+            />
+          </main>
         ) : (
           <>
+            <AdminHeader
+              t={t}
+              isLocked={isLocked}
+              themeMode={themeMode}
+              setThemeMode={setThemeMode}
+              lang={lang}
+              setLang={setLang}
+              status={status}
+              toneColor={toneColor}
+              serverTimeText={formatTime(serverTime, locale)}
+              user={user}
+              userDisplayName={userDisplayName}
+              attendanceError={attendanceError}
+              onBack={() => {
+                window.location.href = '/';
+              }}
+              onLogout={doLogout}
+            />
+
             <AdminNav
               page={page}
               isLocked={isLocked}
@@ -17008,6 +17029,16 @@ ${rowsToHtml(late)}
         <footer className="text-center text-xs text-slate-500">
           {isLocked ? t('请求处理中，已锁定交互', 'Request in progress (locked)') : 'Ready'}
         </footer>
+        <AppDialog
+          open={loginErrorDialog.open}
+          title={loginErrorDialog.title}
+          message={loginErrorDialog.message}
+          themeMode={themeMode}
+          confirmText={t('知道了', 'OK')}
+          onConfirm={closeLoginErrorDialog}
+          onCancel={closeLoginErrorDialog}
+          tone="danger"
+        />
         <AppDialog
           open={confirmDialog.open}
           title={confirmDialog.title}
