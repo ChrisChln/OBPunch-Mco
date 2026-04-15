@@ -62,6 +62,7 @@ type SchedulePickerOption = {
 };
 
 const EMPLOYEE_RENDER_PAGE_SIZE = 80;
+const MOBILE_SCHEDULE_MAX_WIDTH = 900;
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? Math.min(Math.max(DAY_CUTOFF_HOUR_RAW, 0), 23) : 5;
 const TIMECARD_ABSENT_VISIBLE_HOUR_RAW = Number(import.meta.env.VITE_TIMECARD_ABSENT_VISIBLE_HOUR ?? 12);
@@ -279,6 +280,12 @@ const formatNewHireStartTime = (value: string) => {
   return '09:00';
 };
 
+const toCsvCell = (value: unknown) => {
+  const text = String(value ?? '');
+  if (!/[",\r\n]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
+};
+
 const normalizeAgencyValue = (value: unknown) => {
   if (typeof value === 'string') return value.trim();
   if (typeof value === 'number' || typeof value === 'boolean') return String(value).trim();
@@ -342,6 +349,7 @@ const selectedDateColumnClass =
   'bg-white/[0.03] shadow-[inset_3px_0_0_rgba(255,255,255,0.95),inset_-3px_0_0_rgba(255,255,255,0.95)]';
 const selectedDateHeaderLabelClass =
   'inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-white';
+const selectedDateColumnClassMobile = 'bg-white/[0.03]';
 
 const Modal = ({
   open,
@@ -472,6 +480,7 @@ type ScheduleCellProps = {
   isDeadlineLocked: boolean;
   busy: boolean;
   selectedDateColumnClass: string;
+  selectedDateLastRowClass: string;
   onCellClick: (
     event: ReactMouseEvent<HTMLButtonElement>,
     staffId: string,
@@ -494,6 +503,7 @@ const ScheduleCell = memo(function ScheduleCell({
   isDeadlineLocked,
   busy,
   selectedDateColumnClass,
+  selectedDateLastRowClass,
   onCellClick
 }: ScheduleCellProps) {
   const useMutedCellStyle = !canEditCell || isDeadlineLocked;
@@ -503,7 +513,7 @@ const ScheduleCell = memo(function ScheduleCell({
       className={[
         'px-0.5 py-1.5 text-center',
         isSelectedWorkDate ? selectedDateColumnClass : '',
-        isSelectedWorkDate && isLastEmployeeRow ? 'shadow-[inset_3px_0_0_rgba(255,255,255,0.95),inset_-3px_0_0_rgba(255,255,255,0.95),inset_0_-3px_0_rgba(255,255,255,0.95)]' : ''
+        isSelectedWorkDate && isLastEmployeeRow ? selectedDateLastRowClass : ''
       ].join(' ')}
     >
       <button
@@ -536,12 +546,14 @@ const ScheduleCell = memo(function ScheduleCell({
   previousProps.isDeadlineLocked === nextProps.isDeadlineLocked &&
   previousProps.busy === nextProps.busy &&
   previousProps.selectedDateColumnClass === nextProps.selectedDateColumnClass &&
+  previousProps.selectedDateLastRowClass === nextProps.selectedDateLastRowClass &&
   previousProps.onCellClick === nextProps.onCellClick);
 
 export default function AgencyAppPage() {
   const [supabase] = useState(() => createSupabaseClient({ persistSession: true }));
   const [user, setUser] = useState<User | null>(null);
   const [access, setAccess] = useState<AdminAccessContext | null>(null);
+  const [accessLoading, setAccessLoading] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [board] = useState<AgencyBoard | null>(null);
   const [weekSchedule, setWeekSchedule] = useState<AgencyWeekSchedule | null>(null);
@@ -590,6 +602,9 @@ export default function AgencyAppPage() {
     anchorLeft: 0,
     anchorTop: 0
   });
+  const [compactScheduleView, setCompactScheduleView] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth <= MOBILE_SCHEDULE_MAX_WIDTH : false
+  );
 
   const openNotice = useCallback((tone: NoticeTone, message: string, title?: string) => {
     const fallbackTitle = tone === 'error' ? 'Error' : 'Notice';
@@ -638,8 +653,10 @@ export default function AgencyAppPage() {
       if (!supabase || !user) {
         setAccess(null);
         setDisplayName('');
+        setAccessLoading(false);
         return;
       }
+      setAccessLoading(true);
       try {
         const [nextAccess, nextDisplayName] = await Promise.all([
           fetchAdminAccessContext(supabase, user.email),
@@ -658,6 +675,8 @@ export default function AgencyAppPage() {
       } catch (nextError) {
         if (!active) return;
         openNotice('error', nextError instanceof Error ? nextError.message : 'Failed to load access context.');
+      } finally {
+        if (active) setAccessLoading(false);
       }
     };
     void loadContext();
@@ -676,6 +695,18 @@ export default function AgencyAppPage() {
       note: prev.note || 'NEW'
     }));
   }, [selectedDate, access?.managed_agencies, agencyFilter]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const updateCompactMode = () => {
+      setCompactScheduleView(window.innerWidth <= MOBILE_SCHEDULE_MAX_WIDTH);
+    };
+    updateCompactMode();
+    window.addEventListener('resize', updateCompactMode);
+    return () => {
+      window.removeEventListener('resize', updateCompactMode);
+    };
+  }, []);
 
   useEffect(() => {
     if (!schedulePicker.open) return;
@@ -1139,6 +1170,29 @@ export default function AgencyAppPage() {
     return Array.from({ length: 7 }, (_, index) => toDateOnly(addDays(weekStart, index)));
   }, [selectedDate, weekSchedule]);
 
+  const visibleWeekDates = useMemo(() => {
+    if (!compactScheduleView) return weekDates;
+    return weekDates.includes(selectedDate) ? [selectedDate] : [weekDates[0] ?? selectedDate];
+  }, [compactScheduleView, selectedDate, weekDates]);
+
+  const showIdColumn = !compactScheduleView;
+  const showAgencyColumn = !compactScheduleView;
+  const showStartTimeColumn = !compactScheduleView;
+  const selectedDateColumnToneClass = compactScheduleView ? selectedDateColumnClassMobile : selectedDateColumnClass;
+  const selectedDateHeaderColumnClass = compactScheduleView
+    ? selectedDateColumnClassMobile
+    : `${selectedDateColumnClass} shadow-[inset_3px_0_0_rgba(255,255,255,0.95),inset_-3px_0_0_rgba(255,255,255,0.95),inset_0_3px_0_rgba(255,255,255,0.95)]`;
+  const selectedDateLastRowClass = compactScheduleView
+    ? ''
+    : 'shadow-[inset_3px_0_0_rgba(255,255,255,0.95),inset_-3px_0_0_rgba(255,255,255,0.95),inset_0_-3px_0_rgba(255,255,255,0.95)]';
+  const fixedScheduleColumnCount =
+    (showIdColumn ? 1 : 0) +
+    1 +
+    (showAgencyColumn ? 1 : 0) +
+    1 +
+    1 +
+    (showStartTimeColumn ? 1 : 0);
+
   const scheduleCellByStaffDate = useMemo(() => {
     const next = new Map<string, AgencyWeekSchedule['employees'][number]['days'][number]>();
     for (const row of weekSchedule?.employees ?? []) {
@@ -1328,6 +1382,78 @@ export default function AgencyAppPage() {
     return next;
   }, [filteredEmployees, scheduleCellByStaffDate, scheduleStateOverrides, weekDates]);
 
+  const selectedDateWorkExportRows = useMemo(() => {
+    return filteredEmployees
+      .map((employee) => {
+        const overrideKey = `${employee.staff_id}__${selectedDate}`;
+        const cell = scheduleCellByStaffDate.get(overrideKey);
+        const state = scheduleStateOverrides.get(overrideKey) ?? cell?.state ?? 'rest';
+        if (!isWorklikeState(state)) return null;
+        const hasAbsentMark = absentMarkKeys.has(overrideKey);
+        const showLiveAbsent = shouldShowAgencyLiveAbsent({
+          shift: employee.shift,
+          workDate: selectedDate,
+          state,
+          operationalDate: operationalNowContext.operationalDate,
+          currentMinutes: operationalNowContext.minutes,
+          hasPunch: currentOperationalPunchStaffIds.has(employee.staff_id)
+        });
+        if (hasAbsentMark || showLiveAbsent) return null;
+        return {
+          staffId: employee.staff_id,
+          name: String(employee.name ?? '').trim(),
+          agency: String(employee.agency ?? '').trim(),
+          position: String(employee.position ?? '').trim(),
+          shift: shiftLabel(employee.shift),
+          startTime: formatStartTime(employee.start_time),
+          state: stateLabel(state)
+        };
+      })
+      .filter((row): row is {
+        staffId: string;
+        name: string;
+        agency: string;
+        position: string;
+        shift: string;
+        startTime: string;
+        state: string;
+      } => row !== null);
+  }, [
+    absentMarkKeys,
+    currentOperationalPunchStaffIds,
+    filteredEmployees,
+    operationalNowContext.minutes,
+    operationalNowContext.operationalDate,
+    scheduleCellByStaffDate,
+    scheduleStateOverrides,
+    selectedDate
+  ]);
+
+  const exportSelectedDateWorkList = useCallback(() => {
+    const header = ['Date', 'USID', 'Name', 'Agency', 'Position', 'Shift', 'Start Time', 'State'];
+    const rows = selectedDateWorkExportRows.map((row) => [
+      selectedDate,
+      row.staffId,
+      row.name,
+      row.agency,
+      row.position,
+      row.shift,
+      row.startTime,
+      row.state
+    ]);
+    const csv = [header, ...rows].map((line) => line.map(toCsvCell).join(',')).join('\r\n');
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `agency-worklist-${selectedDate}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    openNotice('info', `Exported ${rows.length} work records for ${selectedDate}.`, 'Export complete');
+  }, [openNotice, selectedDate, selectedDateWorkExportRows]);
+
   const hasMoreEmployees = visibleFilteredEmployees.length < filteredEmployees.length;
 
   const filteredNewHireRequests = useMemo(
@@ -1483,15 +1609,6 @@ export default function AgencyAppPage() {
             </div>
             {user ? (
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    window.location.href = '/';
-                  }}
-                  className={buttonClass}
-                >
-                  Back to Punch
-                </button>
                 <button type="button" onClick={() => void doLogout()} className={buttonClass} disabled={busy}>
                   Logout
                 </button>
@@ -1506,13 +1623,19 @@ export default function AgencyAppPage() {
           </div>
         ) : null}
 
-        {user && !canViewAgency ? (
+        {user && accessLoading ? (
+          <section className={cardClass}>
+            <div className="text-sm text-slate-400">Checking access...</div>
+          </section>
+        ) : null}
+
+        {user && !accessLoading && !canViewAgency ? (
           <section className={cardClass}>
             <div className="text-sm text-rose-200">This account does not have access to the Agency module.</div>
           </section>
         ) : null}
 
-        {user && canViewAgency && weekSchedule ? (
+        {user && !accessLoading && canViewAgency && weekSchedule ? (
           <>
             <section className="grid gap-4 md:grid-cols-4">
               {summaryCards.map((card) => (
@@ -1660,6 +1783,14 @@ export default function AgencyAppPage() {
                       onChange={(event) => setSelectedDate(event.target.value)}
                       className={[inputClass, 'w-full min-w-0 md:w-[196px] md:shrink-0'].join(' ')}
                     />
+                    <button
+                      type="button"
+                      onClick={exportSelectedDateWorkList}
+                      className={buttonClass}
+                      disabled={busy || !canViewAgency || selectedDateWorkExportRows.length === 0}
+                    >
+                      Export Work List
+                    </button>
                     <button type="button" onClick={() => void refreshBoard()} className={buttonClass} disabled={busy || !canViewAgency}>
                       Refresh
                     </button>
@@ -1698,28 +1829,31 @@ export default function AgencyAppPage() {
                   <option value="late">Night</option>
                 </select>
               </div>
-              <div className="overflow-x-auto rounded-2xl border border-white/10 bg-black/30 py-1">
-                <table className="min-w-[1350px] w-full table-fixed text-left text-xs leading-tight">
+              <div className={[
+                'overflow-x-auto rounded-2xl border border-white/10 bg-black/30 py-1',
+                compactScheduleView ? 'px-2' : ''
+              ].join(' ')}>
+                <table className={[compactScheduleView ? 'min-w-full' : 'min-w-[1350px]', 'w-full table-fixed text-left text-xs leading-tight'].join(' ')}>
                   <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                     <tr>
-                      <th className="w-[104px] py-2 pl-4 pr-1">ID</th>
-                      <th className="w-[184px] px-1 py-2">Name</th>
-                      <th className="w-[92px] px-1 py-2">Agency</th>
-                      <th className="w-[96px] px-1 py-2">Position</th>
-                      <th className="w-[72px] px-1 py-2 text-center">Shift</th>
-                      <th className="w-[86px] px-1 py-2 text-center">Start time</th>
-                      {weekDates.map((workDate, dayIndex) => (
+                      {showIdColumn ? <th className="w-[104px] py-2 pl-4 pr-1">ID</th> : null}
+                      <th className={[compactScheduleView ? 'w-[206px]' : 'w-[184px]', 'px-1 py-2'].join(' ')}>Name</th>
+                      {showAgencyColumn ? <th className="w-[92px] px-1 py-2">Agency</th> : null}
+                      <th className={[compactScheduleView ? 'w-[88px]' : 'w-[96px]', 'px-1 py-2'].join(' ')}>Position</th>
+                      <th className={[compactScheduleView ? 'w-[66px]' : 'w-[72px]', 'px-1 py-2 text-center'].join(' ')}>Shift</th>
+                      {showStartTimeColumn ? <th className="w-[86px] px-1 py-2 text-center">Start time</th> : null}
+                      {visibleWeekDates.map((workDate) => (
                         <th
                           key={workDate}
                           className={[
-                            'w-[86px] px-0.5 py-2 text-center',
+                            compactScheduleView ? 'w-[78px] px-0.5 py-2 text-center' : 'w-[86px] px-0.5 py-2 text-center',
                             workDate === selectedDate
-                              ? `${selectedDateColumnClass} shadow-[inset_3px_0_0_rgba(255,255,255,0.95),inset_-3px_0_0_rgba(255,255,255,0.95),inset_0_3px_0_rgba(255,255,255,0.95)]`
+                              ? selectedDateHeaderColumnClass
                               : ''
                           ].join(' ')}
                         >
                               <div className="flex flex-col items-center gap-1">
-                                <span className={workDate === selectedDate ? selectedDateHeaderLabelClass : ''}>{formatWeekLabel(workDate, dayIndex)}</span>
+                                <span className={workDate === selectedDate ? selectedDateHeaderLabelClass : ''}>{formatWeekLabel(workDate, weekDates.indexOf(workDate))}</span>
                                 <span className="text-[11px] font-semibold normal-case tracking-normal text-[#9eff00]">
                               Work {dailyCountsByDate.get(workDate)?.work ?? 0}
                                 </span>
@@ -1731,7 +1865,7 @@ export default function AgencyAppPage() {
                   <tbody>
                     {filteredEmployees.length === 0 ? (
                       <tr>
-                        <td colSpan={6 + weekDates.length} className="px-4 py-8 text-center text-sm text-slate-400">
+                        <td colSpan={fixedScheduleColumnCount + visibleWeekDates.length} className="px-4 py-8 text-center text-sm text-slate-400">
                           No matches.
                         </td>
                       </tr>
@@ -1745,7 +1879,7 @@ export default function AgencyAppPage() {
                         : 'border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-b-0';
                       return (
                       <tr key={employee.staff_id} className={rowClass}>
-                        <td className="py-2 pl-4 pr-1 font-mono text-slate-200">{employee.staff_id}</td>
+                        {showIdColumn ? <td className="py-2 pl-4 pr-1 font-mono text-slate-200">{employee.staff_id}</td> : null}
                         <td className="px-1 py-2 text-slate-200">
                           <div className="truncate font-medium">{employee.name || '-'}</div>
                           <div className="mt-1 flex min-h-[38px] flex-col items-start justify-center gap-1">
@@ -1773,7 +1907,7 @@ export default function AgencyAppPage() {
                             ) : null}
                           </div>
                         </td>
-                        <td className="truncate px-1 py-2 text-slate-300">{employee.agency || '-'}</td>
+                        {showAgencyColumn ? <td className="truncate px-1 py-2 text-slate-300">{employee.agency || '-'}</td> : null}
                         <td className="px-1 py-2">
                           <span className={['inline-flex max-w-full items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]', positionChipClass(employee.position)].join(' ')}>
                             <span className="truncate">{employee.position || '-'}</span>
@@ -1784,10 +1918,12 @@ export default function AgencyAppPage() {
                             {shiftLabel(employee.shift)}
                           </span>
                         </td>
-                        <td className="px-1 py-2 text-center font-mono text-slate-300">
-                          {formatStartTime(employee.start_time)}
-                        </td>
-                        {weekDates.map((workDate) => {
+                        {showStartTimeColumn ? (
+                          <td className="px-1 py-2 text-center font-mono text-slate-300">
+                            {formatStartTime(employee.start_time)}
+                          </td>
+                        ) : null}
+                        {visibleWeekDates.map((workDate) => {
                           const cell = scheduleCellByStaffDate.get(`${employee.staff_id}__${workDate}`);
                           const state = scheduleStateOverrides.get(`${employee.staff_id}__${workDate}`) ?? cell?.state ?? 'rest';
                           const hasAbsentMark = absentMarkKeys.has(`${employee.staff_id}__${workDate}`);
@@ -1818,7 +1954,8 @@ export default function AgencyAppPage() {
                               canEditCell={canEditCell}
                               isDeadlineLocked={isDeadlineLocked}
                               busy={busy}
-                              selectedDateColumnClass={selectedDateColumnClass}
+                              selectedDateColumnClass={selectedDateColumnToneClass}
+                              selectedDateLastRowClass={selectedDateLastRowClass}
                               onCellClick={handleScheduleCellClick}
                             />
                           );
