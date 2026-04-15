@@ -1,4 +1,22 @@
 import { memo, useEffect, useRef, useState } from 'react';
+import type { IconType } from 'react-icons';
+import {
+  HiBriefcase,
+  HiChartBar,
+  HiChartPie,
+  HiClipboardDocumentList,
+  HiClock,
+  HiCog6Tooth,
+  HiCube,
+  HiCurrencyDollar,
+  HiDocumentText,
+  HiFolder,
+  HiHome,
+  HiShieldCheck,
+  HiSquares2X2,
+  HiUserGroup,
+  HiUsers
+} from 'react-icons/hi2';
 import type { AdminPage } from '../types';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -20,89 +38,26 @@ type NavItem = {
   badge?: 'leave' | 'todo';
 };
 
-const NAV_ICON_STYLE = 'h-4 w-4';
+const NAV_ICON_STYLE = 'h-5 w-5';
 
-const DashIcon = ({ active }: { active: boolean }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={NAV_ICON_STYLE} aria-hidden="true">
-    <rect x="3" y="4" width="7" height="7" rx="1.8" />
-    <rect x="14" y="4" width="7" height="7" rx="1.8" />
-    <rect x="3" y="13" width="7" height="7" rx="1.8" />
-    <path d="M14 13h7v7h-7z" opacity={active ? 1 : 0.55} />
-  </svg>
-);
-
-const UserCircleIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={NAV_ICON_STYLE} aria-hidden="true">
-    <path d="M20 21a8 8 0 1 0-16 0" />
-    <circle cx="12" cy="8" r="4" />
-  </svg>
-);
-
-const ClockIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={NAV_ICON_STYLE} aria-hidden="true">
-    <circle cx="12" cy="12" r="9" />
-    <polyline points="12 6 12 12 16 14" />
-  </svg>
-);
-
-const ClipboardIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={NAV_ICON_STYLE} aria-hidden="true">
-    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-    <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
-  </svg>
-);
-
-const TrendIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={NAV_ICON_STYLE} aria-hidden="true">
-    <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
-    <polyline points="17 6 23 6 23 12" />
-  </svg>
-);
-
-const ListIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={NAV_ICON_STYLE} aria-hidden="true">
-    <line x1="8" y1="6" x2="21" y2="6" />
-    <line x1="8" y1="12" x2="21" y2="12" />
-    <line x1="8" y1="18" x2="21" y2="18" />
-    <line x1="3" y1="6" x2="3.01" y2="6" />
-    <line x1="3" y1="12" x2="3.01" y2="12" />
-    <line x1="3" y1="18" x2="3.01" y2="18" />
-  </svg>
-);
-
-const FolderIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={NAV_ICON_STYLE} aria-hidden="true">
-    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-  </svg>
-);
-
-const BoxIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={NAV_ICON_STYLE} aria-hidden="true">
-    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-    <line x1="12" y1="22.08" x2="12" y2="12" />
-  </svg>
-);
-
-const ChartIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={NAV_ICON_STYLE} aria-hidden="true">
-    <line x1="12" y1="2" x2="12" y2="22" />
-    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-  </svg>
-);
-
-const ShieldIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={NAV_ICON_STYLE} aria-hidden="true">
-    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-  </svg>
-);
-
-const WalletIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={NAV_ICON_STYLE} aria-hidden="true">
-    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2z" />
-    <path d="M18 5v4" />
-  </svg>
-);
+const PAGE_ICONS: Record<AdminPage, IconType> = {
+  home: HiSquares2X2,
+  employees: HiUsers,
+  employee_upload: HiUserGroup,
+  accounts: HiBriefcase,
+  permissions: HiShieldCheck,
+  timecard: HiClock,
+  leave_approval: HiClipboardDocumentList,
+  work_hour_comparison: HiChartBar,
+  todo: HiDocumentText,
+  punches: HiFolder,
+  audit: HiDocumentText,
+  schedule: HiClipboardDocumentList,
+  devices: HiCube,
+  forecast: HiChartPie,
+  prediction_model: HiCog6Tooth,
+  efficiency: HiCurrencyDollar
+};
 
 const NAV_ITEMS: NavItem[] = [
   { page: 'home', label: (t) => t('首页', 'Dashboard') },
@@ -122,41 +77,9 @@ const NAV_ITEMS: NavItem[] = [
   { page: 'efficiency', label: (t) => t('人效', 'Efficiency') }
 ];
 
-const NavIcon = ({ page, active }: { page: AdminPage; active: boolean }) => {
-  switch (page) {
-    case 'home':
-      return <DashIcon active={active} />;
-    case 'employees':
-      return <UserCircleIcon />;
-    case 'accounts':
-      return <WalletIcon />;
-    case 'permissions':
-      return <ShieldIcon />;
-    case 'timecard':
-      return <ClockIcon />;
-    case 'leave_approval':
-      return <ClipboardIcon />;
-    case 'work_hour_comparison':
-      return <TrendIcon />;
-    case 'todo':
-      return <ListIcon />;
-    case 'punches':
-      return <FolderIcon />;
-    case 'audit':
-      return <ListIcon />;
-    case 'schedule':
-      return <ClipboardIcon />;
-    case 'devices':
-      return <BoxIcon />;
-    case 'forecast':
-      return <TrendIcon />;
-    case 'prediction_model':
-      return <ShieldIcon />;
-    case 'efficiency':
-      return <ChartIcon />;
-    default:
-      return <DashIcon active={active} />;
-  }
+const NavIcon = ({ page }: { page: AdminPage }) => {
+  const Icon = PAGE_ICONS[page] ?? HiHome;
+  return <Icon className={NAV_ICON_STYLE} aria-hidden="true" />;
 };
 
 function AdminNav({
@@ -235,6 +158,7 @@ function AdminNav({
             {items.map((item) => {
               const active = page === item.page;
               const badgeCount = item.badge === 'leave' ? leaveApprovalPendingCount : item.badge === 'todo' ? todoPendingCount : 0;
+              const showLeaveDot = !expanded && item.badge === 'leave' && badgeCount > 0;
               return (
                 <button
                   key={item.page}
@@ -247,8 +171,14 @@ function AdminNav({
                     active ? activeClass : inactiveClass
                   ].join(' ')}
                 >
-                  <span className={['grid h-7 w-7 shrink-0 place-items-center transition', active ? 'text-indigo-600' : 'text-slate-500'].join(' ')}>
-                    <NavIcon page={item.page} active={active} />
+                  <span className={['relative grid h-7 w-7 shrink-0 place-items-center transition', active ? 'text-indigo-600' : 'text-slate-500'].join(' ')}>
+                    <NavIcon page={item.page} />
+                    {showLeaveDot ? (
+                      <span
+                        className="pointer-events-none absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border border-slate-950/80 bg-rose-500"
+                        aria-hidden="true"
+                      />
+                    ) : null}
                   </span>
                   {expanded ? (
                     <div className="min-w-0 flex-1">

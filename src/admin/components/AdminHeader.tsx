@@ -97,6 +97,9 @@ function AdminHeader({
       <div className="flex h-16 items-center gap-4 px-5 lg:px-6">
         <div className="flex items-center">
           <img src={TOP_MENU_LOGO_SRC} alt="Top menu logo" className="h-10 w-10 shrink-0 object-contain" />
+          <span className={['ml-3 font-display text-lg font-bold tracking-[0.06em]', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>
+            ObPunch Admin
+          </span>
         </div>
 
         <div ref={menuRef} className="relative ml-auto">
