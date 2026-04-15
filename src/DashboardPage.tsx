@@ -1,4 +1,5 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { User } from '@supabase/supabase-js';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import { createSupabaseClient } from './lib/supabase';
@@ -159,7 +160,7 @@ const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | 
 const DEVICE_LOANS_FETCH_LIMIT = 50000;
 const MISTAKE_REPORT_TABLE = (import.meta.env.VITE_MISTAKE_REPORT_TABLE as string | undefined) ?? 'ob_mistake_reports';
 const DASHBOARD_REFRESH_INTERVAL_MS = 15000;
-const supabase = createSupabaseClient({ persistSession: false });
+const supabase = createSupabaseClient({ persistSession: true });
 const QR_PRINT_SIZE = 320;
 const SCHEDULE_TEMPLATE_WEEK_START = new Date('2000-01-03T00:00:00');
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
@@ -497,6 +498,24 @@ const getShortGapPunchIndices = (punches: PunchRow[], thresholdMinutes = 10) => 
 };
 
 export default function DashboardPage() {
+  // --- Session restoration logic for Punch Screen auto-login ---
+  const [user, setUser] = useState<User | null>(null);
+  useEffect(() => {
+    if (!supabase) return;
+    let active = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setUser(data.session?.user ?? null);
+    });
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      setUser(session?.user ?? null);
+    });
+    return () => {
+      active = false;
+      data.subscription.unsubscribe();
+    };
+  }, []);
   const [rows, setRows] = useState<DashboardRow[]>([]);
   const [cardStatsByKey, setCardStatsByKey] = useState<Record<string, { expected: number; present: number; onClock: number; offWorked: number }>>({});
   const [cardPositions, setCardPositions] = useState<string[]>(DEFAULT_CARD_POSITIONS);
@@ -1897,6 +1916,7 @@ export default function DashboardPage() {
               <h1 className="font-display text-4xl leading-none tracking-[0.03em] text-stone-50 sm:text-5xl">
                 Dashboard
               </h1>
+              {user?.email && <p className="text-sm text-stone-400">Logged in as: {user.email}</p>}
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

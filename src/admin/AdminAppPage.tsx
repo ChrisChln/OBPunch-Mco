@@ -1,5 +1,6 @@
-﻿import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import type { User } from '@supabase/supabase-js';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import type { User as SupabaseUser } from '@supabase/supabase-js';
+
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
 import { matchesLooseSearch } from '../lib/textSearch';
@@ -371,6 +372,10 @@ const getScheduleDisplayState = (
 };
 
 const supabase = createSupabaseClient({ persistSession: true });
+
+// --- Session restoration logic for Admin auto-login ---
+
+
 const obupSupabase = createSupabaseClientWithCredentials({
   persistSession: false,
   url: import.meta.env.VITE_OBUP_SUPABASE_URL as string | undefined,
@@ -1175,6 +1180,24 @@ const TEMP_ACCOUNT_KEY_ALIASES: Record<string, string> = {
 };
 
 export default function AdminAppPage() {
+  // --- Session restoration logic for Admin auto-login ---
+  const [user, setUser] = useState<SupabaseUser | null>(null);
+  useEffect(() => {
+    if (!supabase) return;
+    let active = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setUser(data.session?.user ?? null);
+    });
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      setUser(session?.user ?? null);
+    });
+    return () => {
+      active = false;
+      data.subscription.unsubscribe();
+    };
+  }, []);
   const busyRef = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const isLocked = Boolean(busy);
@@ -1398,7 +1421,7 @@ export default function AdminAppPage() {
   const [offsetMs, setOffsetMs] = useState(0);
   const [serverTime, setServerTime] = useState(() => new Date());
 
-  const [user, setUser] = useState<User | null>(null);
+
   const [userDisplayName, setUserDisplayName] = useState('');
   const [userDisplayNameInput, setUserDisplayNameInput] = useState('');
   const [userDisplayNamePromptOpen, setUserDisplayNamePromptOpen] = useState(false);
