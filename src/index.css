@@ -416,6 +416,13 @@ body[data-theme='light'] .roster-all-active,
   outline: none !important;
 }
 
+.admin-theme-light input.home-search-input,
+.admin-theme-dark input.home-search-input {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
 .admin-theme-light details > summary {
   background-color: rgba(255, 252, 247, 0.78) !important;
   color: #1f2328 !important;

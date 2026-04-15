@@ -1601,6 +1601,7 @@ export default function AdminAppPage() {
   const [schedulePunchPresenceReady, setSchedulePunchPresenceReady] = useState(false);
   const [schedulePunchPresenceWeekOffset, setSchedulePunchPresenceWeekOffset] = useState<number | null>(null);
   const [scheduleFirstInByStaffDayKey, setScheduleFirstInByStaffDayKey] = useState<Record<string, string>>({});
+  const [homePunchesByStaffId, setHomePunchesByStaffId] = useState<Record<string, Array<{ action: 'IN' | 'OUT'; created_at: string }>>>({});
   const [scheduleUphByStaffId, setScheduleUphByStaffId] = useState<Record<string, number | null>>({});
   const [dailyCapacityStaffStatsByStaffId, setDailyCapacityStaffStatsByStaffId] = useState<Record<string, DailyCapacityStaffStats>>({});
   const [dailyCapacityTemplatePayload, setDailyCapacityTemplatePayload] = useState<EffPayloadLite>(() => effDefaultPayload());
@@ -4815,6 +4816,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!isStale()) {
         setSchedulePunchPresenceKeys(new Set());
         setScheduleFirstInByStaffDayKey({});
+        setHomePunchesByStaffId({});
         setSchedulePunchPresenceReady(true);
         setSchedulePunchPresenceWeekOffset(null);
       }
@@ -4835,6 +4837,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!isStale()) {
         setSchedulePunchPresenceKeys(new Set());
         setScheduleFirstInByStaffDayKey({});
+        setHomePunchesByStaffId({});
         setSchedulePunchPresenceReady(true);
         setSchedulePunchPresenceWeekOffset(options?.weekOffsetOverride ?? scheduleWeekOffset);
       }
@@ -4845,6 +4848,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const dayMs = 24 * 60 * 60 * 1000;
     const found = new Set<string>();
     const firstInByDayKey: Record<string, string> = {};
+    const operationalPunchesByStaffId: Record<string, Array<{ action: 'IN' | 'OUT'; created_at: string }>> = {};
     const staffBatches = chunk(Array.from(staffSet), 120);
 
     if (mode === 'operational_day') {
@@ -4875,6 +4879,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           if (!isStale()) {
             setSchedulePunchPresenceKeys(new Set());
             setScheduleFirstInByStaffDayKey({});
+            setHomePunchesByStaffId({});
             setSchedulePunchPresenceReady(false);
             setSchedulePunchPresenceWeekOffset(null);
           }
@@ -4888,6 +4893,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           if (Number.isNaN(at.getTime())) continue;
           const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
           found.add(`${staff}__${dayIndex}`);
+          const list = operationalPunchesByStaffId[staff] ?? [];
+          list.push({ action, created_at: at.toISOString() });
+          operationalPunchesByStaffId[staff] = list;
           if (action === 'IN') {
             const firstInKey = `${staff}__${dayIndex}`;
             const prev = firstInByDayKey[firstInKey];
@@ -4898,9 +4906,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         }
       }
 
+      for (const staff of Object.keys(operationalPunchesByStaffId)) {
+        operationalPunchesByStaffId[staff] = operationalPunchesByStaffId[staff].sort((a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+      }
+
       if (!isStale()) {
         setSchedulePunchPresenceKeys(found);
         setScheduleFirstInByStaffDayKey(firstInByDayKey);
+        setHomePunchesByStaffId(operationalPunchesByStaffId);
         setSchedulePunchPresenceReady(true);
         setSchedulePunchPresenceWeekOffset(null);
       }
@@ -10814,6 +10829,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const dayDateForAudit = dayRangeForAudit ? toDateOnly(dayRangeForAudit.start) : '';
     const queueTimecardRefresh = () => {
       const run = () => {
+        if (page === 'home') {
+          void refreshHomePanel({ lockUi: false });
+          return;
+        }
         timecardWeekCacheRef.current = null;
         void fetchTimecard({ reset: true, lockUi: false });
       };
@@ -13564,7 +13583,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       agency: string;
       position: string;
       shift: string;
-      attendance: 'Absent' | 'Off Worked' | 'Normal';
+      attendance: 'Absent' | 'Off Worked' | 'Normal' | 'Completed';
       label: string;
       account: string;
       borrowed_device: string;
@@ -13576,11 +13595,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return {
         absent: [] as HomeRosterItem[],
         restWorked: [] as HomeRosterItem[],
+        completed: [] as HomeRosterItem[],
         onClock: [] as HomeRosterItem[]
       };
     }
     const absent: HomeRosterItem[] = [];
     const restWorked: HomeRosterItem[] = [];
+    const completed: HomeRosterItem[] = [];
     const onClock: HomeRosterItem[] = [];
     const seen = new Set<string>();
     const nowMinutes = homeNowMinutes;
@@ -13593,6 +13614,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       positionRaw?: string;
       shift: '' | 'early' | 'late';
       isOnClock: boolean;
+      attendanceOverride?: 'Absent' | 'Off Worked' | 'Normal' | 'Completed';
       extraMistakes?: number;
     }): HomeRosterItem => {
       const {
@@ -13602,6 +13624,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         positionRaw,
         shift,
         isOnClock,
+        attendanceOverride,
         extraMistakes = 0
       } = options;
       const account = String(employee?.work_account ?? employee?.WorkAccount ?? '').trim();
@@ -13610,6 +13633,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const lastPunchAt = String(employeeLastPunchAtByStaffId[staff] ?? '').trim();
       const firstInAt = String(homeFirstInAtByStaffId.get(staff) ?? '').trim();
       const punchAt = lastPunchAt || firstInAt;
+      const rawPunches = Array.isArray(homePunchesByStaffId[staff]) ? homePunchesByStaffId[staff] : [];
       const manualMistakes = Number(scheduleMistakeByStaffId[staff] ?? 0);
       return {
         staff_id: staff,
@@ -13617,14 +13641,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         agency: String(profile?.agency ?? employee?.agency ?? employee?.Agency ?? '').trim(),
         position: String(positionRaw ?? profile?.position ?? employee?.position ?? employee?.Position ?? '').trim(),
         shift: shift === 'early' ? 'Morning' : shift === 'late' ? 'Night' : '-',
-        attendance: isOnClock ? 'Normal' : 'Absent',
+        attendance: attendanceOverride ?? (isOnClock ? 'Normal' : 'Absent'),
         label,
         account: account || '-',
         borrowed_device: borrowedDevice,
         mistake_count_7d: Math.max(0, manualMistakes + extraMistakes),
-        punches: punchAt
-          ? [{ action: isOnClock ? 'IN' : lastPunchAt ? 'OUT' : 'IN', created_at: punchAt }]
-          : []
+        punches:
+          rawPunches.length > 0
+            ? rawPunches
+            : punchAt
+              ? [{ action: isOnClock ? 'IN' : lastPunchAt ? 'OUT' : 'IN', created_at: punchAt }]
+              : []
       };
     };
 
@@ -13638,6 +13665,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       const baseState = row ? getScheduleBaseStateFromNote(row.note) : 'rest';
       const hasPunch = schedulePunchPresenceKeys.has(`${staff}__${homeOperationalDayIndex}`);
+      const currentOnClockShift = homeOnClockShiftByStaffId[staff];
+      const isCurrentlyOnClock = currentOnClockShift === 'early' || currentOnClockShift === 'late';
       const shift = employeeShiftByStaffId[staff]?.shift ?? '';
       const profile = employeeProfileByStaffId.get(staff);
       const item = buildHomeRosterItem({
@@ -13659,10 +13688,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (hasPunch && (!row || isRestLikeScheduleBaseState(baseState))) {
         restWorked.push({ ...item, attendance: 'Off Worked', mistake_count_7d: item.mistake_count_7d + 1 });
       }
+      // 已完成打卡：有排班且有打卡，但当前不在 on clock 列表里
+      if (hasPunch && row && isWorkingScheduleBaseState(baseState) && !isCurrentlyOnClock) {
+        completed.push({ ...item, attendance: 'Completed' });
+      }
     }
 
     absent.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     restWorked.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
+    completed.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     for (const [staffRaw, shiftRaw] of Object.entries(homeOnClockShiftByStaffId)) {
       const staff = normalizeStaffId(String(staffRaw ?? '').trim());
       if (!staff) continue;
@@ -13684,7 +13718,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       );
     }
     onClock.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
-    return { absent, restWorked, onClock };
+    return { absent, restWorked, completed, onClock };
   }, [
     page,
     employees,
@@ -13696,6 +13730,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     homeOnClockShiftByStaffId,
     homeEmployeeByStaffId,
     homeBorrowedDeviceByStaffId,
+    homePunchesByStaffId,
     homeFirstInAtByStaffId,
     employeeShiftByStaffId,
     employeeProfileByStaffId,
@@ -13707,6 +13742,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return {
         absent: [] as typeof homeRosterRows.absent,
         restWorked: [] as typeof homeRosterRows.restWorked,
+        completed: [] as typeof homeRosterRows.completed,
         onClock: [] as typeof homeRosterRows.onClock
       };
     }
@@ -13719,12 +13755,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return {
       absent: filterRows(homeRosterRows.absent),
       restWorked: filterRows(homeRosterRows.restWorked),
+      completed: filterRows(homeRosterRows.completed),
       onClock: filterRows(homeRosterRows.onClock)
     };
   }, [page, homeRosterRows, homeRosterPositionFilter]);
   const homeRosterRowsCurrent = useMemo(() => {
     if (page !== 'home') return [];
-    return [...homeRosterRowsFiltered.absent, ...homeRosterRowsFiltered.restWorked, ...homeRosterRowsFiltered.onClock];
+    return [
+      ...homeRosterRowsFiltered.absent,
+      ...homeRosterRowsFiltered.restWorked,
+      ...homeRosterRowsFiltered.completed,
+      ...homeRosterRowsFiltered.onClock
+    ];
   }, [page, homeRosterRowsFiltered]);
   const formatDailyListStaffId = (row: DailyListRow) => {
     const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
@@ -14687,11 +14729,13 @@ ${rowsToHtml(late)}
                 homeExpectedPositionSummaryCards={homeExpectedPositionSummaryCards}
                 getHomeCardToneClass={getHomeCardToneClass}
                 getHomeChipToneClass={getHomeChipToneClass}
+                getScheduleLabelToneClass={getScheduleLabelToneClass}
                 getHomePanelToneClass={getHomePanelToneClass}
                 getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                 schedulePositionToneByPosition={schedulePositionToneByPosition}
                 homeRosterPositionFilter={homeRosterPositionFilter}
                 setHomeRosterPositionFilter={setHomeRosterPositionFilter}
+                onOpenTimecardCalibration={openTimecardPunchModalForDate}
                 homeRosterRowsCurrent={homeRosterRowsCurrent}
               />
             )}
@@ -16464,7 +16508,7 @@ ${rowsToHtml(late)}
             )}
 
             {page === 'timecard' && (
-              <section className="glass reveal rounded-3xl px-6 py-8">
+              <section className="glass reveal rounded-none px-6 py-8">
                 <TimecardControls
                   t={t}
                   themeMode={themeMode}
