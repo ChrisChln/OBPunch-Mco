@@ -1,4 +1,4 @@
-﻿import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
@@ -1239,7 +1239,6 @@ export default function AdminAppPage() {
   const scheduleRealtimeDebounceTimerRef = useRef<number | null>(null);
 
   const [page, setPage] = useState<AdminPage>('home');
-  const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [adminAccessContext, setAdminAccessContext] = useState<AdminAccessContext | null>(null);
   const [adminAccessRequests, setAdminAccessRequests] = useState<AdminAccessRequestRecord[]>([]);
   const [terminationRequests, setTerminationRequests] = useState<TerminationRequestRecord[]>([]);
@@ -1248,17 +1247,35 @@ export default function AdminAppPage() {
   const [leaveApprovalPendingCount, setLeaveApprovalPendingCount] = useState(0);
   const visibleAdminPages = useMemo(() => getVisibleAdminPages(adminAccessContext), [adminAccessContext]);
   const adminModuleMap = useMemo(() => getModuleMapFromContext(adminAccessContext), [adminAccessContext]);
-  const employeesCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'employees', 'operate'), [adminModuleMap]);
-  const accountsCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'accounts', 'operate'), [adminModuleMap]);
-  const scheduleCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'schedule', 'operate'), [adminModuleMap]);
-  const timecardCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'timecard', 'operate'), [adminModuleMap]);
-  const devicesCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'devices', 'operate'), [adminModuleMap]);
-  const forecastCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'forecast', 'operate'), [adminModuleMap]);
-  const predictionModelCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'prediction_model', 'operate'), [adminModuleMap]);
-  const efficiencyCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'efficiency', 'operate'), [adminModuleMap]);
-  const leaveApprovalCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'leave_approval', 'operate'), [adminModuleMap]);
-  const todoCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'todo', 'operate'), [adminModuleMap]);
-  const auditCanOperate = useMemo(() => hasModuleAccess(adminModuleMap, 'audit', 'operate'), [adminModuleMap]);
+  const canOperateFlags = useMemo(
+    () => ({
+      employees: hasModuleAccess(adminModuleMap, 'employees', 'operate'),
+      accounts: hasModuleAccess(adminModuleMap, 'accounts', 'operate'),
+      schedule: hasModuleAccess(adminModuleMap, 'schedule', 'operate'),
+      timecard: hasModuleAccess(adminModuleMap, 'timecard', 'operate'),
+      devices: hasModuleAccess(adminModuleMap, 'devices', 'operate'),
+      forecast: hasModuleAccess(adminModuleMap, 'forecast', 'operate'),
+      predictionModel: hasModuleAccess(adminModuleMap, 'prediction_model', 'operate'),
+      efficiency: hasModuleAccess(adminModuleMap, 'efficiency', 'operate'),
+      leaveApproval: hasModuleAccess(adminModuleMap, 'leave_approval', 'operate'),
+      todo: hasModuleAccess(adminModuleMap, 'todo', 'operate'),
+      audit: hasModuleAccess(adminModuleMap, 'audit', 'operate')
+    }),
+    [adminModuleMap]
+  );
+  const {
+    employees: employeesCanOperate,
+    accounts: accountsCanOperate,
+    schedule: scheduleCanOperate,
+    timecard: timecardCanOperate,
+    devices: devicesCanOperate,
+    forecast: forecastCanOperate,
+    predictionModel: predictionModelCanOperate,
+    efficiency: efficiencyCanOperate,
+    leaveApproval: leaveApprovalCanOperate,
+    todo: todoCanOperate,
+    audit: auditCanOperate
+  } = canOperateFlags;
   const employeesReadOnly = isLocked || !employeesCanOperate;
   const scheduleReadOnly = isLocked || !scheduleCanOperate;
   const timecardReadOnly = isLocked || !timecardCanOperate;
@@ -3353,12 +3370,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     await recomputeTimecardAttendanceMarks();
   };
 
-  const changeAdminPage = (nextPage: AdminPage, _source: string) => {
+  const changeAdminPage = useCallback((nextPage: AdminPage, _source: string) => {
     if (!visibleAdminPages.includes(nextPage)) {
       return;
     }
     setPage(nextPage);
-  };
+  }, [visibleAdminPages]);
+
+  const handleNavSetPage = useCallback((nextPage: AdminPage) => changeAdminPage(nextPage, 'nav'), [changeAdminPage]);
+  const handleBack = useCallback(() => {
+    window.location.href = '/';
+  }, []);
 
   const fetchAudit = async (options?: { search?: string }) => {
     if (!supabase) {
@@ -14630,33 +14652,28 @@ ${rowsToHtml(late)}
               user={user}
               userDisplayName={userDisplayName}
               attendanceError={attendanceError}
-              onBack={() => {
-                window.location.href = '/';
-              }}
+              onBack={handleBack}
               onLogout={doLogout}
             />
 
-            <div
-              className={[
-                  'grid min-h-0 grid-cols-1 overflow-hidden transition-[grid-template-columns] duration-200 ease-out',
-                  sidebarExpanded ? 'lg:grid-cols-[240px_minmax(0,1fr)]' : 'lg:grid-cols-[60px_minmax(0,1fr)]'
-              ].join(' ')}
-            >
+            <div className="flex min-h-0 flex-1 overflow-hidden">
               <AdminNav
                 page={page}
                 isLocked={isLocked}
-                onSetPage={(nextPage: AdminPage) => changeAdminPage(nextPage, 'nav')}
+                themeMode={themeMode}
+                onSetPage={handleNavSetPage}
                 t={t}
                 visiblePages={visibleAdminPages}
                 leaveApprovalPendingCount={leaveApprovalPendingCount}
                 todoPendingCount={todoPendingCount}
-                expanded={sidebarExpanded}
-                onExpandedChange={setSidebarExpanded}
               />
 
               <main
                 className={[
-                  'min-h-0 overflow-auto bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.12),transparent_28%),linear-gradient(180deg,rgba(245,247,255,0.95),rgba(242,245,255,0.98))] text-slate-900',
+                  'flex-1 min-w-0',
+                  themeMode === 'light'
+                    ? 'min-h-0 overflow-auto bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.12),transparent_28%),linear-gradient(180deg,rgba(245,247,255,0.95),rgba(242,245,255,0.98))] text-slate-900'
+                    : 'min-h-0 overflow-auto bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.14),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(139,92,246,0.12),transparent_26%),linear-gradient(180deg,rgba(7,10,16,0.98),rgba(10,14,22,0.98))] text-slate-100',
                   'px-0 py-0'
                 ].join(' ')}
               >
@@ -16236,7 +16253,7 @@ ${rowsToHtml(late)}
             )}
 
             {page === 'employees' && (
-              <section className="glass reveal rounded-3xl px-6 py-8">
+              <section className="glass reveal rounded-b-3xl rounded-t-none px-6 py-8">
                 <EmployeesToolbar
                   t={t}
                   themeMode={themeMode}

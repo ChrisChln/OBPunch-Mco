@@ -462,6 +462,107 @@ body:not([data-theme='light']) button.bg-neon {
     0 14px 28px rgba(73, 78, 84, 0.08) !important;
 }
 
+.admin-theme-dark {
+  color: #d7dce6;
+  background:
+    radial-gradient(920px 520px at 8% 0%, rgba(59, 130, 246, 0.10), transparent 56%),
+    radial-gradient(760px 420px at 92% 6%, rgba(139, 92, 246, 0.10), transparent 58%),
+    linear-gradient(180deg, #05070b 0%, #090d14 45%, #0b1018 100%);
+}
+
+.admin-theme-dark .glass {
+  background:
+    linear-gradient(180deg, rgba(13, 18, 29, 0.92) 0%, rgba(10, 14, 22, 0.88) 100%),
+    radial-gradient(120% 140% at 0% 0%, rgba(59, 130, 246, 0.08), transparent 46%);
+  border-color: rgba(148, 163, 184, 0.10);
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 24px 72px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.admin-theme-dark .bg-black\/10,
+.admin-theme-dark .bg-black\/20,
+.admin-theme-dark .bg-black\/30,
+.admin-theme-dark .bg-black\/40,
+.admin-theme-dark .bg-black\/50,
+.admin-theme-dark .bg-black\/18,
+.admin-theme-dark .bg-slate-950\/90,
+.admin-theme-dark .bg-slate-950\/95,
+.admin-theme-dark .bg-slate-900\/90,
+.admin-theme-dark .bg-white\/5,
+.admin-theme-dark .bg-white\/10 {
+  background-color: rgba(15, 20, 31, 0.86) !important;
+}
+
+.admin-theme-dark thead {
+  background:
+    linear-gradient(180deg, rgba(14, 18, 28, 0.98) 0%, rgba(10, 14, 22, 0.96) 100%) !important;
+}
+
+.admin-theme-dark tbody tr:hover td {
+  background-color: rgba(148, 163, 184, 0.07) !important;
+}
+
+.admin-theme-dark [class*='border-white/'] {
+  border-color: rgba(148, 163, 184, 0.14) !important;
+}
+
+.admin-theme-dark [class*='text-stone-50'],
+.admin-theme-dark [class*='text-stone-100'],
+.admin-theme-dark [class*='text-stone-200'],
+.admin-theme-dark [class*='text-slate-100'],
+.admin-theme-dark [class*='text-slate-200'] {
+  color: #eef2f7 !important;
+}
+
+.admin-theme-dark [class*='text-stone-300'],
+.admin-theme-dark [class*='text-stone-400'],
+.admin-theme-dark [class*='text-slate-300'],
+.admin-theme-dark [class*='text-slate-400'],
+.admin-theme-dark [class*='text-slate-500'] {
+  color: #94a3b8 !important;
+}
+
+.admin-theme-dark input,
+.admin-theme-dark select,
+.admin-theme-dark textarea {
+  background-color: rgba(9, 13, 20, 0.88) !important;
+  color: #e2e8f0 !important;
+  border-color: rgba(148, 163, 184, 0.16) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02) !important;
+}
+
+.admin-theme-dark [class*='bg-sky-'][class*='/'] {
+  background-color: rgba(56, 189, 248, 0.10) !important;
+}
+
+.admin-theme-dark [class*='bg-emerald-'][class*='/'] {
+  background-color: rgba(52, 211, 153, 0.10) !important;
+}
+
+.admin-theme-dark [class*='bg-amber-'][class*='/'] {
+  background-color: rgba(251, 191, 36, 0.10) !important;
+}
+
+.admin-theme-dark [class*='bg-rose-'][class*='/'] {
+  background-color: rgba(244, 114, 182, 0.10) !important;
+}
+
+.admin-theme-dark [class*='bg-violet-'][class*='/'] {
+  background-color: rgba(167, 139, 250, 0.10) !important;
+}
+
+.admin-theme-dark [class*='bg-indigo-'][class*='/'] {
+  background-color: rgba(129, 140, 248, 0.10) !important;
+}
+
+.admin-theme-dark [class*='shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]'] {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.02),
+    0 14px 28px rgba(0, 0, 0, 0.12) !important;
+}
+
 ::selection {
   background: rgba(232, 223, 207, 0.45);
   color: #111315;

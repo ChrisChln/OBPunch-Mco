@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
 import type { Dispatch, SetStateAction } from 'react';
 
@@ -33,7 +33,7 @@ const ArrowLeftIcon = ({ className = '' }: { className?: string }) => (
 
 const TOP_MENU_LOGO_SRC = '/img/monacoin.png';
 
-export default function AdminHeader({
+function AdminHeader({
   t,
   isLocked,
   themeMode,
@@ -221,3 +221,5 @@ export default function AdminHeader({
     </header>
   );
 }
+
+export default memo(AdminHeader);
