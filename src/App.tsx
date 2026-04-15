@@ -1322,11 +1322,11 @@ export default function App() {
 
       const context = normalizeAdminAccessContext(accessRes.data, email);
       if (!context.is_active) {
-        await rejectAndSignOut('账号已停用，无法解锁。');
+        await rejectAndSignOut('Account was locked');
         return;
       }
       if (!canUnlockPunchScreen(context)) {
-        await rejectAndSignOut('Only level 2 or level 1 admins can unlock this screen.');
+        await rejectAndSignOut('Access denied');
         return;
       }
 
@@ -1382,8 +1382,14 @@ export default function App() {
         }
 
         const context = normalizeAdminAccessContext(accessRes.data, sessionEmail);
-        if (!context.is_active || !canUnlockPunchScreen(context)) {
-          setUnlockStatus({ tone: 'error', message: '当前账号无解锁权限，请重新登录。' });
+        if (!context.is_active) {
+          setUnlockStatus({ tone: 'error', message: 'Account was locked' });
+          await supabase.auth.signOut();
+          return;
+        }
+
+        if (!canUnlockPunchScreen(context)) {
+          setUnlockStatus({ tone: 'error', message: 'Access denied' });
           await supabase.auth.signOut();
           return;
         }

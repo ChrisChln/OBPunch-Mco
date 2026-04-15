@@ -649,7 +649,7 @@ export default function AgencyAppPage() {
         if (!nextAccess.is_active) {
           setAccess(null);
           setDisplayName('');
-          openNotice('error', '账号已停用，无法登录。', '账号已停用');
+          openNotice('error', 'Account was locked', 'Account was locked');
           await supabase.auth.signOut();
           return;
         }
@@ -854,7 +854,7 @@ export default function AgencyAppPage() {
       const context = await fetchAdminAccessContext(supabase, nextEmail);
       if (!context.is_active) {
         await supabase.auth.signOut();
-        openNotice('error', '账号已停用，无法登录。', '账号已停用');
+        openNotice('error', 'Account was locked', 'Account was locked');
         setPassword('');
         return;
       }
