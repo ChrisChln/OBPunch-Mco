@@ -117,7 +117,6 @@ import type {
   ScheduleDisplayState,
   SchedulePickerState,
   ScheduleRow,
-  StatusTone,
   Status,
   TimecardRow
 } from './types';
@@ -1240,6 +1239,7 @@ export default function AdminAppPage() {
   const scheduleRealtimeDebounceTimerRef = useRef<number | null>(null);
 
   const [page, setPage] = useState<AdminPage>('home');
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [adminAccessContext, setAdminAccessContext] = useState<AdminAccessContext | null>(null);
   const [adminAccessRequests, setAdminAccessRequests] = useState<AdminAccessRequestRecord[]>([]);
   const [terminationRequests, setTerminationRequests] = useState<TerminationRequestRecord[]>([]);
@@ -1347,7 +1347,7 @@ export default function AdminAppPage() {
   const locale = lang === 'en' ? 'en-US' : 'zh-CN';
   const t = (zh: string, en: string) => (lang === 'en' ? en : zh);
 
-  const [status, setStatus] = useState<Status>({ tone: 'idle', message: '请登录后台' });
+  const [, setStatus] = useState<Status>({ tone: 'idle', message: '请登录后台' });
   const [loginErrorDialog, setLoginErrorDialog] = useState<{ open: boolean; title: string; message: string }>({
     open: false,
     title: '',
@@ -2210,7 +2210,6 @@ export default function AdminAppPage() {
   >({});
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
   const [homeOnClockShiftByStaffId, setHomeOnClockShiftByStaffId] = useState<Record<string, 'early' | 'late'>>({});
-  const [homeRosterSide, setHomeRosterSide] = useState<'absent' | 'restWorked' | 'onClock'>('absent');
   const [homeRosterPositionFilter, setHomeRosterPositionFilter] = useState<'ALL' | AllowedPosition>('ALL');
 
   const resolveEmployeeColumnMode = async (): Promise<EmployeeColumnMode> => {
@@ -4842,7 +4841,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           fetchPage: async (from, to) =>
             await supabase
               .from('ob_punches')
-              .select('staff_id')
+              .select('staff_id, action, created_at')
               .in('staff_id', batch)
               .gte('created_at', operationalStart.toISOString())
               .lte('created_at', now.toISOString())
@@ -4863,13 +4862,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         for (const row of res.rows) {
           const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
           if (!staff || !staffSet.has(staff)) continue;
+          const at = new Date(String((row as any).created_at ?? ''));
+          if (Number.isNaN(at.getTime())) continue;
+          const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
           found.add(`${staff}__${dayIndex}`);
+          if (action === 'IN') {
+            const firstInKey = `${staff}__${dayIndex}`;
+            const prev = firstInByDayKey[firstInKey];
+            if (!prev || at.getTime() < new Date(prev).getTime()) {
+              firstInByDayKey[firstInKey] = at.toISOString();
+            }
+          }
         }
       }
 
       if (!isStale()) {
         setSchedulePunchPresenceKeys(found);
-        setScheduleFirstInByStaffDayKey({});
+        setScheduleFirstInByStaffDayKey(firstInByDayKey);
         setSchedulePunchPresenceReady(true);
         setSchedulePunchPresenceWeekOffset(null);
       }
@@ -11822,22 +11831,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   };
 
-  const toneColor: Record<StatusTone, string> = {
-    idle: 'text-stone-300',
-    pending: 'text-sky-200',
-    success: 'text-emerald-200',
-    error: 'text-rose-200'
-  };
-
-  const tabClass = (active: boolean) =>
-    [
-      'inline-flex h-11 min-w-[88px] items-center justify-center rounded-full border px-4 text-sm font-medium transition',
-      active
-        ? 'border-stone-200/90 bg-stone-100 text-stone-900 shadow-[0_10px_30px_rgba(0,0,0,0.18)]'
-        : 'border-white/10 bg-white/[0.04] text-stone-200 hover:border-white/15 hover:bg-white/[0.07]',
-      isLocked ? 'cursor-not-allowed opacity-60' : ''
-    ].join(' ');
-
   const downloadEmployeeTemplate = async () => {
     try {
       const XLSX = await import('xlsx');
@@ -13506,20 +13499,112 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     schedulePunchPresenceKeys
   ]);
 
+  const homeEmployeeByStaffId = useMemo(() => {
+    const map = new Map<string, EmployeeRow>();
+    for (const employee of employees) {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      if (!staff || map.has(staff)) continue;
+      map.set(staff, employee);
+    }
+    return map;
+  }, [employees]);
+
+  const homeBorrowedDeviceByStaffId = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const [sn, borrowed] of deviceCurrentBorrowBySn.entries()) {
+      const staff = normalizeStaffId(String(borrowed.staff_id ?? '').trim());
+      if (!staff) continue;
+      const current = map.get(staff) ?? [];
+      current.push(sn);
+      map.set(staff, current);
+    }
+    return map;
+  }, [deviceCurrentBorrowBySn]);
+
+  const homeFirstInAtByStaffId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const [key, createdAt] of Object.entries(scheduleFirstInByStaffDayKey)) {
+      const [staffRaw, dayIndexRaw] = String(key ?? '').split('__');
+      const staff = normalizeStaffId(String(staffRaw ?? '').trim());
+      const dayIndex = Number(dayIndexRaw ?? NaN);
+      if (!staff || !Number.isFinite(dayIndex) || dayIndex !== homeOperationalDayIndex) continue;
+      const value = String(createdAt ?? '').trim();
+      if (!value) continue;
+      map.set(staff, value);
+    }
+    return map;
+  }, [scheduleFirstInByStaffDayKey, homeOperationalDayIndex]);
+
   const homeRosterRows = useMemo(() => {
+    type HomeRosterItem = {
+      staff_id: string;
+      name: string;
+      agency: string;
+      position: string;
+      shift: string;
+      attendance: 'Absent' | 'Off Worked' | 'Normal';
+      label: string;
+      account: string;
+      borrowed_device: string;
+      mistake_count_7d: number;
+      punches: Array<{ action: 'IN' | 'OUT'; created_at: string }>;
+    };
+
     if (page !== 'home') {
       return {
-        absent: [] as Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>,
-        restWorked: [] as Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>,
-        onClock: [] as Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>
+        absent: [] as HomeRosterItem[],
+        restWorked: [] as HomeRosterItem[],
+        onClock: [] as HomeRosterItem[]
       };
     }
-    const absent: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
-    const restWorked: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
-    const onClock: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }> = [];
+    const absent: HomeRosterItem[] = [];
+    const restWorked: HomeRosterItem[] = [];
+    const onClock: HomeRosterItem[] = [];
     const seen = new Set<string>();
     const nowMinutes = homeNowMinutes;
     const lateAbsentVisibleMinutes = 16 * 60 + 30; // 16:30
+
+    const buildHomeRosterItem = (options: {
+      staff: string;
+      profile?: { name: string; agency: string; position: string; shiftTime: string };
+      employee?: EmployeeRow;
+      positionRaw?: string;
+      shift: '' | 'early' | 'late';
+      isOnClock: boolean;
+      extraMistakes?: number;
+    }): HomeRosterItem => {
+      const {
+        staff,
+        profile,
+        employee,
+        positionRaw,
+        shift,
+        isOnClock,
+        extraMistakes = 0
+      } = options;
+      const account = String(employee?.work_account ?? employee?.WorkAccount ?? '').trim();
+      const label = String(employee?.label ?? employee?.Label ?? '').trim();
+      const borrowedDevice = (homeBorrowedDeviceByStaffId.get(staff) ?? []).join(', ');
+      const lastPunchAt = String(employeeLastPunchAtByStaffId[staff] ?? '').trim();
+      const firstInAt = String(homeFirstInAtByStaffId.get(staff) ?? '').trim();
+      const punchAt = lastPunchAt || firstInAt;
+      const manualMistakes = Number(scheduleMistakeByStaffId[staff] ?? 0);
+      return {
+        staff_id: staff,
+        name: String(profile?.name ?? employee?.name ?? '').trim(),
+        agency: String(profile?.agency ?? employee?.agency ?? employee?.Agency ?? '').trim(),
+        position: String(positionRaw ?? profile?.position ?? employee?.position ?? employee?.Position ?? '').trim(),
+        shift: shift === 'early' ? 'Morning' : shift === 'late' ? 'Night' : '-',
+        attendance: isOnClock ? 'Normal' : 'Absent',
+        label,
+        account: account || '-',
+        borrowed_device: borrowedDevice,
+        mistake_count_7d: Math.max(0, manualMistakes + extraMistakes),
+        punches: punchAt
+          ? [{ action: isOnClock ? 'IN' : lastPunchAt ? 'OUT' : 'IN', created_at: punchAt }]
+          : []
+      };
+    };
 
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
@@ -13531,25 +13616,27 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       const baseState = row ? getScheduleBaseStateFromNote(row.note) : 'rest';
       const hasPunch = schedulePunchPresenceKeys.has(`${staff}__${homeOperationalDayIndex}`);
-      const position = String(employee.position ?? employee.Position ?? '').trim();
       const shift = employeeShiftByStaffId[staff]?.shift ?? '';
       const profile = employeeProfileByStaffId.get(staff);
-      const item = {
-        staff_id: staff,
-        name: String(profile?.name ?? employee.name ?? '').trim(),
-        agency: String(profile?.agency ?? employee.agency ?? employee.Agency ?? '').trim(),
-        position,
-        shift: shift === 'early' ? 'Morning' : shift === 'late' ? 'Night' : '-'
-      };
+      const item = buildHomeRosterItem({
+        staff,
+        profile,
+        employee,
+        positionRaw: String(employee.position ?? employee.Position ?? '').trim(),
+        shift,
+        isOnClock: false
+      });
       if (isScheduleOnlyAgency(item.agency)) continue;
 
       const hideLateAbsent = shift === 'late' && nowMinutes < lateAbsentVisibleMinutes;
       // 缺勤：仅在打卡存在性加载完成后再判断，避免初始加载闪烁全缺勤
       if (schedulePunchPresenceReady && row && isWorkingScheduleBaseState(baseState) && !hasPunch && !hideLateAbsent) {
-        absent.push(item);
+        absent.push({ ...item, attendance: 'Absent', mistake_count_7d: item.mistake_count_7d + 1 });
       }
       // 排休出勤：休息类状态或无排班，但有打卡
-      if (hasPunch && (!row || isRestLikeScheduleBaseState(baseState))) restWorked.push(item);
+      if (hasPunch && (!row || isRestLikeScheduleBaseState(baseState))) {
+        restWorked.push({ ...item, attendance: 'Off Worked', mistake_count_7d: item.mistake_count_7d + 1 });
+      }
     }
 
     absent.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
@@ -13559,18 +13646,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!staff) continue;
       const profile = employeeProfileByStaffId.get(staff);
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
-      const fallbackEmp = employees.find((e) => normalizeStaffId(String(e.staff_id ?? '').trim()) === staff);
+      const fallbackEmp = homeEmployeeByStaffId.get(staff);
       const position = String(profile?.position ?? row?.position ?? fallbackEmp?.position ?? fallbackEmp?.Position ?? '').trim();
-      const shift = shiftRaw === 'early' ? 'Morning' : shiftRaw === 'late' ? 'Night' : '-';
       const agency = String(profile?.agency ?? fallbackEmp?.agency ?? fallbackEmp?.Agency ?? '').trim();
       if (isScheduleOnlyAgency(agency)) continue;
-      onClock.push({
-        staff_id: staff,
-        name: String(profile?.name ?? fallbackEmp?.name ?? '').trim(),
-        agency,
-        position,
-        shift
-      });
+      onClock.push(
+        buildHomeRosterItem({
+          staff,
+          profile,
+          employee: fallbackEmp,
+          positionRaw: position,
+          shift: shiftRaw,
+          isOnClock: true
+        })
+      );
     }
     onClock.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     return { absent, restWorked, onClock };
@@ -13583,18 +13672,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     schedulePunchPresenceReady,
     homeNowMinutes,
     homeOnClockShiftByStaffId,
+    homeEmployeeByStaffId,
+    homeBorrowedDeviceByStaffId,
+    homeFirstInAtByStaffId,
     employeeShiftByStaffId,
-    employeeProfileByStaffId
+    employeeProfileByStaffId,
+    employeeLastPunchAtByStaffId,
+    scheduleMistakeByStaffId
   ]);
   const homeRosterRowsFiltered = useMemo(() => {
     if (page !== 'home') {
       return {
-        absent: [] as Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>,
-        restWorked: [] as Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>,
-        onClock: [] as Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>
+        absent: [] as typeof homeRosterRows.absent,
+        restWorked: [] as typeof homeRosterRows.restWorked,
+        onClock: [] as typeof homeRosterRows.onClock
       };
     }
-    const filterRows = (rows: Array<{ staff_id: string; name: string; agency: string; position: string; shift: string }>) =>
+    const filterRows = (rows: typeof homeRosterRows.absent) =>
       rows.filter((row) => {
         if (homeRosterPositionFilter === 'ALL') return true;
         const pos = normalizePositionKey(String(row.position ?? '').trim());
@@ -13608,10 +13702,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }, [page, homeRosterRows, homeRosterPositionFilter]);
   const homeRosterRowsCurrent = useMemo(() => {
     if (page !== 'home') return [];
-    if (homeRosterSide === 'restWorked') return homeRosterRowsFiltered.restWorked;
-    if (homeRosterSide === 'onClock') return homeRosterRowsFiltered.onClock;
-    return homeRosterRowsFiltered.absent;
-  }, [page, homeRosterSide, homeRosterRowsFiltered]);
+    return [...homeRosterRowsFiltered.absent, ...homeRosterRowsFiltered.restWorked, ...homeRosterRowsFiltered.onClock];
+  }, [page, homeRosterRowsFiltered]);
   const formatDailyListStaffId = (row: DailyListRow) => {
     const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
     if (!isNewHirePlaceholderStaffId(staff)) return displayStaffId(staff);
@@ -14508,11 +14600,11 @@ ${rowsToHtml(late)}
   return (
     <div
       className={[
-        'min-h-screen px-5 py-8 text-paper transition-colors',
+        user ? 'min-h-screen text-paper transition-colors' : 'min-h-screen px-5 py-8 text-paper transition-colors',
         themeMode === 'light' ? 'admin-theme-light' : 'admin-theme-dark'
       ].join(' ')}
     >
-      <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-6">
+      <div className="flex w-full flex-col gap-6">
         {!user ? (
           <main className="flex min-h-[calc(100vh-4rem)] items-center justify-center">
             <AdminLoginPanel
@@ -14527,7 +14619,7 @@ ${rowsToHtml(late)}
             />
           </main>
         ) : (
-          <>
+          <div className="grid h-screen grid-rows-[64px_minmax(0,1fr)] overflow-hidden">
             <AdminHeader
               t={t}
               isLocked={isLocked}
@@ -14535,9 +14627,6 @@ ${rowsToHtml(late)}
               setThemeMode={setThemeMode}
               lang={lang}
               setLang={setLang}
-              status={status}
-              toneColor={toneColor}
-              serverTimeText={formatTime(serverTime, locale)}
               user={user}
               userDisplayName={userDisplayName}
               attendanceError={attendanceError}
@@ -14547,21 +14636,36 @@ ${rowsToHtml(late)}
               onLogout={doLogout}
             />
 
-            <AdminNav
-              page={page}
-              isLocked={isLocked}
-              onSetPage={(nextPage) => changeAdminPage(nextPage, 'nav')}
-              tabClass={tabClass}
-              t={t}
-              visiblePages={visibleAdminPages}
-              leaveApprovalPendingCount={leaveApprovalPendingCount}
-              todoPendingCount={todoPendingCount}
-            />
+            <div
+              className={[
+                  'grid min-h-0 grid-cols-1 overflow-hidden transition-[grid-template-columns] duration-200 ease-out',
+                  sidebarExpanded ? 'lg:grid-cols-[240px_minmax(0,1fr)]' : 'lg:grid-cols-[60px_minmax(0,1fr)]'
+              ].join(' ')}
+            >
+              <AdminNav
+                page={page}
+                isLocked={isLocked}
+                onSetPage={(nextPage: AdminPage) => changeAdminPage(nextPage, 'nav')}
+                t={t}
+                visiblePages={visibleAdminPages}
+                leaveApprovalPendingCount={leaveApprovalPendingCount}
+                todoPendingCount={todoPendingCount}
+                expanded={sidebarExpanded}
+                onExpandedChange={setSidebarExpanded}
+              />
+
+              <main
+                className={[
+                  'min-h-0 overflow-auto bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.12),transparent_28%),linear-gradient(180deg,rgba(245,247,255,0.95),rgba(242,245,255,0.98))] text-slate-900',
+                  'px-0 py-0'
+                ].join(' ')}
+              >
+                <div className="flex w-full flex-col gap-6">
 
             {page === 'home' && (
               <HomeDashboardPage
                 t={t}
-                allowedPositions={ALLOWED_POSITIONS}
+                themeMode={themeMode}
                 homeCardStats={homeCardStats}
                 homeExpectedPositionSummaryCards={homeExpectedPositionSummaryCards}
                 getHomeCardToneClass={getHomeCardToneClass}
@@ -14569,8 +14673,6 @@ ${rowsToHtml(late)}
                 getHomePanelToneClass={getHomePanelToneClass}
                 getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                 schedulePositionToneByPosition={schedulePositionToneByPosition}
-                homeRosterSide={homeRosterSide}
-                setHomeRosterSide={setHomeRosterSide}
                 homeRosterPositionFilter={homeRosterPositionFilter}
                 setHomeRosterPositionFilter={setHomeRosterPositionFilter}
                 homeRosterRowsCurrent={homeRosterRowsCurrent}
@@ -16731,7 +16833,10 @@ ${rowsToHtml(late)}
                 uploadError={uploadError}
               />
             )}
-          </>
+                </div>
+              </main>
+            </div>
+          </div>
         )}
 
         {page !== 'timecard' && renderTimecardPunchModal()}
@@ -17025,10 +17130,6 @@ ${rowsToHtml(late)}
             </div>,
             document.body
           )}
-
-        <footer className="text-center text-xs text-slate-500">
-          {isLocked ? t('请求处理中，已锁定交互', 'Request in progress (locked)') : 'Ready'}
-        </footer>
         <AppDialog
           open={loginErrorDialog.open}
           title={loginErrorDialog.title}
