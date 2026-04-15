@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import type { LabelToneKey } from '../../lib/labelTone';
 import type { AllowedPosition } from '../types';
 
@@ -112,7 +112,7 @@ const getAttendanceCardValueClass = (position: string) => {
   return 'text-stone-100';
 };
 
-export default function HomeDashboardPage({
+function HomeDashboardPage({
   t,
   themeMode: _themeMode,
   homeCardStats,
@@ -456,3 +456,5 @@ export default function HomeDashboardPage({
     </main>
   );
 }
+
+export default memo(HomeDashboardPage);
