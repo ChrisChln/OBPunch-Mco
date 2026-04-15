@@ -538,6 +538,7 @@ export default function App() {
   const [punchSuccessOverlay, setPunchSuccessOverlay] = useState<{ title: string; name: string; at: number } | null>(null);
   const unlockEmailRef = useRef<HTMLInputElement | null>(null);
   const unlockPasswordRef = useRef<HTMLInputElement | null>(null);
+  const preservePunchUnlockOnNextSignOutRef = useRef(false);
 
   const getSoundSourceCandidates = (kind: SoundKind) => {
     if (kind === 'successIn') {
@@ -1334,7 +1335,16 @@ export default function App() {
       setPunchUnlocked(true);
       setUnlockByLabel(display);
       setUnlockPassword('');
-      setUnlockStatus({ tone: 'success', message: `Unlocked by admin: ${display}` });
+      preservePunchUnlockOnNextSignOutRef.current = true;
+      const signOutRes = await supabase.auth.signOut();
+      if (signOutRes.error) {
+        preservePunchUnlockOnNextSignOutRef.current = false;
+        setPunchUnlocked(false);
+        setUnlockByLabel('');
+        setUnlockStatus({ tone: 'error', message: `解锁成功但退出管理员会话失败：${signOutRes.error.message}` });
+        return;
+      }
+      setUnlockStatus({ tone: 'success', message: `Unlocked by admin: ${display}. Admin login is required to enter admin page.` });
       setUiStatus({ tone: 'idle', message: defaultUiStatusMessage });
     } catch (error) {
       setUnlockStatus({
@@ -1348,6 +1358,7 @@ export default function App() {
   };
 
   const logoutPunchScreen = async () => {
+    preservePunchUnlockOnNextSignOutRef.current = false;
     if (supabase) {
       await supabase.auth.signOut();
     }
@@ -1410,6 +1421,10 @@ export default function App() {
     const { data } = supabase.auth.onAuthStateChange((event) => {
       if (!active) return;
       if (event !== 'SIGNED_OUT') return;
+      if (preservePunchUnlockOnNextSignOutRef.current) {
+        preservePunchUnlockOnNextSignOutRef.current = false;
+        return;
+      }
       setPunchUnlocked(false);
       setUnlockByLabel('');
       setUnlockPassword('');
