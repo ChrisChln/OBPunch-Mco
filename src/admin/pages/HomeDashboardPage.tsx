@@ -25,17 +25,19 @@ type HomeDashboardPageProps = {
   homeExpectedPositionSummaryCards: Array<{ position: string; early: number; late: number; total: number }>;
   getHomeCardToneClass: (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => string;
   getHomeChipToneClass: (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => string;
+  getScheduleLabelToneClass: (label: string) => string;
   getHomePanelToneClass: (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => string;
   getSchedulePositionBadgeClass: (position: string) => string;
   schedulePositionToneByPosition: Partial<Record<AllowedPosition, LabelToneKey>>;
   homeRosterPositionFilter: 'ALL' | AllowedPosition;
   setHomeRosterPositionFilter: (value: 'ALL' | AllowedPosition) => void;
+  onOpenTimecardCalibration?: (staffId: string, workDate: string) => void | Promise<void>;
   homeRosterRowsCurrent: HomeRosterRow[];
 };
 
 type IconProps = { className?: string };
 
-type AttendanceView = 'Absent' | 'Off Worked' | 'Normal';
+type AttendanceView = 'Absent' | 'Off Worked' | 'Normal' | 'Completed';
 
 type TableRow = HomeRosterRow & {
   label: string;
@@ -94,6 +96,32 @@ const formatTimeOnly = (iso: string) => {
   return d.toLocaleTimeString('en-CA', { hour12: false });
 };
 
+const toLocalDateOnly = (iso: string) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const SHORT_GAP_MINUTES = 10;
+
+const getShortGapPunchIndices = (punches: Array<{ action: 'IN' | 'OUT'; created_at: string }>) => {
+  const result = new Set<number>();
+  for (let index = 1; index < punches.length; index += 1) {
+    const prevMs = new Date(String(punches[index - 1]?.created_at ?? '')).getTime();
+    const currentMs = new Date(String(punches[index]?.created_at ?? '')).getTime();
+    if (!Number.isFinite(prevMs) || !Number.isFinite(currentMs)) continue;
+    const diffMinutes = Math.abs(currentMs - prevMs) / (60 * 1000);
+    if (diffMinutes <= SHORT_GAP_MINUTES) {
+      result.add(index - 1);
+      result.add(index);
+    }
+  }
+  return result;
+};
+
 const getAttendanceCardClass = (position: string) => {
   if (position === 'Pick') return 'border-sky-300/20 bg-sky-400/[0.08]';
   if (position === 'Pack') return 'border-emerald-300/20 bg-emerald-400/[0.08]';
@@ -119,11 +147,13 @@ function HomeDashboardPage({
   homeExpectedPositionSummaryCards,
   getHomeCardToneClass: _getHomeCardToneClass,
   getHomeChipToneClass: _getHomeChipToneClass,
+  getScheduleLabelToneClass,
   getHomePanelToneClass: _getHomePanelToneClass,
-  getSchedulePositionBadgeClass: _getSchedulePositionBadgeClass,
+  getSchedulePositionBadgeClass,
   schedulePositionToneByPosition: _schedulePositionToneByPosition,
   homeRosterPositionFilter: _homeRosterPositionFilter,
   setHomeRosterPositionFilter,
+  onOpenTimecardCalibration,
   homeRosterRowsCurrent
 }: HomeDashboardPageProps) {
   const [search, setSearch] = useState('');
@@ -334,13 +364,13 @@ function HomeDashboardPage({
           </div>
 
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1.5fr)_220px_220px_repeat(3,minmax(0,160px))]">
-            <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4">
-              <SearchIcon className="h-4 w-4 text-stone-400" />
+            <label className="relative flex h-12 items-center overflow-hidden rounded-[20px] border border-white/10 bg-white/[0.04] px-4">
+              <SearchIcon className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search by staff ID or name"
-                className="h-full w-full bg-transparent text-sm text-stone-100 outline-none placeholder:text-stone-500"
+                className="home-search-input h-full w-full bg-transparent pl-8 text-sm text-stone-100 outline-none placeholder:text-stone-500"
               />
             </label>
             <div className="relative">
@@ -404,7 +434,6 @@ function HomeDashboardPage({
                   <th className="px-3 py-3 text-left">Position</th>
                   <th className="px-3 py-3 text-left">Label</th>
                   <th className="px-3 py-3 text-left">Shift</th>
-                  <th className="px-3 py-3 text-left">Mistake</th>
                   <th className="px-3 py-3 text-left">Punch Logs</th>
                 </tr>
               </thead>
@@ -418,26 +447,55 @@ function HomeDashboardPage({
                       <td className="whitespace-nowrap px-3 py-3 font-mono text-stone-100">{row.staff_id || '-'}</td>
                       <td className="whitespace-nowrap px-3 py-3 text-stone-100">{row.name || '-'}</td>
                       <td className="whitespace-nowrap px-3 py-3 text-stone-300">
-                        <span className={['inline-flex items-center rounded-full border px-2.5 py-1', getAttendanceCardClass(normalizePositionKey(row.position) || row.position)].join(' ')}>
+                        <span className={['inline-flex items-center rounded-full border px-2.5 py-1', getSchedulePositionBadgeClass(row.position)].join(' ')}>
                           {row.position || '-'}
                         </span>
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-stone-300">
-                        <span className="inline-flex items-center rounded-full border border-white/12 bg-white/[0.04] px-2.5 py-1">{row.label || '-'}</span>
+                        <span className={['inline-flex items-center rounded-full border px-2.5 py-1', getScheduleLabelToneClass(row.label || '-')].join(' ')}>{row.label || '-'}</span>
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-stone-300">
-                        <span className="inline-flex items-center rounded-full border border-white/12 bg-white/[0.04] px-2.5 py-1">{formatShiftLabel(row.shift)}</span>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-stone-300">
-                        <span className="inline-flex min-w-[36px] items-center justify-center rounded-full border border-white/15 bg-white/[0.03] px-2 py-1 text-xs font-semibold">{row.mistake_count_7d}</span>
+                        <span className="inline-flex items-center rounded-full border border-white/12 bg-white/[0.04] px-2.5 py-1 text-slate-200">
+                          {formatShiftLabel(row.shift)}
+                        </span>
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-stone-300">
                         <div className="flex flex-wrap gap-1.5">
-                          {row.punches.length > 0 ? row.punches.map((punch, punchIndex) => (
-                            <span key={`${row.staff_id}-${punchIndex}`} className="inline-flex items-center rounded-full border border-white/15 bg-white/[0.03] px-2 py-1 text-[10px] font-semibold uppercase">
-                              {punch.action} {formatTimeOnly(punch.created_at)}
-                            </span>
-                          )) : <span className="inline-flex items-center rounded-full border border-white/12 bg-white/[0.03] px-2 py-1 text-[10px]">--</span>}
+                          {row.punches.length > 0 ? (
+                            <>
+                              {row.punches.slice(0, 4).map((punch, punchIndex) => {
+                                const shortGapIndices = getShortGapPunchIndices(row.punches);
+                                const toneClass = shortGapIndices.has(punchIndex)
+                                  ? 'border-rose-300/35 bg-rose-500/[0.14] text-rose-100'
+                                  : punch.action === 'IN'
+                                    ? 'border-emerald-300/35 bg-emerald-500/[0.14] text-emerald-100'
+                                    : 'border-sky-300/35 bg-sky-500/[0.14] text-sky-100';
+                                return (
+                                  <span key={`${row.staff_id}-${punchIndex}`} className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold uppercase', toneClass].join(' ')}>
+                                    {punch.action} {formatTimeOnly(punch.created_at)}
+                                  </span>
+                                );
+                              })}
+                              {row.punches.length > 4 ? (
+                                <button
+                                  type="button"
+                                  title={`+${row.punches.length - 4} more`}
+                                  onClick={() => {
+                                    if (!onOpenTimecardCalibration) return;
+                                    const firstValidPunch = row.punches.find((item) => toLocalDateOnly(item.created_at));
+                                    const workDate = firstValidPunch ? toLocalDateOnly(firstValidPunch.created_at) : '';
+                                    if (!row.staff_id || !workDate) return;
+                                    void onOpenTimecardCalibration(row.staff_id, workDate);
+                                  }}
+                                  className="inline-flex items-center rounded-full border border-amber-300/35 bg-amber-500/[0.14] px-2 py-1 text-[10px] font-semibold text-amber-100 transition hover:bg-amber-500/[0.24]"
+                                >
+                                  +{row.punches.length - 4}
+                                </button>
+                              ) : null}
+                            </>
+                          ) : (
+                            <span className="inline-flex items-center rounded-full border border-white/12 bg-white/[0.03] px-2 py-1 text-[10px]">--</span>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -445,7 +503,7 @@ function HomeDashboardPage({
                 })}
                 {renderedRows.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-3 py-10 text-center text-sm text-stone-400">{t('当前无记录', 'No records')}</td>
+                    <td colSpan={7} className="px-3 py-10 text-center text-sm text-stone-400">{t('当前无记录', 'No records')}</td>
                   </tr>
                 )}
               </tbody>

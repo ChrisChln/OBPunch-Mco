@@ -6,6 +6,7 @@ type StyledDateInputProps = {
   value: string;
   onChange: (value: string) => void;
   themeMode?: 'light' | 'dark';
+  size?: 'default' | 'compact';
   min?: string;
   max?: string;
   disabled?: boolean;
@@ -46,6 +47,7 @@ export default function StyledDateInput({
   value,
   onChange,
   themeMode = 'dark',
+  size = 'default',
   min,
   max,
   disabled = false,
@@ -110,9 +112,19 @@ export default function StyledDateInput({
 
   const monthDays = useMemo(() => buildCalendarDays(viewMonth), [viewMonth]);
   const isDateDisabled = (dateOnly: string) => Boolean((min && dateOnly < min) || (max && dateOnly > max));
+  const triggerBaseClass =
+    size === 'compact'
+      ? 'flex h-8 min-w-[130px] items-center justify-between rounded-lg px-2.5 text-[12px] font-medium'
+      : 'flex h-10 min-w-[156px] items-center justify-between rounded-2xl px-4 text-sm font-medium';
   const triggerClass = isLight
-    ? 'flex h-10 min-w-[156px] items-center justify-between rounded-2xl border border-slate-300 bg-white px-4 text-sm font-medium text-slate-900 shadow-sm transition hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-lime-300/40 disabled:cursor-not-allowed disabled:opacity-60'
-    : 'flex h-10 min-w-[156px] items-center justify-between rounded-2xl border border-white/10 bg-slate-950/75 px-4 text-sm font-medium text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-white/20 focus:outline-none focus:ring-2 focus:ring-neon/30 disabled:cursor-not-allowed disabled:opacity-60';
+    ? [
+        triggerBaseClass,
+        'border border-slate-300 bg-white text-slate-900 shadow-sm transition hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-lime-300/40 disabled:cursor-not-allowed disabled:opacity-60'
+      ].join(' ')
+    : [
+        triggerBaseClass,
+        'border border-white/10 bg-slate-950/75 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-white/20 focus:outline-none focus:ring-2 focus:ring-neon/30 disabled:cursor-not-allowed disabled:opacity-60'
+      ].join(' ');
   const panelClass = isLight
     ? 'w-[264px] rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_40px_rgba(15,23,42,0.18)]'
     : 'w-[264px] rounded-2xl border border-white/10 bg-[#101317]/95 p-3 shadow-[0_24px_48px_rgba(0,0,0,0.5)] backdrop-blur';

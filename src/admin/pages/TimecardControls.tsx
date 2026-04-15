@@ -73,7 +73,7 @@ export default function TimecardControls({
 }: TimecardControlsProps) {
   const isLight = themeMode === 'light';
   const ghostButtonClass = [
-    'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+    'h-9 rounded-2xl px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
     isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
   ].join(' ');
   const controlInputClass = [
@@ -101,10 +101,11 @@ export default function TimecardControls({
         </div>
 
         <div className="flex flex-wrap gap-3">
-          <div className={['flex items-center gap-2 rounded-2xl px-4 py-2', isLight ? 'border border-slate-200 bg-slate-100' : 'bg-white/5'].join(' ')}>
-            <span className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Week</span>
+          <div className={['flex h-9 items-center gap-1 rounded-lg px-2', isLight ? 'border border-slate-200 bg-slate-100' : 'bg-white/5'].join(' ')}>
+            <span className={['text-[10px] uppercase tracking-[0.2em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Week</span>
             <StyledDateInput
               themeMode={themeMode}
+              size="compact"
               disabled={isLocked}
               value={timecardWeekInput}
               onChange={(raw) => {
@@ -151,7 +152,7 @@ export default function TimecardControls({
             type="button"
             disabled={isLocked}
             onClick={() => void refreshTimecardWithAudit('toolbar_refresh')}
-            className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-9 rounded-2xl bg-neon px-5 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
           >
             {t('刷新', 'Refresh')}
           </button>
@@ -188,7 +189,7 @@ export default function TimecardControls({
               });
             }}
             className={[
-              'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+              'h-9 rounded-2xl px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
               timecardMissingEmployeeOnly
                 ? isLight
                   ? 'border border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200'
