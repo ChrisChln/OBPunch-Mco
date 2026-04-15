@@ -1,4 +1,5 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { User } from '@supabase/supabase-js';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import { createSupabaseClient } from './lib/supabase';
@@ -498,7 +499,7 @@ const getShortGapPunchIndices = (punches: PunchRow[], thresholdMinutes = 10) => 
 
 export default function DashboardPage() {
   // --- Session restoration logic for Punch Screen auto-login ---
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState<User | null>(null);
   useEffect(() => {
     if (!supabase) return;
     let active = true;
@@ -1915,6 +1916,7 @@ export default function DashboardPage() {
               <h1 className="font-display text-4xl leading-none tracking-[0.03em] text-stone-50 sm:text-5xl">
                 Dashboard
               </h1>
+              {user?.email && <p className="text-sm text-stone-400">Logged in as: {user.email}</p>}
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

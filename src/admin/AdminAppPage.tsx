@@ -1,5 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import type { User } from '@supabase/supabase-js';
+import type { User as SupabaseUser } from '@supabase/supabase-js';
+
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
 import { matchesLooseSearch } from '../lib/textSearch';
@@ -373,7 +374,7 @@ const getScheduleDisplayState = (
 const supabase = createSupabaseClient({ persistSession: true });
 
 // --- Session restoration logic for Admin auto-login ---
-import type { User as SupabaseUser } from '@supabase/supabase-js';
+
 
 const obupSupabase = createSupabaseClientWithCredentials({
   persistSession: false,
