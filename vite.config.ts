@@ -13,5 +13,13 @@ export default defineConfig({
         agency: resolve(__dirname, 'agency/index.html')
       }
     }
-  }
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      loader: {
+        '.js': 'jsx',
+        '.ts': 'tsx'
+      },
+    },
+  },
 });
