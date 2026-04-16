@@ -31,15 +31,25 @@ export const computeAgencySummaryCards = ({
 }): AgencySummaryCard[] => {
   const gapCount = computeAgencyGapCount(employees, openSlotsByStaffDate, selectedDate);
   const newRequestCount = newHireRequests.length;
+  const activeCount = employees.length;
   const baseScheduledCount = employees.filter((row) => isAgencyWorklikeState(row.state as AgencyScheduleState)).length;
+  const dayOffCount = employees.filter((row) =>
+    ['rest', 'temp_rest', 'planned_temp_rest'].includes(String(row.state ?? '').trim())
+  ).length;
+  const excuseCount = employees.filter((row) =>
+    ['leave_pending', 'leave', 'planned_leave'].includes(String(row.state ?? '').trim())
+  ).length;
   const scheduledNewHireCount = newHireRequests.filter((row) => String(row.name ?? '').trim()).length;
   const scheduledCount = baseScheduledCount + scheduledNewHireCount;
   const requiredCount = baseScheduledCount + newRequestCount + gapCount;
 
   return [
+    { key: 'active', label: 'Active', value: activeCount },
     { key: 'required', label: 'Required', value: requiredCount },
     { key: 'scheduled', label: 'Scheduled', value: scheduledCount },
     { key: 'new_requests', label: 'New Requests', value: newRequestCount },
-    { key: 'gap', label: 'Gap', value: gapCount }
+    { key: 'gap', label: 'Gap', value: gapCount },
+    { key: 'day_off', label: 'Day Off', value: dayOffCount },
+    { key: 'excuse', label: 'Excuse#', value: excuseCount }
   ];
 };

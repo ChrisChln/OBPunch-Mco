@@ -27,6 +27,7 @@ type Props = {
 type EmployeeLite = {
   staffId: string;
   name: string;
+  agency: string;
   position: string;
   shift: string;
 };
@@ -283,6 +284,7 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
       next[staffId] = {
         staffId,
         name: readEmployeeField(row as Record<string, unknown>, 'name', 'Name', 'NAME'),
+        agency: readEmployeeField(row as Record<string, unknown>, 'agency', 'Agency', 'AGENCY'),
         position: readEmployeeField(row as Record<string, unknown>, 'position', 'Position', 'POSITION'),
         shift: readEmployeeField(row as Record<string, unknown>, 'shift', 'Shift', 'SHIFT')
       };
@@ -602,12 +604,13 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
     const q = search.trim().toLowerCase();
     return rows.filter((row) => {
       const effectiveStatus = getEffectiveStatus(row);
+      const matchedAgency = row.matched_staff_id ? employeesByStaffId[row.matched_staff_id]?.agency ?? '' : '';
       if (statusFilter !== 'all' && effectiveStatus !== statusFilter) return false;
       if (dateFilter && row.leave_date !== dateFilter) return false;
       if (!q) return true;
-      return [row.employee_name_raw, row.employee_staff_id_raw, row.matched_staff_id, row.matched_employee_name, row.leave_type, row.position_raw].join(' ').toLowerCase().includes(q);
+      return [row.employee_name_raw, row.employee_staff_id_raw, row.matched_staff_id, row.matched_employee_name, matchedAgency, row.leave_type, row.position_raw].join(' ').toLowerCase().includes(q);
     });
-  }, [rows, search, statusFilter, dateFilter]);
+  }, [rows, search, statusFilter, dateFilter, employeesByStaffId]);
 
   const summary = useMemo(
     () => ({
@@ -675,6 +678,7 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
                 <tbody>
                   {filteredRows.map((row) => {
                     const effectiveStatus = getEffectiveStatus(row);
+                    const matchedAgency = row.matched_staff_id ? employeesByStaffId[row.matched_staff_id]?.agency ?? '' : '';
                     const matchedPosition = row.matched_staff_id ? employeesByStaffId[row.matched_staff_id]?.position ?? '' : '';
                     const displayPosition = matchedPosition || row.position_raw || '-';
                     return (
@@ -687,6 +691,11 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
                         </td>
                         <td className="px-3 py-2">
                           <div>{row.matched_staff_id ? `${row.matched_staff_id} · ${row.matched_employee_name || row.matched_staff_id}` : t('未匹配', 'Unmatched')}</div>
+                          {row.matched_staff_id ? (
+                            <div className={isLight ? 'text-xs text-slate-500' : 'text-xs text-white/50'}>
+                              Agency: {matchedAgency || '-'}
+                            </div>
+                          ) : null}
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap">{displayPosition}</td>
                         <td className="px-3 py-2">{row.leave_type}</td>

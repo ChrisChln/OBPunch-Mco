@@ -325,6 +325,17 @@ const summaryCardStatusClass = (
   if (key === 'new_requests') {
     return 'border-2 border-emerald-400/80 bg-[linear-gradient(180deg,rgba(16,185,129,0.14),rgba(0,0,0,0.18))] shadow-[0_0_0_1px_rgba(16,185,129,0.16),0_22px_56px_rgba(16,185,129,0.16)]';
   }
+  if (key === 'active') {
+    return 'border-2 border-emerald-400/80 bg-[linear-gradient(180deg,rgba(16,185,129,0.14),rgba(0,0,0,0.18))] shadow-[0_0_0_1px_rgba(16,185,129,0.16),0_22px_56px_rgba(16,185,129,0.16)]';
+  }
+  if (key === 'day_off') {
+    return 'border-2 border-emerald-400/80 bg-[linear-gradient(180deg,rgba(16,185,129,0.14),rgba(0,0,0,0.18))] shadow-[0_0_0_1px_rgba(16,185,129,0.16),0_22px_56px_rgba(16,185,129,0.16)]';
+  }
+  if (key === 'excuse') {
+    return value === 0
+      ? 'border-2 border-emerald-400/80 bg-[linear-gradient(180deg,rgba(16,185,129,0.14),rgba(0,0,0,0.18))] shadow-[0_0_0_1px_rgba(16,185,129,0.16),0_22px_56px_rgba(16,185,129,0.16)]'
+      : 'border-2 border-violet-400/80 bg-[linear-gradient(180deg,rgba(167,139,250,0.16),rgba(0,0,0,0.18))] shadow-[0_0_0_1px_rgba(167,139,250,0.16),0_22px_56px_rgba(124,58,237,0.16)]';
+  }
   return 'border-white/10';
 };
 
@@ -1572,12 +1583,12 @@ export default function AgencyAppPage() {
   const derivedSummaryCards = useMemo(
     () =>
       computeAgencySummaryCards({
-        employees: employeeRows,
-        newHireRequests: selectedDateNewHireRequests,
+        employees: filteredEmployees,
+        newHireRequests: filteredNewHireRequests,
         openSlotsByStaffDate: openSubstituteSlotsByStaffDate,
         selectedDate
       }),
-    [employeeRows, openSubstituteSlotsByStaffDate, selectedDate, selectedDateNewHireRequests]
+    [filteredEmployees, filteredNewHireRequests, openSubstituteSlotsByStaffDate, selectedDate]
   );
 
   const summaryCards = useMemo(() => derivedSummaryCards, [derivedSummaryCards]);
@@ -1637,7 +1648,7 @@ export default function AgencyAppPage() {
 
         {user && !accessLoading && canViewAgency && weekSchedule ? (
           <>
-            <section className="grid gap-4 md:grid-cols-4">
+            <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
               {summaryCards.map((card) => (
                 <div
                   key={card.key}
@@ -2198,4 +2209,3 @@ export default function AgencyAppPage() {
     </div>
   );
 }
-

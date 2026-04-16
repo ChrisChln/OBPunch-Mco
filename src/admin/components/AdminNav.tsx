@@ -97,11 +97,7 @@ function AdminNav({
   const [expanded, setExpanded] = useState(false);
   const collapseTimerRef = useRef<number | null>(null);
   const visiblePageSet = new Set(visiblePages ?? NAV_ITEMS.map((item) => item.page));
-  const items = NAV_ITEMS.filter((item) => visiblePageSet.has(item.page)).sort((left, right) => {
-    const leftPriority = left.page === 'schedule' && scheduleTerminationPendingCount > 0 ? 1 : 0;
-    const rightPriority = right.page === 'schedule' && scheduleTerminationPendingCount > 0 ? 1 : 0;
-    return rightPriority - leftPriority;
-  });
+  const items = NAV_ITEMS.filter((item) => visiblePageSet.has(item.page));
   const shellClass =
     themeMode === 'light'
       ? 'border-r border-slate-200 bg-white/90 text-slate-900 backdrop-blur-xl'
