@@ -264,21 +264,21 @@ const normalizePositionKey = (value: string): '' | 'Pick' | 'Pack' | 'Rebin' | '
 };
 const getPositionBadgeClass = (value: string) => {
   const pos = normalizePositionKey(value);
-  if (pos === 'Pick') return 'border-sky-300/35 text-sky-100 bg-sky-400/[0.14]';
-  if (pos === 'Pack') return 'border-rose-300/35 text-rose-100 bg-rose-400/[0.14]';
-  if (pos === 'Rebin') return 'border-emerald-300/35 text-emerald-100 bg-emerald-400/[0.14]';
-  if (pos === 'Preship') return 'border-amber-300/35 text-amber-100 bg-amber-400/[0.14]';
-  if (pos === 'Transfer') return 'border-violet-300/35 text-violet-100 bg-violet-400/[0.14]';
-  if (pos === 'FLEX TEAM') return 'border-slate-300/35 text-slate-100 bg-slate-400/[0.14]';
-  return 'border-white/15 text-stone-100 bg-white/[0.04]';
+  if (pos === 'Pick') return 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]';
+  if (pos === 'Pack') return 'badge-elevated-dark border-rose-300/30 text-rose-100 bg-rose-400/[0.13]';
+  if (pos === 'Rebin') return 'badge-elevated-dark border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]';
+  if (pos === 'Preship') return 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
+  if (pos === 'Transfer') return 'badge-elevated-dark border-violet-300/30 text-violet-100 bg-violet-400/[0.13]';
+  if (pos === 'FLEX TEAM') return 'badge-elevated-dark border-slate-300/30 text-slate-100 bg-slate-400/[0.13]';
+  return 'badge-elevated-dark border-white/12 text-stone-100 bg-white/[0.05]';
 };
 const getShiftBadgeClass = (value: string) => {
   const v = String(value ?? '').trim().toLowerCase();
-  if (v === 'early') return 'border-stone-300/25 text-stone-100 bg-stone-200/[0.08]';
-  if (v === 'late') return 'border-stone-500/25 text-stone-200 bg-stone-400/[0.08]';
-  return 'border-white/15 text-stone-100 bg-white/[0.04]';
+  if (v === 'early') return 'badge-elevated-dark border-amber-300/24 text-amber-100 bg-amber-400/[0.10]';
+  if (v === 'late') return 'badge-elevated-dark border-indigo-300/24 text-indigo-100 bg-indigo-400/[0.10]';
+  return 'badge-elevated-dark border-white/12 text-stone-100 bg-white/[0.05]';
 };
-const DEFAULT_CARD_POSITIONS: string[] = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'];
+const DEFAULT_CARD_POSITIONS: string[] = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'];
 const getAttendanceCardClass = (position: string) => {
   const pos = normalizePositionKey(position);
   if (pos === 'Pick') return 'border-sky-300/20 bg-gradient-to-br from-sky-400/[0.14] via-sky-300/[0.06] to-transparent';
@@ -839,6 +839,8 @@ export default function DashboardPage() {
         const position = String(key.split(':')[1] ?? '').trim();
         if (position) positionUniverse.add(position);
       }
+      // Remove FLEX TEAM if present
+      positionUniverse.delete('FLEX TEAM');
       const orderedCardPositions = Array.from(positionUniverse).sort((a, b) => {
         const rankA = positionOrder.get(a);
         const rankB = positionOrder.get(b);

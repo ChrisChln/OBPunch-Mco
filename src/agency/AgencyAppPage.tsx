@@ -259,9 +259,9 @@ const shiftLabel = (shift: AgencyEmployeeRow['shift']) => {
 const normalizeAgencyShift = (shift: string): AgencyShift => (shift === 'late' ? 'late' : 'early');
 
 const shiftChipClass = (shift: AgencyEmployeeRow['shift']) => {
-  if (shift === 'early') return 'border-amber-400/50 bg-amber-500/10 text-amber-200';
-  if (shift === 'late') return 'border-violet-400/50 bg-violet-500/10 text-violet-200';
-  return 'border-white/10 bg-white/5 text-slate-300';
+  if (shift === 'early') return 'badge-elevated-dark border-amber-300/30 bg-amber-400/[0.13] text-amber-100';
+  if (shift === 'late') return 'badge-elevated-dark border-violet-300/30 bg-violet-400/[0.13] text-violet-100';
+  return 'badge-elevated-dark border-white/12 bg-white/[0.05] text-slate-200';
 };
 
 const formatStartTime = (value: string) => {
@@ -299,12 +299,12 @@ const normalizeAgencyValue = (value: unknown) => {
 
 const positionChipClass = (position: string) => {
   const key = String(position ?? '').trim().toLowerCase();
-  if (key === 'pick') return 'border-sky-400/50 bg-sky-500/10 text-sky-200';
-  if (key === 'rebin') return 'border-emerald-400/50 bg-emerald-500/10 text-emerald-200';
-  if (key === 'pack') return 'border-rose-400/50 bg-rose-500/10 text-rose-200';
-  if (key === 'preship') return 'border-amber-400/50 bg-amber-500/10 text-amber-200';
-  if (key === 'transfer') return 'border-violet-400/50 bg-violet-500/10 text-violet-200';
-  return 'border-white/10 bg-white/5 text-slate-300';
+  if (key === 'pick') return 'badge-elevated-dark border-sky-300/30 bg-sky-400/[0.13] text-sky-100';
+  if (key === 'rebin') return 'badge-elevated-dark border-emerald-300/30 bg-emerald-400/[0.13] text-emerald-100';
+  if (key === 'pack') return 'badge-elevated-dark border-rose-300/30 bg-rose-400/[0.13] text-rose-100';
+  if (key === 'preship') return 'badge-elevated-dark border-amber-300/30 bg-amber-400/[0.13] text-amber-100';
+  if (key === 'transfer') return 'badge-elevated-dark border-violet-300/30 bg-violet-400/[0.13] text-violet-100';
+  return 'badge-elevated-dark border-white/12 bg-white/[0.05] text-slate-200';
 };
 
 const summaryCardStatusClass = (
@@ -2198,5 +2198,4 @@ export default function AgencyAppPage() {
     </div>
   );
 }
-
 
