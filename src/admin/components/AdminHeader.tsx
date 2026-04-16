@@ -206,9 +206,6 @@ function AdminHeader({
                   className={['flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60', menuItemClass].join(' ')}
                 >
                   <span>{t('个人资料', 'Profile')}</span>
-                  <span className={['rounded-full border px-2 py-0.5 text-[11px] font-semibold', isLight ? 'border-slate-200 bg-white text-slate-500' : 'border-slate-700 bg-slate-900 text-slate-400'].join(' ')}>
-                    {t('编辑', 'Edit')}
-                  </span>
                 </button>
 
                 <button
