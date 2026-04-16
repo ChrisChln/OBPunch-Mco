@@ -795,26 +795,19 @@ export default function App() {
   }, [deviceReturnReminder]);
 
   const punchBoardFiltered = useMemo(() => {
-    if (!punchLogPositionFilter) return punchBoard;
-    const needle = punchLogPositionFilter.trim().toLowerCase();
-    return punchBoard.filter((p) => {
-      const employee = punchBoardEmployeeMap[p.staff_id];
-      const pos = String(employee?.position ?? '').trim();
-      if (!pos) return true;
-      return pos.toLowerCase() === needle;
-    });
-  }, [punchBoard, punchBoardEmployeeMap, punchLogPositionFilter]);
-
-  const arrivalMetricByKey = useMemo(() => {
-    const map: Record<string, ArrivalMetric> = {};
-    for (const metric of arrivalMetrics) {
-      map[`${metric.position}:${metric.shift}`] = metric;
+        if (position === 'FLEX TEAM') continue;
+        const positionShiftScope = rows.filter(
+          (row) =>
+            normalizePositionKey(row.position) === position &&
+            String(row.shift ?? '').trim().toLowerCase() === shift
+        );
+        const offWorkedScope = positionShiftScope.filter((row) => row.attendance === 'Off Worked');
+        const stat = cardStatsByKey[`${shift}:${position}`] ?? { expected: 0, present: 0, onClock: 0, offWorked: 0 };
+        cards.push({ position, shift, expected: stat.expected, present: stat.present, onClock: stat.onClock, offWorked: stat.offWorked || offWorkedScope.length });
+      }
     }
-    return map;
-  }, [arrivalMetrics]);
-  const rosterStaffIds = useMemo(
-    () => Array.from(new Set(dailyRoster.map((row) => row.staff_id).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'en-US')),
-    [dailyRoster]
+    return cards;
+  }, [rows, cardPositions, cardStatsByKey]);
   );
   const [lastPunchActionLoading, setLastPunchActionLoading] = useState(false);
 
