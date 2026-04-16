@@ -5,6 +5,7 @@ export const ADMIN_MODULE_KEYS = [
   'permissions',
   'timecard',
   'leave_approval',
+  'work_hour_comparison',
   'todo',
   'punches',
   'audit',

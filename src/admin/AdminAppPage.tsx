@@ -1077,7 +1077,7 @@ const getVisibleAdminPages = (accessContext: AdminAccessContext | null | undefin
   if (hasModuleAccess(moduleMap, 'permissions', 'view')) pages.push('permissions');
   if (hasModuleAccess(moduleMap, 'timecard', 'view')) pages.push('timecard');
   if (hasModuleAccess(moduleMap, 'leave_approval', 'view')) pages.push('leave_approval');
-  if (hasModuleAccess(moduleMap, 'efficiency', 'view')) pages.push('work_hour_comparison');
+  if (hasModuleAccess(moduleMap, 'work_hour_comparison', 'view')) pages.push('work_hour_comparison');
   if (hasModuleAccess(moduleMap, 'todo', 'view')) pages.push('todo');
   if (hasModuleAccess(moduleMap, 'punches', 'view')) pages.push('punches');
   if (hasModuleAccess(moduleMap, 'audit', 'view')) pages.push('audit');
@@ -1330,6 +1330,10 @@ export default function AdminAppPage() {
     }
     return map;
   }, [terminationRequests]);
+  const scheduleTerminationPendingCount = useMemo(
+    () => terminationRequests.filter((request) => request.status === 'pending').length,
+    [terminationRequests]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -13586,15 +13590,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const filtered = !search
       ? scheduleEmployeesBase
       : scheduleEmployeesBase.filter((employee) => {
-      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-      const name = String(employee.name ?? '').trim();
-      const position = String(employee.position ?? employee.Position ?? '').trim();
-      return [staff, name, position].join(' ').toLowerCase().includes(search);
-    });
-    if (!scheduleSortByUphDesc) return filtered;
+          const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+          const name = String(employee.name ?? '').trim();
+          const position = String(employee.position ?? employee.Position ?? '').trim();
+          return [staff, name, position].join(' ').toLowerCase().includes(search);
+        });
     return [...filtered].sort((a, b) => {
       const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
       const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
+      const pendingA = pendingTerminationRequestsByStaffId.has(staffA);
+      const pendingB = pendingTerminationRequestsByStaffId.has(staffB);
+      if (pendingA !== pendingB) return pendingA ? -1 : 1;
+      if (!scheduleSortByUphDesc) return staffA.localeCompare(staffB, 'en-US');
       const rawA = Number(scheduleUphByStaffId[staffA]);
       const rawB = Number(scheduleUphByStaffId[staffB]);
       const hasA = Number.isFinite(rawA);
@@ -13604,7 +13611,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!hasA && hasB) return 1;
       return staffA.localeCompare(staffB, 'en-US');
     });
-  }, [page, scheduleEmployeesBase, deferredScheduleSearch, scheduleSortByUphDesc, scheduleUphByStaffId]);
+  }, [page, scheduleEmployeesBase, deferredScheduleSearch, pendingTerminationRequestsByStaffId, scheduleSortByUphDesc, scheduleUphByStaffId]);
   const scheduleEmployeesRendered = useMemo(
     () => scheduleEmployeesFiltered.slice(0, Math.max(0, scheduleRenderCount)),
     [scheduleEmployeesFiltered, scheduleRenderCount]
@@ -15009,6 +15016,7 @@ ${rowsToHtml(late)}
                 t={t}
                 visiblePages={visibleAdminPages}
                 leaveApprovalPendingCount={leaveApprovalPendingCount}
+                scheduleTerminationPendingCount={scheduleTerminationPendingCount}
                 todoPendingCount={todoPendingCount}
               />
 

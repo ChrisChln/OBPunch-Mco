@@ -39,17 +39,18 @@ const MODULE_LABELS: Record<AdminModuleKey, { zh: string; en: string }> = {
   home: { zh: '首页', en: 'Home' },
   employees: { zh: '员工', en: 'Employees' },
   accounts: { zh: '账号', en: 'Accounts' },
+  permissions: { zh: '权限', en: 'Permissions' },
   timecard: { zh: '时间卡', en: 'Timecard' },
-  leave_approval: { zh: '请假审批', en: 'Leave' },
+  leave_approval: { zh: '请假审批', en: 'Leave Approval' },
+  work_hour_comparison: { zh: '工时对比', en: 'Work Hour Comparison' },
   todo: { zh: '待办', en: 'Todo' },
   punches: { zh: '打卡流水', en: 'Punches' },
   audit: { zh: '日志', en: 'Audit' },
   schedule: { zh: '排班', en: 'Schedule' },
   devices: { zh: '设备', en: 'Devices' },
   forecast: { zh: '件量预测', en: 'Forecast' },
-  prediction_model: { zh: '预测模型', en: 'Model' },
+  prediction_model: { zh: '预测模型', en: 'Prediction Model' },
   efficiency: { zh: '人效', en: 'Efficiency' },
-  permissions: { zh: '权限', en: 'Permissions' },
   agency: { zh: 'Agency', en: 'Agency' }
 };
 
@@ -127,13 +128,7 @@ export default function AdminAccessManagementSection({
     return mergedRows.filter((row) => {
       if (roleFilter !== 'all' && row.role !== roleFilter) return false;
       if (!normalizedSearchKeyword) return true;
-      const searchable = [
-        row.display_name,
-        row.user_email,
-        row.user_id,
-        row.role,
-        row.managed_agencies.join(' ')
-      ]
+      const searchable = [row.display_name, row.user_email, row.user_id, row.role, row.managed_agencies.join(' ')]
         .join(' ')
         .toLowerCase();
       return searchable.includes(normalizedSearchKeyword);
@@ -215,22 +210,22 @@ export default function AdminAccessManagementSection({
       ? createPortal(
           <div
             className={[
-              'fixed inset-0 z-40 flex items-center justify-center overflow-y-auto px-4 py-10',
+              'fixed inset-0 z-40 flex items-center justify-center overflow-y-auto px-4 py-6',
               isLight ? 'bg-slate-900/35' : 'bg-black/60'
             ].join(' ')}
           >
             <div
               className={[
-                'w-full max-w-5xl rounded-3xl border p-6 shadow-2xl',
+                'flex h-[min(860px,calc(100vh-2rem))] w-full max-w-[1120px] flex-col overflow-hidden rounded-3xl border shadow-2xl',
                 isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950/90 backdrop-blur'
               ].join(' ')}
             >
-              <div className="flex items-start justify-between gap-4">
-                <div>
+              <div className={['flex items-start justify-between gap-4 border-b px-6 py-5', isLight ? 'border-slate-200' : 'border-white/10'].join(' ')}>
+                <div className="min-w-0">
                   <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                     {editing.mode === 'create' ? t('新增权限', 'New Access') : t('编辑权限', 'Edit Access')}
                   </div>
-                  <div className={['mt-2 text-sm', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                  <div className={['mt-2 truncate text-sm', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                     {editing.mode === 'edit'
                       ? normalizeDisplayName(userOptions.find((option) => option.user_id === selectedUserId) ?? null) || selectedUserId
                       : t('配置角色、模块和 Agency 范围', 'Set role, modules, and agency scope')}
@@ -249,14 +244,15 @@ export default function AdminAccessManagementSection({
                 </button>
               </div>
 
-              <div className="mt-6 grid gap-4 md:grid-cols-3">
-                <div>
+              <div className="flex-1 overflow-hidden px-6 py-5">
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div>
                   <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
                     {t('账号', 'User')}
                   </label>
                   <select
                     value={selectedUserId}
-                    onChange={(e) => setSelectedUserId(e.target.value)}
+                    onChange={(event) => setSelectedUserId(event.target.value)}
                     disabled={saving || editing.mode === 'edit'}
                     className={[
                       'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
@@ -272,15 +268,15 @@ export default function AdminAccessManagementSection({
                       </option>
                     ))}
                   </select>
-                </div>
+                  </div>
 
-                <div>
+                  <div>
                   <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
                     {t('角色', 'Role')}
                   </label>
                   <select
                     value={role}
-                    onChange={(e) => setRole(e.target.value as AdminRole)}
+                    onChange={(event) => setRole(event.target.value as AdminRole)}
                     disabled={saving}
                     className={[
                       'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
@@ -295,9 +291,9 @@ export default function AdminAccessManagementSection({
                       </option>
                     ))}
                   </select>
-                </div>
+                  </div>
 
-                <div className="flex items-end">
+                  <div className="flex items-end">
                   <label
                     className={[
                       'flex h-11 w-full items-center justify-between rounded-2xl border px-4 text-sm',
@@ -308,188 +304,196 @@ export default function AdminAccessManagementSection({
                     <input
                       type="checkbox"
                       checked={isActive}
-                      onChange={(e) => setIsActive(e.target.checked)}
+                      onChange={(event) => setIsActive(event.target.checked)}
                       disabled={saving}
                       className="h-4 w-4 rounded border-slate-400 text-neon focus:ring-neon"
                     />
                   </label>
+                  </div>
                 </div>
-              </div>
 
-              <div className="mt-6">
-                <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
+                <div className="mt-6">
+                  <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
                   {t('Agency 范围', 'Agency Scope')}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {agencyOptions.map((agency) => {
+                      const active = managedAgencies.includes(agency);
+                      return (
+                        <button
+                          key={agency}
+                          type="button"
+                          onClick={() => toggleAgency(agency)}
+                          disabled={saving}
+                          className={[
+                            'rounded-full border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                            active
+                              ? isLight
+                                ? 'border-neon/60 bg-neon/15 text-slate-900'
+                                : 'border-neon/60 bg-neon/20 text-neon'
+                              : isLight
+                                ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                                : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                          ].join(' ')}
+                        >
+                          {agency}
+                        </button>
+                      );
+                    })}
+                    {!agencyOptions.length && (
+                      <span className={isLight ? 'text-sm text-slate-500' : 'text-sm text-slate-400'}>
+                        {t('暂无 Agency', 'No agencies')}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {agencyOptions.map((agency) => {
-                    const active = managedAgencies.includes(agency);
-                    return (
+
+                <div className="mt-6 flex min-h-0 flex-col">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
+                      {t('模块权限', 'Modules')}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span
+                          className={[
+                            'rounded-full border px-2.5 py-1 text-xs font-semibold',
+                            isLight
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                              : 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200'
+                          ].join(' ')}
+                        >
+                          {t('可操作', 'Operate')} {moduleSummary.operate}
+                        </span>
+                        <span
+                          className={[
+                            'rounded-full border px-2.5 py-1 text-xs font-semibold',
+                            isLight ? 'border-sky-300 bg-sky-50 text-sky-700' : 'border-sky-400/40 bg-sky-500/10 text-sky-200'
+                          ].join(' ')}
+                        >
+                          {t('只读', 'View')} {moduleSummary.view}
+                        </span>
+                        <span
+                          className={[
+                            'rounded-full border px-2.5 py-1 text-xs font-semibold',
+                            isLight
+                              ? 'border-slate-300 bg-slate-100 text-slate-700'
+                              : 'border-slate-400/30 bg-slate-500/10 text-slate-300'
+                          ].join(' ')}
+                        >
+                          {t('隐藏', 'Hidden')} {moduleSummary.hidden}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-2">
                       <button
-                        key={agency}
                         type="button"
-                        onClick={() => toggleAgency(agency)}
+                        onClick={() => applyAllModuleAccess('hidden')}
                         disabled={saving}
                         className={[
-                          'rounded-full border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                          active
-                            ? isLight
-                              ? 'border-neon/60 bg-neon/15 text-slate-900'
-                              : 'border-neon/60 bg-neon/20 text-neon'
-                            : isLight
-                              ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
-                              : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                          'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                          isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                         ].join(' ')}
                       >
-                        {agency}
+                        {t('全部隐藏', 'All Hidden')}
                       </button>
-                    );
-                  })}
-                  {!agencyOptions.length && (
-                    <span className={isLight ? 'text-sm text-slate-500' : 'text-sm text-slate-400'}>
-                      {t('暂无 Agency', 'No agencies')}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-6">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
-                      {t('模块权限', 'Modules')}
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <span
+                      <button
+                        type="button"
+                        onClick={() => applyAllModuleAccess('view')}
+                        disabled={saving}
                         className={[
-                          'rounded-full border px-2.5 py-1 text-xs font-semibold',
-                          isLight
-                            ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                            : 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200'
+                          'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                          isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                         ].join(' ')}
                       >
-                        {t('可操作', 'Operate')} {moduleSummary.operate}
-                      </span>
-                      <span
+                        {t('全部只读', 'All View')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyAllModuleAccess('operate')}
+                        disabled={saving}
                         className={[
-                          'rounded-full border px-2.5 py-1 text-xs font-semibold',
-                          isLight ? 'border-sky-300 bg-sky-50 text-sky-700' : 'border-sky-400/40 bg-sky-500/10 text-sky-200'
+                          'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                          isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                         ].join(' ')}
                       >
-                        {t('只读', 'View')} {moduleSummary.view}
-                      </span>
-                      <span
+                        {t('全部可操作', 'All Operate')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyRoleDefaults()}
+                        disabled={saving}
                         className={[
-                          'rounded-full border px-2.5 py-1 text-xs font-semibold',
-                          isLight
-                            ? 'border-slate-300 bg-slate-100 text-slate-700'
-                            : 'border-slate-400/30 bg-slate-500/10 text-slate-300'
+                          'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                          isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                         ].join(' ')}
                       >
-                        {t('隐藏', 'Hidden')} {moduleSummary.hidden}
-                      </span>
+                        {t('应用默认', 'Apply Defaults')}
+                      </button>
                     </div>
                   </div>
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => applyAllModuleAccess('hidden')}
-                      disabled={saving}
-                      className={[
-                        'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                        isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                      ].join(' ')}
-                    >
-                      {t('全部隐藏', 'All Hidden')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => applyAllModuleAccess('view')}
-                      disabled={saving}
-                      className={[
-                        'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                        isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                      ].join(' ')}
-                    >
-                      {t('全部只读', 'All View')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => applyAllModuleAccess('operate')}
-                      disabled={saving}
-                      className={[
-                        'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                        isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                      ].join(' ')}
-                    >
-                      {t('全部可操作', 'All Operate')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => applyRoleDefaults()}
-                      disabled={saving}
-                      className={[
-                        'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                        isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                      ].join(' ')}
-                    >
-                      {t('应用默认', 'Apply Defaults')}
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  {modules.map((module) => (
-                    <div
-                      key={module.module_key}
-                      className={[
-                        'rounded-2xl border p-3',
-                        isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'
-                      ].join(' ')}
-                    >
-                      <div className={['text-sm font-semibold', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>
-                        {t(MODULE_LABELS[module.module_key].zh, MODULE_LABELS[module.module_key].en)}
-                      </div>
-                      <div
-                        className={[
-                          'mt-2 grid grid-cols-3 gap-1 rounded-xl p-1',
-                          isLight ? 'bg-white border border-slate-200' : 'bg-black/30 border border-white/10'
-                        ].join(' ')}
-                      >
-                        {ACCESS_OPTIONS.map((option) => {
-                          const selected = module.access_level === option;
-                          return (
-                            <button
-                              key={option}
-                              type="button"
-                              onClick={() => setModuleAccess(module.module_key, option)}
-                              disabled={saving}
-                              className={[
-                                'rounded-lg px-2 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                                selected
-                                  ? option === 'operate'
-                                    ? 'bg-emerald-500 text-white'
+                  <div
+                    className={[
+                      'mt-3 min-h-0 flex-1 overflow-y-auto rounded-2xl border p-1.5',
+                      isLight ? 'border-slate-200 bg-slate-100/70' : 'border-white/10 bg-black/20'
+                    ].join(' ')}
+                  >
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {modules.map((module) => (
+                        <div
+                          key={module.module_key}
+                          className={[
+                            'rounded-2xl border p-3',
+                            isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'
+                          ].join(' ')}
+                        >
+                          <div className={['text-sm font-semibold', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>
+                            {t(MODULE_LABELS[module.module_key].zh, MODULE_LABELS[module.module_key].en)}
+                          </div>
+                          <div
+                            className={[
+                              'mt-2 grid grid-cols-3 gap-1 rounded-xl p-1',
+                              isLight ? 'border border-slate-200 bg-white' : 'border border-white/10 bg-black/30'
+                            ].join(' ')}
+                          >
+                            {ACCESS_OPTIONS.map((option) => {
+                              const selected = module.access_level === option;
+                              return (
+                                <button
+                                  key={option}
+                                  type="button"
+                                  onClick={() => setModuleAccess(module.module_key, option)}
+                                  disabled={saving}
+                                  className={[
+                                    'rounded-lg px-2 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                                    selected
+                                      ? option === 'operate'
+                                        ? 'bg-emerald-500 text-white'
+                                        : option === 'view'
+                                          ? 'bg-sky-500 text-white'
+                                          : 'bg-slate-600 text-white'
+                                      : isLight
+                                        ? 'text-slate-600 hover:bg-slate-100'
+                                        : 'text-slate-300 hover:bg-white/10'
+                                  ].join(' ')}
+                                >
+                                  {option === 'operate'
+                                    ? t('可操作', 'Operate')
                                     : option === 'view'
-                                      ? 'bg-sky-500 text-white'
-                                      : 'bg-slate-600 text-white'
-                                  : isLight
-                                    ? 'text-slate-600 hover:bg-slate-100'
-                                    : 'text-slate-300 hover:bg-white/10'
-                              ].join(' ')}
-                            >
-                              {option === 'operate'
-                                ? t('可操作', 'Operate')
-                                : option === 'view'
-                                  ? t('只读', 'View')
-                                  : t('隐藏', 'Hidden')}
-                            </button>
-                          );
-                        })}
-                      </div>
+                                      ? t('只读', 'View')
+                                      : t('隐藏', 'Hidden')}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </div>
                 </div>
               </div>
 
-              <div className="mt-6 flex items-center justify-end gap-3">
+              <div className={['flex items-center justify-end gap-3 border-t px-6 py-4', isLight ? 'border-slate-200' : 'border-white/10'].join(' ')}>
                 <button
                   type="button"
                   onClick={closeModal}
@@ -556,18 +560,12 @@ export default function AdminAccessManagementSection({
           <button
             type="button"
             disabled={isLocked}
-            onClick={() => setEditing({ mode: 'create', row: null })}
-            className="hidden rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {t('新增账号', 'New Access')}
-          </button>
-          <button
-            type="button"
-            disabled={isLocked}
             onClick={() => void onRefresh()}
             className={[
               'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-              isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+              isLight
+                ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                : 'bg-white/10 text-slate-200 hover:bg-white/15'
             ].join(' ')}
           >
             {t('刷新', 'Refresh')}
