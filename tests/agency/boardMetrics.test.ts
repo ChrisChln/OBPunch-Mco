@@ -69,10 +69,13 @@ describe('computeAgencySummaryCards', () => {
     });
 
     expect(cards).toEqual([
+      { key: 'active', label: 'Active', value: 3 },
       { key: 'required', label: 'Required', value: 6 },
       { key: 'scheduled', label: 'Scheduled', value: 3 },
       { key: 'new_requests', label: 'New Requests', value: 2 },
-      { key: 'gap', label: 'Gap', value: 2 }
+      { key: 'gap', label: 'Gap', value: 2 },
+      { key: 'day_off', label: 'Day Off', value: 1 },
+      { key: 'excuse', label: 'Excuse#', value: 0 }
     ]);
   });
 
@@ -92,5 +95,28 @@ describe('computeAgencySummaryCards', () => {
 
     expect(cards.find((card) => card.key === 'scheduled')?.value).toBe(2);
     expect(cards.find((card) => card.key === 'required')?.value).toBe(3);
+    expect(cards.find((card) => card.key === 'active')?.value).toBe(2);
+  });
+
+  it('counts day off and excuse states separately', () => {
+    const employees = [
+      makeEmployee({ staff_id: 'US1', state: 'rest' }),
+      makeEmployee({ staff_id: 'US2', state: 'temp_rest' }),
+      makeEmployee({ staff_id: 'US3', state: 'planned_temp_rest' }),
+      makeEmployee({ staff_id: 'US4', state: 'leave_pending' }),
+      makeEmployee({ staff_id: 'US5', state: 'leave' }),
+      makeEmployee({ staff_id: 'US6', state: 'planned_leave' }),
+      makeEmployee({ staff_id: 'US7', state: 'work' })
+    ];
+
+    const cards = computeAgencySummaryCards({
+      employees,
+      newHireRequests: [],
+      openSlotsByStaffDate: new Map(),
+      selectedDate: '2026-04-14'
+    });
+
+    expect(cards.find((card) => card.key === 'day_off')?.value).toBe(3);
+    expect(cards.find((card) => card.key === 'excuse')?.value).toBe(3);
   });
 });

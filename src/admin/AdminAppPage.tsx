@@ -15946,12 +15946,19 @@ ${rowsToHtml(late)}
                                               : t('休息', 'Off')}
                                         </button>
                                         {lateInfo && (
-                                          <span className={['pointer-events-none absolute -left-1 -top-1 h-2 w-2 rounded-full', scheduleLateDotClass].join(' ')} />
+                                          <span
+                                            className={[
+                                              'pointer-events-none absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2',
+                                              themeMode === 'light' ? 'border-white' : 'border-slate-950',
+                                              scheduleLateDotClass
+                                            ].join(' ')}
+                                          />
                                         )}
                                         {scheduleCellAudit.length > 0 && (
                                           <span
                                             className={[
-                                              'pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full',
+                                              'pointer-events-none absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2',
+                                              themeMode === 'light' ? 'border-white' : 'border-slate-950',
                                               getScheduleAuditDotClass(displayState)
                                             ].join(' ')}
                                           />
