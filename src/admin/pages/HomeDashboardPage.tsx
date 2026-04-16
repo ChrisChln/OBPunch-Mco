@@ -455,7 +455,7 @@ function HomeDashboardPage({
                         <span className={['inline-flex items-center rounded-full border px-2.5 py-1', getScheduleLabelToneClass(row.label || '-')].join(' ')}>{row.label || '-'}</span>
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-stone-300">
-                        <span className="inline-flex items-center rounded-full border border-white/12 bg-white/[0.04] px-2.5 py-1 text-slate-200">
+                        <span className="badge-elevated-dark inline-flex items-center rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-slate-200">
                           {formatShiftLabel(row.shift)}
                         </span>
                       </td>
@@ -465,11 +465,11 @@ function HomeDashboardPage({
                             <>
                               {row.punches.slice(0, 4).map((punch, punchIndex) => {
                                 const shortGapIndices = getShortGapPunchIndices(row.punches);
-                                const toneClass = shortGapIndices.has(punchIndex)
-                                  ? 'border-rose-300/35 bg-rose-500/[0.14] text-rose-100'
-                                  : punch.action === 'IN'
-                                    ? 'border-emerald-300/35 bg-emerald-500/[0.14] text-emerald-100'
-                                    : 'border-sky-300/35 bg-sky-500/[0.14] text-sky-100';
+                                  const toneClass = shortGapIndices.has(punchIndex)
+                                    ? 'badge-elevated-dark border-rose-300/30 bg-rose-400/[0.13] text-rose-100'
+                                    : punch.action === 'IN'
+                                      ? 'badge-elevated-dark border-emerald-300/30 bg-emerald-400/[0.13] text-emerald-100'
+                                      : 'badge-elevated-dark border-sky-300/30 bg-sky-400/[0.13] text-sky-100';
                                 return (
                                   <span key={`${row.staff_id}-${punchIndex}`} className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold uppercase', toneClass].join(' ')}>
                                     {punch.action} {formatTimeOnly(punch.created_at)}
@@ -487,14 +487,14 @@ function HomeDashboardPage({
                                     if (!row.staff_id || !workDate) return;
                                     void onOpenTimecardCalibration(row.staff_id, workDate);
                                   }}
-                                  className="inline-flex items-center rounded-full border border-amber-300/35 bg-amber-500/[0.14] px-2 py-1 text-[10px] font-semibold text-amber-100 transition hover:bg-amber-500/[0.24]"
+                                  className="badge-elevated-dark inline-flex items-center rounded-full border border-amber-300/30 bg-amber-400/[0.13] px-2 py-1 text-[10px] font-semibold text-amber-100 transition hover:bg-amber-400/[0.2]"
                                 >
                                   +{row.punches.length - 4}
                                 </button>
                               ) : null}
                             </>
                           ) : (
-                            <span className="inline-flex items-center rounded-full border border-white/12 bg-white/[0.03] px-2 py-1 text-[10px]">--</span>
+                            <span className="badge-elevated-dark inline-flex items-center rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-[10px]">--</span>
                           )}
                         </div>
                       </td>

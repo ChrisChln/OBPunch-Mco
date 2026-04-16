@@ -273,12 +273,12 @@ const getDefaultPositionToneKey = (value: string): LabelToneKey => {
   return 'slate';
 };
 const POSITION_BADGE_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
-  sky: 'border-sky-400/60 text-sky-200 bg-sky-500/10',
-  emerald: 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10',
-  amber: 'border-amber-400/60 text-amber-200 bg-amber-500/10',
-  violet: 'border-violet-400/60 text-violet-200 bg-violet-500/10',
-  rose: 'border-rose-400/60 text-rose-200 bg-rose-500/10',
-  slate: 'border-white/20 text-slate-200 bg-white/5'
+  sky: 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]',
+  emerald: 'badge-elevated-dark border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]',
+  amber: 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]',
+  violet: 'badge-elevated-dark border-violet-300/30 text-violet-100 bg-violet-400/[0.13]',
+  rose: 'badge-elevated-dark border-rose-300/30 text-rose-100 bg-rose-400/[0.13]',
+  slate: 'badge-elevated-dark border-white/12 text-slate-200 bg-white/[0.05]'
 };
 const POSITION_FRAME_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
   sky: 'border-sky-400/35 bg-sky-500/[0.04]',
@@ -795,19 +795,22 @@ export default function App() {
   }, [deviceReturnReminder]);
 
   const punchBoardFiltered = useMemo(() => {
-        if (position === 'FLEX TEAM') continue;
-        const positionShiftScope = rows.filter(
-          (row) =>
-            normalizePositionKey(row.position) === position &&
-            String(row.shift ?? '').trim().toLowerCase() === shift
-        );
-        const offWorkedScope = positionShiftScope.filter((row) => row.attendance === 'Off Worked');
-        const stat = cardStatsByKey[`${shift}:${position}`] ?? { expected: 0, present: 0, onClock: 0, offWorked: 0 };
-        cards.push({ position, shift, expected: stat.expected, present: stat.present, onClock: stat.onClock, offWorked: stat.offWorked || offWorkedScope.length });
-      }
-    }
-    return cards;
-  }, [rows, cardPositions, cardStatsByKey]);
+    if (!punchLogPositionFilter) return punchBoard;
+    return punchBoard.filter((row) => {
+      const employee = punchBoardEmployeeMap[normalizeStaffId(row.staff_id)] ?? punchBoardEmployeeMap[row.staff_id];
+      return normalizeAllowedPosition(String(employee?.position ?? '')) === punchLogPositionFilter;
+    });
+  }, [punchBoard, punchBoardEmployeeMap, punchLogPositionFilter]);
+  const rosterStaffIds = useMemo(
+    () => Array.from(new Set(dailyRoster.map((row) => normalizeStaffId(row.staff_id)).filter(Boolean))),
+    [dailyRoster]
+  );
+  const arrivalMetricByKey = useMemo(
+    () =>
+      Object.fromEntries(
+        arrivalMetrics.map((metric) => [`${metric.position}:${metric.shift}`, metric] as const)
+      ) as Record<string, ArrivalMetric>,
+    [arrivalMetrics]
   );
   const [lastPunchActionLoading, setLastPunchActionLoading] = useState(false);
 
@@ -2833,7 +2836,7 @@ const fetchPunchBoardUph = async (
         {deviceQuickError && <p className="mt-2 text-xs text-ember">{deviceQuickError}</p>}
         {!deviceQuickError && deviceQuickLogs.length === 0 && <p className="mt-2 text-xs text-slate-500">No device logs.</p>}
         {!deviceQuickError && deviceQuickLogs.length > 0 && (
-          <div className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-auto pr-1">
+          <div className="no-scrollbar mt-2 min-h-0 flex-1 space-y-1.5 overflow-auto pr-1">
             {deviceQuickLogs.map((row) => {
               const timeText = row.created_at ? new Date(row.created_at).toLocaleString('en-CA', { hour12: false }) : '-';
               const actionClass =
@@ -3214,7 +3217,7 @@ const fetchPunchBoardUph = async (
               <div className="glass reveal relative z-40 overflow-visible rounded-[28px] px-5 py-5">
                 <div className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">Attendance</div>
                 <div className="space-y-3 overflow-visible">
-                  {ALLOWED_POSITIONS.map((position) => {
+                  {ALLOWED_POSITIONS.filter((position) => position !== 'Transfer' && position !== 'FLEX TEAM').map((position) => {
                     const positionFrameClass = getAppPositionFrameClass(position);
                     const early = arrivalMetricByKey[`${position}:early`] ?? {
                       shift: 'early' as const,
@@ -3521,7 +3524,7 @@ const fetchPunchBoardUph = async (
                 {!punchBoardError && punchBoardFiltered.length === 0 && <p className="mt-3 text-sm text-slate-400">No data</p>}
 
                 {!punchBoardError && punchBoardFiltered.length > 0 && (
-                  <div className="mt-4 flex-1 overflow-auto pr-1">
+                  <div className="no-scrollbar mt-4 flex-1 overflow-auto pr-1">
                     <div className="space-y-2">
                       <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_6.5rem] items-center gap-3 px-4 text-xs uppercase tracking-[0.25em] text-slate-500 sm:grid-cols-[3.5rem_minmax(0,1fr)_7rem_8.5rem_9.5rem]">
                         <div>Action</div>
@@ -3843,7 +3846,6 @@ const fetchPunchBoardUph = async (
 
         <footer className="text-center text-xs text-slate-500">
           {isLocked && "Request in progress; input locked."}
-          {!isLocked && 'Ready'}
         </footer>
       </div>
     </div>

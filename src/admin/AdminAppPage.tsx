@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
@@ -786,6 +786,12 @@ const getWorkDateRange = (workDate: string) => {
   const end = addDays(start, 1);
   return { start, end };
 };
+const isExactOperationalCutoffOut = (atRaw: string, actionRaw?: string) => {
+  const at = new Date(atRaw);
+  if (Number.isNaN(at.getTime())) return false;
+  const action = String(actionRaw ?? '').trim().toUpperCase();
+  return action === 'OUT' && at.getHours() === DAY_CUTOFF_HOUR && at.getMinutes() === 0 && at.getSeconds() === 0;
+};
 const toOperationalWorkDate = (atRaw: string, actionRaw?: string) => {
   const at = new Date(atRaw);
   if (Number.isNaN(at.getTime())) return '';
@@ -892,21 +898,21 @@ const getDefaultPositionToneKey = (value: string): LabelToneKey => {
 };
 
 const POSITION_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
-  sky: 'border-sky-400/60 text-sky-200 bg-sky-500/10',
-  emerald: 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10',
-  amber: 'border-amber-400/60 text-amber-200 bg-amber-500/10',
-  violet: 'border-violet-400/60 text-violet-200 bg-violet-500/10',
-  rose: 'border-rose-400/60 text-rose-200 bg-rose-500/10',
-  slate: 'border-white/20 text-slate-200 bg-white/5'
+  sky: 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]',
+  emerald: 'badge-elevated-dark border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]',
+  amber: 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]',
+  violet: 'badge-elevated-dark border-violet-300/30 text-violet-100 bg-violet-400/[0.13]',
+  rose: 'badge-elevated-dark border-rose-300/30 text-rose-100 bg-rose-400/[0.13]',
+  slate: 'badge-elevated-dark border-white/12 text-slate-200 bg-white/[0.05]'
 };
 
 const POSITION_TONE_CLASS_LIGHT: Record<LabelToneKey, string> = {
-  sky: 'border-sky-300 bg-sky-50 text-sky-700',
-  emerald: 'border-emerald-300 bg-emerald-50 text-emerald-700',
-  amber: 'border-amber-300 bg-amber-50 text-amber-700',
-  violet: 'border-violet-300 bg-violet-50 text-violet-700',
-  rose: 'border-rose-300 bg-rose-50 text-rose-700',
-  slate: 'border-slate-300 bg-slate-100 text-slate-700'
+  sky: 'badge-elevated-light border-sky-300 bg-sky-50 text-sky-700',
+  emerald: 'badge-elevated-light border-emerald-300 bg-emerald-50 text-emerald-700',
+  amber: 'badge-elevated-light border-amber-300 bg-amber-50 text-amber-700',
+  violet: 'badge-elevated-light border-violet-300 bg-violet-50 text-violet-700',
+  rose: 'badge-elevated-light border-rose-300 bg-rose-50 text-rose-700',
+  slate: 'badge-elevated-light border-slate-300 bg-slate-100 text-slate-700'
 };
 
 const getPositionBadgeClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
@@ -1386,6 +1392,139 @@ export default function AdminAppPage() {
   }, [themeMode]);
   const locale = lang === 'en' ? 'en-US' : 'zh-CN';
   const t = (zh: string, en: string) => (lang === 'en' ? en : zh);
+  const getScheduleStateButtonClass = (state: ScheduleDisplayState) => {
+    const base =
+      'h-7 min-w-[42px] rounded-[10px] border px-1.5 text-[9px] font-semibold leading-tight tracking-[0.01em] transition hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-55';
+    if (themeMode === 'light') {
+      switch (state) {
+        case 'work':
+          return `${base} border-lime-300 bg-lime-50 text-lime-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_4px_10px_rgba(132,204,22,0.12)]`;
+        case 'new':
+          return `${base} border-cyan-300 bg-cyan-50 text-cyan-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_4px_10px_rgba(8,145,178,0.10)]`;
+        case 'fixed_work':
+          return `${base} border-amber-300 bg-amber-50 text-amber-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(217,119,6,0.10)]`;
+        case 'temp_work':
+          return `${base} border-emerald-300 bg-emerald-50 text-emerald-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(5,150,105,0.10)]`;
+        case 'planned_temp_work':
+          return `${base} border-sky-300 bg-sky-50 text-sky-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(2,132,199,0.10)]`;
+        case 'leave':
+          return `${base} border-violet-300 bg-violet-50 text-violet-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(124,58,237,0.10)]`;
+        case 'planned_leave':
+          return `${base} border-fuchsia-300 bg-fuchsia-50 text-fuchsia-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(192,38,211,0.10)]`;
+        case 'rest_worked':
+          return `${base} border-cyan-300 bg-cyan-50 text-cyan-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(6,182,212,0.10)]`;
+        case 'absent':
+          return `${base} border-slate-400 bg-slate-100 text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_4px_10px_rgba(71,85,105,0.10)]`;
+        case 'temp_rest':
+          return `${base} border-rose-300 bg-rose-50 text-rose-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(225,29,72,0.10)]`;
+        case 'planned_temp_rest':
+          return `${base} border-orange-300 bg-orange-50 text-orange-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(234,88,12,0.10)]`;
+        default:
+          return `${base} border-slate-200 bg-white text-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.96),0_4px_10px_rgba(148,163,184,0.08)]`;
+      }
+    }
+    switch (state) {
+      case 'work':
+        return `${base} border-lime-400/35 bg-lime-500/14 text-lime-100 shadow-[inset_0_1px_0_rgba(190,242,100,0.12),0_8px_18px_rgba(101,163,13,0.16)]`;
+      case 'new':
+        return `${base} border-cyan-400/35 bg-cyan-500/14 text-cyan-100 shadow-[inset_0_1px_0_rgba(103,232,249,0.12),0_8px_18px_rgba(8,145,178,0.16)]`;
+      case 'fixed_work':
+        return `${base} border-amber-400/35 bg-amber-500/14 text-amber-100 shadow-[inset_0_1px_0_rgba(253,224,71,0.12),0_8px_18px_rgba(180,83,9,0.16)]`;
+      case 'temp_work':
+        return `${base} border-emerald-400/35 bg-emerald-500/14 text-emerald-100 shadow-[inset_0_1px_0_rgba(110,231,183,0.12),0_8px_18px_rgba(5,150,105,0.16)]`;
+      case 'planned_temp_work':
+        return `${base} border-sky-400/35 bg-sky-500/14 text-sky-100 shadow-[inset_0_1px_0_rgba(125,211,252,0.12),0_8px_18px_rgba(2,132,199,0.16)]`;
+      case 'leave':
+        return `${base} border-violet-400/35 bg-violet-500/14 text-violet-100 shadow-[inset_0_1px_0_rgba(196,181,253,0.12),0_8px_18px_rgba(124,58,237,0.16)]`;
+      case 'planned_leave':
+        return `${base} border-fuchsia-400/35 bg-fuchsia-500/14 text-fuchsia-100 shadow-[inset_0_1px_0_rgba(240,171,252,0.12),0_8px_18px_rgba(192,38,211,0.16)]`;
+      case 'rest_worked':
+        return `${base} border-cyan-400/35 bg-cyan-500/14 text-cyan-100 shadow-[inset_0_1px_0_rgba(103,232,249,0.12),0_8px_18px_rgba(14,116,144,0.16)]`;
+      case 'absent':
+        return `${base} border-slate-400/45 bg-slate-200 text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_8px_18px_rgba(15,23,42,0.12)]`;
+      case 'temp_rest':
+        return `${base} border-rose-400/35 bg-rose-500/14 text-rose-100 shadow-[inset_0_1px_0_rgba(253,164,175,0.12),0_8px_18px_rgba(190,24,93,0.16)]`;
+      case 'planned_temp_rest':
+        return `${base} border-orange-400/35 bg-orange-500/14 text-orange-100 shadow-[inset_0_1px_0_rgba(253,186,116,0.12),0_8px_18px_rgba(194,65,12,0.16)]`;
+      default:
+        return `${base} border-white/10 bg-white/[0.04] text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_8px_18px_rgba(15,23,42,0.12)]`;
+    }
+  };
+  const scheduleLateDotClass =
+    themeMode === 'light'
+      ? 'bg-amber-500 shadow-[0_0_0_1px_rgba(245,158,11,0.22)]'
+      : 'bg-amber-300 shadow-[0_0_0_1px_rgba(252,211,77,0.24)]';
+  const getScheduleAuditDotClass = (state: ScheduleDisplayState) => {
+    if (themeMode === 'light') {
+      return state === 'rest' || state === 'temp_rest' || state === 'planned_temp_rest'
+        ? 'bg-slate-500 shadow-[0_0_0_1px_rgba(100,116,139,0.18)]'
+        : 'bg-rose-500 shadow-[0_0_0_1px_rgba(244,63,94,0.20)]';
+    }
+    return state === 'rest' || state === 'temp_rest' || state === 'planned_temp_rest'
+      ? 'bg-slate-300 shadow-[0_0_0_1px_rgba(226,232,240,0.12)]'
+      : 'bg-rose-400 shadow-[0_0_0_1px_rgba(251,113,133,0.22)]';
+  };
+  const schedulePickerMetaClass =
+    themeMode === 'light'
+      ? 'border border-slate-200 bg-slate-100 text-slate-600'
+      : 'border border-white/10 bg-white/[0.06] text-slate-300';
+  const scheduleBadgeBaseClass =
+    themeMode === 'light'
+      ? 'badge-elevated-light inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold'
+      : 'badge-elevated-dark inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold';
+  const getScheduleWorkDaysBadgeClass = (value: number) => {
+    const tone =
+      value > 5
+        ? themeMode === 'light'
+          ? 'border-rose-300 bg-rose-50 text-rose-700'
+          : 'border-rose-400/35 bg-rose-500/14 text-rose-100'
+        : value >= 5
+          ? themeMode === 'light'
+            ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+            : 'border-emerald-400/35 bg-emerald-500/14 text-emerald-100'
+          : value >= 1
+            ? themeMode === 'light'
+              ? 'border-amber-300 bg-amber-50 text-amber-700'
+              : 'border-amber-400/35 bg-amber-500/14 text-amber-100'
+            : themeMode === 'light'
+              ? 'border-slate-300 bg-slate-100 text-slate-600'
+              : 'border-slate-400/35 bg-slate-500/12 text-slate-200';
+    return `${scheduleBadgeBaseClass} min-w-[32px] justify-center px-2.5 py-[5px] tabular-nums ${tone}`;
+  };
+  const getScheduleTablePositionBadgeClass = (position: string) => {
+    const toneClass =
+      themeMode === 'light'
+        ? getSchedulePositionBadgeClassLight(position)
+        : getSchedulePositionBadgeClass(position);
+    return `${scheduleBadgeBaseClass} px-2.5 py-[5px] uppercase tracking-[0.12em] ${toneClass}`;
+  };
+  const getScheduleTableLabelBadgeClass = (label: string) => {
+    const toneClass =
+      themeMode === 'light'
+        ? POSITION_TONE_CLASS_LIGHT[getScheduleLabelTone(label)] ?? POSITION_TONE_CLASS_LIGHT.slate
+        : getScheduleLabelToneClass(label);
+    return `${scheduleBadgeBaseClass} max-w-full px-2.5 py-[5px] ${toneClass}`;
+  };
+  const getScheduleTableShiftBadgeClass = (value: '' | 'early' | 'late') => {
+    let toneClass = '';
+    if (value === 'early') {
+      toneClass =
+        themeMode === 'light'
+          ? 'border-amber-300 bg-amber-50 text-amber-700'
+          : 'border-amber-400/35 bg-amber-500/14 text-amber-100';
+    } else if (value === 'late') {
+      toneClass =
+        themeMode === 'light'
+          ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
+          : 'border-indigo-400/35 bg-indigo-500/14 text-indigo-100';
+    } else {
+      toneClass =
+        themeMode === 'light'
+          ? 'border-slate-300 bg-slate-100 text-slate-600'
+          : 'border-slate-400/35 bg-slate-500/12 text-slate-200';
+    }
+    return `${scheduleBadgeBaseClass} min-w-[52px] justify-center px-2.5 py-[5px] tracking-[0.04em] ${toneClass}`;
+  };
 
   const [, setStatus] = useState<Status>({ tone: 'idle', message: '请登录后台' });
   const [loginErrorDialog, setLoginErrorDialog] = useState<{ open: boolean; title: string; message: string }>({
@@ -1662,6 +1801,7 @@ export default function AdminAppPage() {
     loadLabelToneMap()
   );
   const [scheduleShift, setScheduleShift] = useState<'' | 'early' | 'late'>('');
+  const [schedulePickerShowMore, setSchedulePickerShowMore] = useState(false);
   const [scheduleSortByUphDesc, setScheduleSortByUphDesc] = useState(false);
   const [scheduleWorkDayFilter, setScheduleWorkDayFilter] = useState<number | null>(null);
   const [scheduleRenderCount, setScheduleRenderCount] = useState(120);
@@ -2313,9 +2453,9 @@ const getShiftBucket = (inAtIso: string) => {
 };
 
 const getShiftBadgeClass = (value: '' | 'early' | 'late') => {
-  if (value === 'early') return 'border-amber-400/60 text-amber-200 bg-amber-500/10';
-  if (value === 'late') return 'border-indigo-400/60 text-indigo-200 bg-indigo-500/10';
-  return 'border-white/20 text-slate-200 bg-white/5';
+  if (value === 'early') return 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
+  if (value === 'late') return 'badge-elevated-dark border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]';
+  return 'badge-elevated-dark border-white/12 text-slate-200 bg-white/[0.05]';
 };
 const normalizeShiftValue = (value: string): '' | 'early' | 'late' => {
   const v = value.trim().toLowerCase();
@@ -4706,6 +4846,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     anchorRect: DOMRect
   ) => {
     if (schedulePicker.open && schedulePicker.cellKey === cellKey) {
+      setSchedulePickerShowMore(false);
       setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
       return;
     }
@@ -4739,6 +4880,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       anchorLeft,
       anchorTop
     });
+    setSchedulePickerShowMore(false);
   };
 
   const schedulePickerMode = useMemo(() => {
@@ -4759,33 +4901,43 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         key: 'work',
         labelZh: '工作',
         labelEn: 'Work',
-        cls: themeMode === 'light' ? 'bg-slate-900 text-white' : 'bg-neon text-white shadow-glow',
         mode: 'all'
       },
       {
         key: 'fixed_work',
         labelZh: '固定排班',
         labelEn: 'Fixed Shift',
-        cls:
-          themeMode === 'light'
-            ? 'border-2 border-[#d4a017] bg-[#000000] text-[#ffd24d]'
-            : 'border-2 border-[#d4a017] bg-[#0f3f2b] text-[#ffd24d]',
         mode: 'all'
       },
-      { key: 'temp_work', labelZh: '临时工作', labelEn: 'Tem Work', cls: 'bg-emerald-700 text-white', mode: 'current' },
-      { key: 'planned_temp_work', labelZh: '替补', labelEn: 'Replacement', cls: 'border border-sky-300/50 bg-sky-500/20 text-sky-100', mode: 'future' },
-      { key: 'leave', labelZh: '请假', labelEn: 'Excuse', cls: 'bg-violet-500 text-white', mode: 'current' },
-      { key: 'planned_leave', labelZh: '计划请假', labelEn: 'Planned Leave', cls: 'bg-fuchsia-600 text-white', mode: 'future' },
-      { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Tem Off', cls: 'bg-red-800 text-red-100', mode: 'current' },
-      { key: 'planned_temp_rest', labelZh: '计划临时排休', labelEn: 'Planned Tem Off', cls: 'bg-rose-600 text-white', mode: 'future' },
-      { key: 'rest', labelZh: '休息', labelEn: 'Off', cls: 'bg-ember text-white', mode: 'all' }
-    ] as Array<{ key: ScheduleBaseState; labelZh: string; labelEn: string; cls: string; mode: 'all' | 'current' | 'future' }>;
+      { key: 'temp_work', labelZh: '临时工作', labelEn: 'Tem Work', mode: 'current' },
+      { key: 'planned_temp_work', labelZh: '替补', labelEn: 'Replacement', mode: 'future' },
+      { key: 'leave', labelZh: '请假', labelEn: 'Excuse', mode: 'current' },
+      { key: 'planned_leave', labelZh: '计划请假', labelEn: 'Planned Leave', mode: 'future' },
+      { key: 'temp_rest', labelZh: '临时排休', labelEn: 'Tem Off', mode: 'current' },
+      { key: 'planned_temp_rest', labelZh: '计划临时排休', labelEn: 'Planned Tem Off', mode: 'future' },
+      { key: 'rest', labelZh: '休息', labelEn: 'Off', mode: 'all' }
+    ] as Array<{ key: ScheduleBaseState; labelZh: string; labelEn: string; mode: 'all' | 'current' | 'future' }>;
 
     const preferred = base.filter((item) => item.mode === 'all' || item.mode === schedulePickerMode);
     const secondary = base.filter((item) => item.mode !== 'all' && item.mode !== schedulePickerMode);
     return [...preferred, ...secondary];
-  }, [schedulePickerMode, themeMode]);
+  }, [schedulePickerMode]);
+  const schedulePickerSecondaryOptions = useMemo(
+    () => schedulePickerOptions.filter((item) => item.mode !== 'all' && item.mode !== schedulePickerMode),
+    [schedulePickerOptions, schedulePickerMode]
+  );
+  const schedulePickerVisibleOptions = useMemo(() => {
+    if (schedulePickerShowMore) return schedulePickerOptions;
+    const primary = schedulePickerOptions.filter((item) => item.mode === 'all' || item.mode === schedulePickerMode);
+    const currentSecondary = schedulePickerOptions.find((item) => item.key === schedulePicker.currentState && !primary.some((p) => p.key === item.key));
+    return currentSecondary ? [...primary, currentSecondary] : primary;
+  }, [schedulePicker.currentState, schedulePickerOptions, schedulePickerMode, schedulePickerShowMore]);
 
+  useEffect(() => {
+    if (!schedulePicker.open) {
+      setSchedulePickerShowMore(false);
+    }
+  }, [schedulePicker.open]);
   useEffect(() => {
     if (!schedulePicker.open) return;
     const onDocumentClickCapture = (event: MouseEvent) => {
@@ -4793,6 +4945,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!(target instanceof Element)) return;
       if (target.closest('[data-schedule-popover="true"]')) return;
       if (target.closest('[data-schedule-trigger="true"]')) return;
+      setSchedulePickerShowMore(false);
       setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
     };
     document.addEventListener('click', onDocumentClickCapture, true);
@@ -13656,7 +13809,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const lastPunchAt = String(employeeLastPunchAtByStaffId[staff] ?? '').trim();
       const firstInAt = String(homeFirstInAtByStaffId.get(staff) ?? '').trim();
       const punchAt = lastPunchAt || firstInAt;
-      const rawPunches = Array.isArray(homePunchesByStaffId[staff]) ? homePunchesByStaffId[staff] : [];
+      const rawPunches = Array.isArray(homePunchesByStaffId[staff])
+        ? homePunchesByStaffId[staff].filter((item) => !isExactOperationalCutoffOut(item.created_at, item.action))
+        : [];
       const manualMistakes = Number(scheduleMistakeByStaffId[staff] ?? 0);
       return {
         staff_id: staff,
@@ -15396,14 +15551,6 @@ ${rowsToHtml(late)}
                             }
                           }
                           const effectiveWorkDays = workDays + restWorkedBonusDays - absentPenaltyDays;
-                          const workDaysClass =
-                            effectiveWorkDays > 5
-                              ? 'border-2 border-rose-400 text-rose-100 bg-rose-500/20 shadow-[0_0_0_1px_rgba(248,113,113,0.7)]'
-                              : effectiveWorkDays >= 5
-                                ? 'border-emerald-400/60 text-emerald-200 bg-emerald-500/10'
-                                : effectiveWorkDays >= 1 && effectiveWorkDays <= 4
-                                  ? 'border-amber-400/60 text-amber-200 bg-amber-500/10'
-                                  : 'border-rose-400/60 text-rose-200 bg-rose-500/10';
                           const scheduleRowClass = hasPendingTermination
                             ? themeMode === 'light'
                               ? 'border-b border-slate-300 bg-slate-200/85 text-slate-700 transition-colors hover:bg-slate-200 last:border-0'
@@ -15433,23 +15580,20 @@ ${rowsToHtml(late)}
                                 )}
                               </td>
                               <td className="px-1.5 py-2 text-center">
-                                <span className={['inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold', workDaysClass].join(' ')}>
+                                <span className={getScheduleWorkDaysBadgeClass(effectiveWorkDays)}>
                                   {effectiveWorkDays}
                                 </span>
                               </td>
                               <td className={['px-1 py-2 truncate', scheduleBodyTextClass].join(' ')}>{agency || '-'}</td>
                               <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
-                                <span className={['inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]', getSchedulePositionBadgeClass(position)].join(' ')}>
+                                <span className={getScheduleTablePositionBadgeClass(position)}>
                                   {position || '-'}
                                 </span>
                               </td>
                               <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
                                 {label ? (
                                   <span
-                                    className={[
-                                      'inline-flex max-w-full items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold',
-                                      getScheduleLabelToneClass(label)
-                                    ].join(' ')}
+                                    className={getScheduleTableLabelBadgeClass(label)}
                                   >
                                     <span className="truncate">{label}</span>
                                   </span>
@@ -15462,8 +15606,7 @@ ${rowsToHtml(late)}
                                   const dbShift = normalizeShiftValue(String(employee.shift ?? '').trim());
                                   const shift = dbShift || '';
                                   const shiftLabel = shift === 'early' ? t('早班', 'Morning') : shift === 'late' ? t('晚班', 'Night') : '-';
-                                  const shiftClass = getShiftBadgeClass(shift);
-                                  return <span className={['inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.06em]', shiftClass].join(' ')}>{shiftLabel}</span>;
+                                  return <span className={getScheduleTableShiftBadgeClass(shift)}>{shiftLabel}</span>;
                                 })()}
                               </td>
                               <td className={['px-1 py-2 text-center font-mono', scheduleBodyTextClass].join(' ')}>{formatUph(scheduleUphByStaffId[staff])}</td>
@@ -15642,34 +15785,7 @@ ${rowsToHtml(late)}
                                             );
                                           }}
                                           className={[
-                                            'h-7 min-w-[36px] rounded-md px-0.5 text-[9px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55',
-                                            displayState === 'new'
-                                              ? 'border border-cyan-300/60 bg-cyan-500/20 text-cyan-100'
-                                              : displayState === 'work'
-                                              ? 'bg-neon text-white shadow-glow'
-                                              : displayState === 'fixed_work'
-                                                ? themeMode === 'light'
-                                                  ? 'border-2 border-[#d4a017] bg-[#000000] text-[#ffd24d]'
-                                                  : 'border-2 border-[#d4a017] bg-[#0f3f2b] text-[#ffd24d]'
-                                              : displayState === 'temp_work'
-                                                ? 'bg-emerald-700 text-white'
-                                              : displayState === 'planned_temp_work'
-                                                ? 'border border-sky-300/50 bg-sky-500/20 text-sky-100'
-                                              : displayState === 'leave'
-                                                ? 'bg-violet-500 text-white'
-                                              : displayState === 'planned_leave'
-                                                ? 'bg-fuchsia-600 text-white'
-                                              : displayState === 'rest_worked'
-                                                ? 'bg-sky-500 text-white'
-                                              : displayState === 'absent'
-                                                ? themeMode === 'light'
-                                                  ? 'bg-white text-slate-900 border border-slate-900/70'
-                                                  : 'bg-white text-slate-900'
-                                              : displayState === 'temp_rest'
-                                                ? 'bg-red-800 text-red-100'
-                                              : displayState === 'planned_temp_rest'
-                                                ? 'bg-rose-600 text-white'
-                                              : 'bg-ember text-white'
+                                            getScheduleStateButtonClass(displayState)
                                           ].join(' ')}
                                           title={lateTitle || undefined}
                                         >
@@ -15698,16 +15814,13 @@ ${rowsToHtml(late)}
                                               : t('休息', 'Off')}
                                         </button>
                                         {lateInfo && (
-                                          <span className="pointer-events-none absolute -left-1 -top-1 h-2 w-2 rounded-full bg-amber-400 shadow-[0_0_0_1px_rgba(251,191,36,0.55)]" />
+                                          <span className={['pointer-events-none absolute -left-1 -top-1 h-2 w-2 rounded-full', scheduleLateDotClass].join(' ')} />
                                         )}
                                         {scheduleCellAudit.length > 0 && (
                                           <span
                                             className={[
                                               'pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full',
-                                              displayState === 'rest' || displayState === 'temp_rest'
-                                                || displayState === 'planned_temp_rest'
-                                                ? 'bg-neon shadow-glow'
-                                                : 'bg-rose-500 shadow-[0_0_0_1px_rgba(244,63,94,0.55)]'
+                                              getScheduleAuditDotClass(displayState)
                                             ].join(' ')}
                                           />
                                         )}
@@ -15817,7 +15930,7 @@ ${rowsToHtml(late)}
                       ].join(' ')}
                       style={{ '--picker-left': `${schedulePicker.anchorLeft}px`, '--picker-top': `${schedulePicker.anchorTop}px`, left: 'var(--picker-left)', top: 'var(--picker-top)' } as React.CSSProperties}
                     >
-                      {schedulePickerOptions.map((item) => (
+                      {schedulePickerVisibleOptions.map((item) => (
                         <button
                           key={item.key}
                           type="button"
@@ -15832,24 +15945,42 @@ ${rowsToHtml(late)}
                             setSchedulePicker((prev) => ({ ...prev, open: false, employee: null, cellKey: '' }));
                           }}
                           className={[
-                            'mb-1 flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs font-semibold transition hover:brightness-110 last:mb-0',
-                            item.cls,
+                            'mb-1 flex w-full items-center justify-between rounded-[10px] px-2.5 py-2 text-left text-[11px] font-semibold transition last:mb-0 hover:-translate-y-px',
+                            getScheduleStateButtonClass(item.key),
                             item.mode !== 'all' && item.mode !== schedulePickerMode ? 'opacity-60' : '',
                             schedulePicker.currentState === item.key
                               ? themeMode === 'light'
-                                ? 'ring-2 ring-slate-900/70'
-                                : 'ring-2 ring-white/70'
+                                ? 'ring-2 ring-slate-900/20'
+                                : 'ring-2 ring-white/20'
                               : ''
                           ].join(' ')}
                         >
                           <span>{t(item.labelZh, item.labelEn)}</span>
                           {schedulePicker.currentState === item.key ? (
-                            <span className="text-[10px] uppercase tracking-[0.18em]">Now</span>
+                            <span className={['rounded-full px-1.5 py-0.5 text-[9px] uppercase tracking-[0.16em]', schedulePickerMetaClass].join(' ')}>
+                              Now
+                            </span>
                           ) : item.mode !== 'all' && item.mode === schedulePickerMode ? (
-                            <span className="text-[10px] uppercase tracking-[0.18em]">{t('推', 'Rec')}</span>
+                            <span className={['rounded-full px-1.5 py-0.5 text-[9px] uppercase tracking-[0.16em]', schedulePickerMetaClass].join(' ')}>
+                              {t('推', 'Rec')}
+                            </span>
                           ) : null}
                         </button>
                       ))}
+                      {schedulePickerSecondaryOptions.length > 0 && !schedulePickerShowMore && (
+                        <button
+                          type="button"
+                          onClick={() => setSchedulePickerShowMore(true)}
+                          className={[
+                            'mt-1 flex w-full items-center justify-center rounded-[10px] border px-2.5 py-2 text-[11px] font-semibold transition hover:-translate-y-px',
+                            themeMode === 'light'
+                              ? 'border-slate-200 bg-slate-50 text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.96),0_4px_10px_rgba(148,163,184,0.08)]'
+                              : 'border-white/10 bg-white/[0.04] text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_8px_18px_rgba(15,23,42,0.12)]'
+                          ].join(' ')}
+                        >
+                          {t('更多状态', 'More states')}
+                        </button>
+                      )}
                     </div>,
                     document.body
                   )}
