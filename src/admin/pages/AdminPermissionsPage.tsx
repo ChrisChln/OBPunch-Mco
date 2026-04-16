@@ -44,14 +44,15 @@ const MODULE_LABELS: Record<AdminModuleKey, { zh: string; en: string }> = {
   accounts: { zh: '账号', en: 'Accounts' },
   permissions: { zh: '权限', en: 'Permissions' },
   timecard: { zh: '时间卡', en: 'Timecard' },
-  leave_approval: { zh: '请假审批', en: 'Leave' },
+  leave_approval: { zh: '请假审批', en: 'Leave Approval' },
+  work_hour_comparison: { zh: '工时对比', en: 'Work Hour Comparison' },
   todo: { zh: '待办', en: 'Todo' },
   punches: { zh: '打卡流水', en: 'Punches' },
   audit: { zh: '日志', en: 'Audit' },
   schedule: { zh: '排班', en: 'Schedule' },
   devices: { zh: '设备', en: 'Devices' },
   forecast: { zh: '件量预测', en: 'Forecast' },
-  prediction_model: { zh: '预测模型', en: 'Model' },
+  prediction_model: { zh: '预测模型', en: 'Prediction Model' },
   efficiency: { zh: '人效', en: 'Efficiency' },
   agency: { zh: 'Agency', en: 'Agency' }
 };
@@ -166,14 +167,14 @@ export default function AdminPermissionsPage({
     );
   };
 
-  const applyRequestedRoleDefaults = (nextRole: AdminRole = requestedRole) => {
-    setRequestedModules(buildDefaultModuleState(nextRole));
-  };
-
   const setModuleAccess = (moduleKey: AdminModuleKey, accessLevel: AdminModuleAccessLevel) => {
     setRequestedModules((prev) =>
       prev.map((module) => (module.module_key === moduleKey ? { ...module, access_level: accessLevel } : module))
     );
+  };
+
+  const applyRequestedRoleDefaults = (nextRole: AdminRole = requestedRole) => {
+    setRequestedModules(buildDefaultModuleState(nextRole));
   };
 
   const submitRequest = async () => {
@@ -241,7 +242,9 @@ export default function AdminPermissionsPage({
               onClick={() => void onRefreshRequests()}
               className={[
                 'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-                isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                isLight
+                  ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                  : 'bg-white/10 text-slate-200 hover:bg-white/15'
               ].join(' ')}
             >
               {t('刷新', 'Refresh')}
@@ -448,7 +451,9 @@ export default function AdminPermissionsPage({
             onClick={() => void refreshAll()}
             className={[
               'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-              isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+              isLight
+                ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                : 'bg-white/10 text-slate-200 hover:bg-white/15'
             ].join(' ')}
           >
             {t('刷新', 'Refresh')}
@@ -546,7 +551,9 @@ export default function AdminPermissionsPage({
                             onClick={() => void onReviewRequest(row, 'reject')}
                             className={[
                               'rounded-2xl px-4 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                              isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                              isLight
+                                ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                                : 'bg-white/10 text-slate-200 hover:bg-white/15'
                             ].join(' ')}
                           >
                             {t('拒绝', 'Reject')}

@@ -29,13 +29,14 @@ type AdminNavProps = {
   t: TranslateFn;
   visiblePages?: AdminPage[];
   leaveApprovalPendingCount?: number;
+  scheduleTerminationPendingCount?: number;
   todoPendingCount?: number;
 };
 
 type NavItem = {
   page: AdminPage;
   label: (t: TranslateFn) => string;
-  badge?: 'leave' | 'todo';
+  badge?: 'leave' | 'schedule' | 'todo';
 };
 
 const NAV_ICON_STYLE = 'h-5 w-5';
@@ -65,12 +66,12 @@ const NAV_ITEMS: NavItem[] = [
   { page: 'accounts', label: (t) => t('账号管理', 'Accounts') },
   { page: 'permissions', label: (t) => t('权限', 'Permissions') },
   { page: 'timecard', label: (t) => t('时间卡', 'Timecard') },
+  { page: 'schedule', label: (t) => t('排班', 'Schedule'), badge: 'schedule' },
   { page: 'leave_approval', label: (t) => t('请假审批', 'Leave Approval'), badge: 'leave' },
   { page: 'work_hour_comparison', label: (t) => t('工时对比', 'Work Hour Comparison') },
   { page: 'todo', label: (t) => t('待办', 'ToDo'), badge: 'todo' },
   { page: 'punches', label: (t) => t('打卡流水', 'Punches') },
   { page: 'audit', label: (t) => t('日志', 'Log') },
-  { page: 'schedule', label: (t) => t('排班', 'Schedule') },
   { page: 'devices', label: (t) => t('设备管理', 'Devices') },
   { page: 'forecast', label: (t) => t('件量预测', 'Forecast') },
   { page: 'prediction_model', label: (t) => t('预测模型', 'Prediction Model') },
@@ -90,12 +91,17 @@ function AdminNav({
   t,
   visiblePages,
   leaveApprovalPendingCount = 0,
+  scheduleTerminationPendingCount = 0,
   todoPendingCount = 0
 }: AdminNavProps) {
   const [expanded, setExpanded] = useState(false);
   const collapseTimerRef = useRef<number | null>(null);
   const visiblePageSet = new Set(visiblePages ?? NAV_ITEMS.map((item) => item.page));
-  const items = NAV_ITEMS.filter((item) => visiblePageSet.has(item.page));
+  const items = NAV_ITEMS.filter((item) => visiblePageSet.has(item.page)).sort((left, right) => {
+    const leftPriority = left.page === 'schedule' && scheduleTerminationPendingCount > 0 ? 1 : 0;
+    const rightPriority = right.page === 'schedule' && scheduleTerminationPendingCount > 0 ? 1 : 0;
+    return rightPriority - leftPriority;
+  });
   const shellClass =
     themeMode === 'light'
       ? 'border-r border-slate-200 bg-white/90 text-slate-900 backdrop-blur-xl'
@@ -127,16 +133,12 @@ function AdminNav({
       className="relative h-full min-h-0 w-[60px]"
       onMouseEnter={() => {
         clearCollapseTimer();
-        if (!expanded) {
-          setExpanded(true);
-        }
+        if (!expanded) setExpanded(true);
       }}
       onMouseLeave={() => {
         clearCollapseTimer();
         collapseTimerRef.current = window.setTimeout(() => {
-          if (expanded) {
-            setExpanded(false);
-          }
+          if (expanded) setExpanded(false);
           collapseTimerRef.current = null;
         }, 80);
       }}
@@ -157,8 +159,18 @@ function AdminNav({
           <div className="space-y-0">
             {items.map((item) => {
               const active = page === item.page;
-              const badgeCount = item.badge === 'leave' ? leaveApprovalPendingCount : item.badge === 'todo' ? todoPendingCount : 0;
-              const showLeaveDot = !expanded && item.badge === 'leave' && badgeCount > 0;
+              const badgeCount =
+                item.badge === 'leave'
+                  ? leaveApprovalPendingCount
+                  : item.badge === 'schedule'
+                    ? scheduleTerminationPendingCount
+                    : item.badge === 'todo'
+                      ? todoPendingCount
+                      : 0;
+              const showBadgeDot = !expanded && badgeCount > 0;
+              const badgeTone =
+                item.badge === 'todo' ? 'bg-indigo-100 text-indigo-700' : 'bg-rose-100 text-rose-700';
+
               return (
                 <button
                   key={item.page}
@@ -173,7 +185,7 @@ function AdminNav({
                 >
                   <span className={['relative grid h-7 w-7 shrink-0 place-items-center transition', active ? 'text-indigo-600' : 'text-slate-500'].join(' ')}>
                     <NavIcon page={item.page} />
-                    {showLeaveDot ? (
+                    {showBadgeDot ? (
                       <span
                         className="pointer-events-none absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border border-slate-950/80 bg-rose-500"
                         aria-hidden="true"
@@ -185,7 +197,7 @@ function AdminNav({
                       <div className="flex items-center justify-between gap-2">
                         <div className="truncate text-[15px] font-semibold leading-tight">{item.label(t)}</div>
                         {badgeCount > 0 ? (
-                          <span className={['rounded-full px-2 py-0.5 text-[10px] font-semibold', item.badge === 'leave' ? 'bg-rose-100 text-rose-700' : 'bg-indigo-100 text-indigo-700'].join(' ')}>
+                          <span className={['rounded-full px-2 py-0.5 text-[10px] font-semibold', badgeTone].join(' ')}>
                             {badgeCount}
                           </span>
                         ) : null}
