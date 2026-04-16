@@ -196,6 +196,7 @@ const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
 const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
+const PROFILE_AVATAR_BUCKET = (import.meta.env.VITE_PROFILE_AVATAR_BUCKET as string | undefined) ?? 'profile-avatars';
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
@@ -1563,8 +1564,26 @@ export default function AdminAppPage() {
 
   const [userDisplayName, setUserDisplayName] = useState('');
   const [userDisplayNameInput, setUserDisplayNameInput] = useState('');
+  const [userAvatarUrl, setUserAvatarUrl] = useState('');
+  const [userAvatarUrlInput, setUserAvatarUrlInput] = useState('');
+  const [userAvatarFileInput, setUserAvatarFileInput] = useState<File | null>(null);
   const [userDisplayNamePromptOpen, setUserDisplayNamePromptOpen] = useState(false);
   const [userDisplayNameSaving, setUserDisplayNameSaving] = useState(false);
+  const isMissingAvatarUrlColumnError = (message: string) => /avatar_url/i.test(message) && /column/i.test(message);
+  const isMissingStorageBucketError = (message: string) =>
+    /bucket/i.test(message) && /(not found|does not exist|missing|invalid)/i.test(message);
+  const getFallbackProfileName = () => {
+    const candidates = [
+      userDisplayName,
+      String(user?.user_metadata?.display_name ?? '').trim(),
+      String(user?.user_metadata?.name ?? '').trim()
+    ];
+    for (const candidate of candidates) {
+      const next = String(candidate ?? '').trim();
+      if (next) return next;
+    }
+    return '';
+  };
   const auditActorDisplayByKeyRef = useRef<Map<string, string>>(new Map());
   const auditActorDisplayMapLoadedRef = useRef(false);
   const loadAuditActorDisplayNameMap = async () => {
@@ -2886,27 +2905,45 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!supabase || !user?.id) {
         setUserDisplayName('');
         setUserDisplayNameInput('');
+        setUserAvatarUrl('');
+        setUserAvatarUrlInput('');
+        setUserAvatarFileInput(null);
         setUserDisplayNamePromptOpen(false);
         return;
       }
-      const res = await supabase
+      let res = await supabase
         .from(USER_PROFILE_TABLE)
-        .select('display_name')
+        .select('display_name, avatar_url')
         .eq('user_id', user.id)
         .maybeSingle();
+      if (res.error && isMissingAvatarUrlColumnError(String(res.error.message ?? ''))) {
+        res = await supabase
+          .from(USER_PROFILE_TABLE)
+          .select('display_name')
+          .eq('user_id', user.id)
+          .maybeSingle();
+      }
       if (!active) {
         return;
       }
       if (res.error) {
+        const fallbackName = getFallbackProfileName();
         setStatus({ tone: 'error', message: t(`读取用户名称失败：${res.error.message}`, `Failed to load profile name: ${res.error.message}`) });
-        setUserDisplayName('');
-        setUserDisplayNameInput('');
-        setUserDisplayNamePromptOpen(true);
+        setUserDisplayName(fallbackName);
+        setUserDisplayNameInput(fallbackName);
+        setUserAvatarUrl('');
+        setUserAvatarUrlInput('');
+        setUserAvatarFileInput(null);
+        setUserDisplayNamePromptOpen(!fallbackName);
         return;
       }
       const nextName = String((res.data as any)?.display_name ?? '').trim();
+      const nextAvatarUrl = String((res.data as any)?.avatar_url ?? '').trim();
       setUserDisplayName(nextName);
       setUserDisplayNameInput(nextName);
+      setUserAvatarUrl(nextAvatarUrl);
+      setUserAvatarUrlInput(nextAvatarUrl);
+      setUserAvatarFileInput(null);
       setUserDisplayNamePromptOpen(!nextName);
     };
     void syncUserDisplayName();
@@ -2926,16 +2963,60 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     setUserDisplayNameSaving(true);
     try {
-      const upsertRes = await supabase.from(USER_PROFILE_TABLE).upsert(
+      let nextAvatarUrl = userAvatarUrlInput.trim();
+      let avatarColumnUnavailable = false;
+      if (userAvatarFileInput) {
+        const objectPath = `users/${user.id}/avatar`;
+        const uploadRes = await supabase.storage.from(PROFILE_AVATAR_BUCKET).upload(objectPath, userAvatarFileInput, {
+          upsert: true,
+          contentType: userAvatarFileInput.type,
+          cacheControl: '31536000'
+        });
+        if (uploadRes.error) {
+          const errorMessage = String(uploadRes.error.message ?? '');
+          setStatus({
+            tone: 'error',
+            message: isMissingStorageBucketError(errorMessage)
+              ? t(
+                  `头像桶 ${PROFILE_AVATAR_BUCKET} 不存在，请先创建 Storage bucket。`,
+                  `Avatar bucket ${PROFILE_AVATAR_BUCKET} is missing. Create the Storage bucket first.`
+                )
+              : t(`上传头像失败：${errorMessage}`, `Failed to upload avatar: ${errorMessage}`)
+          });
+          return;
+        }
+        const publicUrlRes = supabase.storage.from(PROFILE_AVATAR_BUCKET).getPublicUrl(objectPath);
+        const publicUrl = String(publicUrlRes.data.publicUrl ?? '').trim();
+        if (!publicUrl) {
+          setStatus({ tone: 'error', message: t('生成头像地址失败。', 'Failed to generate avatar URL.') });
+          return;
+        }
+        nextAvatarUrl = `${publicUrl}?v=${Date.now()}`;
+      }
+      let upsertRes = await supabase.from(USER_PROFILE_TABLE).upsert(
         [
           {
             user_id: user.id,
             user_email: user.email ?? null,
-            display_name: nextName
+            display_name: nextName,
+            avatar_url: nextAvatarUrl || null
           }
         ] as any[],
         { onConflict: 'user_id' }
       );
+      if (upsertRes.error && isMissingAvatarUrlColumnError(String(upsertRes.error.message ?? ''))) {
+        avatarColumnUnavailable = true;
+        upsertRes = await supabase.from(USER_PROFILE_TABLE).upsert(
+          [
+            {
+              user_id: user.id,
+              user_email: user.email ?? null,
+              display_name: nextName
+            }
+          ] as any[],
+          { onConflict: 'user_id' }
+        );
+      }
       if (upsertRes.error) {
         setStatus({
           tone: 'error',
@@ -2945,10 +3026,47 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       setUserDisplayName(nextName);
       setUserDisplayNamePromptOpen(false);
-      setStatus({ tone: 'success', message: t('用户名已保存。', 'Profile name saved.') });
+      if (avatarColumnUnavailable && nextAvatarUrl) {
+        setUserAvatarFileInput(null);
+        setStatus({
+          tone: 'error',
+          message: t(
+            '名字已保存，但头像地址字段还没建。请先执行 2026-04-16_add_avatar_url_to_user_profiles.sql。',
+            'Name saved, but the avatar_url column is missing. Run 2026-04-16_add_avatar_url_to_user_profiles.sql first.'
+          )
+        });
+        return;
+      }
+      setUserAvatarUrl(nextAvatarUrl);
+      setUserAvatarUrlInput(nextAvatarUrl);
+      setUserAvatarFileInput(null);
+      setStatus({ tone: 'success', message: t('资料已保存。', 'Profile saved.') });
     } finally {
       setUserDisplayNameSaving(false);
     }
+  };
+  const onProfileAvatarPick = async (file: File | null) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setStatus({ tone: 'error', message: t('请选择图片文件。', 'Please choose an image file.') });
+      return;
+    }
+    if (file.size > 1024 * 1024) {
+      setStatus({ tone: 'error', message: t('头像图片请控制在 1MB 内。', 'Avatar image must be under 1MB.') });
+      return;
+    }
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => reject(new Error('read_failed'));
+      reader.readAsDataURL(file);
+    }).catch(() => '');
+    if (!dataUrl) {
+      setStatus({ tone: 'error', message: t('读取头像失败。', 'Failed to read avatar image.') });
+      return;
+    }
+    setUserAvatarFileInput(file);
+    setUserAvatarUrlInput(dataUrl);
   };
 
   useEffect(() => {
@@ -14871,6 +14989,12 @@ ${rowsToHtml(late)}
               setLang={setLang}
               user={user}
               userDisplayName={userDisplayName}
+              userAvatarUrl={userAvatarUrlInput || userAvatarUrl}
+              profileDraftName={userDisplayNameInput}
+              setProfileDraftName={setUserDisplayNameInput}
+              profileSaving={userDisplayNameSaving}
+              onProfileSave={saveUserDisplayName}
+              onProfileAvatarPick={onProfileAvatarPick}
               attendanceError={attendanceError}
               onBack={handleBack}
               onLogout={doLogout}
