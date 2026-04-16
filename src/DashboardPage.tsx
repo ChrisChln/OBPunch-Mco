@@ -278,7 +278,7 @@ const getShiftBadgeClass = (value: string) => {
   if (v === 'late') return 'border-stone-500/25 text-stone-200 bg-stone-400/[0.08]';
   return 'border-white/15 text-stone-100 bg-white/[0.04]';
 };
-const DEFAULT_CARD_POSITIONS: string[] = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'];
+const DEFAULT_CARD_POSITIONS: string[] = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'];
 const getAttendanceCardClass = (position: string) => {
   const pos = normalizePositionKey(position);
   if (pos === 'Pick') return 'border-sky-300/20 bg-gradient-to-br from-sky-400/[0.14] via-sky-300/[0.06] to-transparent';
@@ -839,6 +839,8 @@ export default function DashboardPage() {
         const position = String(key.split(':')[1] ?? '').trim();
         if (position) positionUniverse.add(position);
       }
+      // Remove FLEX TEAM if present
+      positionUniverse.delete('FLEX TEAM');
       const orderedCardPositions = Array.from(positionUniverse).sort((a, b) => {
         const rankA = positionOrder.get(a);
         const rankB = positionOrder.get(b);

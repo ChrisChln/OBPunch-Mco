@@ -518,11 +518,25 @@ export default function App() {
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
 
   const [page, setPage] = useState<Page>('punch');
-  const [punchUnlocked, setPunchUnlocked] = useState(false);
+  const PUNCH_UNLOCKED_KEY = 'punch_screen_unlocked';
+  const [punchUnlocked, setPunchUnlocked] = useState(() => {
+    try {
+      return localStorage.getItem(PUNCH_UNLOCKED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
   const [unlockEmail, setUnlockEmail] = useState('');
   const [unlockPassword, setUnlockPassword] = useState('');
   const [unlockBusy, setUnlockBusy] = useState(false);
-  const [unlockByLabel, setUnlockByLabel] = useState('');
+  const PUNCH_UNLOCKED_LABEL_KEY = 'punch_screen_unlocked_by';
+  const [unlockByLabel, setUnlockByLabel] = useState(() => {
+    try {
+      return localStorage.getItem(PUNCH_UNLOCKED_LABEL_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
   const [unlockStatus, setUnlockStatus] = useState<UnlockStatus>({
     tone: 'idle',
     message: ''
@@ -1333,14 +1347,18 @@ export default function App() {
 
       const display = String(signInRes.data.user?.email ?? email).trim();
       setPunchUnlocked(true);
+      try { localStorage.setItem(PUNCH_UNLOCKED_KEY, '1'); } catch {}
       setUnlockByLabel(display);
+      try { localStorage.setItem(PUNCH_UNLOCKED_LABEL_KEY, display); } catch {}
       setUnlockPassword('');
       preservePunchUnlockOnNextSignOutRef.current = true;
       const signOutRes = await supabase.auth.signOut();
       if (signOutRes.error) {
         preservePunchUnlockOnNextSignOutRef.current = false;
         setPunchUnlocked(false);
+        try { localStorage.removeItem(PUNCH_UNLOCKED_KEY); } catch {}
         setUnlockByLabel('');
+        try { localStorage.removeItem(PUNCH_UNLOCKED_LABEL_KEY); } catch {}
         setUnlockStatus({ tone: 'error', message: `解锁成功但退出管理员会话失败：${signOutRes.error.message}` });
         return;
       }
@@ -1363,9 +1381,11 @@ export default function App() {
       await supabase.auth.signOut();
     }
     setPunchUnlocked(false);
+    try { localStorage.removeItem(PUNCH_UNLOCKED_KEY); } catch {}
     setUnlockEmail('');
     setUnlockPassword('');
     setUnlockByLabel('');
+    try { localStorage.removeItem(PUNCH_UNLOCKED_LABEL_KEY); } catch {}
     setUnlockStatus({ tone: 'idle', message: '' });
     setStaffId('');
     setPage('punch');
@@ -1406,7 +1426,9 @@ export default function App() {
         }
 
         setPunchUnlocked(true);
+        try { localStorage.setItem(PUNCH_UNLOCKED_KEY, '1'); } catch {}
         setUnlockByLabel(sessionEmail);
+        try { localStorage.setItem(PUNCH_UNLOCKED_LABEL_KEY, sessionEmail); } catch {}
         setUnlockStatus({ tone: 'success', message: `Unlocked by admin: ${sessionEmail}` });
         setUiStatus({ tone: 'idle', message: defaultUiStatusMessage });
       } finally {
@@ -1426,7 +1448,9 @@ export default function App() {
         return;
       }
       setPunchUnlocked(false);
+      try { localStorage.removeItem(PUNCH_UNLOCKED_KEY); } catch {}
       setUnlockByLabel('');
+      try { localStorage.removeItem(PUNCH_UNLOCKED_LABEL_KEY); } catch {}
       setUnlockPassword('');
       setUnlockStatus({ tone: 'idle', message: '' });
     });
