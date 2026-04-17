@@ -184,6 +184,7 @@ type DailyListCapacityView = {
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
+const DAILY_LIST_VISIBLE_POSITIONS = ALLOWED_POSITIONS.filter((position) => position !== 'FLEX TEAM') as Exclude<AllowedPosition, 'FLEX TEAM'>[];
 const createEmptyPositionFlags = (): Record<AllowedPosition, boolean> => ({
   Pick: false,
   Pack: false,
@@ -1733,6 +1734,7 @@ export default function AdminAppPage() {
   const [timecardSearch, setTimecardSearch] = useState('');
   const [timecardAgency, setTimecardAgency] = useState('');
   const [timecardAgencySort, setTimecardAgencySort] = useState<'' | 'asc' | 'desc'>('');
+  const [timecardTotalSort, setTimecardTotalSort] = useState<'' | 'asc' | 'desc'>('');
   const [timecardPosition, setTimecardPosition] = useState('');
   const [timecardShift, setTimecardShift] = useState<'' | 'early' | 'late'>('');
   const [timecardInProgressOnly, setTimecardInProgressOnly] = useState(false);
@@ -12844,12 +12846,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const agencyDiff = agencyA.localeCompare(agencyB, 'zh-CN', { sensitivity: 'base' });
         if (agencyDiff !== 0) return timecardAgencySort === 'asc' ? agencyDiff : -agencyDiff;
       }
+      if (timecardTotalSort && b.totalHours !== a.totalHours) {
+        return timecardTotalSort === 'asc' ? a.totalHours - b.totalHours : b.totalHours - a.totalHours;
+      }
       const anomalyDiff = getAnomalyScore(b) - getAnomalyScore(a);
       if (anomalyDiff !== 0) return anomalyDiff;
       if (b.totalHours !== a.totalHours) return b.totalHours - a.totalHours;
       return String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US');
     });
-  }, [page, timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter, timecardAgencySort]);
+  }, [page, timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter, timecardAgencySort, timecardTotalSort]);
   const timecardRowsRendered = useMemo(
     () => timecardRowsFiltered.slice(0, Math.max(0, timecardRenderCount)),
     [timecardRowsFiltered, timecardRenderCount]
@@ -13377,7 +13382,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }, [tomorrowDailyList]);
   const tomorrowPositionSummaryCards = useMemo(
     () =>
-      ALLOWED_POSITIONS.map((position) => {
+      DAILY_LIST_VISIBLE_POSITIONS.map((position) => {
         const early = tomorrowAttendanceCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
         const late = tomorrowAttendanceCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
         const recommendedRows = scheduleRecommendedAdjustedByDate[tomorrowDailyList.targetDate] ?? [];
@@ -13414,14 +13419,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     [tomorrowAttendanceCards, scheduleRecommendedAdjustedByDate, tomorrowDailyList, dailyListCapacityByRowKey]
   );
   const selectedDailyFilterPositions = useMemo(
-    () => ALLOWED_POSITIONS.filter((position) => Boolean(dailyListFilterPositions[position])),
+    () => DAILY_LIST_VISIBLE_POSITIONS.filter((position) => Boolean(dailyListFilterPositions[position])),
     [dailyListFilterPositions]
   );
   const tomorrowDailyRowsDisplayed = useMemo(() => {
     if (selectedDailyFilterPositions.length === 0) {
       return { earlyRows: tomorrowDailyList.earlyRows, lateRows: tomorrowDailyList.lateRows };
     }
-    const allowed = new Set(selectedDailyFilterPositions);
+    const allowed = new Set<AllowedPosition>(selectedDailyFilterPositions);
     const match = (row: DailyListRow) => {
       const pos = normalizePositionKey(String(row.position ?? '').trim());
       return Boolean(pos && allowed.has(pos as AllowedPosition));
@@ -13931,9 +13936,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const account = String(employee?.work_account ?? employee?.WorkAccount ?? '').trim();
       const label = String(employee?.label ?? employee?.Label ?? '').trim();
       const borrowedDevice = (homeBorrowedDeviceByStaffId.get(staff) ?? []).join(', ');
-      const lastPunchAt = String(employeeLastPunchAtByStaffId[staff] ?? '').trim();
       const firstInAt = String(homeFirstInAtByStaffId.get(staff) ?? '').trim();
-      const punchAt = lastPunchAt || firstInAt;
       const rawPunches = Array.isArray(homePunchesByStaffId[staff])
         ? homePunchesByStaffId[staff].filter((item) => !isExactOperationalCutoffOut(item.created_at, item.action))
         : [];
@@ -13952,8 +13955,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         punches:
           rawPunches.length > 0
             ? rawPunches
-            : punchAt
-              ? [{ action: isOnClock ? 'IN' : lastPunchAt ? 'OUT' : 'IN', created_at: punchAt }]
+            : firstInAt
+              ? [{ action: 'IN', created_at: firstInAt }]
               : []
       };
     };
@@ -14037,7 +14040,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     homeFirstInAtByStaffId,
     employeeShiftByStaffId,
     employeeProfileByStaffId,
-    employeeLastPunchAtByStaffId,
     scheduleMistakeByStaffId
   ]);
   const homeRosterRowsFiltered = useMemo(() => {
@@ -16171,11 +16173,11 @@ ${rowsToHtml(late)}
                                   onClick={() => toggleDailyListSelectedPosition(card.position)}
                                   key={card.position}
                                   className={[
-                                    'rounded-xl border px-2.5 py-2 text-left transition',
+                                    'flex min-h-[104px] w-full flex-col justify-between rounded-md border px-2.5 py-2 text-left transition',
                                     dailyListSelectedPositions[card.position]
                                       ? themeMode === 'light'
-                                        ? getSchedulePositionBadgeClassLight(card.position)
-                                        : getSchedulePositionBadgeClass(card.position)
+                                        ? getHomeCardToneClass(card.position, schedulePositionToneByPosition)
+                                        : getHomeCardToneClass(card.position, schedulePositionToneByPosition)
                                       : themeMode === 'light'
                                         ? 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
                                         : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
@@ -16301,7 +16303,7 @@ ${rowsToHtml(late)}
                               <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                                 {t('筛选', 'Filter')}
                               </span>
-                              {ALLOWED_POSITIONS.map((position) => (
+                              {DAILY_LIST_VISIBLE_POSITIONS.map((position) => (
                                 <button
                                   key={`filter-${position}`}
                                   type="button"
@@ -16855,8 +16857,18 @@ ${rowsToHtml(late)}
                   timecardPresentDayFilter={timecardPresentDayFilter}
                   setTimecardPresentDayFilter={setTimecardPresentDayFilter}
                   timecardAgencySort={timecardAgencySort}
+                  timecardTotalSort={timecardTotalSort}
                   onToggleTimecardAgencySort={() =>
-                    setTimecardAgencySort((prev) => (prev === '' ? 'asc' : prev === 'asc' ? 'desc' : ''))
+                    {
+                      setTimecardTotalSort('');
+                      setTimecardAgencySort((prev) => (prev === '' ? 'asc' : prev === 'asc' ? 'desc' : ''));
+                    }
+                  }
+                  onToggleTimecardTotalSort={() =>
+                    {
+                      setTimecardAgencySort('');
+                      setTimecardTotalSort((prev) => (prev === '' ? 'desc' : prev === 'desc' ? 'asc' : ''));
+                    }
                   }
                   timecardRowsRendered={timecardRowsRendered}
                   timecardAuditByStaffDate={timecardAuditByStaffDate}

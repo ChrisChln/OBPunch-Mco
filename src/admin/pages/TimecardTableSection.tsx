@@ -21,7 +21,9 @@ type TimecardTableSectionProps = {
   timecardPresentDayFilter: number | null;
   setTimecardPresentDayFilter: (value: number | null | ((prev: number | null) => number | null)) => void;
   timecardAgencySort: '' | 'asc' | 'desc';
+  timecardTotalSort: '' | 'asc' | 'desc';
   onToggleTimecardAgencySort: () => void;
+  onToggleTimecardTotalSort: () => void;
   timecardRowsRendered: any[];
   timecardAuditByStaffDate: Map<string, any[]>;
   openTimecardPunchModal: (staffId: string, dayIndex: number | null) => void | Promise<void>;
@@ -31,7 +33,6 @@ type TimecardTableSectionProps = {
   renderAuditSummary: (text: string) => any;
 };
 
-// 虚拟滚动配置
 const ROW_HEIGHT = 56;
 const OVERSCAN = 12;
 
@@ -53,7 +54,9 @@ export default function TimecardTableSection({
   timecardPresentDayFilter,
   setTimecardPresentDayFilter,
   timecardAgencySort,
+  timecardTotalSort,
   onToggleTimecardAgencySort,
+  onToggleTimecardTotalSort,
   timecardRowsRendered,
   timecardAuditByStaffDate,
   openTimecardPunchModal,
@@ -92,14 +95,10 @@ export default function TimecardTableSection({
   const visibleRange = useMemo(() => {
     const visibleCount = Math.ceil(containerHeightPx / ROW_HEIGHT) + OVERSCAN * 2;
     const start = Math.max(0, visibleStartIndex - OVERSCAN);
-    const end = Math.min(
-      timecardRowsRendered.length,
-      start + visibleCount
-    );
+    const end = Math.min(timecardRowsRendered.length, start + visibleCount);
     return { start, end };
   }, [visibleStartIndex, containerHeightPx, timecardRowsRendered.length]);
 
-  // 仅渲染可见的行
   const visibleRows = useMemo(
     () => timecardRowsRendered.slice(visibleRange.start, visibleRange.end),
     [timecardRowsRendered, visibleRange]
@@ -119,7 +118,6 @@ export default function TimecardTableSection({
   const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
   const days = [t('周一', 'Mon'), t('周二', 'Tue'), t('周三', 'Wed'), t('周四', 'Thu'), t('周五', 'Fri'), t('周六', 'Sat'), t('周日', 'Sun')];
 
-  // 提取行渲染逻辑为独立函数
   const renderRow = (r: any, realIndex: number) => (
     <tr
       key={`${r.staff_id}__${r.position}__${r.agency}__${realIndex}`}
@@ -377,21 +375,32 @@ export default function TimecardTableSection({
                 </div>
               </th>
             ))}
-            <th className="w-[92px] px-2 py-1.5 text-center">{t('合计', 'Total')}</th>
+            <th className="w-[92px] px-2 py-1.5 text-center">
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={onToggleTimecardTotalSort}
+                className={[
+                  'inline-flex items-center justify-center gap-1 rounded px-1 py-0.5 transition',
+                  timecardTotalSort ? 'text-sky-300 hover:bg-white/10' : 'text-slate-400 hover:bg-white/10',
+                  isLocked ? 'cursor-not-allowed opacity-60' : ''
+                ].join(' ')}
+                title={t('按合计工时排序', 'Sort by total hours')}
+              >
+                <span>{t('合计', 'Total')}</span>
+              </button>
+            </th>
           </tr>
         </thead>
         <tbody>
-          {/* 顶部 spacer - 占位符以保持滚动位置 */}
           {visibleRange.start > 0 && (
             <tr>
               <td colSpan={12} style={{ height: `${visibleRange.start * ROW_HEIGHT}px` }} />
             </tr>
           )}
 
-          {/* 渲染可见的行 */}
           {visibleRows.map((r, idx) => renderRow(r, visibleRange.start + idx))}
 
-          {/* 底部 spacer - 占位符以保持滚动位置 */}
           {visibleRange.end < timecardRowsRendered.length && (
             <tr>
               <td colSpan={12} style={{ height: `${(timecardRowsRendered.length - visibleRange.end) * ROW_HEIGHT}px` }} />
