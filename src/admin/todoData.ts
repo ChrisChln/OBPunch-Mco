@@ -137,18 +137,23 @@ const TODO_ITEM_SELECT = `
 `;
 
 export const fetchTodoProfiles = async (supabase: any) => {
-  const normalizeProfiles = (rows: Array<{ user_id?: string | null; user_email?: string | null; display_name?: string | null }>) =>
+  const normalizeProfiles = (
+    rows: Array<{ user_id?: string | null; user_email?: string | null; display_name?: string | null; avatar_url?: string | null }>
+  ) =>
     rows
       .map((item) => ({
         user_id: String(item.user_id ?? ''),
         user_email: String(item.user_email ?? '').trim(),
-        display_name: String(item.display_name ?? '').trim()
+        display_name: String(item.display_name ?? '').trim(),
+        avatar_url: String(item.avatar_url ?? '').trim()
       }))
       .filter((item) => item.user_id && item.user_email);
 
   const rpcRes = await supabase.rpc('list_todo_profiles');
   if (!rpcRes.error) {
-    return normalizeProfiles((rpcRes.data ?? []) as Array<{ user_id?: string | null; user_email?: string | null; display_name?: string | null }>);
+    return normalizeProfiles(
+      (rpcRes.data ?? []) as Array<{ user_id?: string | null; user_email?: string | null; display_name?: string | null; avatar_url?: string | null }>
+    );
   }
 
   const rpcMissing = String(rpcRes.error?.code ?? '') === 'PGRST202';
@@ -156,9 +161,11 @@ export const fetchTodoProfiles = async (supabase: any) => {
     throw new Error(String(rpcRes.error?.message ?? 'Failed to load user profiles.'));
   }
 
-  const res = await supabase.from(USER_PROFILE_TABLE).select('user_id, user_email, display_name').order('display_name', { ascending: true }).limit(5000);
+  const res = await supabase.from(USER_PROFILE_TABLE).select('user_id, user_email, display_name, avatar_url').order('display_name', { ascending: true }).limit(5000);
   if (res.error) throw new Error(String(res.error.message ?? 'Failed to load user profiles.'));
-  return normalizeProfiles((res.data ?? []) as Array<{ user_id?: string | null; user_email?: string | null; display_name?: string | null }>);
+  return normalizeProfiles(
+    (res.data ?? []) as Array<{ user_id?: string | null; user_email?: string | null; display_name?: string | null; avatar_url?: string | null }>
+  );
 };
 
 export const fetchAssignedTodoItems = async (supabase: any, userId: string) => {

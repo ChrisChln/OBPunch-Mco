@@ -29,12 +29,14 @@ export type AdminAccessUserOption = {
   user_id: string;
   user_email: string;
   display_name: string;
+  avatar_url?: string;
 };
 
 export type AdminAccessAccountRecord = {
   user_id: string;
   user_email: string;
   display_name: string;
+  avatar_url?: string;
   role: AdminRole;
   is_active: boolean;
   managed_agencies: string[];

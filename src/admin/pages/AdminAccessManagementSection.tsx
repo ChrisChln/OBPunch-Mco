@@ -8,6 +8,7 @@ import {
   type AdminModuleKey,
   type AdminRole
 } from '../../shared/adminAccess';
+import AdminUserAvatar from '../components/AdminUserAvatar';
 import type {
   AdminAccessAccountRecord,
   AdminAccessSavePayload,
@@ -90,13 +91,14 @@ export default function AdminAccessManagementSection({
     const explicitRowMap = new Map(rows.map((row) => [row.user_id, row] as const));
     const merged = userOptions.map((user) => {
       const explicitRow = explicitRowMap.get(user.user_id);
-      if (explicitRow) return explicitRow;
+      if (explicitRow) return { ...explicitRow, avatar_url: explicitRow.avatar_url || user.avatar_url || '' };
 
       const nextRole = normalizeAdminRole('', user.user_email);
       return {
         user_id: user.user_id,
         user_email: user.user_email,
         display_name: user.display_name,
+        avatar_url: user.avatar_url ?? '',
         role: nextRole,
         is_active: true,
         managed_agencies: [],
@@ -106,7 +108,7 @@ export default function AdminAccessManagementSection({
 
     const knownUserIds = new Set(merged.map((row) => row.user_id));
     for (const row of rows) {
-      if (!knownUserIds.has(row.user_id)) merged.push(row);
+      if (!knownUserIds.has(row.user_id)) merged.push({ ...row, avatar_url: row.avatar_url ?? '' });
     }
 
     return merged.sort((left, right) => {
@@ -602,9 +604,20 @@ export default function AdminAccessManagementSection({
               return (
                 <tr key={row.user_id} className="border-b border-white/5 transition-colors hover:bg-white/5 last:border-0">
                   <td className="px-4 py-3">
-                    <div className={isLight ? 'text-slate-900' : 'text-slate-100'}>{row.display_name || '-'}</div>
-                    <div className={['text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
-                      {row.user_email || row.user_id}
+                    <div className="flex items-center gap-3">
+                      <AdminUserAvatar
+                        name={row.display_name || row.user_email || row.user_id}
+                        avatarUrl={row.avatar_url}
+                        fallbackInitial={(row.display_name || row.user_email || row.user_id).slice(0, 1).toUpperCase() || '?'}
+                        size={28}
+                        className={isLight ? 'border-slate-200 bg-slate-200 text-slate-700' : 'border-white/10 bg-slate-800 text-slate-100'}
+                      />
+                      <div className="min-w-0">
+                        <div className={['truncate', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>{row.display_name || '-'}</div>
+                        <div className={['truncate text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                          {row.user_email || row.user_id}
+                        </div>
+                      </div>
                     </div>
                   </td>
                   <td className="px-4 py-3">

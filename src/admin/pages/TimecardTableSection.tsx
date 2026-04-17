@@ -1,7 +1,9 @@
-type TranslateFn = (zh: string, en: string) => string;
-
-import { useRef, useState, useMemo, useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import AdminUserAvatar from '../components/AdminUserAvatar';
+import type { AdminUserIdentityView } from '../adminIdentity';
 import { getTimecardCellHoursText, getTimecardTotalHoursText } from '../timecardDisplay';
+
+type TranslateFn = (zh: string, en: string) => string;
 
 type TimecardTableSectionProps = {
   t: TranslateFn;
@@ -30,6 +32,12 @@ type TimecardTableSectionProps = {
   formatAuditDetail: (row: any) => { summary: string; details: Array<{ label: string; value: string }> };
   formatCellAuditTime: (value: string | null | undefined) => string;
   normalizeAuditActor: (value: unknown) => string;
+  resolveAdminUserIdentity: (input: {
+    userId?: string | null;
+    userEmail?: string | null;
+    actor?: unknown;
+    displayName?: string | null;
+  }) => AdminUserIdentityView;
   renderAuditSummary: (text: string) => any;
 };
 
@@ -63,6 +71,7 @@ export default function TimecardTableSection({
   formatAuditDetail,
   formatCellAuditTime,
   normalizeAuditActor,
+  resolveAdminUserIdentity,
   renderAuditSummary
 }: TimecardTableSectionProps) {
   const isLight = themeMode === 'light';
@@ -104,8 +113,8 @@ export default function TimecardTableSection({
     [timecardRowsRendered, visibleRange]
   );
 
-  const handleBodyScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    const target = e.currentTarget;
+  const handleBodyScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
     if (scrollRafRef.current !== null) return;
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null;
@@ -118,33 +127,92 @@ export default function TimecardTableSection({
   const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
   const days = [t('周一', 'Mon'), t('周二', 'Tue'), t('周三', 'Wed'), t('周四', 'Thu'), t('周五', 'Fri'), t('周六', 'Sat'), t('周日', 'Sun')];
 
-  const renderRow = (r: any, realIndex: number) => (
+  const renderAuditPopover = (rows: any[]) => {
+    if (!rows.length) return null;
+    return (
+      <div
+        className={[
+          'pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-72 max-w-[calc(100vw-2rem)] rounded-xl border p-2 text-[11px] opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100',
+          isLight ? 'border-slate-200 bg-white text-slate-700' : 'border-slate-700 bg-[#16181c] text-slate-100'
+        ].join(' ')}
+      >
+        <div className={['mb-1 text-[10px] uppercase tracking-[0.14em]', isLight ? 'text-neon' : 'text-emerald-300'].join(' ')}>
+          {t('最近操作', 'Recent changes')}
+        </div>
+        <div className="space-y-1">
+          {rows.slice(0, 1).map((item: any) => {
+            const detail = formatAuditDetail(item);
+            const actorIdentity = resolveAdminUserIdentity({
+              actor: item.actor_raw ?? item.actor,
+              displayName: normalizeAuditActor(item.actor_raw ?? item.actor)
+            });
+            return (
+              <div
+                key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)}
+                className={['rounded-md px-1.5 py-1 text-left', isLight ? 'bg-slate-100' : 'bg-slate-800'].join(' ')}
+              >
+                <div className="flex items-center gap-2">
+                  <AdminUserAvatar
+                    name={actorIdentity.displayName}
+                    avatarUrl={actorIdentity.avatarUrl}
+                    fallbackInitial={actorIdentity.fallbackInitial}
+                    size={20}
+                    className={isLight ? 'border-slate-200 bg-slate-200 text-slate-700' : 'border-white/10 bg-slate-700 text-slate-100'}
+                  />
+                  <div className="min-w-0">
+                    <div className={['truncate text-[10px] font-medium', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
+                      {actorIdentity.displayName || '-'}
+                    </div>
+                    <div className={['text-[10px]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                      {formatCellAuditTime(item.created_at)}
+                    </div>
+                  </div>
+                </div>
+                <div className={['mt-1', isLight ? 'text-slate-800' : 'text-slate-100'].join(' ')}>{renderAuditSummary(detail.summary)}</div>
+                {detail.details.slice(0, 2).map((entry: any, index: number) => (
+                  <div
+                    key={`${String(item.id ?? 'row')}_${entry.label}_${index}`}
+                    className={['mt-0.5 text-[10px]', isLight ? 'text-slate-600' : 'text-slate-300'].join(' ')}
+                  >
+                    <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{entry.label}: </span>
+                    <span className="whitespace-normal break-words">{entry.value}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const renderRow = (row: any, realIndex: number) => (
     <tr
-      key={`${r.staff_id}__${r.position}__${r.agency}__${realIndex}`}
+      key={`${row.staff_id}__${row.position}__${row.agency}__${realIndex}`}
       className={[
         'border-b transition last:border-0',
         isLight ? 'border-slate-200 hover:bg-slate-100' : 'border-white/5 hover:bg-white/5'
       ].join(' ')}
     >
-      <td className="px-2 py-1.5 font-mono text-slate-200">{r.staff_id}</td>
-      <td className="px-2 py-1.5 text-slate-200 truncate">{r.name || '-'}</td>
-      <td className="px-2 py-1.5 text-slate-200 truncate">{r.agency || '-'}</td>
-      <td className="px-2 py-1.5 text-slate-200 truncate">
+      <td className="px-2 py-1.5 font-mono text-slate-200">{row.staff_id}</td>
+      <td className="px-2 py-1.5 truncate text-slate-200">{row.name || '-'}</td>
+      <td className="px-2 py-1.5 truncate text-slate-200">{row.agency || '-'}</td>
+      <td className="px-2 py-1.5 truncate text-slate-200">
         <span
           className={[
             'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
-            getSchedulePositionBadgeClass(r.position)
+            getSchedulePositionBadgeClass(row.position)
           ].join(' ')}
         >
-          {r.position || '-'}
+          {row.position || '-'}
         </span>
       </td>
       <td className="px-2 py-1.5 text-center text-slate-200">
-        {r.shift === 'early' ? (
+        {row.shift === 'early' ? (
           <span className="inline-flex items-center rounded-full border border-amber-300/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
             {t('早班', 'Morning')}
           </span>
-        ) : r.shift === 'late' ? (
+        ) : row.shift === 'late' ? (
           <span className="inline-flex items-center rounded-full border border-indigo-300/30 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-semibold text-indigo-200">
             {t('晚班', 'Night')}
           </span>
@@ -152,54 +220,43 @@ export default function TimecardTableSection({
           <span className="text-slate-500">-</span>
         )}
       </td>
-      {r.hoursByDay.map((h: number, idx: number) => (
-        <td key={idx} className="w-[92px] px-2 py-1.5 text-center align-middle text-slate-200">
+      {row.hoursByDay.map((hours: number, dayIndex: number) => (
+        <td key={dayIndex} className="w-[92px] px-2 py-1.5 text-center align-middle text-slate-200">
           {(() => {
-            const timecardAuditKey = `${r.staff_id}__${toDateOnly(addDays(timecardWeekStart, idx))}`;
+            const timecardAuditKey = `${row.staff_id}__${toDateOnly(addDays(timecardWeekStart, dayIndex))}`;
             const timecardCellAudit = timecardAuditByStaffDate.get(timecardAuditKey) ?? [];
             const hoursText = getTimecardCellHoursText({
-              hours: h,
-              punchCount: Number(r.punchCountByDay?.[idx] ?? 0),
-              inProgress: Boolean(r.inProgressByDay?.[idx])
+              hours,
+              punchCount: Number(row.punchCountByDay?.[dayIndex] ?? 0),
+              inProgress: Boolean(row.inProgressByDay?.[dayIndex])
             });
-            const late = Boolean(r.lateByDay?.[idx]);
-            const lateMinutes = Number(r.lateMinutesByDay?.[idx] ?? 0);
+            const late = Boolean(row.lateByDay?.[dayIndex]);
+            const lateMinutes = Number(row.lateMinutesByDay?.[dayIndex] ?? 0);
             const lateTitle = late ? `${t('迟到', 'Late')} ${lateMinutes}${t('分钟', 'm')}` : '';
+
             return (
               <div className="group relative inline-flex items-center justify-center">
                 {hoursText ? (
                   <button
                     type="button"
                     disabled={isLocked}
-                    onClick={() => void openTimecardPunchModal(r.staff_id, idx)}
+                    onClick={() => void openTimecardPunchModal(row.staff_id, dayIndex)}
                     className={(() => {
-                      const over8 = h > 8.5;
-                      const inProgress = r.inProgressByDay[idx];
-                      const manual = r.manualByDay[idx];
-                      const punchCountMismatch = r.punchCountMismatchByDay[idx];
+                      const over8 = hours > 8.5;
+                      const inProgress = row.inProgressByDay[dayIndex];
+                      const manual = row.manualByDay[dayIndex];
+                      const punchCountMismatch = row.punchCountMismatchByDay[dayIndex];
                       const latestPunchReviewAction = timecardCellAudit.find((item: any) => {
                         const action = String(item?.action ?? '').trim();
-                        return (
-                          action === 'punch_count_verified' ||
-                          action === 'punch_manual_add' ||
-                          action === 'punch_manual_edit' ||
-                          action === 'punch_manual_delete'
-                        );
+                        return ['punch_count_verified', 'punch_manual_add', 'punch_manual_edit', 'punch_manual_delete'].includes(action);
                       })?.action;
                       const punchCountVerified = latestPunchReviewAction === 'punch_count_verified';
                       const base = 'rounded px-1.5 py-0.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
                       if (manual) return [base, 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'].join(' ');
                       if (punchCountMismatch) {
-                        if (punchCountVerified) {
-                          return [
-                            base,
-                            'border-2 border-teal-500 bg-teal-500/20 text-teal-100 shadow-[0_0_0_1px_rgba(20,184,166,0.55)] hover:bg-teal-500/30'
-                          ].join(' ');
-                        }
-                        return [
-                          base,
-                          'border-2 border-rose-500 bg-rose-500/20 text-rose-100 shadow-[0_0_0_1px_rgba(244,63,94,0.55)] hover:bg-rose-500/30'
-                        ].join(' ');
+                        return punchCountVerified
+                          ? [base, 'border-2 border-teal-500 bg-teal-500/20 text-teal-100 shadow-[0_0_0_1px_rgba(20,184,166,0.55)] hover:bg-teal-500/30'].join(' ')
+                          : [base, 'border-2 border-rose-500 bg-rose-500/20 text-rose-100 shadow-[0_0_0_1px_rgba(244,63,94,0.55)] hover:bg-rose-500/30'].join(' ');
                       }
                       if (over8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
                       if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
@@ -216,78 +273,41 @@ export default function TimecardTableSection({
                   >
                     {t('迟到', 'Late')}
                   </span>
-                ) : r.absentByDay[idx] ? (
+                ) : row.absentByDay[dayIndex] ? (
                   <span className="inline-flex rounded px-1.5 py-0.5 text-[11px] font-semibold text-rose-200" title="Scheduled but no punch">
                     {t('缺勤', 'Absent')}
                   </span>
-                ) : r.leaveByDay[idx] ? (
+                ) : row.leaveByDay[dayIndex] ? (
                   <span className="text-[11px] font-semibold text-violet-300" title="Excuse">
                     {t('请假', 'Excuse')}
                   </span>
-                ) : r.tempRestByDay[idx] ? (
+                ) : row.tempRestByDay[dayIndex] ? (
                   <span className="text-[11px] font-semibold text-amber-300" title="Temporary Off">
                     {t('临时排休', 'Temp Off')}
                   </span>
-                ) : r.terminatedByDay?.[idx] ? (
+                ) : row.terminatedByDay?.[dayIndex] ? (
                   <span className="text-[11px] font-semibold text-slate-400" title="Terminated">
                     {t('离职', 'Terminated')}
                   </span>
-                ) : r.restByDay[idx] &&
-                  toDateOnly(addDays(addDays(startOfWeekMonday(serverTime), timecardWeekOffset * 7), idx)) <= toDateOnly(serverTime) ? (
+                ) : row.restByDay[dayIndex] &&
+                  toDateOnly(addDays(addDays(startOfWeekMonday(serverTime), timecardWeekOffset * 7), dayIndex)) <= toDateOnly(serverTime) ? (
                   <span className="text-[11px] font-semibold text-amber-300" title="Off">
                     {t('休息', 'Off')}
                   </span>
                 ) : (
                   ''
                 )}
-                {late && (
+
+                {late ? (
                   <span
                     className="pointer-events-none absolute -left-1 -top-1 h-2 w-2 rounded-full bg-amber-400 shadow-[0_0_0_1px_rgba(251,191,36,0.55)]"
                     title={lateTitle || t('迟到', 'Late')}
                   />
-                )}
-                {timecardCellAudit.length > 0 && (
+                ) : null}
+                {timecardCellAudit.length > 0 ? (
                   <span className="pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full bg-rose-500 shadow-[0_0_0_1px_rgba(244,63,94,0.55)]" />
-                )}
-                {timecardCellAudit.length > 0 && (
-                  <div
-                    className={[
-                      'pointer-events-none invisible absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl border p-2 text-[11px] opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100',
-                      isLight
-                        ? 'border-slate-200 bg-white text-slate-700'
-                        : 'border-slate-700 bg-[#16181c] text-slate-100'
-                    ].join(' ')}
-                  >
-                    <div className={['mb-1 text-[10px] uppercase tracking-[0.14em]', isLight ? 'text-neon' : 'text-emerald-300'].join(' ')}>
-                      {t('最近操作', 'Recent changes')}
-                    </div>
-                    <div className="space-y-1">
-                      {timecardCellAudit.slice(0, 1).map((item: any) => {
-                        const detail = formatAuditDetail(item);
-                        return (
-                          <div
-                            key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)}
-                            className={['rounded-md px-1.5 py-1 text-left', isLight ? 'bg-slate-100' : 'bg-slate-800'].join(' ')}
-                          >
-                            <div className={['text-[10px]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
-                              {formatCellAuditTime(item.created_at)} · {normalizeAuditActor((item as any).actor) || '-'}
-                            </div>
-                            <div className={isLight ? 'text-slate-800' : 'text-slate-100'}>{renderAuditSummary(detail.summary)}</div>
-                            {detail.details.slice(0, 2).map((d: any, idx2: number) => (
-                              <div
-                                key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`}
-                                className={['mt-0.5 text-[10px]', isLight ? 'text-slate-600' : 'text-slate-300'].join(' ')}
-                              >
-                                <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>{d.label}: </span>
-                                <span className="whitespace-normal break-words">{d.value}</span>
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
+                ) : null}
+                {renderAuditPopover(timecardCellAudit)}
               </div>
             );
           })()}
@@ -296,20 +316,20 @@ export default function TimecardTableSection({
       <td className="w-[92px] px-2 py-1.5 text-center align-middle font-semibold text-slate-200">
         {(() => {
           const totalHoursText = getTimecardTotalHoursText({
-            totalHours: Number(r.totalHours ?? 0),
-            punchCounts: Array.isArray(r.punchCountByDay) ? r.punchCountByDay : [],
-            inProgressWeek: Boolean(r.inProgressWeek)
+            totalHours: Number(row.totalHours ?? 0),
+            punchCounts: Array.isArray(row.punchCountByDay) ? row.punchCountByDay : [],
+            inProgressWeek: Boolean(row.inProgressWeek)
           });
           if (!totalHoursText) return '';
           return (
             <button
               type="button"
               disabled={isLocked}
-              onClick={() => void openTimecardPunchModal(r.staff_id, null)}
+              onClick={() => void openTimecardPunchModal(row.staff_id, null)}
               className={(() => {
-                const hasOver8 = r.hoursByDay.some((v: number) => v > 8.5);
-                const inProgress = r.inProgressWeek;
-                const manual = r.manualWeek;
+                const hasOver8 = row.hoursByDay.some((value: number) => value > 8.5);
+                const inProgress = row.inProgressWeek;
+                const manual = row.manualWeek;
                 const base = 'rounded px-1.5 py-0.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
                 if (manual) return [base, 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'].join(' ');
                 if (hasOver8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
@@ -354,24 +374,24 @@ export default function TimecardTableSection({
             </th>
             <th className="w-[120px] px-2 py-1.5">{t('岗位', 'Position')}</th>
             <th className="w-[80px] px-2 py-1.5">{t('班次', 'Shift')}</th>
-            {days.map((label, idx) => (
-              <th key={label} className="w-[92px] px-2 py-1.5 whitespace-nowrap text-center">
-                <div className="text-neon">{`${t('总工时', 'Total')} ${formatHours(timecardDayTotalHours[idx]) || '0'}`}</div>
+            {days.map((label, index) => (
+              <th key={label} className="w-[92px] whitespace-nowrap px-2 py-1.5 text-center">
+                <div className="text-neon">{`${t('总工时', 'Total')} ${formatHours(timecardDayTotalHours[index]) || '0'}`}</div>
                 <button
                   type="button"
                   disabled={isLocked}
-                  onClick={() => setTimecardPresentDayFilter((prev) => (prev === idx ? null : idx))}
+                  onClick={() => setTimecardPresentDayFilter((prev) => (prev === index ? null : index))}
                   className={[
                     'rounded px-1 py-0.5 text-[10px] transition',
-                    timecardPresentDayFilter === idx ? 'bg-sky-500/20 text-sky-100' : 'text-sky-300 hover:bg-white/10',
+                    timecardPresentDayFilter === index ? 'bg-sky-500/20 text-sky-100' : 'text-sky-300 hover:bg-white/10',
                     isLocked ? 'cursor-not-allowed opacity-60' : ''
                   ].join(' ')}
-                  title={timecardPresentDayFilter === idx ? 'Clear present filter' : 'Filter present staff'}
+                  title={timecardPresentDayFilter === index ? 'Clear present filter' : 'Filter present staff'}
                 >
-                  {`${t('出勤', 'Present')} ${timecardDayAttendanceCount[idx] ?? 0}`}
+                  {`${t('出勤', 'Present')} ${timecardDayAttendanceCount[index] ?? 0}`}
                 </button>
                 <div>
-                  {label} {toDateOnly(addDays(weekStart, idx)).slice(5)}
+                  {label} {toDateOnly(addDays(weekStart, index)).slice(5)}
                 </div>
               </th>
             ))}
@@ -393,76 +413,32 @@ export default function TimecardTableSection({
           </tr>
         </thead>
         <tbody>
-          {visibleRange.start > 0 && (
+          {visibleRange.start > 0 ? (
             <tr>
               <td colSpan={12} style={{ height: `${visibleRange.start * ROW_HEIGHT}px` }} />
             </tr>
-          )}
+          ) : null}
 
-          {visibleRows.map((r, idx) => renderRow(r, visibleRange.start + idx))}
+          {visibleRows.map((row, index) => renderRow(row, visibleRange.start + index))}
 
-          {visibleRange.end < timecardRowsRendered.length && (
+          {visibleRange.end < timecardRowsRendered.length ? (
             <tr>
               <td colSpan={12} style={{ height: `${(timecardRowsRendered.length - visibleRange.end) * ROW_HEIGHT}px` }} />
             </tr>
-          )}
+          ) : null}
         </tbody>
       </table>
 
-      {timecardLoading && (
+      {timecardLoading ? (
         <div
           className={[
             'pointer-events-none absolute inset-0 z-30 overflow-hidden rounded-2xl border backdrop-blur-sm',
             isLight ? 'border-slate-200/90 bg-white/80' : 'border-white/10 bg-slate-950/70'
           ].join(' ')}
         >
-          <div
-            className={[
-              'absolute inset-0 animate-pulse',
-              isLight
-                ? 'bg-gradient-to-r from-transparent via-sky-100/80 to-transparent'
-                : 'bg-gradient-to-r from-transparent via-white/10 to-transparent'
-            ].join(' ')}
-          />
-          {isLight && (
-            <div className="absolute inset-0 opacity-90" aria-hidden="true">
-              <div className="absolute -left-[15%] top-[-35%] h-[72%] w-[55%] animate-[spin_16s_linear_infinite] rounded-full bg-[radial-gradient(circle,rgba(56,189,248,0.2)_0%,rgba(14,165,233,0.06)_45%,transparent_70%)]" />
-              <div className="absolute -right-[8%] bottom-[-42%] h-[78%] w-[52%] animate-[spin_20s_linear_infinite_reverse] rounded-full bg-[radial-gradient(circle,rgba(59,130,246,0.16)_0%,rgba(37,99,235,0.05)_46%,transparent_70%)]" />
-              <div className="absolute inset-x-0 top-0 h-full bg-[repeating-linear-gradient(180deg,rgba(148,163,184,0.08)_0px,rgba(148,163,184,0.08)_1px,transparent_1px,transparent_6px)]" />
-            </div>
-          )}
-          <div className="relative h-full w-full p-3 sm:p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <div className={['h-3 w-36 rounded animate-pulse', isLight ? 'bg-slate-300/60' : 'bg-white/20'].join(' ')} />
-              <div className={['h-3 w-24 rounded animate-pulse', isLight ? 'bg-slate-300/50' : 'bg-white/15'].join(' ')} />
-            </div>
-            <div className="space-y-2">
-              {Array.from({ length: 8 }).map((_, idx) => (
-                <div
-                  key={`timecard-skeleton-row-${idx}`}
-                  className={[
-                    'grid grid-cols-12 gap-2 rounded-lg border px-2 py-2',
-                    isLight ? 'border-slate-200/80 bg-white/65' : 'border-white/10 bg-white/[0.04]'
-                  ].join(' ')}
-                >
-                  <div className={['col-span-2 h-4 rounded animate-pulse', isLight ? 'bg-slate-300/70' : 'bg-white/20'].join(' ')} />
-                  <div className={['col-span-3 h-4 rounded animate-pulse', isLight ? 'bg-slate-300/60' : 'bg-white/15'].join(' ')} />
-                  <div className={['col-span-2 h-4 rounded animate-pulse', isLight ? 'bg-slate-300/50' : 'bg-white/10'].join(' ')} />
-                  <div className="col-span-5 flex gap-2">
-                    <span className={['h-4 flex-1 rounded animate-pulse', isLight ? 'bg-teal-300/45' : 'bg-teal-400/20'].join(' ')} />
-                    <span className={['h-4 flex-1 rounded animate-pulse', isLight ? 'bg-indigo-300/45' : 'bg-indigo-400/20'].join(' ')} />
-                    <span className={['h-4 flex-1 rounded animate-pulse', isLight ? 'bg-amber-300/45' : 'bg-amber-400/20'].join(' ')} />
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className={['mt-4 flex items-center gap-2 text-[11px] tracking-[0.12em]', isLight ? 'text-slate-600' : 'text-slate-300/80'].join(' ')}>
-              <span className={['inline-block h-1.5 w-1.5 rounded-full animate-pulse', isLight ? 'bg-sky-500' : 'bg-sky-300'].join(' ')} />
-              <span>{t('时间卡加载中', 'Loading timecard')}</span>
-            </div>
-          </div>
+          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-transparent via-neon to-transparent opacity-80" />
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
