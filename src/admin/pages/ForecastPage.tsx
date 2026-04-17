@@ -1910,6 +1910,49 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           <h2 className="font-display text-2xl tracking-[0.08em]">{t('Forecast', 'Forecast')}</h2>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            onChange={(e) => void onForecastFileSelected(e.target.files?.[0] ?? null)}
+          />
+          <label className="flex items-center gap-2">
+            <span className={['text-[10px] uppercase tracking-[0.18em]', labelClass].join(' ')}>{t('Lookback window', 'Lookback window')}</span>
+            <select
+              value={String(lookbackMode)}
+              disabled={isLocked || loading}
+              onChange={(e) => setLookbackMode(e.target.value === 'all' ? 'all' : (Number(e.target.value) as LookbackMode))}
+              className={[inputClass, 'h-10 min-w-[148px] py-0'].join(' ')}
+            >
+              {LOOKBACK_OPTIONS.map((option) => (
+                <option key={String(option.value)} value={String(option.value)}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
+            <span className={['text-[10px] uppercase tracking-[0.18em]', labelClass].join(' ')}>{t('预测截止至', 'Forecast cutoff')}</span>
+            <div className="flex items-center gap-2 whitespace-nowrap">
+              {hasAutoForecastSnapshot && <span className={['text-sm font-medium', helperClass].join(' ')}>{autoForecastSnapshot?.date}</span>}
+              <select
+                value={String(effectiveForecastHour)}
+                disabled={isLocked || loading || forecastHourOptions.length <= 1}
+                onChange={(e) => setSelectedForecastHour(Number(e.target.value))}
+                className={[
+                  'h-10 min-w-[96px] rounded-xl px-3 text-sm font-semibold outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                  isLight ? 'border border-slate-300 bg-white text-slate-900' : 'border border-white/10 bg-black/30 text-white'
+                ].join(' ')}
+              >
+                {forecastHourOptions.map((hour) => (
+                  <option key={hour} value={hour}>
+                    {`${String(hour).padStart(2, '0')}:00`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </label>
           {WEEKDAY_OPTIONS.map((option) => (
             <button
               key={option.value}
@@ -1937,217 +1980,80 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           >
             {t('历史流入', 'History inflow')}
           </button>
+          <button
+            type="button"
+            disabled={isLocked || uploading}
+            onClick={() => fileInputRef.current?.click()}
+            className={[
+              'rounded-2xl bg-neon px-4 py-2 text-sm font-semibold shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-60',
+              isLight ? 'text-slate-950' : 'text-white'
+            ].join(' ')}
+          >
+            {uploading ? t('Uploading...', 'Uploading...') : t('Upload CSV/Excel', 'Upload CSV/Excel')}
+          </button>
+          <button
+            type="button"
+            disabled={isLocked}
+            onClick={() => void downloadTemplate()}
+            className={secondaryButtonClass}
+          >
+            {t('Download template', 'Download template')}
+          </button>
         </div>
       </div>
 
-      <div className="mt-6 grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <div className={['rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
-          <div className="grid gap-4">
-            <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
-              <div className={['text-[10px] uppercase tracking-[0.18em]', labelClass].join(' ')}>{t('History upload', 'History upload')}</div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  className="hidden"
-                  accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-                  onChange={(e) => void onForecastFileSelected(e.target.files?.[0] ?? null)}
-                />
-                <button
-                  type="button"
-                  disabled={isLocked || uploading}
-                  onClick={() => fileInputRef.current?.click()}
-                  className={[
-                    'rounded-2xl bg-neon px-4 py-2 text-sm font-semibold shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-60',
-                    isLight ? 'text-slate-950' : 'text-white'
-                  ].join(' ')}
-                >
-                  {uploading ? t('Uploading...', 'Uploading...') : t('Upload CSV/Excel', 'Upload CSV/Excel')}
-                </button>
-                <button
-                  type="button"
-                  disabled={isLocked}
-                  onClick={() => void downloadTemplate()}
-                  className={secondaryButtonClass}
-                >
-                  {t('Download template', 'Download template')}
-                </button>
-              </div>
-              {uploadError && (
-                <div
-                  className={[
-                    'mt-3 rounded-2xl border px-3 py-2 text-sm',
-                    isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-                  ].join(' ')}
-                >
-                  {uploadError}
-                </div>
-              )}
-              {uploadMessage && (
-                <div
-                  className={[
-                    'mt-3 rounded-2xl border px-3 py-2 text-sm',
-                    isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                  ].join(' ')}
-                >
-                  {uploadMessage}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label className={['text-xs uppercase tracking-[0.2em]', labelClass].join(' ')}>{t('Lookback window', 'Lookback window')}</label>
-              <select
-                value={String(lookbackMode)}
-                disabled={isLocked || loading}
-                onChange={(e) => setLookbackMode(e.target.value === 'all' ? 'all' : (Number(e.target.value) as LookbackMode))}
-                className={inputClass}
-              >
-                {LOOKBACK_OPTIONS.map((option) => (
-                  <option key={String(option.value)} value={String(option.value)}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
-              <div className={['flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.18em]', labelClass].join(' ')}>
-                <span>{t('日期列表', 'Date list')}</span>
-                <span>{t(selectedWeekdayOption.zh, selectedWeekdayOption.en)}</span>
-              </div>
-              <div className={['mt-3 max-h-[300px] space-y-2 overflow-auto rounded-2xl p-2', tableWrapClass].join(' ')}>
-                {!latestSelectedWeekdayCardRow ? (
-                  <div className={['px-3 py-6 text-center text-xs', helperClass].join(' ')}>
-                    {manualInputsLoading ? t('Loading...', 'Loading...') : t('No saved rows', 'No saved rows')}
-                  </div>
-                ) : (
-                  [latestSelectedWeekdayCardRow].map((row, index) => (
-                    <div
-                      key={row.input_date}
-                      className={[
-                        'rounded-2xl border p-3',
-                        isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/20',
-                        index === 0 && isLight ? 'border-emerald-200 bg-emerald-50/60' : '',
-                        index === 0 && !isLight ? 'border-emerald-500/30 bg-emerald-500/5' : ''
-                      ].join(' ')}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className={['text-sm font-semibold', index === 0 ? (isLight ? 'text-emerald-800' : 'text-emerald-300') : valueClass].join(' ')}>
-                          {row.input_date}
-                        </div>
-                        <div className={['text-[10px] uppercase tracking-[0.18em]', labelClass].join(' ')}>
-                          {index === 0 ? t('最新', 'Latest') : t(selectedWeekdayOption.zh, selectedWeekdayOption.shortEn)}
-                        </div>
-                      </div>
-                      <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-                        <div>
-                          <div className={labelClass}>{t('积压', 'Backlog')}</div>
-                          <div className={valueClass}>{formatNumber(row.previous_day_backlog)}</div>
-                        </div>
-                        <div>
-                          <div className={labelClass}>{t('今日预测(12点)', 'Predicted today (12:00)')}</div>
-                          <div className={valueClass}>{formatNumber(row.predicted_full_day_volume_12)}</div>
-                        </div>
-                        <div>
-                          <div className={labelClass}>{t('库存量', 'Inventory')}</div>
-                          <div className={valueClass}>{formatNumber(row.inventory_level)}</div>
-                        </div>
-                        <div>
-                          <div className={labelClass}>{t('恶劣天气', 'Severe weather')}</div>
-                          <div className={valueClass}>{row.severe_weather ? t('是', 'Yes') : t('否', 'No')}</div>
-                        </div>
-                        <div>
-                          <div className={labelClass}>{t('大促', 'Major promotion')}</div>
-                          <div className={valueClass}>{row.major_promotion ? t('是', 'Yes') : t('否', 'No')}</div>
-                        </div>
-                        <div>
-                          <div className={labelClass}>{t('全天产能', 'Capacity')}</div>
-                          <div className={valueClass}>{formatNumber(row.full_day_capacity)}</div>
-                        </div>
-                        <div>
-                          <div className={labelClass}>{t('昨日0-14流入', 'Yday 0-14 inflow')}</div>
-                          <div className={valueClass}>{formatNumber(row.yesterday_inflow_00_14)}</div>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-              <div className={['mt-3 flex items-center justify-between gap-2 text-sm', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
-                <span className={labelClass}>{t('预测截止至', 'Forecast cutoff')}</span>
-                <div className="flex items-center gap-2 whitespace-nowrap">
-                  {hasAutoForecastSnapshot && <span className={['text-sm font-medium', helperClass].join(' ')}>{autoForecastSnapshot?.date}</span>}
-                  <select
-                    value={String(effectiveForecastHour)}
-                    disabled={isLocked || loading || forecastHourOptions.length <= 1}
-                    onChange={(e) => setSelectedForecastHour(Number(e.target.value))}
-                    className={[
-                      'h-10 min-w-[84px] rounded-xl px-3 text-sm font-semibold outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
-                      isLight ? 'border border-slate-300 bg-white text-slate-900' : 'border border-white/10 bg-black/30 text-white'
-                    ].join(' ')}
-                  >
-                    {forecastHourOptions.map((hour) => (
-                      <option key={hour} value={hour}>
-                        {`${String(hour).padStart(2, '0')}:00`}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              {manualInputsError && (
-                <div
-                  className={[
-                    'mt-3 rounded-2xl border px-3 py-2 text-sm',
-                    isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-                  ].join(' ')}
-                >
-                  {manualInputsError}
-                </div>
-              )}
-              {manualInputSaveMessage && (
-                <div
-                  className={[
-                    'mt-3 rounded-2xl border px-3 py-2 text-sm',
-                    isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                  ].join(' ')}
-                >
-                  {manualInputSaveMessage}
-                </div>
-              )}
-            </div>
-
-            <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
-              <div className={['text-[10px] uppercase tracking-[0.18em]', labelClass].join(' ')}>{t('Model coefficients', 'Model coefficients')}</div>
-              <div className={['mt-3 grid gap-3 text-sm', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
-                <div className="flex items-center justify-between gap-3">
-                  <span className={labelClass}>{t('Avg share', 'Avg share')}</span>
-                  <span className="font-semibold">{formatPercent(result.avgShare)}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className={labelClass}>{t('Share SD', 'Share SD')}</span>
-                  <span className="font-semibold">{formatPercent(result.stddevShare)}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className={labelClass}>{t('Sample size', 'Sample size')}</span>
-                  <span className="font-semibold">{result.sampleSize || '-'}</span>
-                </div>
-              </div>
-            </div>
-
-            {error && (
-              <div
-                className={[
-                  'rounded-2xl border px-4 py-3 text-sm',
-                  isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-                ].join(' ')}
-              >
-                {error}
-              </div>
-            )}
-          </div>
+      {uploadError && (
+        <div
+          className={[
+            'mt-4 rounded-2xl border px-4 py-3 text-sm',
+            isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+          ].join(' ')}
+        >
+          {uploadError}
         </div>
+      )}
+      {uploadMessage && (
+        <div
+          className={[
+            'mt-4 rounded-2xl border px-4 py-3 text-sm',
+            isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+          ].join(' ')}
+        >
+          {uploadMessage}
+        </div>
+      )}
+      {manualInputsError && (
+        <div
+          className={[
+            'mt-4 rounded-2xl border px-4 py-3 text-sm',
+            isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+          ].join(' ')}
+        >
+          {manualInputsError}
+        </div>
+      )}
+      {manualInputSaveMessage && (
+        <div
+          className={[
+            'mt-4 rounded-2xl border px-4 py-3 text-sm',
+            isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+          ].join(' ')}
+        >
+          {manualInputSaveMessage}
+        </div>
+      )}
+      {error && (
+        <div
+          className={[
+            'mt-4 rounded-2xl border px-4 py-3 text-sm',
+            isLight ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+          ].join(' ')}
+        >
+          {error}
+        </div>
+      )}
 
+      <div className="mt-6 grid min-w-0 gap-4">
         <div className="grid min-w-0 gap-4">
           <div className={['min-w-0 rounded-2xl p-4 shadow-sm', panelClass].join(' ')}>
             <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
@@ -2256,6 +2162,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                     <th className="px-3 py-2">{t('截止12点预测', '12:00 forecast')}</th>
                     <th className="px-3 py-2">{t('实际差异', 'Actual variance')}</th>
                     <th className="px-3 py-2">{t('当日总流入', 'Daily total')}</th>
+                    <th className="px-3 py-2">{t('12点截单', '12:00 cutoff')}</th>
                     <th className="px-3 py-2">{t('库存转换率', 'ITR')}</th>
                     <th className="px-3 py-2">{t('恶劣天气', 'Severe weather')}</th>
                     {HOUR_COLUMNS.map((hourKey, index) => (
@@ -2272,6 +2179,10 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                     const hasReachedNoonCutoff = lastFilledHour !== null && lastFilledHour >= FIXED_FORECAST_HOUR - 1;
                     const noonCumulative =
                       row && hasReachedNoonCutoff ? calculateCumulativeVolume(row as Pick<VolumeHistoryUploadRow, HourColumnKey>, FIXED_FORECAST_HOUR) : null;
+                    const noonCutoffVolume =
+                      row && lastFilledHour !== null && lastFilledHour >= FIXED_FORECAST_HOUR
+                        ? calculateCumulativeVolume(row as Pick<VolumeHistoryUploadRow, HourColumnKey>, FIXED_FORECAST_HOUR + 1)
+                        : null;
                     const noonForecastResult =
                       row && noonCumulative !== null ? calculateForecast(noonCumulative, FIXED_FORECAST_HOUR, weekday, noonCoefficient) : null;
                     const noonForecast = noonForecastResult?.forecast ?? null;
@@ -2294,6 +2205,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                         <td className="px-3 py-2">{formatNumber(noonForecast)}</td>
                         <td className="px-3 py-2">{actualVariance === null ? '-' : formatPercent(actualVariance, 2)}</td>
                         <td className="px-3 py-2">{formatNumber(dailyTotal)}</td>
+                        <td className="px-3 py-2">{formatNumber(noonCutoffVolume)}</td>
                         <td className="px-3 py-2">{itr === null ? '-' : formatPercent(itr, 2)}</td>
                         <td className="px-3 py-2">{severeWeather ? t('是', 'Yes') : t('否', 'No')}</td>
                         {HOUR_COLUMNS.map((hourKey) => (
@@ -2306,7 +2218,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   })}
                   {loading && historyTableDates.length === 0 && (
                     <tr>
-                      <td colSpan={HOUR_COLUMNS.length + 7} className={['px-3 py-6 text-center', helperClass].join(' ')}>
+                      <td colSpan={HOUR_COLUMNS.length + 8} className={['px-3 py-6 text-center', helperClass].join(' ')}>
                         {t('Loading...', 'Loading...')}
                       </td>
                     </tr>

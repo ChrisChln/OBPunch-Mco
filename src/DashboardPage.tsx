@@ -17,6 +17,8 @@ type EmployeeRow = {
   work_password: string;
   hire_date: string;
   shift: string;
+  active?: boolean | null;
+  terminated_at?: string | null;
 };
 
 type PunchRow = {
@@ -152,6 +154,18 @@ type TempAssignmentPayload = {
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const PUNCHES_TABLE = 'ob_punches';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
+
+const isEmployeeActive = (employee: { active?: unknown; terminated_at?: unknown } | null | undefined) => {
+  if (!employee) return false;
+  const terminatedAt = String(employee.terminated_at ?? '').trim();
+  if (terminatedAt) return false;
+  const raw = employee.active;
+  if (raw === null || raw === undefined) return true;
+  if (typeof raw === 'boolean') return raw;
+  const text = String(raw).trim().toLowerCase();
+  if (!text) return true;
+  return text !== 'false' && text !== '0' && text !== 'f' && text !== 'no';
+};
 const TEMP_ACCOUNT_TABLE = (import.meta.env.VITE_TEMP_ACCOUNT_TABLE as string | undefined) ?? 'ob_temp_accounts';
 const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
   (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
@@ -719,6 +733,7 @@ export default function DashboardPage() {
       }
 
       const fetchedEmployeesByStaff = new Map<string, EmployeeRow>();
+      const activeEmployeeStaffIds = new Set<string>();
       for (const staffIds of chunkArray(displayStaffIds, 200)) {
         const employeeRes = await supabase
           .from(EMPLOYEE_TABLE)
@@ -737,7 +752,8 @@ export default function DashboardPage() {
 
         for (const row of ((employeeRes.data as any[] | null) ?? [])) {
           const staffId = normalizeStaffId(String(row.staff_id ?? '').trim());
-          if (!staffId || fetchedEmployeesByStaff.has(staffId)) continue;
+          if (!staffId || fetchedEmployeesByStaff.has(staffId) || !isEmployeeActive(row)) continue;
+          activeEmployeeStaffIds.add(staffId);
           fetchedEmployeesByStaff.set(staffId, {
             staff_id: staffId,
             name: String(row.name ?? '').trim(),
@@ -750,10 +766,16 @@ export default function DashboardPage() {
               String(row.work_password ?? '').trim()
             ),
             hire_date: String(row.hire_date ?? '').trim(),
-            shift: String(row.shift ?? '').trim()
+            shift: String(row.shift ?? '').trim(),
+            active: row.active ?? null,
+            terminated_at: row.terminated_at ?? null
           });
         }
       }
+      const activeDisplayStaffIds = displayStaffIds.filter((staffId) => activeEmployeeStaffIds.has(staffId));
+      const activeScheduledStaffIds = scheduledStaffIds.filter((staffId) => activeEmployeeStaffIds.has(staffId));
+      const activePunchedStaffIds = punchedStaffIds.filter((staffId) => activeEmployeeStaffIds.has(staffId));
+
       for (const staffId of displayStaffIds) {
         const employee = fetchedEmployeesByStaff.get(staffId);
         if (employee) employeeCacheRef.current.set(staffId, employee);
@@ -765,7 +787,7 @@ export default function DashboardPage() {
       const keysByStaff = new Map<string, string[]>();
       const hasWorkScheduleStaff = new Set<string>();
       const hasRestScheduleStaff = new Set<string>();
-      for (const staffId of scheduledStaffIds) {
+      for (const staffId of activeScheduledStaffIds) {
         const schedule = scheduledByStaff.get(staffId);
         if (!schedule) continue;
         const employeePosition = normalizePositionKey(String(employeeCacheRef.current.get(staffId)?.position ?? ''));
@@ -790,7 +812,7 @@ export default function DashboardPage() {
           keysByStaff.set(staffId, keys);
         }
       }
-      for (const staffId of punchedStaffIds) {
+      for (const staffId of activePunchedStaffIds) {
         if (keysByStaff.has(staffId) || hasWorkScheduleStaff.has(staffId) || hasRestScheduleStaff.has(staffId)) continue;
         const employee = employeeCacheRef.current.get(staffId);
         const position = normalizePositionKey(String(employee?.position ?? ''));
@@ -808,6 +830,7 @@ export default function DashboardPage() {
       }
       const onClockByKey = new Map<string, Set<string>>();
       for (const [staffId, punches] of punchesByStaff.entries()) {
+        if (!activeEmployeeStaffIds.has(staffId)) continue;
         const last = punches[punches.length - 1];
         if (!last || last.action !== 'IN') continue;
         const keys = keysByStaff.get(staffId) ?? [];
@@ -819,12 +842,12 @@ export default function DashboardPage() {
       const restWorkedByKey = new Map<string, Set<string>>();
       for (const [key, restSet] of restByKey.entries()) {
         for (const staffId of restSet) {
-          if (!punchedStaffIds.includes(staffId)) continue;
+          if (!activeEmployeeStaffIds.has(staffId) || !activePunchedStaffIds.includes(staffId)) continue;
           if (!restWorkedByKey.has(key)) restWorkedByKey.set(key, new Set());
           restWorkedByKey.get(key)?.add(staffId);
         }
       }
-      for (const staffId of punchedStaffIds) {
+      for (const staffId of activePunchedStaffIds) {
         if (hasWorkScheduleStaff.has(staffId) || hasRestScheduleStaff.has(staffId)) continue;
         const keys = keysByStaff.get(staffId) ?? [];
         for (const key of keys) {
@@ -866,7 +889,7 @@ export default function DashboardPage() {
         }
       }
 
-      const nextRows: DashboardRow[] = displayStaffIds
+      const nextRows: DashboardRow[] = activeDisplayStaffIds
         .sort((a, b) => a.localeCompare(b, 'en-US'))
         .map((staffId) => {
           const employee = employeeCacheRef.current.get(staffId);
