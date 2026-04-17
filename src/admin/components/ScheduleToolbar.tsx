@@ -33,7 +33,7 @@ export default function ScheduleToolbar({
 }: ScheduleToolbarProps) {
   const writeLocked = isLocked || isReadOnly;
   const actionButtonClass =
-    'inline-flex h-10 min-w-[104px] items-center justify-center rounded-2xl px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60';
+    'admin-btn admin-btn-toolbar inline-flex min-w-[108px] items-center justify-center disabled:cursor-not-allowed disabled:opacity-60';
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -46,7 +46,7 @@ export default function ScheduleToolbar({
           type="button"
           disabled={writeLocked}
           onClick={() => changeScheduleWeek(scheduleWeekOffset - 1, 'toolbar_prev')}
-          className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
+          className={[actionButtonClass, 'admin-btn-secondary'].join(' ')}
         >
           {t('上一周', 'Prev')}
         </button>
@@ -55,7 +55,7 @@ export default function ScheduleToolbar({
           type="button"
           disabled={writeLocked}
           onClick={() => changeScheduleWeek(0, 'toolbar_this_week')}
-          className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
+          className={[actionButtonClass, 'admin-btn-secondary'].join(' ')}
         >
           {t('本周', 'This week')}
         </button>
@@ -64,7 +64,7 @@ export default function ScheduleToolbar({
           type="button"
           disabled={writeLocked}
           onClick={() => changeScheduleWeek(scheduleWeekOffset + 1, 'toolbar_next')}
-          className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
+          className={[actionButtonClass, 'admin-btn-secondary'].join(' ')}
         >
           {t('下一周', 'Next')}
         </button>
@@ -73,7 +73,7 @@ export default function ScheduleToolbar({
           type="button"
           disabled={writeLocked}
           onClick={() => openScheduleDailyList('toolbar_daily_list')}
-          className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
+          className={[actionButtonClass, 'admin-btn-secondary'].join(' ')}
         >
           {t('明日名单', 'Tomorrow list')}
         </button>
@@ -90,7 +90,7 @@ export default function ScheduleToolbar({
           type="button"
           disabled={writeLocked || scheduleEmployeesFilteredLength === 0}
           onClick={printScheduleSignInSheet}
-          className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
+          className={[actionButtonClass, 'admin-btn-secondary'].join(' ')}
         >
           {t('打印签到表', 'Print sign-in')}
         </button>
@@ -99,7 +99,7 @@ export default function ScheduleToolbar({
           type="button"
           disabled={writeLocked || scheduleEmployeesFilteredLength === 0}
           onClick={() => void exportScheduleTemplate()}
-          className={[actionButtonClass, 'bg-white/10 text-slate-200 hover:bg-white/15'].join(' ')}
+          className={[actionButtonClass, 'admin-btn-secondary'].join(' ')}
         >
           {t('导出排班', 'Export schedule')}
         </button>
@@ -110,7 +110,7 @@ export default function ScheduleToolbar({
           onClick={() => void refreshSchedulePanelWithAudit('toolbar_refresh')}
           className={[
             actionButtonClass,
-            'bg-neon font-semibold text-white shadow-glow hover:-translate-y-0.5 hover:shadow-2xl disabled:opacity-50'
+            'admin-btn-primary disabled:opacity-50'
           ].join(' ')}
         >
           {t('刷新', 'Refresh')}

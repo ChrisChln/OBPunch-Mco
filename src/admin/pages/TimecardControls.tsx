@@ -73,8 +73,8 @@ export default function TimecardControls({
 }: TimecardControlsProps) {
   const isLight = themeMode === 'light';
   const ghostButtonClass = [
-    'h-9 rounded-2xl px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-    isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+    'admin-btn admin-btn-toolbar inline-flex items-center justify-center disabled:cursor-not-allowed disabled:opacity-60',
+    isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'admin-btn-secondary'
   ].join(' ');
   const controlInputClass = [
     'mt-2 w-full rounded-2xl border px-4 py-3 text-base outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
@@ -152,7 +152,7 @@ export default function TimecardControls({
             type="button"
             disabled={isLocked}
             onClick={() => void refreshTimecardWithAudit('toolbar_refresh')}
-            className="h-9 rounded-2xl bg-neon px-5 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+            className="admin-btn admin-btn-toolbar admin-btn-primary inline-flex items-center justify-center px-5 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {t('刷新', 'Refresh')}
           </button>
@@ -189,14 +189,14 @@ export default function TimecardControls({
               });
             }}
             className={[
-              'h-9 rounded-2xl px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+              'admin-btn admin-btn-toolbar inline-flex items-center justify-center disabled:cursor-not-allowed disabled:opacity-60',
               timecardMissingEmployeeOnly
                 ? isLight
                   ? 'border border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200'
                   : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/25'
                 : isLight
                   ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                  : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                  : 'admin-btn-secondary'
             ].join(' ')}
           >
             {timecardMissingEmployeeOnly ? t('显示全部打卡', 'Show all timecards') : t('缺少员工信息', 'Missing employee info')}

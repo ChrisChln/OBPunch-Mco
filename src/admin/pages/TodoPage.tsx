@@ -298,11 +298,11 @@ export default function TodoPage({
   const [participantsItem, setParticipantsItem] = useState<TodoItemRecord | null>(null);
 
   const buttonSecondaryClass = isLight
-    ? 'inline-flex h-10 items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:border-slate-400 disabled:opacity-60'
-    : 'inline-flex h-10 items-center justify-center rounded-2xl border border-white/20 bg-white/[0.05] px-4 text-sm font-semibold text-white hover:border-white/40 disabled:opacity-60';
+    ? 'admin-btn inline-flex h-10 items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:border-slate-400 disabled:opacity-60'
+    : 'admin-btn admin-btn-secondary inline-flex h-10 items-center justify-center px-4 text-sm font-semibold disabled:opacity-60';
   const buttonPrimaryClass = isLight
-    ? 'inline-flex h-10 items-center justify-center rounded-2xl bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60'
-    : 'inline-flex h-10 items-center justify-center rounded-2xl bg-neon px-4 text-sm font-semibold text-slate-950 hover:brightness-110 disabled:opacity-60';
+    ? 'admin-btn inline-flex h-10 items-center justify-center rounded-2xl bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60'
+    : 'admin-btn admin-btn-primary inline-flex h-10 items-center justify-center px-4 text-sm font-semibold text-slate-950 disabled:opacity-60';
   const panelClass = isLight ? 'rounded-2xl border border-slate-200 bg-white p-4 shadow-sm' : 'rounded-2xl border border-white/10 bg-white/[0.03] p-4';
   const modalPanelClass = isLight
     ? 'rounded-3xl border border-slate-200 bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.18)] md:p-7'
