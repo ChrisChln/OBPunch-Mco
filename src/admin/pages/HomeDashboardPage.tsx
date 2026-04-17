@@ -184,26 +184,39 @@ function HomeDashboardPage({
   }, [homeCardStats, summaryByPosition]);
 
   const attendanceCardGroups = useMemo(
-    () =>
-      (['early', 'late'] as const).map((shift) => ({
+    () => {
+      const onClockCountByKey = new Map<string, number>();
+      const offWorkedCountByKey = new Map<string, number>();
+      for (const row of homeRosterRowsCurrent) {
+        const position = normalizePositionKey(row.position);
+        const shift = normalizeShiftValue(row.shift);
+        if (!position || !shift) continue;
+        const key = `${position}:${shift}`;
+        if (row.attendance === 'Normal') {
+          onClockCountByKey.set(key, (onClockCountByKey.get(key) ?? 0) + 1);
+        }
+        if (row.attendance === 'Off Worked') {
+          offWorkedCountByKey.set(key, (offWorkedCountByKey.get(key) ?? 0) + 1);
+        }
+      }
+
+      return (['early', 'late'] as const).map((shift) => ({
         shift,
         cards: POSITIONS.map((position) => {
           const stats = homeCardStats[position] ?? { early: 0, late: 0, active: 0 };
           const plan = summaryByPosition.get(position) ?? { early: 0, late: 0, total: 0 };
-          const offWorked =
-            shift === 'early'
-              ? 0
-              : homeRosterRowsCurrent.filter((row) => normalizePositionKey(row.position) === position && row.attendance === 'Off Worked').length;
+          const key = `${position}:${shift}`;
           return {
             position,
             shift,
             expected: shift === 'early' ? plan.early : plan.late,
             present: shift === 'early' ? stats.early : stats.late,
-            onClock: shift === 'early' ? stats.early : stats.late,
-            offWorked
+            onClock: onClockCountByKey.get(key) ?? 0,
+            offWorked: offWorkedCountByKey.get(key) ?? 0
           };
         })
-      })),
+      }));
+    },
     [homeCardStats, summaryByPosition, homeRosterRowsCurrent]
   );
 
