@@ -625,8 +625,8 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
 
   const pagePanelClass = isLight ? 'rounded-2xl border border-slate-200 bg-white p-4 shadow-sm' : 'rounded-2xl border border-white/10 bg-white/[0.03] p-4';
   const inputClass = isLight ? 'h-10 rounded-2xl border border-slate-300 bg-white px-3 text-sm text-slate-900' : 'h-10 rounded-2xl border border-white/10 bg-white/[0.04] px-3 text-sm text-white';
-  const buttonSecondaryClass = isLight ? 'h-10 rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:border-slate-400 disabled:opacity-60' : 'h-10 rounded-2xl border border-white/20 bg-white/[0.05] px-4 text-sm font-semibold text-white hover:border-white/40 disabled:opacity-60';
-  const buttonPrimaryClass = isLight ? 'h-10 rounded-2xl bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60' : 'h-10 rounded-2xl bg-neon px-4 text-sm font-semibold text-slate-950 hover:brightness-110 disabled:opacity-60';
+  const buttonSecondaryClass = isLight ? 'admin-btn h-10 rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:border-slate-400 disabled:opacity-60' : 'admin-btn admin-btn-secondary h-10 px-4 text-sm font-semibold text-white disabled:opacity-60';
+  const buttonPrimaryClass = isLight ? 'admin-btn h-10 rounded-2xl bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60' : 'admin-btn admin-btn-primary h-10 px-4 text-sm font-semibold text-slate-950 disabled:opacity-60';
   const labelClass = isLight ? 'text-xs uppercase tracking-[0.16em] text-slate-500' : 'text-xs uppercase tracking-[0.16em] text-white/60';
 
   return (

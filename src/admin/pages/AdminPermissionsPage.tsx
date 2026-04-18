@@ -8,6 +8,8 @@ import {
   type AdminModuleKey,
   type AdminRole
 } from '../../shared/adminAccess';
+import AdminUserAvatar from '../components/AdminUserAvatar';
+import type { AdminUserIdentityView } from '../adminIdentity';
 import type {
   AdminAccessAccountRecord,
   AdminAccessRequestCreatePayload,
@@ -28,6 +30,12 @@ type AdminPermissionsPageProps = {
   userOptions: AdminAccessUserOption[];
   agencyOptions: string[];
   requestRows: AdminAccessRequestRecord[];
+  resolveAdminUserIdentity: (input: {
+    userId?: string | null;
+    userEmail?: string | null;
+    actor?: unknown;
+    displayName?: string | null;
+  }) => AdminUserIdentityView;
   onRefreshAccess: () => void | Promise<void>;
   onSaveAccess: (payload: AdminAccessSavePayload) => void | Promise<void>;
   onRefreshRequests: () => void | Promise<void>;
@@ -114,6 +122,7 @@ export default function AdminPermissionsPage({
   userOptions,
   agencyOptions,
   requestRows,
+  resolveAdminUserIdentity,
   onRefreshAccess,
   onSaveAccess,
   onRefreshRequests,
@@ -158,6 +167,12 @@ export default function AdminPermissionsPage({
   const refreshAll = async () => {
     await Promise.all([onRefreshRequests(), canManage ? onRefreshAccess() : Promise.resolve()]);
   };
+  const resolveRequestIdentity = (row: AdminAccessRequestRecord) =>
+    resolveAdminUserIdentity({
+      userId: row.requester_user_id,
+      userEmail: row.requester_user_email,
+      displayName: row.requester_display_name
+    });
 
   const toggleAgency = (agency: string) => {
     setRequestedManagedAgencies((prev) =>
@@ -484,14 +499,26 @@ export default function AdminPermissionsPage({
               {requestRows.map((row) => {
                 const summary = buildModuleSummary(row.requested_modules);
                 const canReview = canManage && row.status === 'pending';
+                const requesterIdentity = resolveRequestIdentity(row);
                 return (
                   <tr key={row.id} className="border-b border-white/5 transition-colors hover:bg-white/5 last:border-0">
                     <td className="px-4 py-3">
-                      <div className={isLight ? 'text-slate-900' : 'text-slate-100'}>
-                        {row.requester_display_name || '-'}
-                      </div>
-                      <div className={['text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
-                        {row.requester_user_email || row.requester_user_id}
+                      <div className="flex items-center gap-3">
+                        <AdminUserAvatar
+                          name={requesterIdentity.displayName}
+                          avatarUrl={requesterIdentity.avatarUrl}
+                          fallbackInitial={requesterIdentity.fallbackInitial}
+                          size={28}
+                          className={isLight ? 'border-slate-200 bg-slate-200 text-slate-700' : 'border-white/10 bg-slate-800 text-slate-100'}
+                        />
+                        <div className="min-w-0">
+                          <div className={['truncate', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>
+                            {requesterIdentity.displayName}
+                          </div>
+                          <div className={['truncate text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                            {row.requester_user_email || row.requester_user_id}
+                          </div>
+                        </div>
                       </div>
                     </td>
                     <td className="px-4 py-3">

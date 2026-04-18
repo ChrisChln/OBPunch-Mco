@@ -21,6 +21,7 @@ export type TodoAssigneeInput = {
   user_id: string;
   user_email: string;
   display_name: string;
+  avatar_url?: string;
 };
 
 export type TodoLinkInput = {
@@ -41,6 +42,7 @@ export type TodoItemAssignee = {
   assignee_user_id: string;
   assignee_email: string;
   assignee_display_name: string;
+  assignee_avatar_url?: string;
 };
 
 export type TodoItemRecord = {
@@ -202,7 +204,8 @@ export const normalizeTodoAssignees = (assignees: TodoAssigneeInput[]) => {
     byId.set(userId, {
       user_id: userId,
       user_email: String(item.user_email ?? '').trim(),
-      display_name: String(item.display_name ?? '').trim()
+      display_name: String(item.display_name ?? '').trim(),
+      avatar_url: String(item.avatar_url ?? '').trim()
     });
   }
   return Array.from(byId.values()).sort((a, b) =>

@@ -826,6 +826,35 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const tableWrapClass = isLight ? 'border border-slate-200 bg-white' : 'border border-white/10';
   const tableHeadClass = isLight ? 'bg-slate-50 text-slate-700' : 'bg-slate-950/95 text-slate-400';
   const tableRowClass = isLight ? 'border-t border-slate-100 text-slate-800' : 'border-t border-white/5 text-slate-200';
+  const frozenColumnBgClass = isLight ? 'bg-white' : 'bg-slate-950';
+  const frozenHeaderBgClass = isLight ? 'bg-slate-50' : 'bg-slate-950';
+  const historyFrozenColumns = [
+    { key: 'date', width: 124 },
+    { key: 'weekday', width: 72 },
+    { key: 'forecast', width: 120 },
+    { key: 'variance', width: 104 },
+    { key: 'dailyTotal', width: 108 },
+    { key: 'cutoff', width: 104 },
+    { key: 'itr', width: 96 },
+    { key: 'weather', width: 104 }
+  ] as const;
+  const historyFrozenLeft = historyFrozenColumns.reduce<Record<string, number>>((acc, column, index) => {
+    acc[column.key] = historyFrozenColumns.slice(0, index).reduce((sum, item) => sum + item.width, 0);
+    return acc;
+  }, {});
+  const weeklyFrozenColumns = [
+    { key: 'date', width: 124 },
+    { key: 'weekday', width: 72 },
+    { key: 'forecast', width: 120 },
+    { key: 'variance', width: 104 },
+    { key: 'dailyTotal', width: 108 },
+    { key: 'itr', width: 96 },
+    { key: 'weather', width: 104 }
+  ] as const;
+  const weeklyFrozenLeft = weeklyFrozenColumns.reduce<Record<string, number>>((acc, column, index) => {
+    acc[column.key] = weeklyFrozenColumns.slice(0, index).reduce((sum, item) => sum + item.width, 0);
+    return acc;
+  }, {});
   const weekdayButtonClass = (weekday: WeekdayValue) =>
     [
       'rounded-2xl px-4 py-2 text-sm font-semibold transition',
@@ -2157,14 +2186,14 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
               <table className="min-w-[2100px] table-fixed text-left text-xs">
                 <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
                   <tr>
-                    <th className="px-3 py-2">{t('日期', 'Date')}</th>
-                    <th className="px-3 py-2">{t('星期', 'Weekday')}</th>
-                    <th className="px-3 py-2">{t('截止12点预测', '12:00 forecast')}</th>
-                    <th className="px-3 py-2">{t('实际差异', 'Actual variance')}</th>
-                    <th className="px-3 py-2">{t('当日总流入', 'Daily total')}</th>
-                    <th className="px-3 py-2">{t('12点截单', '12:00 cutoff')}</th>
-                    <th className="px-3 py-2">{t('库存转换率', 'ITR')}</th>
-                    <th className="px-3 py-2">{t('恶劣天气', 'Severe weather')}</th>
+                    <th className={`sticky left-0 z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ width: historyFrozenColumns[0].width, minWidth: historyFrozenColumns[0].width }}>{t('日期', 'Date')}</th>
+                    <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ left: historyFrozenLeft.weekday, width: historyFrozenColumns[1].width, minWidth: historyFrozenColumns[1].width }}>{t('星期', 'Weekday')}</th>
+                    <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ left: historyFrozenLeft.forecast, width: historyFrozenColumns[2].width, minWidth: historyFrozenColumns[2].width }}>{t('截止12点预测', '12:00 forecast')}</th>
+                    <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ left: historyFrozenLeft.variance, width: historyFrozenColumns[3].width, minWidth: historyFrozenColumns[3].width }}>{t('实际差异', 'Actual variance')}</th>
+                    <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ left: historyFrozenLeft.dailyTotal, width: historyFrozenColumns[4].width, minWidth: historyFrozenColumns[4].width }}>{t('当日总流入', 'Daily total')}</th>
+                    <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ left: historyFrozenLeft.cutoff, width: historyFrozenColumns[5].width, minWidth: historyFrozenColumns[5].width }}>{t('12点截单', '12:00 cutoff')}</th>
+                    <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ left: historyFrozenLeft.itr, width: historyFrozenColumns[6].width, minWidth: historyFrozenColumns[6].width }}>{t('库存转换率', 'ITR')}</th>
+                    <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap border-r px-3 py-2 ${frozenHeaderBgClass} ${isLight ? 'border-slate-200' : 'border-white/10'}`} style={{ left: historyFrozenLeft.weather, width: historyFrozenColumns[7].width, minWidth: historyFrozenColumns[7].width }}>{t('恶劣天气', 'Severe weather')}</th>
                     {HOUR_COLUMNS.map((hourKey, index) => (
                       <th key={`page-${hourKey}`} className="px-3 py-2">{`${String(index).padStart(2, '0')}:00`}</th>
                     ))}
@@ -2198,16 +2227,16 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                     const itr = dailyTotal !== null && inventoryLevel > 0 ? dailyTotal / inventoryLevel : null;
                     return (
                       <tr key={`page-history-${date}`} className={tableRowClass}>
-                        <td className="px-3 py-2 font-semibold">{date}</td>
-                        <td className="px-3 py-2">
+                        <td className={`sticky left-0 z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 font-semibold ${frozenColumnBgClass}`} style={{ width: historyFrozenColumns[0].width, minWidth: historyFrozenColumns[0].width }}>{date}</td>
+                        <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenColumnBgClass}`} style={{ left: historyFrozenLeft.weekday, width: historyFrozenColumns[1].width, minWidth: historyFrozenColumns[1].width }}>
                           {t(WEEKDAY_OPTIONS[weekday - 1]?.zh ?? '周一', WEEKDAY_OPTIONS[weekday - 1]?.shortEn ?? 'Mon')}
                         </td>
-                        <td className="px-3 py-2">{formatNumber(noonForecast)}</td>
-                        <td className="px-3 py-2">{actualVariance === null ? '-' : formatPercent(actualVariance, 2)}</td>
-                        <td className="px-3 py-2">{formatNumber(dailyTotal)}</td>
-                        <td className="px-3 py-2">{formatNumber(noonCutoffVolume)}</td>
-                        <td className="px-3 py-2">{itr === null ? '-' : formatPercent(itr, 2)}</td>
-                        <td className="px-3 py-2">{severeWeather ? t('是', 'Yes') : t('否', 'No')}</td>
+                        <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenColumnBgClass}`} style={{ left: historyFrozenLeft.forecast, width: historyFrozenColumns[2].width, minWidth: historyFrozenColumns[2].width }}>{formatNumber(noonForecast)}</td>
+                        <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenColumnBgClass}`} style={{ left: historyFrozenLeft.variance, width: historyFrozenColumns[3].width, minWidth: historyFrozenColumns[3].width }}>{actualVariance === null ? '-' : formatPercent(actualVariance, 2)}</td>
+                        <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenColumnBgClass}`} style={{ left: historyFrozenLeft.dailyTotal, width: historyFrozenColumns[4].width, minWidth: historyFrozenColumns[4].width }}>{formatNumber(dailyTotal)}</td>
+                        <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenColumnBgClass}`} style={{ left: historyFrozenLeft.cutoff, width: historyFrozenColumns[5].width, minWidth: historyFrozenColumns[5].width }}>{formatNumber(noonCutoffVolume)}</td>
+                        <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenColumnBgClass}`} style={{ left: historyFrozenLeft.itr, width: historyFrozenColumns[6].width, minWidth: historyFrozenColumns[6].width }}>{itr === null ? '-' : formatPercent(itr, 2)}</td>
+                        <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap border-r px-3 py-2 ${frozenColumnBgClass} ${isLight ? 'border-slate-200' : 'border-white/10'}`} style={{ left: historyFrozenLeft.weather, width: historyFrozenColumns[7].width, minWidth: historyFrozenColumns[7].width }}>{severeWeather ? t('是', 'Yes') : t('否', 'No')}</td>
                         {HOUR_COLUMNS.map((hourKey) => (
                           <td key={`page-${date}-${hourKey}`} className="px-3 py-2">
                             {row ? formatNumber(Number(row[hourKey] ?? 0)) : '-'}
@@ -2699,13 +2728,13 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                       <table className="min-w-[2100px] table-fixed text-left text-xs">
                         <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
                           <tr>
-                            <th className="px-3 py-2">{t('日期', 'Date')}</th>
-                            <th className="px-3 py-2">{t('星期', 'Weekday')}</th>
-                            <th className="px-3 py-2">{t('截止12点预测', '12:00 forecast')}</th>
-                            <th className="px-3 py-2">{t('实际差异', 'Actual variance')}</th>
-                            <th className="px-3 py-2">{t('当日总流入', 'Daily total')}</th>
-                            <th className="px-3 py-2">{t('库存转换率', 'ITR')}</th>
-                            <th className="px-3 py-2">{t('恶劣天气', 'Severe weather')}</th>
+                            <th className={`sticky left-0 z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ width: weeklyFrozenColumns[0].width, minWidth: weeklyFrozenColumns[0].width }}>{t('日期', 'Date')}</th>
+                            <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ left: weeklyFrozenLeft.weekday, width: weeklyFrozenColumns[1].width, minWidth: weeklyFrozenColumns[1].width }}>{t('星期', 'Weekday')}</th>
+                            <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ left: weeklyFrozenLeft.forecast, width: weeklyFrozenColumns[2].width, minWidth: weeklyFrozenColumns[2].width }}>{t('截止12点预测', '12:00 forecast')}</th>
+                            <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ left: weeklyFrozenLeft.variance, width: weeklyFrozenColumns[3].width, minWidth: weeklyFrozenColumns[3].width }}>{t('实际差异', 'Actual variance')}</th>
+                            <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ left: weeklyFrozenLeft.dailyTotal, width: weeklyFrozenColumns[4].width, minWidth: weeklyFrozenColumns[4].width }}>{t('当日总流入', 'Daily total')}</th>
+                            <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenHeaderBgClass}`} style={{ left: weeklyFrozenLeft.itr, width: weeklyFrozenColumns[5].width, minWidth: weeklyFrozenColumns[5].width }}>{t('库存转换率', 'ITR')}</th>
+                            <th className={`sticky z-20 overflow-hidden text-ellipsis whitespace-nowrap border-r px-3 py-2 ${frozenHeaderBgClass} ${isLight ? 'border-slate-200' : 'border-white/10'}`} style={{ left: weeklyFrozenLeft.weather, width: weeklyFrozenColumns[6].width, minWidth: weeklyFrozenColumns[6].width }}>{t('恶劣天气', 'Severe weather')}</th>
                             {HOUR_COLUMNS.map((hourKey, index) => (
                               <th key={hourKey} className="px-3 py-2">{`${String(index).padStart(2, '0')}:00`}</th>
                             ))}
@@ -2737,15 +2766,15 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                             const itr = dailyTotal !== null && inventoryLevel > 0 ? dailyTotal / inventoryLevel : null;
                             return (
                               <tr key={date} className={tableRowClass}>
-                                <td className="px-3 py-2 font-semibold">{date}</td>
-                                <td className="px-3 py-2">
+                                <td className={`sticky left-0 z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 font-semibold ${frozenColumnBgClass}`} style={{ width: weeklyFrozenColumns[0].width, minWidth: weeklyFrozenColumns[0].width }}>{date}</td>
+                                <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenColumnBgClass}`} style={{ left: weeklyFrozenLeft.weekday, width: weeklyFrozenColumns[1].width, minWidth: weeklyFrozenColumns[1].width }}>
                                   {t(WEEKDAY_OPTIONS[weekday - 1]?.zh ?? '周一', WEEKDAY_OPTIONS[weekday - 1]?.shortEn ?? 'Mon')}
                                 </td>
-                                <td className="px-3 py-2">{formatNumber(noonForecast)}</td>
-                                <td className="px-3 py-2">{actualVariance === null ? '-' : formatPercent(actualVariance, 2)}</td>
-                                <td className="px-3 py-2">{formatNumber(dailyTotal)}</td>
-                                <td className="px-3 py-2">{itr === null ? '-' : formatPercent(itr, 2)}</td>
-                                <td className="px-3 py-2">{severeWeather ? t('是', 'Yes') : t('否', 'No')}</td>
+                                <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenColumnBgClass}`} style={{ left: weeklyFrozenLeft.forecast, width: weeklyFrozenColumns[2].width, minWidth: weeklyFrozenColumns[2].width }}>{formatNumber(noonForecast)}</td>
+                                <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenColumnBgClass}`} style={{ left: weeklyFrozenLeft.variance, width: weeklyFrozenColumns[3].width, minWidth: weeklyFrozenColumns[3].width }}>{actualVariance === null ? '-' : formatPercent(actualVariance, 2)}</td>
+                                <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenColumnBgClass}`} style={{ left: weeklyFrozenLeft.dailyTotal, width: weeklyFrozenColumns[4].width, minWidth: weeklyFrozenColumns[4].width }}>{formatNumber(dailyTotal)}</td>
+                                <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 ${frozenColumnBgClass}`} style={{ left: weeklyFrozenLeft.itr, width: weeklyFrozenColumns[5].width, minWidth: weeklyFrozenColumns[5].width }}>{itr === null ? '-' : formatPercent(itr, 2)}</td>
+                                <td className={`sticky z-10 overflow-hidden text-ellipsis whitespace-nowrap border-r px-3 py-2 ${frozenColumnBgClass} ${isLight ? 'border-slate-200' : 'border-white/10'}`} style={{ left: weeklyFrozenLeft.weather, width: weeklyFrozenColumns[6].width, minWidth: weeklyFrozenColumns[6].width }}>{severeWeather ? t('是', 'Yes') : t('否', 'No')}</td>
                                 {HOUR_COLUMNS.map((hourKey) => (
                                   <td key={`${date}-${hourKey}`} className="px-3 py-2">
                                     {row ? formatNumber(Number(row[hourKey] ?? 0)) : '-'}

@@ -15,6 +15,8 @@ import {
   type TodoStatus
 } from '../todoShared';
 import { createPortal } from 'react-dom';
+import AdminUserAvatar from '../components/AdminUserAvatar';
+import { buildAdminUserIdentityView } from '../adminIdentity';
 import {
   fetchAssignedTodoItems,
   fetchCreatedTodoItems,
@@ -42,6 +44,7 @@ type TodoProfile = {
   user_id: string;
   user_email: string;
   display_name: string;
+  avatar_url?: string;
 };
 
 type FormState = {
@@ -61,6 +64,7 @@ type TodoGroupParticipant = {
   assignee_user_id: string;
   assignee_email: string;
   assignee_display_name: string;
+  assignee_avatar_url?: string;
   status: TodoStatus;
   due_at: string | null;
   completed_at: string | null;
@@ -130,7 +134,6 @@ const parseMonthDays = (value: string) =>
 const formatMonthDays = (values: number[] | undefined) => (values ?? []).join(', ');
 const getProfileLabel = (profile: { display_name?: string; user_email?: string; user_id?: string }) => String(profile.display_name ?? '').trim() || String(profile.user_email ?? '').trim() || String(profile.user_id ?? '').trim();
 const getProfileSubLabel = (profile: { user_email?: string; user_id?: string }) => String(profile.user_email ?? '').trim() || String(profile.user_id ?? '').trim();
-const getInitial = (profile: { display_name?: string; user_email?: string; user_id?: string }) => getProfileLabel(profile).slice(0, 1).toUpperCase() || '?';
 
 const isTodoOverdue = (item: TodoItemRecord) => {
   if (item.status !== 'open' || !item.due_at) return false;
@@ -190,7 +193,8 @@ const buildEditForm = (item: TodoItemRecord): FormState => ({
   assignees: item.assignees.map((assignee) => ({
     user_id: assignee.assignee_user_id,
     user_email: assignee.assignee_email,
-    display_name: assignee.assignee_display_name
+    display_name: assignee.assignee_display_name,
+    avatar_url: assignee.assignee_avatar_url
   })),
   links: item.links.map((link, index) => ({
     label: link.label,
@@ -225,6 +229,7 @@ const buildTodoGroups = (items: TodoItemRecord[], userId: string) => {
       assignee_user_id: assignee.assignee_user_id,
       assignee_email: assignee.assignee_email,
       assignee_display_name: assignee.assignee_display_name,
+      assignee_avatar_url: assignee.assignee_avatar_url,
       status: item.status,
       due_at: item.due_at,
       completed_at: item.completed_at,
@@ -293,11 +298,11 @@ export default function TodoPage({
   const [participantsItem, setParticipantsItem] = useState<TodoItemRecord | null>(null);
 
   const buttonSecondaryClass = isLight
-    ? 'inline-flex h-10 items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:border-slate-400 disabled:opacity-60'
-    : 'inline-flex h-10 items-center justify-center rounded-2xl border border-white/20 bg-white/[0.05] px-4 text-sm font-semibold text-white hover:border-white/40 disabled:opacity-60';
+    ? 'admin-btn inline-flex h-10 items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:border-slate-400 disabled:opacity-60'
+    : 'admin-btn admin-btn-secondary inline-flex h-10 items-center justify-center px-4 text-sm font-semibold disabled:opacity-60';
   const buttonPrimaryClass = isLight
-    ? 'inline-flex h-10 items-center justify-center rounded-2xl bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60'
-    : 'inline-flex h-10 items-center justify-center rounded-2xl bg-neon px-4 text-sm font-semibold text-slate-950 hover:brightness-110 disabled:opacity-60';
+    ? 'admin-btn inline-flex h-10 items-center justify-center rounded-2xl bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60'
+    : 'admin-btn admin-btn-primary inline-flex h-10 items-center justify-center px-4 text-sm font-semibold text-slate-950 disabled:opacity-60';
   const panelClass = isLight ? 'rounded-2xl border border-slate-200 bg-white p-4 shadow-sm' : 'rounded-2xl border border-white/10 bg-white/[0.03] p-4';
   const modalPanelClass = isLight
     ? 'rounded-3xl border border-slate-200 bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.18)] md:p-7'
@@ -377,7 +382,8 @@ export default function TodoPage({
               {
                 user_id: userId,
                 user_email: String(userEmail ?? '').trim(),
-                display_name: String(userDisplayName ?? '').trim() || String(userEmail ?? '').trim() || userId
+                display_name: String(userDisplayName ?? '').trim() || String(userEmail ?? '').trim() || userId,
+                avatar_url: ''
               }
             ])
           }
@@ -422,7 +428,8 @@ export default function TodoPage({
       next.set(userId, {
         user_id: userId,
         user_email: String(userEmail ?? '').trim(),
-        display_name: String(userDisplayName ?? '').trim() || String(userEmail ?? '').trim() || userId
+        display_name: String(userDisplayName ?? '').trim() || String(userEmail ?? '').trim() || userId,
+        avatar_url: ''
       });
     }
     for (const assignee of form.assignees) {
@@ -430,11 +437,27 @@ export default function TodoPage({
       next.set(assignee.user_id, {
         user_id: assignee.user_id,
         user_email: String(assignee.user_email ?? '').trim(),
-        display_name: String(assignee.display_name ?? '').trim() || String(assignee.user_email ?? '').trim() || assignee.user_id
+        display_name: String(assignee.display_name ?? '').trim() || String(assignee.user_email ?? '').trim() || assignee.user_id,
+        avatar_url: String((assignee as any).avatar_url ?? '').trim()
       });
     }
     return Array.from(next.values()).sort((left, right) => getProfileLabel(left).localeCompare(getProfileLabel(right), 'en-US'));
   }, [form.assignees, profiles, userDisplayName, userEmail, userId]);
+  const profileByUserId = useMemo(() => new Map(assigneeOptions.map((item) => [item.user_id, item] as const)), [assigneeOptions]);
+  const resolveTodoIdentity = (profile: {
+    user_id?: string;
+    user_email?: string;
+    display_name?: string;
+    avatar_url?: string;
+  }) => {
+    const cached = profile.user_id ? profileByUserId.get(profile.user_id) : undefined;
+    return buildAdminUserIdentityView({
+      userId: profile.user_id || cached?.user_id,
+      userEmail: profile.user_email || cached?.user_email,
+      displayName: profile.display_name || cached?.display_name,
+      avatarUrl: profile.avatar_url || cached?.avatar_url
+    });
+  };
 
   const filteredAssigneeOptions = useMemo(() => {
     const selectedIds = new Set(form.assignees.map((item) => item.user_id));
@@ -449,7 +472,7 @@ export default function TodoPage({
   const buildDefaultAssignees = () =>
     normalizeTodoAssignees(
       userId
-        ? [{ user_id: userId, user_email: String(userEmail ?? '').trim(), display_name: String(userDisplayName ?? '').trim() || String(userEmail ?? '').trim() || userId }]
+        ? [{ user_id: userId, user_email: String(userEmail ?? '').trim(), display_name: String(userDisplayName ?? '').trim() || String(userEmail ?? '').trim() || userId, avatar_url: '' }]
         : []
     );
 
@@ -667,6 +690,28 @@ export default function TodoPage({
                 >
                   <span className="text-xs font-bold leading-none">{participant.status === 'done' ? '✓' : ''}</span>
                 </button>
+                <AdminUserAvatar
+                  name={resolveTodoIdentity({
+                    user_id: participant.assignee_user_id,
+                    user_email: participant.assignee_email,
+                    display_name: participant.assignee_display_name,
+                    avatar_url: participant.assignee_avatar_url
+                  }).displayName}
+                  avatarUrl={resolveTodoIdentity({
+                    user_id: participant.assignee_user_id,
+                    user_email: participant.assignee_email,
+                    display_name: participant.assignee_display_name,
+                    avatar_url: participant.assignee_avatar_url
+                  }).avatarUrl}
+                  fallbackInitial={resolveTodoIdentity({
+                    user_id: participant.assignee_user_id,
+                    user_email: participant.assignee_email,
+                    display_name: participant.assignee_display_name,
+                    avatar_url: participant.assignee_avatar_url
+                  }).fallbackInitial}
+                  size={28}
+                  className={isLight ? 'border-slate-200 bg-slate-200 text-slate-700' : 'border-white/10 bg-slate-800 text-slate-100'}
+                />
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium">
                     {participant.assignee_display_name || participant.assignee_email || participant.assignee_user_id}
@@ -709,8 +754,8 @@ export default function TodoPage({
 
     return (
       <article key={group.key} className={['space-y-3 rounded-2xl border p-4', getTodoGroupCardToneClass(group, isLight)].join(' ')}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 items-start gap-3">
           {!group.isGroupedIndividual ? (
             <button
               type="button"
@@ -745,6 +790,25 @@ export default function TodoPage({
               <span className="text-sm font-bold leading-none">{item.status === 'done' ? '✓' : ''}</span>
             </button>
           ) : null}
+          <AdminUserAvatar
+            name={resolveTodoIdentity({
+              user_id: item.creator_user_id,
+              user_email: item.creator_email,
+              display_name: item.creator_display_name
+            }).displayName}
+            avatarUrl={resolveTodoIdentity({
+              user_id: item.creator_user_id,
+              user_email: item.creator_email,
+              display_name: item.creator_display_name
+            }).avatarUrl}
+            fallbackInitial={resolveTodoIdentity({
+              user_id: item.creator_user_id,
+              user_email: item.creator_email,
+              display_name: item.creator_display_name
+            }).fallbackInitial}
+            size={32}
+            className={isLight ? 'mt-0.5 border-slate-200 bg-slate-200 text-slate-700' : 'mt-0.5 border-white/10 bg-slate-800 text-slate-100'}
+          />
           <div className="min-w-0">
             <h3 className="text-lg font-semibold">{item.title}</h3>
             <div className={['mt-1 text-sm', isLight ? 'text-slate-500' : 'text-white/60'].join(' ')}>
@@ -873,7 +937,13 @@ export default function TodoPage({
                   <div className="flex flex-wrap items-center gap-2">
                     {form.assignees.map((assignee) => (
                       <span key={assignee.user_id} className={['inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm', isLight ? 'border-slate-300 bg-slate-50 text-slate-800' : 'border-white/15 bg-white/[0.05] text-white/85'].join(' ')}>
-                        <span className={['flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold', isLight ? 'bg-sky-100 text-sky-700' : 'bg-neon/20 text-neon'].join(' ')}>{getInitial(assignee)}</span>
+                        <AdminUserAvatar
+                          name={resolveTodoIdentity(assignee).displayName}
+                          avatarUrl={resolveTodoIdentity(assignee).avatarUrl}
+                          fallbackInitial={resolveTodoIdentity(assignee).fallbackInitial}
+                          size={24}
+                          className={isLight ? 'border-slate-200 bg-slate-200 text-slate-700' : 'border-white/10 bg-slate-800 text-slate-100'}
+                        />
                         <span>{getProfileLabel(assignee)}</span>
                         <button type="button" className={isLight ? 'text-slate-500 hover:text-slate-800' : 'text-white/50 hover:text-white'} onClick={() => removeAssignee(assignee.user_id)}>×</button>
                       </span>
@@ -887,7 +957,13 @@ export default function TodoPage({
                     {assigneeOptions.length > 0 && !filteredAssigneeOptions.length ? <div className={['px-3 py-2 text-sm', isLight ? 'text-slate-500' : 'text-white/60'].join(' ')}>{t('没有匹配的账号。', 'No matching accounts.')}</div> : null}
                     {filteredAssigneeOptions.map((profile) => (
                       <button key={profile.user_id} type="button" className={['flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left text-sm transition', isLight ? 'hover:bg-slate-50' : 'hover:bg-white/[0.05]'].join(' ')} onClick={() => { toggleAssignee(profile); setAssigneeQuery(''); setAssigneePickerOpen(true); }}>
-                        <span className={['flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold', isLight ? 'bg-sky-100 text-sky-700' : 'bg-neon/20 text-neon'].join(' ')}>{getInitial(profile)}</span>
+                        <AdminUserAvatar
+                          name={resolveTodoIdentity(profile).displayName}
+                          avatarUrl={resolveTodoIdentity(profile).avatarUrl}
+                          fallbackInitial={resolveTodoIdentity(profile).fallbackInitial}
+                          size={32}
+                          className={isLight ? 'border-slate-200 bg-slate-200 text-slate-700' : 'border-white/10 bg-slate-800 text-slate-100'}
+                        />
                         <span className="min-w-0"><span className="block truncate font-medium">{getProfileLabel(profile)}</span><span className={['block truncate text-xs', isLight ? 'text-slate-500' : 'text-white/50'].join(' ')}>{getProfileSubLabel(profile)}</span></span>
                       </button>
                     ))}
@@ -1022,9 +1098,28 @@ export default function TodoPage({
                         isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.04]'
                       ].join(' ')}
                     >
-                      <span className={['flex h-9 w-9 items-center justify-center rounded-full text-xs font-semibold', isLight ? 'bg-sky-100 text-sky-700' : 'bg-neon/20 text-neon'].join(' ')}>
-                        {getInitial({ display_name: assignee.assignee_display_name, user_email: assignee.assignee_email, user_id: assignee.assignee_user_id })}
-                      </span>
+                      <AdminUserAvatar
+                        name={resolveTodoIdentity({
+                          user_id: assignee.assignee_user_id,
+                          user_email: assignee.assignee_email,
+                          display_name: assignee.assignee_display_name,
+                          avatar_url: assignee.assignee_avatar_url
+                        }).displayName}
+                        avatarUrl={resolveTodoIdentity({
+                          user_id: assignee.assignee_user_id,
+                          user_email: assignee.assignee_email,
+                          display_name: assignee.assignee_display_name,
+                          avatar_url: assignee.assignee_avatar_url
+                        }).avatarUrl}
+                        fallbackInitial={resolveTodoIdentity({
+                          user_id: assignee.assignee_user_id,
+                          user_email: assignee.assignee_email,
+                          display_name: assignee.assignee_display_name,
+                          avatar_url: assignee.assignee_avatar_url
+                        }).fallbackInitial}
+                        size={36}
+                        className={isLight ? 'border-slate-200 bg-slate-200 text-slate-700' : 'border-white/10 bg-slate-800 text-slate-100'}
+                      />
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium">
                           {assignee.assignee_display_name || assignee.assignee_email || assignee.assignee_user_id}

@@ -18,6 +18,7 @@ import BusyOverlay from './components/BusyOverlay';
 import AdminLoginPanel from './components/AdminLoginPanel';
 import ScheduleToolbar from './components/ScheduleToolbar';
 import DailyListNewHireModal from './components/DailyListNewHireModal';
+import AdminUserAvatar from './components/AdminUserAvatar';
 import DevicesPage from './pages/DevicesPage';
 import EmployeeUploadPage from './pages/EmployeeUploadPage';
 import AccountManagementPage from './pages/AccountManagementPage';
@@ -89,6 +90,7 @@ import {
 } from './lateMarks';
 import { fetchTodoNavPendingCount, fetchTodoProfiles } from './todoData';
 import { TODO_UPDATED_EVENT } from './todoShared';
+import { buildAdminUserIdentityView, type AdminUserIdentityView } from './adminIdentity';
 import { shouldAutofillShiftTime } from './shiftTimeAutofill';
 import {
   loadDailyCapacityStaffStats,
@@ -184,6 +186,7 @@ type DailyListCapacityView = {
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
+const DAILY_LIST_VISIBLE_POSITIONS = ALLOWED_POSITIONS.filter((position) => position !== 'FLEX TEAM') as Exclude<AllowedPosition, 'FLEX TEAM'>[];
 const createEmptyPositionFlags = (): Record<AllowedPosition, boolean> => ({
   Pick: false,
   Pack: false,
@@ -1588,19 +1591,32 @@ export default function AdminAppPage() {
     }
     return '';
   };
-  const auditActorDisplayByKeyRef = useRef<Map<string, string>>(new Map());
+  type AdminProfileCacheEntry = { userId: string; userEmail: string; displayName: string; avatarUrl: string };
+  const adminProfileByUserIdRef = useRef<Map<string, AdminProfileCacheEntry>>(new Map());
+  const adminProfileByEmailRef = useRef<Map<string, AdminProfileCacheEntry>>(new Map());
+  const adminProfileByDisplayNameRef = useRef<Map<string, AdminProfileCacheEntry>>(new Map());
   const auditActorDisplayMapLoadedRef = useRef(false);
+  const rememberAdminProfile = (row: { user_id?: unknown; user_email?: unknown; display_name?: unknown; avatar_url?: unknown }) => {
+    const userId = String(row.user_id ?? '').trim();
+    const userEmail = String(row.user_email ?? '').trim();
+    const displayName = String(row.display_name ?? '').trim();
+    const avatarUrl = String(row.avatar_url ?? '').trim();
+    if (!userId && !userEmail && !displayName) return;
+    const entry: AdminProfileCacheEntry = { userId, userEmail, displayName, avatarUrl };
+    if (userId) adminProfileByUserIdRef.current.set(userId, entry);
+    if (userEmail) adminProfileByEmailRef.current.set(userEmail.toLowerCase(), entry);
+    if (displayName && !adminProfileByDisplayNameRef.current.has(displayName.toLowerCase())) {
+      adminProfileByDisplayNameRef.current.set(displayName.toLowerCase(), entry);
+    }
+  };
   const loadAuditActorDisplayNameMap = async () => {
     if (!supabase || auditActorDisplayMapLoadedRef.current) return;
-    const res = await supabase.from(USER_PROFILE_TABLE).select('user_email, display_name').limit(5000);
+    const res = await supabase.from(USER_PROFILE_TABLE).select('user_id, user_email, display_name, avatar_url').limit(5000);
     if (res.error) {
       return;
     }
     for (const row of ((res.data as any[]) ?? [])) {
-      const email = String(row?.user_email ?? '').trim();
-      const display = String(row?.display_name ?? '').trim();
-      if (!email || !display) continue;
-      auditActorDisplayByKeyRef.current.set(email.toLowerCase(), display);
+      rememberAdminProfile(row ?? {});
     }
     auditActorDisplayMapLoadedRef.current = true;
   };
@@ -1613,26 +1629,23 @@ export default function AdminAppPage() {
       const raw = String(value ?? '').trim();
       if (!raw || !raw.includes('@')) continue;
       const key = raw.toLowerCase();
-      if (seen.has(key) || auditActorDisplayByKeyRef.current.has(key)) continue;
+      if (seen.has(key) || adminProfileByEmailRef.current.has(key)) continue;
       seen.add(key);
       missingEmails.push(raw);
     }
     if (missingEmails.length === 0) return;
 
-    const res = await supabase.from(USER_PROFILE_TABLE).select('user_email, display_name').in('user_email', missingEmails as any);
+    const res = await supabase.from(USER_PROFILE_TABLE).select('user_id, user_email, display_name, avatar_url').in('user_email', missingEmails as any);
     if (res.error) {
       return;
     }
     for (const row of ((res.data as any[]) ?? [])) {
-      const email = String(row?.user_email ?? '').trim();
-      const display = String(row?.display_name ?? '').trim();
-      if (!email || !display) continue;
-      auditActorDisplayByKeyRef.current.set(email.toLowerCase(), display);
+      rememberAdminProfile(row ?? {});
     }
   };
   const normalizeAuditActor = (value: unknown) => {
     const raw = String(value ?? '').trim();
-    const resolved = auditActorDisplayByKeyRef.current.get(raw.toLowerCase());
+    const resolved = adminProfileByEmailRef.current.get(raw.toLowerCase())?.displayName;
     const emailValue = String(user?.email ?? '').trim();
     const displayValue = userDisplayName.trim();
     if (!raw) return raw;
@@ -1641,6 +1654,56 @@ export default function AdminAppPage() {
       return displayValue;
     }
     return raw;
+  };
+  const resolveAdminUserIdentity = ({
+    userId,
+    userEmail,
+    actor,
+    displayName
+  }: {
+    userId?: string | null;
+    userEmail?: string | null;
+    actor?: unknown;
+    displayName?: string | null;
+  }): AdminUserIdentityView => {
+    const normalizedUserId = String(userId ?? '').trim();
+    const normalizedUserEmail = String(userEmail ?? '').trim();
+    const normalizedDisplayName = String(displayName ?? '').trim();
+    const normalizedActor = String(actor ?? '').trim();
+    const currentUserEmail = String(user?.email ?? '').trim();
+    const currentProfile =
+      (normalizedUserId ? adminProfileByUserIdRef.current.get(normalizedUserId) : undefined) ??
+      (normalizedUserEmail ? adminProfileByEmailRef.current.get(normalizedUserEmail.toLowerCase()) : undefined) ??
+      (normalizedActor.includes('@') ? adminProfileByEmailRef.current.get(normalizedActor.toLowerCase()) : undefined) ??
+      (normalizedDisplayName ? adminProfileByDisplayNameRef.current.get(normalizedDisplayName.toLowerCase()) : undefined) ??
+      (normalizedActor ? adminProfileByDisplayNameRef.current.get(normalizedActor.toLowerCase()) : undefined);
+
+    if (currentProfile) {
+      return buildAdminUserIdentityView({
+        userId: normalizedUserId || currentProfile.userId,
+        userEmail: normalizedUserEmail || currentProfile.userEmail,
+        actor: normalizedActor,
+        displayName: normalizedDisplayName || currentProfile.displayName,
+        avatarUrl: currentProfile.avatarUrl
+      });
+    }
+
+    if (currentUserEmail && normalizedActor && normalizedActor.toLowerCase() === currentUserEmail.toLowerCase()) {
+      return buildAdminUserIdentityView({
+        userId: String(user?.id ?? ''),
+        userEmail: currentUserEmail,
+        actor: normalizedActor,
+        displayName: normalizedDisplayName || userDisplayName,
+        avatarUrl: userAvatarUrlInput || userAvatarUrl
+      });
+    }
+
+    return buildAdminUserIdentityView({
+      userId: normalizedUserId,
+      userEmail: normalizedUserEmail,
+      actor: normalizedActor,
+      displayName: normalizedDisplayName
+    });
   };
 
   const [email, setEmail] = useState('');
@@ -1733,6 +1796,7 @@ export default function AdminAppPage() {
   const [timecardSearch, setTimecardSearch] = useState('');
   const [timecardAgency, setTimecardAgency] = useState('');
   const [timecardAgencySort, setTimecardAgencySort] = useState<'' | 'asc' | 'desc'>('');
+  const [timecardTotalSort, setTimecardTotalSort] = useState<'' | 'asc' | 'desc'>('');
   const [timecardPosition, setTimecardPosition] = useState('');
   const [timecardShift, setTimecardShift] = useState<'' | 'early' | 'late'>('');
   const [timecardInProgressOnly, setTimecardInProgressOnly] = useState(false);
@@ -3310,13 +3374,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     const exec = async () => {
       const [rows, users] = await Promise.all([listAdminAccessAccounts(supabase), fetchTodoProfiles(supabase)]);
-      setAdminAccessAccounts(rows);
+      const avatarByUserId = new Map(
+        users
+          .map((item) => [String(item.user_id ?? '').trim(), String(item.avatar_url ?? '').trim()] as const)
+          .filter(([userId]) => Boolean(userId))
+      );
+      setAdminAccessAccounts(rows.map((row) => ({ ...row, avatar_url: avatarByUserId.get(row.user_id) ?? row.avatar_url ?? '' })));
       setAdminAccessUserOptions(
         users
           .map((item) => ({
             user_id: String(item.user_id ?? '').trim(),
             user_email: String(item.user_email ?? '').trim(),
-            display_name: String(item.display_name ?? '').trim()
+            display_name: String(item.display_name ?? '').trim(),
+            avatar_url: String(item.avatar_url ?? '').trim()
           }))
           .filter((item) => item.user_id)
       );
@@ -3734,6 +3804,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const nextAuditRows = rawRows
         .map((row) => ({
           ...row,
+          actor_raw: (row as any).actor,
           actor: normalizeAuditActor((row as any).actor)
         }))
         .filter((row) => {
@@ -3907,6 +3978,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     await rememberAuditActorDisplayNames(rawRows.map((row) => row.actor));
     const nextCellRows = rawRows.map((row) => ({
       ...row,
+      actor_raw: (row as any).actor,
       actor: normalizeAuditActor((row as any).actor)
     }));
     setCellAuditRows(nextCellRows);
@@ -7239,6 +7311,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         await rememberAuditActorDisplayNames(rawRows.map((row) => row.actor));
         const nextRows = rawRows.map((row) => ({
           ...row,
+          actor_raw: (row as any).actor,
           actor: normalizeAuditActor((row as any).actor)
         }));
         setEmployeeAuditRows(nextRows);
@@ -12844,12 +12917,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const agencyDiff = agencyA.localeCompare(agencyB, 'zh-CN', { sensitivity: 'base' });
         if (agencyDiff !== 0) return timecardAgencySort === 'asc' ? agencyDiff : -agencyDiff;
       }
+      if (timecardTotalSort && b.totalHours !== a.totalHours) {
+        return timecardTotalSort === 'asc' ? a.totalHours - b.totalHours : b.totalHours - a.totalHours;
+      }
       const anomalyDiff = getAnomalyScore(b) - getAnomalyScore(a);
       if (anomalyDiff !== 0) return anomalyDiff;
       if (b.totalHours !== a.totalHours) return b.totalHours - a.totalHours;
       return String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US');
     });
-  }, [page, timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter, timecardAgencySort]);
+  }, [page, timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter, timecardAgencySort, timecardTotalSort]);
   const timecardRowsRendered = useMemo(
     () => timecardRowsFiltered.slice(0, Math.max(0, timecardRenderCount)),
     [timecardRowsFiltered, timecardRenderCount]
@@ -13377,7 +13453,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }, [tomorrowDailyList]);
   const tomorrowPositionSummaryCards = useMemo(
     () =>
-      ALLOWED_POSITIONS.map((position) => {
+      DAILY_LIST_VISIBLE_POSITIONS.map((position) => {
         const early = tomorrowAttendanceCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
         const late = tomorrowAttendanceCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
         const recommendedRows = scheduleRecommendedAdjustedByDate[tomorrowDailyList.targetDate] ?? [];
@@ -13414,14 +13490,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     [tomorrowAttendanceCards, scheduleRecommendedAdjustedByDate, tomorrowDailyList, dailyListCapacityByRowKey]
   );
   const selectedDailyFilterPositions = useMemo(
-    () => ALLOWED_POSITIONS.filter((position) => Boolean(dailyListFilterPositions[position])),
+    () => DAILY_LIST_VISIBLE_POSITIONS.filter((position) => Boolean(dailyListFilterPositions[position])),
     [dailyListFilterPositions]
   );
   const tomorrowDailyRowsDisplayed = useMemo(() => {
     if (selectedDailyFilterPositions.length === 0) {
       return { earlyRows: tomorrowDailyList.earlyRows, lateRows: tomorrowDailyList.lateRows };
     }
-    const allowed = new Set(selectedDailyFilterPositions);
+    const allowed = new Set<AllowedPosition>(selectedDailyFilterPositions);
     const match = (row: DailyListRow) => {
       const pos = normalizePositionKey(String(row.position ?? '').trim());
       return Boolean(pos && allowed.has(pos as AllowedPosition));
@@ -13931,9 +14007,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const account = String(employee?.work_account ?? employee?.WorkAccount ?? '').trim();
       const label = String(employee?.label ?? employee?.Label ?? '').trim();
       const borrowedDevice = (homeBorrowedDeviceByStaffId.get(staff) ?? []).join(', ');
-      const lastPunchAt = String(employeeLastPunchAtByStaffId[staff] ?? '').trim();
       const firstInAt = String(homeFirstInAtByStaffId.get(staff) ?? '').trim();
-      const punchAt = lastPunchAt || firstInAt;
       const rawPunches = Array.isArray(homePunchesByStaffId[staff])
         ? homePunchesByStaffId[staff].filter((item) => !isExactOperationalCutoffOut(item.created_at, item.action))
         : [];
@@ -13952,8 +14026,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         punches:
           rawPunches.length > 0
             ? rawPunches
-            : punchAt
-              ? [{ action: isOnClock ? 'IN' : lastPunchAt ? 'OUT' : 'IN', created_at: punchAt }]
+            : firstInAt
+              ? [{ action: 'IN', created_at: firstInAt }]
               : []
       };
     };
@@ -14037,7 +14111,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     homeFirstInAtByStaffId,
     employeeShiftByStaffId,
     employeeProfileByStaffId,
-    employeeLastPunchAtByStaffId,
     scheduleMistakeByStaffId
   ]);
   const homeRosterRowsFiltered = useMemo(() => {
@@ -15169,6 +15242,7 @@ ${rowsToHtml(late)}
                 resolveAuditStaffName={resolveAuditStaffName}
                 formatAuditCreatedAt={formatAuditCreatedAt}
                 resolveAuditBusinessDate={resolveAuditBusinessDate}
+                resolveAdminUserIdentity={resolveAdminUserIdentity}
                 canUndoAuditRow={isUndoableAuditRow}
                 isAuditRowUndone={isAuditRowUndone}
                 undoAuditRow={undoAuditRow}
@@ -15979,13 +16053,31 @@ ${rowsToHtml(late)}
                                           <div className="space-y-1">
                                             {scheduleCellAudit.slice(0, 3).map((item) => {
                                               const detail = formatAuditDetail(item);
+                                              const actorIdentity = resolveAdminUserIdentity({
+                                                actor: (item as any).actor_raw ?? (item as any).actor,
+                                                displayName: normalizeAuditActor((item as any).actor_raw ?? (item as any).actor)
+                                              });
                                               return (
                                                 <div
                                                   key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)}
                                                   className={['rounded-md px-1.5 py-1', themeMode === 'light' ? 'bg-slate-100' : 'bg-slate-800'].join(' ')}
                                                 >
-                                                  <div className={['text-[10px]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
-                                                    {formatCellAuditTime(item.created_at)} · {normalizeAuditActor((item as any).actor) || '-'}
+                                                  <div className="flex items-center gap-2">
+                                                    <AdminUserAvatar
+                                                      name={actorIdentity.displayName}
+                                                      avatarUrl={actorIdentity.avatarUrl}
+                                                      fallbackInitial={actorIdentity.fallbackInitial}
+                                                      size={20}
+                                                      className={themeMode === 'light' ? 'border-slate-200 bg-slate-200 text-slate-700' : 'border-white/10 bg-slate-700 text-slate-100'}
+                                                    />
+                                                    <div className="min-w-0">
+                                                      <div className={['truncate text-[10px] font-medium', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
+                                                        {actorIdentity.displayName || '-'}
+                                                      </div>
+                                                      <div className={['text-[10px]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                                        {formatCellAuditTime(item.created_at)}
+                                                      </div>
+                                                    </div>
                                                   </div>
                                                   <div className={themeMode === 'light' ? 'text-slate-800' : 'text-slate-100'}>{renderAuditSummary(detail.summary)}</div>
                                                   {detail.details.slice(0, 2).map((d, idx2) => (
@@ -16171,11 +16263,11 @@ ${rowsToHtml(late)}
                                   onClick={() => toggleDailyListSelectedPosition(card.position)}
                                   key={card.position}
                                   className={[
-                                    'rounded-xl border px-2.5 py-2 text-left transition',
+                                    'flex min-h-[104px] w-full flex-col justify-between rounded-md border px-2.5 py-2 text-left transition',
                                     dailyListSelectedPositions[card.position]
                                       ? themeMode === 'light'
-                                        ? getSchedulePositionBadgeClassLight(card.position)
-                                        : getSchedulePositionBadgeClass(card.position)
+                                        ? getHomeCardToneClass(card.position, schedulePositionToneByPosition)
+                                        : getHomeCardToneClass(card.position, schedulePositionToneByPosition)
                                       : themeMode === 'light'
                                         ? 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
                                         : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
@@ -16301,7 +16393,7 @@ ${rowsToHtml(late)}
                               <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                                 {t('筛选', 'Filter')}
                               </span>
-                              {ALLOWED_POSITIONS.map((position) => (
+                              {DAILY_LIST_VISIBLE_POSITIONS.map((position) => (
                                 <button
                                   key={`filter-${position}`}
                                   type="button"
@@ -16707,6 +16799,7 @@ ${rowsToHtml(late)}
                   renderAuditSummary={renderAuditSummary}
                   formatAuditDetail={formatAuditDetail}
                   displayStaffId={displayStaffId}
+                  resolveAdminUserIdentity={resolveAdminUserIdentity}
                 />
 
                 <EmployeeEditModal
@@ -16788,6 +16881,7 @@ ${rowsToHtml(late)}
                 userOptions={adminAccessUserOptions}
                 agencyOptions={employeeAgencyOptions}
                 requestRows={adminAccessRequests}
+                resolveAdminUserIdentity={resolveAdminUserIdentity}
                 onRefreshAccess={async () => {
                   await fetchAdminAccessAccountsAndUsers({ lockUi: false });
                 }}
@@ -16855,8 +16949,18 @@ ${rowsToHtml(late)}
                   timecardPresentDayFilter={timecardPresentDayFilter}
                   setTimecardPresentDayFilter={setTimecardPresentDayFilter}
                   timecardAgencySort={timecardAgencySort}
+                  timecardTotalSort={timecardTotalSort}
                   onToggleTimecardAgencySort={() =>
-                    setTimecardAgencySort((prev) => (prev === '' ? 'asc' : prev === 'asc' ? 'desc' : ''))
+                    {
+                      setTimecardTotalSort('');
+                      setTimecardAgencySort((prev) => (prev === '' ? 'asc' : prev === 'asc' ? 'desc' : ''));
+                    }
+                  }
+                  onToggleTimecardTotalSort={() =>
+                    {
+                      setTimecardAgencySort('');
+                      setTimecardTotalSort((prev) => (prev === '' ? 'desc' : prev === 'desc' ? 'asc' : ''));
+                    }
                   }
                   timecardRowsRendered={timecardRowsRendered}
                   timecardAuditByStaffDate={timecardAuditByStaffDate}
@@ -16864,6 +16968,7 @@ ${rowsToHtml(late)}
                   formatAuditDetail={formatAuditDetail}
                   formatCellAuditTime={formatCellAuditTime}
                   normalizeAuditActor={normalizeAuditActor}
+                  resolveAdminUserIdentity={resolveAdminUserIdentity}
                   renderAuditSummary={renderAuditSummary}
                 />
 

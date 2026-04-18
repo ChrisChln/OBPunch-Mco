@@ -1,4 +1,6 @@
 import { createPortal } from 'react-dom';
+import AdminUserAvatar from '../components/AdminUserAvatar';
+import type { AdminUserIdentityView } from '../adminIdentity';
 import type { AuditRow } from '../types';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -16,6 +18,12 @@ type EmployeeAuditModalProps = {
   renderAuditSummary: (text: string) => any;
   formatAuditDetail: (row: AuditRow) => { summary: string; details: Array<{ label: string; value: string }> };
   displayStaffId: (value: string) => string;
+  resolveAdminUserIdentity: (input: {
+    userId?: string | null;
+    userEmail?: string | null;
+    actor?: unknown;
+    displayName?: string | null;
+  }) => AdminUserIdentityView;
 };
 
 export default function EmployeeAuditModal({
@@ -30,7 +38,8 @@ export default function EmployeeAuditModal({
   formatCellAuditTime,
   renderAuditSummary,
   formatAuditDetail,
-  displayStaffId
+  displayStaffId,
+  resolveAdminUserIdentity
 }: EmployeeAuditModalProps) {
   if (!open || typeof document === 'undefined') return null;
 
@@ -61,11 +70,11 @@ export default function EmployeeAuditModal({
             </div>
           ) : (
             <>
-              {employeeAuditError && (
+              {employeeAuditError ? (
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                  {t(`加载失败：${employeeAuditError}`, `Load failed: ${employeeAuditError}`)}
+                  {t(`加载失败: ${employeeAuditError}`, `Load failed: ${employeeAuditError}`)}
                 </div>
-              )}
+              ) : null}
               {employeeAuditRows.length === 0 ? (
                 <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-6 text-center text-sm text-slate-300">
                   {t('暂无记录', 'No records')}
@@ -73,18 +82,32 @@ export default function EmployeeAuditModal({
               ) : (
                 employeeAuditRows.map((item) => {
                   const detail = formatAuditDetail(item);
+                  const actorIdentity = resolveAdminUserIdentity({
+                    actor: (item as any).actor_raw ?? item.actor,
+                    displayName: String(item.actor ?? '').trim()
+                  });
+
                   return (
                     <div
                       key={String(item.id ?? `${item.created_at ?? ''}_${item.action ?? ''}`)}
                       className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2"
                     >
-                      <div className="text-[11px] text-slate-400">
-                        {formatCellAuditTime(item.created_at)} · {String(item.actor ?? '').trim() || '-'}
+                      <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                        <AdminUserAvatar
+                          name={actorIdentity.displayName}
+                          avatarUrl={actorIdentity.avatarUrl}
+                          fallbackInitial={actorIdentity.fallbackInitial}
+                          size={20}
+                          className="border-white/10 bg-slate-700 text-slate-100"
+                        />
+                        <span className="truncate text-slate-200">{actorIdentity.displayName || '-'}</span>
+                        <span className="text-slate-500">·</span>
+                        <span>{formatCellAuditTime(item.created_at)}</span>
                       </div>
                       <div className="mt-0.5 text-sm text-slate-100">{renderAuditSummary(detail.summary)}</div>
-                      {detail.details.slice(0, 2).map((d, idx2) => (
-                        <div key={`${String(item.id ?? 'row')}_${d.label}_${idx2}`} className="mt-1 text-xs">
-                          <div className="whitespace-normal break-words text-slate-200">{renderAuditSummary(`${d.label}: ${d.value}`)}</div>
+                      {detail.details.slice(0, 2).map((entry, index) => (
+                        <div key={`${String(item.id ?? 'row')}_${entry.label}_${index}`} className="mt-1 text-xs">
+                          <div className="whitespace-normal break-words text-slate-200">{renderAuditSummary(`${entry.label}: ${entry.value}`)}</div>
                         </div>
                       ))}
                     </div>

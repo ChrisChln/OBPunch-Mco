@@ -103,7 +103,7 @@ export default function EmployeesToolbar({
             type="button"
             disabled={isLocked || employeeBadgeBatchPrinting || employeeBadgeBatchSelectedStaffIds.length === 0}
             onClick={() => void onPrintSelectedBadgeBatch()}
-            className="rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-primary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {employeeBadgeBatchPrinting
               ? t('生成中...', 'Generating...')
@@ -113,7 +113,7 @@ export default function EmployeesToolbar({
             type="button"
             disabled={isLocked || employeeBadgeBatchPrinting || employeeBadgeBatchSelectedStaffIds.length === 0}
             onClick={() => setEmployeeBadgeBatchSelectedStaffIds([])}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('清空已选', 'Clear selected')}
           </button>
@@ -134,7 +134,7 @@ export default function EmployeesToolbar({
             type="button"
             disabled={writeLocked}
             onClick={() => fileInputRef.current?.click()}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('导入', 'Import')}
           </button>
@@ -142,7 +142,7 @@ export default function EmployeesToolbar({
             type="button"
             disabled={isLocked}
             onClick={() => void exportEmployees()}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('导出', 'Export')}
           </button>
@@ -150,7 +150,7 @@ export default function EmployeesToolbar({
             type="button"
             disabled={writeLocked}
             onClick={() => setEmployeeAddOpen(true)}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('新增员工', 'Add employee')}
           </button>
@@ -158,7 +158,7 @@ export default function EmployeesToolbar({
             type="button"
             disabled={isLocked}
             onClick={() => void fetchEmployees({ reset: true })}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('刷新', 'Refresh')}
           </button>
@@ -173,7 +173,7 @@ export default function EmployeesToolbar({
               setEmployeeLabels([]);
               void fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
             }}
-            className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('清空筛选', 'Clear filters')}
           </button>
