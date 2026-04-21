@@ -44,6 +44,27 @@ export type PackageDailyMetrics = {
   computed_at: string;
 };
 
+export type PackageDerivedMetrics = {
+  pieceEfficiency: number | null;
+  orderEfficiency: number | null;
+  slaRatio: number | null;
+};
+
+export type PackageMetricsDateCoverage = {
+  inboundDateStart: string | null;
+  inboundDateEnd: string | null;
+  assessmentInboundRowCount: number;
+  calendarInboundRowCount: number;
+};
+
+export type PackageDailyReportLabor = {
+  scheduledCount: number;
+  presentCount: number;
+  lateCount: number;
+  earlyLeaveCount: number;
+  totalHours: number | null;
+};
+
 const pad = (value: number) => String(value).padStart(2, '0');
 
 export const isDateOnly = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '').trim());
@@ -136,7 +157,136 @@ const isWithinWindow = (value: string | null | undefined, start: string, endExcl
 const isFinishedStatus = (status: string) => status.trim() === '已发货';
 const isBacklogStatus = (status: string) => status.trim() === '待发货';
 
-const safeRatio = (numerator: number, denominator: number) => (denominator > 0 ? Number((numerator / denominator).toFixed(6)) : 0);
+const safeRatio = (numerator: number, denominator: number) =>
+  denominator > 0 ? Number((numerator / denominator).toFixed(6)) : 0;
+
+export const inspectPackageMetricsDateCoverage = (
+  rows: Pick<PackageMetricsRowInput, 'inboundAt'>[],
+  metricDate: string
+): PackageMetricsDateCoverage => {
+  const assessmentWindow = buildAssessmentWindow(metricDate);
+  const calendarWindow = buildCalendarWindow(metricDate);
+  let inboundDateStart: string | null = null;
+  let inboundDateEnd: string | null = null;
+  let assessmentInboundRowCount = 0;
+  let calendarInboundRowCount = 0;
+
+  for (const row of rows) {
+    const inboundAt = normalizePackageTimestamp(row.inboundAt);
+    if (!inboundAt) continue;
+    const inboundDate = inboundAt.slice(0, 10);
+    if (!inboundDateStart || inboundDate < inboundDateStart) inboundDateStart = inboundDate;
+    if (!inboundDateEnd || inboundDate > inboundDateEnd) inboundDateEnd = inboundDate;
+    if (isWithinWindow(inboundAt, assessmentWindow.start, assessmentWindow.endExclusive)) {
+      assessmentInboundRowCount += 1;
+    }
+    if (isWithinWindow(inboundAt, calendarWindow.start, calendarWindow.endExclusive)) {
+      calendarInboundRowCount += 1;
+    }
+  }
+
+  return {
+    inboundDateStart,
+    inboundDateEnd,
+    assessmentInboundRowCount,
+    calendarInboundRowCount
+  };
+};
+
+export const computePackageDerivedMetrics = (
+  metrics: Pick<
+    PackageDailyMetrics,
+    'calendar_completed_item_qty' | 'calendar_completed_order_count' | 'assessment_completed_order_count' | 'assessment_total_order_count'
+  >,
+  totalHours: number | null | undefined
+): PackageDerivedMetrics => {
+  const normalizedHours =
+    totalHours != null && Number.isFinite(Number(totalHours)) && Number(totalHours) > 0
+      ? Number(totalHours)
+      : null;
+
+  return {
+    pieceEfficiency: normalizedHours ? Number((metrics.calendar_completed_item_qty / normalizedHours).toFixed(2)) : null,
+    orderEfficiency: normalizedHours ? Number((metrics.calendar_completed_order_count / normalizedHours).toFixed(2)) : null,
+    slaRatio:
+      metrics.assessment_total_order_count > 0
+        ? Number((metrics.assessment_completed_order_count / metrics.assessment_total_order_count).toFixed(6))
+        : null
+  };
+};
+
+const formatReportDate = (dateOnly: string) => String(dateOnly ?? '').trim().replace(/-/g, '/');
+
+const formatInteger = (value: number | null | undefined) => {
+  const normalized = Number(value ?? 0);
+  if (!Number.isFinite(normalized)) return '0';
+  return String(Math.max(0, Math.round(normalized)));
+};
+
+const formatPercentText = (value: number | null | undefined) => {
+  const normalized = Number(value ?? 0);
+  if (!Number.isFinite(normalized)) return '0%';
+  const percent = normalized * 100;
+  return `${Number(percent.toFixed(2)).toString()}%`;
+};
+
+const formatHoursText = (value: number | null | undefined) => {
+  const normalized = Number(value ?? 0);
+  if (!Number.isFinite(normalized) || normalized <= 0) return '0';
+  return Number(normalized.toFixed(2)).toString();
+};
+
+const formatEfficiencyText = (value: number | null | undefined) => {
+  const normalized = Number(value ?? 0);
+  if (!Number.isFinite(normalized) || normalized < 0) return '0.00';
+  return normalized.toFixed(2);
+};
+
+export const buildPackageDailyReportText = (options: {
+  metricDate: string;
+  metrics: PackageDailyMetrics;
+  labor: PackageDailyReportLabor;
+  unfinishedReason?: string | null;
+  stationLabel?: string;
+}) => {
+  const stationLabel = String(options.stationLabel ?? 'JDL NYC4').trim() || 'JDL NYC4';
+  const unfinishedReason = String(options.unfinishedReason ?? '').trim() || '/';
+  const attendanceRate =
+    options.labor.scheduledCount > 0
+      ? options.labor.presentCount / options.labor.scheduledCount
+      : 0;
+  const derived = computePackageDerivedMetrics(options.metrics, options.labor.totalHours);
+
+  return [
+    `${stationLabel} ${formatReportDate(options.metricDate)} 出库日报：`,
+    '',
+    `考核进单量：${formatInteger(options.metrics.assessment_total_order_count)}单，${formatInteger(options.metrics.assessment_total_item_qty)}件`,
+    `考核完成单量：${formatInteger(options.metrics.assessment_completed_order_count)}单，${formatInteger(options.metrics.assessment_completed_item_qty)}件`,
+    `考核未完成单量：${formatInteger(options.metrics.assessment_unfinished_order_count)}单，${formatInteger(options.metrics.assessment_unfinished_item_qty)}件`,
+    `未完成原因：${unfinishedReason}`,
+    '',
+    `全天进单量：${formatInteger(options.metrics.calendar_inbound_order_count)}单，${formatInteger(options.metrics.calendar_inbound_item_qty)}件`,
+    `全天完成单量：${formatInteger(options.metrics.calendar_completed_order_count)}单，${formatInteger(options.metrics.calendar_completed_item_qty)}件`,
+    `全天未完成单量：${formatInteger(options.metrics.calendar_backlog_order_count)}单，${formatInteger(options.metrics.calendar_backlog_item_qty)}件`,
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    'O岗出勤',
+    `编制：${formatInteger(options.labor.scheduledCount)}人`,
+    `实到：${formatInteger(options.labor.presentCount)}人`,
+    `迟到：${formatInteger(options.labor.lateCount)}人`,
+    `早退：${formatInteger(options.labor.earlyLeaveCount)}人`,
+    `出勤率：${formatPercentText(attendanceRate)}`,
+    `总工时: ${formatHoursText(options.labor.totalHours)} 小时`,
+    `人效（件效）：${formatEfficiencyText(derived.pieceEfficiency)}`,
+    `人效（单效）：${formatEfficiencyText(derived.orderEfficiency)}`,
+    '',
+    `SLA：${formatPercentText(derived.slaRatio)}`
+  ].join('\n');
+};
 
 export const computePackageDailyMetrics = (
   rows: PackageMetricsRowInput[],
@@ -144,6 +294,7 @@ export const computePackageDailyMetrics = (
     metricDate: string;
     sourceFilename: string;
     computedAt?: string;
+    inventoryQty?: number | null;
   }
 ): PackageDailyMetrics => {
   const metricDate = String(options.metricDate ?? '').trim();
@@ -212,6 +363,11 @@ export const computePackageDailyMetrics = (
 
   const assessmentTotalOrderCount = assessmentSingleOrderCount + assessmentMultiOrderCount;
   const assessmentTotalItemQty = assessmentSingleItemQty + assessmentMultiItemQty;
+  const inventoryQtyRaw = options.inventoryQty;
+  const inventoryQty =
+    inventoryQtyRaw == null || !Number.isFinite(Number(inventoryQtyRaw)) || Number(inventoryQtyRaw) < 0
+      ? null
+      : Number(Number(inventoryQtyRaw).toFixed(2));
 
   return {
     metric_date: metricDate,
@@ -226,8 +382,8 @@ export const computePackageDailyMetrics = (
     assessment_multi_item_ratio: safeRatio(assessmentMultiItemQty, assessmentTotalItemQty),
     assessment_total_item_qty: assessmentTotalItemQty,
     calendar_inbound_item_qty: calendarInboundItemQty,
-    inventory_qty: null,
-    inventory_conversion_ratio: null,
+    inventory_qty: inventoryQty,
+    inventory_conversion_ratio: inventoryQty && inventoryQty > 0 ? safeRatio(calendarInboundItemQty, inventoryQty) : null,
     assessment_unfinished_item_qty: assessmentUnfinishedItemQty,
     assessment_completed_order_count: assessmentCompletedOrderCount,
     assessment_completed_item_qty: assessmentCompletedItemQty,

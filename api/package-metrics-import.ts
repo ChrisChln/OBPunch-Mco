@@ -11,6 +11,23 @@ type PackageMetricsImportBody = {
   rows?: PackageMetricsParsedRow[];
 };
 
+const loadForecastInventoryQty = async (supabase: any, metricDate: string) => {
+  const inventoryRes = await supabase
+    .from('volume_forecast_daily_inputs')
+    .select('inventory_level')
+    .eq('input_date', metricDate)
+    .maybeSingle();
+
+  if (inventoryRes.error) {
+    throw new Error(String(inventoryRes.error.message ?? 'Failed to load forecast inventory.'));
+  }
+
+  const rawInventory = inventoryRes.data?.inventory_level;
+  if (rawInventory == null) return null;
+  const inventoryQty = Number(rawInventory);
+  return Number.isFinite(inventoryQty) && inventoryQty >= 0 ? inventoryQty : null;
+};
+
 const isProduction = process.env.NODE_ENV === 'production';
 const supabaseUrl =
   (process.env.SUPABASE_URL as string | undefined) ??
@@ -105,6 +122,7 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
+    const inventoryQty = await loadForecastInventoryQty(supabase, metricDate);
     const persistence = {
       insertRun: async (payload: any) => {
         const insertRes = await supabase
@@ -137,7 +155,8 @@ export default async function handler(req: any, res: any) {
             {
               metricDate,
               filename,
-              rows
+              rows,
+              inventoryQty
             },
             persistence
           )
@@ -145,7 +164,8 @@ export default async function handler(req: any, res: any) {
             {
               metricDate,
               filename,
-              fileBase64
+              fileBase64,
+              inventoryQty
             },
             persistence
           );
