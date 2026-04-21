@@ -1,5 +1,6 @@
 export const ADMIN_MODULE_KEYS = [
   'home',
+  'package_metrics',
   'employees',
   'accounts',
   'permissions',

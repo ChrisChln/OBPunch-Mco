@@ -37,6 +37,16 @@ describe('adminAccess', () => {
     expect(getDefaultModuleAccess('agency', 'permissions')).toBe('view');
   });
 
+  test('package metrics is an independent module from forecast', () => {
+    const map = buildEffectiveModuleMap('level3', [
+      { module_key: 'package_metrics', access_level: 'hidden' },
+      { module_key: 'forecast', access_level: 'operate' }
+    ]);
+
+    expect(map.package_metrics).toBe('hidden');
+    expect(map.forecast).toBe('operate');
+  });
+
   test('checks view and operate access correctly', () => {
     const map = buildEffectiveModuleMap('agency', [{ module_key: 'agency', access_level: 'operate' }]);
     expect(hasModuleAccess(map, 'agency', 'view')).toBe(true);
@@ -80,7 +90,7 @@ describe('adminAccess', () => {
     expect(canManageAdminAccess(level1WithoutPermission)).toBe(false);
   });
 
-  test('termination review requires schedule operate', () => {
+  test('termination review requires level1/level2 and schedule operate', () => {
     const readonlyLevel3 = normalizeAdminAccessContext({
       user_id: 'u3',
       role: 'level3',
@@ -91,8 +101,14 @@ describe('adminAccess', () => {
       role: 'level3',
       modules: [{ module_key: 'schedule', access_level: 'operate' }]
     });
+    const level2WithOperate = normalizeAdminAccessContext({
+      user_id: 'u5',
+      role: 'level2',
+      modules: [{ module_key: 'schedule', access_level: 'operate' }]
+    });
 
     expect(canReviewTerminationRequests(readonlyLevel3)).toBe(false);
-    expect(canReviewTerminationRequests(overriddenLevel3)).toBe(true);
+    expect(canReviewTerminationRequests(overriddenLevel3)).toBe(false);
+    expect(canReviewTerminationRequests(level2WithOperate)).toBe(true);
   });
 });

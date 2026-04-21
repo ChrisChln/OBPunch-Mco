@@ -1076,7 +1076,7 @@ const getVisibleAdminPages = (accessContext: AdminAccessContext | null | undefin
   const pages: AdminPage[] = [];
 
   if (hasModuleAccess(moduleMap, 'home', 'view')) pages.push('home');
-  if (hasModuleAccess(moduleMap, 'forecast', 'view')) pages.push('package_metrics');
+  if (hasModuleAccess(moduleMap, 'package_metrics', 'view')) pages.push('package_metrics');
   if (hasModuleAccess(moduleMap, 'employees', 'view')) pages.push('employees');
   if (hasModuleAccess(moduleMap, 'accounts', 'view')) pages.push('accounts');
   if (hasModuleAccess(moduleMap, 'permissions', 'view')) pages.push('permissions');
@@ -1290,7 +1290,7 @@ export default function AdminAppPage() {
       timecard: hasModuleAccess(adminModuleMap, 'timecard', 'operate'),
       devices: hasModuleAccess(adminModuleMap, 'devices', 'operate'),
       forecast: hasModuleAccess(adminModuleMap, 'forecast', 'operate'),
-      packageMetrics: hasModuleAccess(adminModuleMap, 'forecast', 'operate'),
+      packageMetrics: hasModuleAccess(adminModuleMap, 'package_metrics', 'operate'),
       predictionModel: hasModuleAccess(adminModuleMap, 'prediction_model', 'operate'),
       efficiency: hasModuleAccess(adminModuleMap, 'efficiency', 'operate'),
       leaveApproval: hasModuleAccess(adminModuleMap, 'leave_approval', 'operate'),
