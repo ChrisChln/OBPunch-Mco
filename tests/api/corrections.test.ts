@@ -23,24 +23,55 @@ const createRes = (): MockRes => {
 };
 
 describe('api/corrections', () => {
-  const mockSupabaseModule = (insertErrorMessage?: string) => {
+  const mockSupabaseModule = (options?: {
+    insertErrorMessage?: string;
+    terminatedAt?: string | null;
+    employeeLookupErrorMessage?: string;
+  }) => {
     vi.doMock('@supabase/supabase-js', () => ({
       createClient: () => ({
-        from: () => ({
-          insert: async () =>
-            insertErrorMessage ? { error: { message: insertErrorMessage } } : { error: null }
-        })
+        from: (table: string) => {
+          if (table === 'ob_employees') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  limit: async () =>
+                    options?.employeeLookupErrorMessage
+                      ? { data: null, error: { message: options.employeeLookupErrorMessage } }
+                      : { data: [{ terminated_at: options?.terminatedAt ?? null }], error: null }
+                })
+              })
+            };
+          }
+
+          return {
+            insert: async () =>
+              options?.insertErrorMessage ? { error: { message: options.insertErrorMessage } } : { error: null }
+          };
+        }
       })
     }));
   };
   const mockSupabaseModuleThrowing = (message: string) => {
     vi.doMock('@supabase/supabase-js', () => ({
       createClient: () => ({
-        from: () => ({
-          insert: async () => {
-            throw new Error(message);
+        from: (table: string) => {
+          if (table === 'ob_employees') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  limit: async () => ({ data: [{ terminated_at: null }], error: null })
+                })
+              })
+            };
           }
-        })
+
+          return {
+            insert: async () => {
+              throw new Error(message);
+            }
+          };
+        }
       })
     }));
   };
@@ -119,7 +150,7 @@ describe('api/corrections', () => {
     process.env.ADMIN_TOKEN = 'secret';
     process.env.SUPABASE_URL = 'https://example.supabase.co';
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role';
-    mockSupabaseModule('insert failed');
+    mockSupabaseModule({ insertErrorMessage: 'insert failed' });
     const { default: handler } = await import('../../api/corrections');
     const req = {
       method: 'POST',
@@ -147,6 +178,40 @@ describe('api/corrections', () => {
     await handler(req, res);
     expect(res.code).toBe(200);
     expect(res.body).toEqual({ status: 'ok' });
+  });
+
+  test('returns 409 for terminated employee', async () => {
+    process.env.ADMIN_TOKEN = 'secret';
+    process.env.SUPABASE_URL = 'https://example.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role';
+    mockSupabaseModule({ terminatedAt: '2026-04-20T08:00:00Z' });
+    const { default: handler } = await import('../../api/corrections');
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer secret' },
+      body: { staff_id: 'US010454', action: 'IN' }
+    };
+    const res = createRes();
+    await handler(req, res);
+    expect(res.code).toBe(409);
+    expect(String(res.body?.error ?? '')).toContain('Terminated employee cannot punch');
+  });
+
+  test('returns 500 when employee lookup fails', async () => {
+    process.env.ADMIN_TOKEN = 'secret';
+    process.env.SUPABASE_URL = 'https://example.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role';
+    mockSupabaseModule({ employeeLookupErrorMessage: 'lookup failed' });
+    const { default: handler } = await import('../../api/corrections');
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer secret' },
+      body: { staff_id: 'US010454', action: 'IN' }
+    };
+    const res = createRes();
+    await handler(req, res);
+    expect(res.code).toBe(500);
+    expect(String(res.body?.error ?? '')).toContain('lookup failed');
   });
 
   test('accepts non-Bearer authorization token format', async () => {
@@ -189,11 +254,23 @@ describe('api/corrections', () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role';
     vi.doMock('@supabase/supabase-js', () => ({
       createClient: () => ({
-        from: () => ({
-          insert: async () => {
-            throw 'raw failure';
+        from: (table: string) => {
+          if (table === 'ob_employees') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  limit: async () => ({ data: [{ terminated_at: null }], error: null })
+                })
+              })
+            };
           }
-        })
+
+          return {
+            insert: async () => {
+              throw 'raw failure';
+            }
+          };
+        }
       })
     }));
     const { default: handler } = await import('../../api/corrections');
