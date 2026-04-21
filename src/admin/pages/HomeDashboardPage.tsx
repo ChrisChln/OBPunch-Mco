@@ -26,8 +26,11 @@ type HomeDashboardPageProps = {
   getHomeCardToneClass: (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => string;
   getHomeChipToneClass: (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => string;
   getScheduleLabelToneClass: (label: string) => string;
+  getScheduleTableLabelBadgeClass: (label: string) => string;
   getHomePanelToneClass: (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => string;
   getSchedulePositionBadgeClass: (position: string) => string;
+  getScheduleTablePositionBadgeClass: (position: string) => string;
+  getScheduleTableShiftBadgeClass: (value: '' | 'early' | 'late') => string;
   schedulePositionToneByPosition: Partial<Record<AllowedPosition, LabelToneKey>>;
   homeRosterPositionFilter: 'ALL' | AllowedPosition;
   setHomeRosterPositionFilter: (value: 'ALL' | AllowedPosition) => void;
@@ -131,6 +134,24 @@ const getAttendanceCardClass = (position: string) => {
   return 'border-white/10 bg-white/[0.04]';
 };
 
+const getAttendanceCardClassLight = (position: string) => {
+  if (position === 'Pick') return 'border-sky-200 bg-sky-50/85';
+  if (position === 'Pack') return 'border-emerald-200 bg-emerald-50/85';
+  if (position === 'Rebin') return 'border-amber-200 bg-amber-50/85';
+  if (position === 'Preship') return 'border-rose-200 bg-rose-50/85';
+  if (position === 'Transfer') return 'border-violet-200 bg-violet-50/85';
+  return 'border-slate-200 bg-white/90';
+};
+
+const getAttendanceCardValueClassLight = (position: string) => {
+  if (position === 'Pick') return 'text-sky-700';
+  if (position === 'Pack') return 'text-emerald-700';
+  if (position === 'Rebin') return 'text-amber-700';
+  if (position === 'Preship') return 'text-rose-700';
+  if (position === 'Transfer') return 'text-violet-700';
+  return 'text-slate-700';
+};
+
 const getAttendanceCardValueClass = (position: string) => {
   if (position === 'Pick') return 'text-sky-100';
   if (position === 'Pack') return 'text-emerald-100';
@@ -148,14 +169,18 @@ function HomeDashboardPage({
   getHomeCardToneClass: _getHomeCardToneClass,
   getHomeChipToneClass: _getHomeChipToneClass,
   getScheduleLabelToneClass,
+  getScheduleTableLabelBadgeClass,
   getHomePanelToneClass: _getHomePanelToneClass,
   getSchedulePositionBadgeClass,
+  getScheduleTablePositionBadgeClass,
+  getScheduleTableShiftBadgeClass,
   schedulePositionToneByPosition: _schedulePositionToneByPosition,
   homeRosterPositionFilter: _homeRosterPositionFilter,
   setHomeRosterPositionFilter,
   onOpenTimecardCalibration,
   homeRosterRowsCurrent
 }: HomeDashboardPageProps) {
+  const isLight = _themeMode === 'light';
   const [search, setSearch] = useState('');
   const [positionFilter, setPositionFilter] = useState('');
   const [shiftFilter, setShiftFilter] = useState('');
@@ -294,20 +319,20 @@ function HomeDashboardPage({
     <main className="h-full w-full text-paper">
       <section className="glass w-full px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
         <div className="space-y-3">
-          <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-stone-300">
+          <div className={['inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em]', isLight ? 'border-slate-200 bg-white text-slate-500' : 'border-white/10 bg-white/[0.04] text-stone-300'].join(' ')}>
             Operational Dashboard
           </div>
           <div className="space-y-2">
-            <h1 className="font-display text-4xl leading-none tracking-[0.03em] text-stone-50 sm:text-5xl">Dashboard</h1>
+            <h1 className={['font-display text-4xl leading-none tracking-[0.03em] sm:text-5xl', isLight ? 'text-slate-900' : 'text-stone-50'].join(' ')}>Dashboard</h1>
           </div>
         </div>
 
-        <div className="mt-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-black/20 p-4 sm:p-5">
+        <div className={['mt-6 flex flex-col gap-4 rounded-[28px] border p-4 sm:p-5', isLight ? 'border-slate-200 bg-white/70' : 'border-white/10 bg-black/20'].join(' ')}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-1">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">Schedule Date</div>
-              <div className="text-xl font-semibold tracking-[-0.02em] text-stone-50">{operationalDate || '-'}</div>
-              <div className="text-sm text-stone-400">Updated {lastUpdatedAt || '-'}</div>
+              <div className={['text-[11px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>Schedule Date</div>
+              <div className={['text-xl font-semibold tracking-[-0.02em]', isLight ? 'text-slate-900' : 'text-stone-50'].join(' ')}>{operationalDate || '-'}</div>
+              <div className={['text-sm', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>Updated {lastUpdatedAt || '-'}</div>
             </div>
           </div>
 
@@ -316,13 +341,19 @@ function HomeDashboardPage({
               const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
               const isMorning = card.shift === 'early';
               return (
-                <div key={`outbound:${card.shift}`} className={['rounded-[24px] border px-5 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]', getAttendanceCardClass(isMorning ? 'Pick' : 'Transfer')].join(' ')}>
+                <div
+                    key={`outbound:${card.shift}`}
+                    className={[
+                      'rounded-[24px] border px-5 py-4 shadow-none',
+                      isLight ? getAttendanceCardClassLight(isMorning ? 'Pick' : 'Transfer') : getAttendanceCardClass(isMorning ? 'Pick' : 'Transfer')
+                    ].join(' ')}
+                  >
                   <div className="flex items-end justify-between gap-4">
                     <div>
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">{isMorning ? 'Outbound Morning' : 'Outbound Night'}</div>
+                      <div className={['text-[11px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>{isMorning ? 'Outbound Morning' : 'Outbound Night'}</div>
                       <div className="mt-3 flex items-end gap-3">
-                        <span className="text-3xl font-semibold tracking-[-0.03em] text-stone-50">{card.present}/{card.expected}</span>
-                        <span className={['pb-1 text-sm font-semibold', ratio < 80 ? 'text-rose-300' : ratio >= 90 ? getAttendanceCardValueClass(isMorning ? 'Pick' : 'Transfer') : 'text-stone-300'].join(' ')}>
+                        <span className={['text-3xl font-semibold tracking-[-0.03em]', isLight ? 'text-slate-800' : 'text-stone-50'].join(' ')}>{card.present}/{card.expected}</span>
+                        <span className={['pb-1 text-sm font-semibold', isLight ? (ratio < 80 ? 'text-rose-500' : ratio >= 90 ? getAttendanceCardValueClassLight(isMorning ? 'Pick' : 'Transfer') : 'text-slate-500') : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? getAttendanceCardValueClass(isMorning ? 'Pick' : 'Transfer') : 'text-stone-300'].join(' ')}>
                           {card.expected > 0 ? `${ratio.toFixed(1)}% coverage` : '0.0% coverage'}
                         </span>
                       </div>
@@ -339,34 +370,42 @@ function HomeDashboardPage({
                 {group.cards.map((card) => {
                   const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
                   return (
-                    <div key={`${card.position}:${card.shift}`} className={['rounded-[24px] border px-4 py-4', getAttendanceCardClass(card.position)].join(' ')}>
+                    <div
+                      key={`${card.position}:${card.shift}`}
+                      className={[
+                        'rounded-[24px] border px-4 py-4 shadow-none',
+                        isLight ? getAttendanceCardClassLight(card.position) : getAttendanceCardClass(card.position)
+                      ].join(' ')}
+                    >
                       <div className="flex items-start justify-between gap-4">
                         <div>
-                          <div className="text-sm font-semibold text-stone-100">{card.shift === 'early' ? 'Morning' : 'Night'} {card.position}</div>
-                          <div className="mt-2 text-xs text-stone-400">
+                          <div className={['text-sm font-semibold', isLight ? 'text-slate-800' : 'text-stone-100'].join(' ')}>{card.shift === 'early' ? 'Morning' : 'Night'} {card.position}</div>
+                          <div className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>
                             {card.present}/{card.expected}
-                            <span className={['ml-2 font-semibold', ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'].join(' ')}>
+                            <span className={['ml-2 font-semibold', isLight ? (ratio < 80 ? 'text-rose-500' : ratio >= 90 ? getAttendanceCardValueClassLight(card.position) : 'text-slate-500') : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'].join(' ')}>
                               {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
                             </span>
                           </div>
-                          {card.offWorked > 0 ? <div className="mt-2 text-xs font-medium text-stone-300">+{card.offWorked} off worked</div> : null}
+                          {card.offWorked > 0 ? <div className={['mt-2 text-xs font-medium', isLight ? 'text-slate-500' : 'text-stone-300'].join(' ')}>+{card.offWorked} off worked</div> : null}
                         </div>
                         <div className={[
-                          'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
-                          card.position === 'Pick'
-                            ? 'border-sky-300/20 bg-sky-400/[0.10]'
-                            : card.position === 'Pack'
-                              ? 'border-emerald-300/20 bg-emerald-400/[0.10]'
-                              : card.position === 'Rebin'
-                                ? 'border-amber-300/20 bg-amber-400/[0.10]'
-                                : card.position === 'Preship'
-                                  ? 'border-rose-300/20 bg-rose-400/[0.10]'
-                                  : card.position === 'Transfer'
-                                    ? 'border-violet-300/20 bg-violet-400/[0.10]'
-                                    : 'border-white/10 bg-white/[0.04]'
+                          'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-none',
+                          isLight
+                            ? getAttendanceCardClassLight(card.position).replace('/85', '')
+                            : card.position === 'Pick'
+                              ? 'border-sky-300/20 bg-sky-400/[0.10]'
+                              : card.position === 'Pack'
+                                ? 'border-emerald-300/20 bg-emerald-400/[0.10]'
+                                : card.position === 'Rebin'
+                                  ? 'border-amber-300/20 bg-amber-400/[0.10]'
+                                  : card.position === 'Preship'
+                                    ? 'border-rose-300/20 bg-rose-400/[0.10]'
+                                    : card.position === 'Transfer'
+                                      ? 'border-violet-300/20 bg-violet-400/[0.10]'
+                                      : 'border-white/10 bg-white/[0.04]'
                         ].join(' ')}>
-                          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">On Clock</div>
-                          <div className={['mt-1 text-3xl font-semibold leading-none', getAttendanceCardValueClass(card.position)].join(' ')}>{card.onClock}</div>
+                          <div className={['text-[10px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>On Clock</div>
+                          <div className={['mt-1 text-3xl font-semibold leading-none', isLight ? getAttendanceCardValueClassLight(card.position) : getAttendanceCardValueClass(card.position)].join(' ')}>{card.onClock}</div>
                         </div>
                       </div>
                     </div>
@@ -377,13 +416,13 @@ function HomeDashboardPage({
           </div>
 
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1.5fr)_220px_220px_repeat(3,minmax(0,160px))]">
-            <label className="relative flex h-12 items-center overflow-hidden rounded-[20px] border border-white/10 bg-white/[0.04] px-4">
-              <SearchIcon className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+            <label className={['relative flex h-12 items-center overflow-hidden rounded-[20px] border px-4', isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-white/[0.04]'].join(' ')}>
+              <SearchIcon className={['pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2', isLight ? 'text-slate-400' : 'text-stone-400'].join(' ')} />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search by staff ID or name"
-                className="home-search-input h-full w-full bg-transparent pl-8 text-sm text-stone-100 outline-none placeholder:text-stone-500"
+                className={['home-search-input h-full w-full bg-transparent pl-8 text-sm outline-none', isLight ? 'text-slate-800 placeholder:text-slate-400' : 'text-stone-100 placeholder:text-stone-500'].join(' ')}
               />
             </label>
             <div className="relative">
@@ -398,48 +437,48 @@ function HomeDashboardPage({
                     if (casted) setHomeRosterPositionFilter(casted);
                   }
                 }}
-                className="h-12 w-full appearance-none rounded-[20px] border border-white/10 bg-white/[0.04] px-4 pr-10 text-sm text-stone-100 outline-none transition focus:border-white/20"
+                className={['h-12 w-full appearance-none rounded-[20px] border px-4 pr-10 text-sm outline-none transition', isLight ? 'border-slate-200 bg-white text-slate-800 focus:border-slate-300' : 'border-white/10 bg-white/[0.04] text-stone-100 focus:border-white/20'].join(' ')}
               >
                 <option value="">All positions</option>
                 {positionOptions.map((position) => (
                   <option key={position} value={position}>{position}</option>
                 ))}
               </select>
-              <ChevronDownIcon className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+              <ChevronDownIcon className={['pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2', isLight ? 'text-slate-400' : 'text-stone-400'].join(' ')} />
             </div>
             <div className="relative">
               <select
                 value={shiftFilter}
                 onChange={(e) => setShiftFilter(e.target.value)}
-                className="h-12 w-full appearance-none rounded-[20px] border border-white/10 bg-white/[0.04] px-4 pr-10 text-sm text-stone-100 outline-none transition focus:border-white/20"
+                className={['h-12 w-full appearance-none rounded-[20px] border px-4 pr-10 text-sm outline-none transition', isLight ? 'border-slate-200 bg-white text-slate-800 focus:border-slate-300' : 'border-white/10 bg-white/[0.04] text-stone-100 focus:border-white/20'].join(' ')}
               >
                 <option value="">All shifts</option>
                 {shiftOptions.map((shift) => (
                   <option key={shift} value={shift}>{formatShiftLabel(shift)}</option>
                 ))}
               </select>
-              <ChevronDownIcon className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+              <ChevronDownIcon className={['pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2', isLight ? 'text-slate-400' : 'text-stone-400'].join(' ')} />
             </div>
-            <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-200">
-              <input type="checkbox" checked={absentOnly} onChange={(e) => setAbsentOnly(e.target.checked)} className="h-4 w-4 rounded border-white/20 bg-transparent accent-[#e8dfcf]" />
+            <label className={['flex h-12 items-center gap-3 rounded-[20px] border px-4 text-sm', isLight ? 'border-slate-200 bg-white text-slate-700' : 'border-white/10 bg-white/[0.04] text-stone-200'].join(' ')}>
+              <input type="checkbox" checked={absentOnly} onChange={(e) => setAbsentOnly(e.target.checked)} className="home-filter-checkbox h-4 w-4 shrink-0 appearance-auto rounded border border-slate-300 bg-white accent-indigo-600 shadow-none" />
               Absent
             </label>
-            <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-200">
-              <input type="checkbox" checked={onClockOnly} onChange={(e) => setOnClockOnly(e.target.checked)} className="h-4 w-4 rounded border-white/20 bg-transparent accent-[#e8dfcf]" />
+            <label className={['flex h-12 items-center gap-3 rounded-[20px] border px-4 text-sm', isLight ? 'border-slate-200 bg-white text-slate-700' : 'border-white/10 bg-white/[0.04] text-stone-200'].join(' ')}>
+              <input type="checkbox" checked={onClockOnly} onChange={(e) => setOnClockOnly(e.target.checked)} className="home-filter-checkbox h-4 w-4 shrink-0 appearance-auto rounded border border-slate-300 bg-white accent-indigo-600 shadow-none" />
               On Clock
             </label>
-            <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-200">
-              <input type="checkbox" checked={offWorkOnly} onChange={(e) => setOffWorkOnly(e.target.checked)} className="h-4 w-4 rounded border-white/20 bg-transparent accent-[#e8dfcf]" />
+            <label className={['flex h-12 items-center gap-3 rounded-[20px] border px-4 text-sm', isLight ? 'border-slate-200 bg-white text-slate-700' : 'border-white/10 bg-white/[0.04] text-stone-200'].join(' ')}>
+              <input type="checkbox" checked={offWorkOnly} onChange={(e) => setOffWorkOnly(e.target.checked)} className="home-filter-checkbox h-4 w-4 shrink-0 appearance-auto rounded border border-slate-300 bg-white accent-indigo-600 shadow-none" />
               Off Work
             </label>
           </div>
 
         </div>
 
-        <div className="mt-6 overflow-hidden rounded-[28px] border border-white/10 bg-black/20">
+        <div className={['mt-6 overflow-hidden rounded-[28px] border', isLight ? 'border-slate-300/80 bg-white/80' : 'border-white/10 bg-black/20'].join(' ')}>
           <div className="overflow-auto">
             <table className="min-w-[1100px] w-full border-collapse text-sm">
-              <thead className="sticky top-0 z-10 bg-[#17191c]/95 text-xs uppercase tracking-[0.16em] text-stone-400 backdrop-blur">
+              <thead className={['sticky top-0 z-10 text-xs uppercase tracking-[0.16em] backdrop-blur', isLight ? 'bg-[#f4efe7]/95 text-slate-600' : 'bg-[#17191c]/95 text-stone-400'].join(' ')}>
                 <tr>
                   <th className="px-3 py-3 text-left">SN</th>
                   <th className="px-3 py-3 text-left">Staff ID</th>
@@ -452,37 +491,52 @@ function HomeDashboardPage({
               </thead>
               <tbody>
                 {renderedRows.map((row, idx) => {
-                  const rowToneClass =
-                    row.attendance === 'Absent' ? 'bg-rose-950/30' : row.attendance === 'Off Worked' ? 'bg-stone-200/[0.03]' : 'odd:bg-white/[0.02]';
+                    const rowToneClass = isLight
+                      ? row.attendance === 'Absent'
+                        ? 'bg-rose-50'
+                        : row.attendance === 'Off Worked'
+                          ? 'bg-slate-50'
+                          : 'odd:bg-white even:bg-slate-50/50'
+                      : row.attendance === 'Absent'
+                        ? 'bg-rose-950/30'
+                        : row.attendance === 'Off Worked'
+                          ? 'bg-stone-200/[0.03]'
+                          : 'odd:bg-white/[0.02]';
                   return (
-                    <tr key={`${row.staff_id}-${idx}`} className={['border-t border-white/5 transition-colors hover:bg-white/[0.05]', rowToneClass].join(' ')}>
-                      <td className="whitespace-nowrap px-3 py-3 font-mono text-stone-500">{idx + 1}</td>
-                      <td className="whitespace-nowrap px-3 py-3 font-mono text-stone-100">{row.staff_id || '-'}</td>
-                      <td className="whitespace-nowrap px-3 py-3 text-stone-100">{row.name || '-'}</td>
-                      <td className="whitespace-nowrap px-3 py-3 text-stone-300">
-                        <span className={['inline-flex items-center rounded-full border px-2.5 py-1', getSchedulePositionBadgeClass(row.position)].join(' ')}>
+                    <tr key={`${row.staff_id}-${idx}`} className={['border-t transition-colors', isLight ? 'border-slate-200 hover:bg-slate-50' : 'border-white/5 hover:bg-white/[0.05]', rowToneClass].join(' ')}>
+                      <td className={['whitespace-nowrap px-3 py-3 font-mono', isLight ? 'text-slate-500' : 'text-stone-500'].join(' ')}>{idx + 1}</td>
+                      <td className={['whitespace-nowrap px-3 py-3 font-mono', isLight ? 'text-slate-800' : 'text-stone-100'].join(' ')}>{row.staff_id || '-'}</td>
+                      <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-800' : 'text-stone-100'].join(' ')}>{row.name || '-'}</td>
+                      <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-600' : 'text-stone-300'].join(' ')}>
+                        <span className={['inline-flex items-center rounded-full border px-2.5 py-1', isLight ? getScheduleTablePositionBadgeClass(row.position) : getSchedulePositionBadgeClass(row.position)].join(' ')}>
                           {row.position || '-'}
                         </span>
                       </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-stone-300">
-                        <span className={['inline-flex items-center rounded-full border px-2.5 py-1', getScheduleLabelToneClass(row.label || '-')].join(' ')}>{row.label || '-'}</span>
+                      <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-600' : 'text-stone-300'].join(' ')}>
+                        <span className={['inline-flex items-center rounded-full border px-2.5 py-1', isLight ? getScheduleTableLabelBadgeClass(row.label || '-') : getScheduleLabelToneClass(row.label || '-')].join(' ')}>{row.label || '-'}</span>
                       </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-stone-300">
-                        <span className="badge-elevated-dark inline-flex items-center rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-slate-200">
+                      <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-600' : 'text-stone-300'].join(' ')}>
+                        <span className={isLight ? getScheduleTableShiftBadgeClass(normalizeShiftValue(row.shift)) : 'badge-elevated-dark inline-flex items-center rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-slate-200'}>
                           {formatShiftLabel(row.shift)}
                         </span>
                       </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-stone-300">
+                      <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-600' : 'text-stone-300'].join(' ')}>
                         <div className="flex flex-wrap gap-1.5">
                           {row.punches.length > 0 ? (
                             <>
                               {row.punches.slice(0, 4).map((punch, punchIndex) => {
                                 const shortGapIndices = getShortGapPunchIndices(row.punches);
-                                  const toneClass = shortGapIndices.has(punchIndex)
-                                    ? 'badge-elevated-dark border-rose-300/30 bg-rose-400/[0.13] text-rose-100'
-                                    : punch.action === 'IN'
-                                      ? 'badge-elevated-dark border-emerald-300/30 bg-emerald-400/[0.13] text-emerald-100'
-                                      : 'badge-elevated-dark border-sky-300/30 bg-sky-400/[0.13] text-sky-100';
+                                  const toneClass = isLight
+                                    ? shortGapIndices.has(punchIndex)
+                                      ? 'badge-elevated-light border-rose-300 bg-rose-50 text-rose-700'
+                                      : punch.action === 'IN'
+                                        ? 'badge-elevated-light border-emerald-300 bg-emerald-50 text-emerald-700'
+                                        : 'badge-elevated-light border-sky-300 bg-sky-50 text-sky-700'
+                                    : shortGapIndices.has(punchIndex)
+                                      ? 'badge-elevated-dark border-rose-300/30 bg-rose-400/[0.13] text-rose-100'
+                                      : punch.action === 'IN'
+                                        ? 'badge-elevated-dark border-emerald-300/30 bg-emerald-400/[0.13] text-emerald-100'
+                                        : 'badge-elevated-dark border-sky-300/30 bg-sky-400/[0.13] text-sky-100';
                                 return (
                                   <span key={`${row.staff_id}-${punchIndex}`} className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold uppercase', toneClass].join(' ')}>
                                     {punch.action} {formatTimeOnly(punch.created_at)}
@@ -500,14 +554,19 @@ function HomeDashboardPage({
                                     if (!row.staff_id || !workDate) return;
                                     void onOpenTimecardCalibration(row.staff_id, workDate);
                                   }}
-                                  className="badge-elevated-dark inline-flex items-center rounded-full border border-amber-300/30 bg-amber-400/[0.13] px-2 py-1 text-[10px] font-semibold text-amber-100 transition hover:bg-amber-400/[0.2]"
+                                  className={[
+                                    'inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold transition',
+                                    isLight
+                                      ? 'badge-elevated-light border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                      : 'badge-elevated-dark border-amber-300/30 bg-amber-400/[0.13] text-amber-100 hover:bg-amber-400/[0.2]'
+                                  ].join(' ')}
                                 >
                                   +{row.punches.length - 4}
                                 </button>
                               ) : null}
                             </>
                           ) : (
-                            <span className="badge-elevated-dark inline-flex items-center rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-[10px]">--</span>
+                            <span className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px]', isLight ? 'badge-elevated-light border-slate-200 bg-white text-slate-400' : 'badge-elevated-dark border-white/12 bg-white/[0.05]'].join(' ')}>--</span>
                           )}
                         </div>
                       </td>

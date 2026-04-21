@@ -35,7 +35,7 @@ export default function AdminUserAvatar({
   return (
     <span
       className={[
-        'relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-slate-800/90 font-semibold uppercase text-slate-100',
+        'relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-slate-200 bg-slate-200 font-semibold uppercase text-slate-700',
         getSizeClassName(size),
         className
       ].join(' ')}

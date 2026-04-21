@@ -32,6 +32,7 @@ import EmployeeBadgePreviewModal from './pages/EmployeeBadgePreviewModal';
 import TimecardControls from './pages/TimecardControls';
 import TimecardTableSection from './pages/TimecardTableSection';
 import HomeDashboardPage from './pages/HomeDashboardPage';
+import PackageMetricsPage from './pages/PackageMetricsPage';
 import AuditPage from './pages/AuditPage';
 import PunchesPage from './pages/PunchesPage';
 import ForecastPage from './pages/ForecastPage';
@@ -1075,6 +1076,7 @@ const getVisibleAdminPages = (accessContext: AdminAccessContext | null | undefin
   const pages: AdminPage[] = [];
 
   if (hasModuleAccess(moduleMap, 'home', 'view')) pages.push('home');
+  if (hasModuleAccess(moduleMap, 'forecast', 'view')) pages.push('package_metrics');
   if (hasModuleAccess(moduleMap, 'employees', 'view')) pages.push('employees');
   if (hasModuleAccess(moduleMap, 'accounts', 'view')) pages.push('accounts');
   if (hasModuleAccess(moduleMap, 'permissions', 'view')) pages.push('permissions');
@@ -1288,6 +1290,7 @@ export default function AdminAppPage() {
       timecard: hasModuleAccess(adminModuleMap, 'timecard', 'operate'),
       devices: hasModuleAccess(adminModuleMap, 'devices', 'operate'),
       forecast: hasModuleAccess(adminModuleMap, 'forecast', 'operate'),
+      packageMetrics: hasModuleAccess(adminModuleMap, 'forecast', 'operate'),
       predictionModel: hasModuleAccess(adminModuleMap, 'prediction_model', 'operate'),
       efficiency: hasModuleAccess(adminModuleMap, 'efficiency', 'operate'),
       leaveApproval: hasModuleAccess(adminModuleMap, 'leave_approval', 'operate'),
@@ -1303,6 +1306,7 @@ export default function AdminAppPage() {
     timecard: timecardCanOperate,
     devices: devicesCanOperate,
     forecast: forecastCanOperate,
+    packageMetrics: packageMetricsCanOperate,
     predictionModel: predictionModelCanOperate,
     efficiency: efficiencyCanOperate,
     leaveApproval: leaveApprovalCanOperate,
@@ -1406,29 +1410,29 @@ export default function AdminAppPage() {
     if (themeMode === 'light') {
       switch (state) {
         case 'work':
-          return `${base} border-lime-300 bg-lime-50 text-lime-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_4px_10px_rgba(132,204,22,0.12)]`;
+          return `${base} border-lime-300 bg-lime-50 text-lime-800 shadow-none`;
         case 'new':
-          return `${base} border-cyan-300 bg-cyan-50 text-cyan-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_4px_10px_rgba(8,145,178,0.10)]`;
+          return `${base} border-cyan-300 bg-cyan-50 text-cyan-800 shadow-none`;
         case 'fixed_work':
-          return `${base} border-amber-300 bg-amber-50 text-amber-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(217,119,6,0.10)]`;
+          return `${base} border-amber-300 bg-amber-50 text-amber-800 shadow-none`;
         case 'temp_work':
-          return `${base} border-emerald-300 bg-emerald-50 text-emerald-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(5,150,105,0.10)]`;
+          return `${base} border-emerald-300 bg-emerald-50 text-emerald-800 shadow-none`;
         case 'planned_temp_work':
-          return `${base} border-sky-300 bg-sky-50 text-sky-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(2,132,199,0.10)]`;
+          return `${base} border-sky-300 bg-sky-50 text-sky-800 shadow-none`;
         case 'leave':
-          return `${base} border-violet-300 bg-violet-50 text-violet-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(124,58,237,0.10)]`;
+          return `${base} border-violet-300 bg-violet-50 text-violet-800 shadow-none`;
         case 'planned_leave':
-          return `${base} border-fuchsia-300 bg-fuchsia-50 text-fuchsia-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(192,38,211,0.10)]`;
+          return `${base} border-fuchsia-300 bg-fuchsia-50 text-fuchsia-800 shadow-none`;
         case 'rest_worked':
-          return `${base} border-cyan-300 bg-cyan-50 text-cyan-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(6,182,212,0.10)]`;
+          return `${base} border-cyan-300 bg-cyan-50 text-cyan-800 shadow-none`;
         case 'absent':
-          return `${base} border-slate-400 bg-slate-100 text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_4px_10px_rgba(71,85,105,0.10)]`;
+          return `${base} border-slate-300 bg-slate-100 text-slate-700 shadow-none`;
         case 'temp_rest':
-          return `${base} border-rose-300 bg-rose-50 text-rose-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(225,29,72,0.10)]`;
+          return `${base} border-rose-300 bg-rose-50 text-rose-800 shadow-none`;
         case 'planned_temp_rest':
-          return `${base} border-orange-300 bg-orange-50 text-orange-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_4px_10px_rgba(234,88,12,0.10)]`;
+          return `${base} border-orange-300 bg-orange-50 text-orange-800 shadow-none`;
         default:
-          return `${base} border-slate-200 bg-white text-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.96),0_4px_10px_rgba(148,163,184,0.08)]`;
+          return `${base} border-slate-200 bg-white text-slate-500 shadow-none`;
       }
     }
     switch (state) {
@@ -1649,11 +1653,18 @@ export default function AdminAppPage() {
     const emailValue = String(user?.email ?? '').trim();
     const displayValue = userDisplayName.trim();
     if (!raw) return raw;
+    if (raw.toLowerCase() === 'system') return t('系统', 'System');
     if (resolved) return resolved;
     if (displayValue && emailValue && raw.toLowerCase() === emailValue.toLowerCase()) {
       return displayValue;
     }
     return raw;
+  };
+  const getAuditActorDisplay = (row: AuditRow) => {
+    if (String(row.action ?? '').trim() === 'schedule_auto_daily_activation') {
+      return t('系统', 'System');
+    }
+    return normalizeAuditActor((row as any).actor);
   };
   const resolveAdminUserIdentity = ({
     userId,
@@ -3565,14 +3576,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     action,
     staffId,
     target,
-    payload
+    payload,
+    actor
   }: {
     action: string;
     staffId?: string | null;
     target?: string | null;
     payload?: any;
+    actor?: string | null;
   }) => {
-    const actorForAudit = userDisplayName.trim() || user?.email || null;
+    const actorForAudit = String(actor ?? '').trim() || userDisplayName.trim() || user?.email || null;
     const row: AuditRow = {
       id: `local_${Date.now()}`,
       created_at: new Date(serverTime).toISOString(),
@@ -3805,7 +3818,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         .map((row) => ({
           ...row,
           actor_raw: (row as any).actor,
-          actor: normalizeAuditActor((row as any).actor)
+          actor: getAuditActorDisplay(row)
         }))
         .filter((row) => {
           if (!searchValue) return true;
@@ -3979,7 +3992,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const nextCellRows = rawRows.map((row) => ({
       ...row,
       actor_raw: (row as any).actor,
-      actor: normalizeAuditActor((row as any).actor)
+      actor: getAuditActorDisplay(row)
     }));
     setCellAuditRows(nextCellRows);
   };
@@ -4763,7 +4776,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const exec = async () => {
       setScheduleError(null);
       const nowIso = new Date(serverTime).toISOString();
-      const op = user?.email ?? null;
+      const op = 'system';
       const lockToken = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
       const lockPayload = {
         key: SCHEDULE_DAILY_PLAN_ACTIVATION_KEY,
@@ -4837,6 +4850,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           staff_id: normalizeStaffId(row.staff_id),
           operator: op
         }));
+        const employeeNameByStaffId = new Map(
+          employees.map((employee) => [normalizeStaffId(String(employee.staff_id ?? '').trim()), String(employee.name ?? '').trim()] as const)
+        );
+        const activatedEntries = payload.map((entry) => {
+          const source = rows.find(
+            (row) =>
+              normalizeStaffId(String(row.staff_id ?? '').trim()) === entry.staff_id && String(row.date ?? '').trim() === String(entry.date ?? '').trim()
+          );
+          return {
+            staff_id: entry.staff_id,
+            staff_name: employeeNameByStaffId.get(entry.staff_id) ?? '',
+            date: String(entry.date ?? '').trim(),
+            position: String(entry.position ?? '').trim(),
+            from_note: source?.note ?? null,
+            to_note: entry.note ?? null
+          };
+        });
         const upsertRes = await supabase.from(SCHEDULE_TABLE).upsert(payload as any[], { onConflict: 'staff_id,date' });
         if (upsertRes.error) {
           setScheduleError(upsertRes.error.message);
@@ -4845,9 +4875,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         await writeAudit({
           action: 'schedule_auto_daily_activation',
           target: SCHEDULE_TABLE,
+          actor: op,
           payload: {
             date: dateKey,
-            activated_count: payload.length
+            activated_count: payload.length,
+            activated_entries: activatedEntries
           }
         });
       }
@@ -4859,7 +4891,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           status: 'done',
           lock_token: lockToken,
           updated_at: new Date(serverTime).toISOString(),
-          operator: user?.email ?? null
+          operator: op
         },
         updated_at: new Date(serverTime).toISOString()
       };
@@ -5262,6 +5294,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           const at = new Date(String((row as any).created_at ?? ''));
           if (Number.isNaN(at.getTime())) continue;
           const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+          // Keep the home dashboard consistent with its visible punch list:
+          // exact-cutoff OUT events are hidden from display, so they should not
+          // independently make someone count as having punched for the day.
+          if (isExactOperationalCutoffOut(at.toISOString(), action)) continue;
           found.add(`${staff}__${dayIndex}`);
           const list = operationalPunchesByStaffId[staff] ?? [];
           list.push({ action, created_at: at.toISOString() });
@@ -7312,7 +7348,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const nextRows = rawRows.map((row) => ({
           ...row,
           actor_raw: (row as any).actor,
-          actor: normalizeAuditActor((row as any).actor)
+          actor: getAuditActorDisplay(row)
         }));
         setEmployeeAuditRows(nextRows);
       }
@@ -8132,6 +8168,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       summary = t('自动计划激活已执行', 'Automatic daily plan activation applied');
       push(t('激活日期', 'Activation date'), payload?.date);
       push(t('激活条数', 'Activated rows'), payload?.activated_count);
+      const activatedEntries = Array.isArray(payload?.activated_entries)
+        ? (payload.activated_entries as Array<Record<string, unknown>>)
+        : [];
+      activatedEntries.forEach((entry: Record<string, unknown>, index: number) => {
+        const staffId = normalizeStaffId(String(entry?.staff_id ?? '').trim());
+        const staffName = String(entry?.staff_name ?? '').trim();
+        const fromState = fmtScheduleState(getScheduleBaseStateFromNote(entry?.from_note ?? null));
+        const toState = fmtScheduleState(getScheduleBaseStateFromNote(entry?.to_note ?? null));
+        const labelBase = staffName ? `${staffName} (${staffId || '-'})` : staffId || t('员工', 'Employee');
+        const dateText = fmtText(entry?.date);
+        const positionText = fmtText(entry?.position);
+        details.push({
+          label: `${t('变更', 'Change')} ${index + 1}`,
+          value: `${labelBase} · ${dateText} · ${positionText} · ${fromState} -> ${toState}`
+        });
+      });
     } else if (action === 'schedule_week_switch') {
       summary = `Week: ${fmtText(payload?.previous_week_start)} -> ${fmtText(payload?.next_week_start)}`;
       push(t('来源', 'Source'), payload?.source);
@@ -15113,13 +15165,26 @@ ${rowsToHtml(late)}
                 getHomeCardToneClass={getHomeCardToneClass}
                 getHomeChipToneClass={getHomeChipToneClass}
                 getScheduleLabelToneClass={getScheduleLabelToneClass}
+                getScheduleTableLabelBadgeClass={getScheduleTableLabelBadgeClass}
                 getHomePanelToneClass={getHomePanelToneClass}
                 getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
+                getScheduleTablePositionBadgeClass={getScheduleTablePositionBadgeClass}
+                getScheduleTableShiftBadgeClass={getScheduleTableShiftBadgeClass}
                 schedulePositionToneByPosition={schedulePositionToneByPosition}
                 homeRosterPositionFilter={homeRosterPositionFilter}
                 setHomeRosterPositionFilter={setHomeRosterPositionFilter}
                 onOpenTimecardCalibration={openTimecardPunchModalForDate}
                 homeRosterRowsCurrent={homeRosterRowsCurrent}
+              />
+            )}
+            {page === 'package_metrics' && (
+              <PackageMetricsPage
+                t={t}
+                isLocked={isLocked}
+                isReadOnly={!packageMetricsCanOperate}
+                supabase={supabase}
+                themeMode={themeMode}
+                serverTime={serverTime}
               />
             )}
             {page === 'devices' && (

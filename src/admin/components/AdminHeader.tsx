@@ -163,8 +163,8 @@ function AdminHeader({
             disabled={isLocked}
             onClick={() => setMenuOpen((prev) => !prev)}
             className={[
-              'group flex h-10 w-10 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-60',
-              isLight ? 'border-slate-200 bg-white hover:border-indigo-200' : 'border-slate-700 bg-slate-900 hover:border-indigo-500/40'
+              'group flex h-10 w-10 items-center justify-center rounded-full border border-transparent bg-transparent p-0 shadow-none transition disabled:cursor-not-allowed disabled:opacity-60',
+              'hover:border-transparent hover:bg-transparent'
             ].join(' ')}
             title={t('个人菜单', 'Profile menu')}
             aria-expanded={menuOpen}

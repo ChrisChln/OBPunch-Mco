@@ -43,6 +43,7 @@ const NAV_ICON_STYLE = 'h-5 w-5';
 
 const PAGE_ICONS: Record<AdminPage, IconType> = {
   home: HiSquares2X2,
+  package_metrics: HiChartBar,
   employees: HiUsers,
   employee_upload: HiUserGroup,
   accounts: HiBriefcase,
@@ -77,6 +78,8 @@ const NAV_ITEMS: NavItem[] = [
   { page: 'prediction_model', label: (t) => t('预测模型', 'Prediction Model') },
   { page: 'efficiency', label: (t) => t('人效', 'Efficiency') }
 ];
+
+NAV_ITEMS.splice(1, 0, { page: 'package_metrics', label: (t) => t('包裹日报', 'Package Metrics') });
 
 const NavIcon = ({ page }: { page: AdminPage }) => {
   const Icon = PAGE_ICONS[page] ?? HiHome;
