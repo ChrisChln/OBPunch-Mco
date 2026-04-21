@@ -1,5 +1,7 @@
+import { createClient } from '@supabase/supabase-js';
 import { createServiceSupabase, parseJsonBody } from './_forecastShared';
 import { isDateOnly, type PackageMetricsParsedRow } from '../src/shared/packageMetrics';
+import { getModuleMapFromContext, hasModuleAccess, normalizeAdminAccessContext } from '../src/shared/adminAccess';
 import { processPackageMetricsImport, processPackageMetricsRowsImport } from './_packageMetricsImportCore';
 
 type PackageMetricsImportBody = {
@@ -7,6 +9,30 @@ type PackageMetricsImportBody = {
   filename?: string;
   file_base64?: string;
   rows?: PackageMetricsParsedRow[];
+};
+
+const isProduction = process.env.NODE_ENV === 'production';
+const supabaseUrl =
+  (process.env.SUPABASE_URL as string | undefined) ??
+  (!isProduction ? ((process.env.VITE_SUPABASE_URL as string | undefined) ?? undefined) : undefined);
+const supabaseAnonKey =
+  (process.env.SUPABASE_ANON_KEY as string | undefined) ??
+  (process.env.VITE_SUPABASE_ANON_KEY as string | undefined);
+
+const createUserSupabase = (token: string) => {
+  if (!supabaseUrl || !supabaseAnonKey || !token) return null;
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false
+    }
+  });
 };
 
 const ensureAuthenticatedUser = async (req: any, res: any, supabase: any) => {
@@ -21,7 +47,7 @@ const ensureAuthenticatedUser = async (req: any, res: any, supabase: any) => {
     res.status(401).json({ error: 'Unauthorized' });
     return null;
   }
-  return userRes.data.user;
+  return { user: userRes.data.user, token };
 };
 
 export default async function handler(req: any, res: any) {
@@ -36,8 +62,27 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
-  const user = await ensureAuthenticatedUser(req, res, supabase);
-  if (!user) return;
+  const auth = await ensureAuthenticatedUser(req, res, supabase);
+  if (!auth) return;
+
+  const userSupabase = createUserSupabase(auth.token);
+  if (!userSupabase) {
+    res.status(500).json({ error: 'Missing Supabase client configuration' });
+    return;
+  }
+
+  const accessRes = await userSupabase.rpc('get_admin_access_context');
+  if (accessRes.error) {
+    res.status(403).json({ error: 'Failed to verify package metrics permission.' });
+    return;
+  }
+
+  const accessContext = normalizeAdminAccessContext(accessRes.data, auth.user.email ?? null);
+  const moduleMap = getModuleMapFromContext(accessContext);
+  if (!hasModuleAccess(moduleMap, 'package_metrics', 'operate')) {
+    res.status(403).json({ error: 'Package metrics operate permission is required.' });
+    return;
+  }
 
   const body = parseJsonBody<PackageMetricsImportBody>(req, res);
   if (!body) return;
