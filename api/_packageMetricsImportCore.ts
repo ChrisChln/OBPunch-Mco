@@ -39,6 +39,13 @@ export type PackageImportProcessResult = {
 
 export type PackageMetricsImportPersistence = PackageImportPersistence;
 
+const REQUIRED_HEADERS = {
+  quantity: '商品数量',
+  inboundAt: '订单流入时间',
+  shippingStatus: '发货状态',
+  packedAt: '打包完成时间'
+} as const;
+
 const normalizeHeaderKey = (value: unknown) =>
   String(value ?? '')
     .trim()
@@ -82,50 +89,57 @@ export const parsePackageMetricsRows = (buffer: Buffer, filename: string): Packa
   const [headers, ...dataRows] = rows;
   const headerMap = buildHeaderMap(headers);
 
-  const quantityIndex = headerMap.get(normalizeHeaderKey('商品数量'));
-  const inboundAtIndex = headerMap.get(normalizeHeaderKey('订单流入时间'));
-  const shippingStatusIndex = headerMap.get(normalizeHeaderKey('发货状态'));
-  const packedAtIndex = headerMap.get(normalizeHeaderKey('打包完成时间'));
+  const quantityIndex = headerMap.get(normalizeHeaderKey(REQUIRED_HEADERS.quantity));
+  const inboundAtIndex = headerMap.get(normalizeHeaderKey(REQUIRED_HEADERS.inboundAt));
+  const shippingStatusIndex = headerMap.get(normalizeHeaderKey(REQUIRED_HEADERS.shippingStatus));
+  const packedAtIndex = headerMap.get(normalizeHeaderKey(REQUIRED_HEADERS.packedAt));
 
   const missingHeaders = [
-    quantityIndex == null ? '商品数量' : '',
-    inboundAtIndex == null ? '订单流入时间' : '',
-    shippingStatusIndex == null ? '发货状态' : '',
-    packedAtIndex == null ? '打包完成时间' : ''
+    quantityIndex == null ? REQUIRED_HEADERS.quantity : '',
+    inboundAtIndex == null ? REQUIRED_HEADERS.inboundAt : '',
+    shippingStatusIndex == null ? REQUIRED_HEADERS.shippingStatus : '',
+    packedAtIndex == null ? REQUIRED_HEADERS.packedAt : ''
   ].filter(Boolean);
   if (missingHeaders.length > 0) {
     throw new Error(`Missing required headers: ${missingHeaders.join(', ')}`);
   }
 
-  const parsedRows: PackageMetricsParsedRow[] = [];
-  dataRows.forEach((row, index) => {
+  const resolvedQuantityIndex = quantityIndex as number;
+  const resolvedInboundAtIndex = inboundAtIndex as number;
+  const resolvedShippingStatusIndex = shippingStatusIndex as number;
+  const resolvedPackedAtIndex = packedAtIndex as number;
+
+  return dataRows.map((row, index) => {
     const rowNumber = index + 2;
-    const quantity = parsePackageQuantity(row[quantityIndex]);
+    const quantity = parsePackageQuantity(row[resolvedQuantityIndex]);
     if (quantity == null) {
-      throw new Error(`Row ${rowNumber}: 商品数量 is required and must be numeric.`);
+      throw new Error(`Row ${rowNumber}: ${REQUIRED_HEADERS.quantity} is required and must be numeric.`);
     }
-    const inboundAt = normalizePackageTimestamp(row[inboundAtIndex]);
+
+    const inboundAt = normalizePackageTimestamp(row[resolvedInboundAtIndex]);
     if (!inboundAt) {
-      throw new Error(`Row ${rowNumber}: 订单流入时间 is required and must be a valid datetime.`);
+      throw new Error(`Row ${rowNumber}: ${REQUIRED_HEADERS.inboundAt} is required and must be a valid datetime.`);
     }
-    const shippingStatus = String(row[shippingStatusIndex] ?? '').trim();
+
+    const shippingStatus = String(row[resolvedShippingStatusIndex] ?? '').trim();
     if (!shippingStatus) {
-      throw new Error(`Row ${rowNumber}: 发货状态 is required.`);
+      throw new Error(`Row ${rowNumber}: ${REQUIRED_HEADERS.shippingStatus} is required.`);
     }
-    const packedRaw = row[packedAtIndex];
+
+    const packedRaw = row[resolvedPackedAtIndex];
     const packedAtText = String(packedRaw ?? '').trim();
     const packedAt = packedAtText ? normalizePackageTimestamp(packedRaw) : null;
     if (packedAtText && !packedAt) {
-      throw new Error(`Row ${rowNumber}: 打包完成时间 must be a valid datetime when provided.`);
+      throw new Error(`Row ${rowNumber}: ${REQUIRED_HEADERS.packedAt} must be a valid datetime when provided.`);
     }
-    parsedRows.push({
+
+    return {
       quantity,
       inboundAt,
       shippingStatus,
       packedAt
-    });
+    };
   });
-  return parsedRows;
 };
 
 export const processPackageMetricsRowsImport = async (
@@ -134,6 +148,7 @@ export const processPackageMetricsRowsImport = async (
     filename: string;
     rows: PackageMetricsParsedRow[];
     computedAt?: string;
+    inventoryQty?: number | null;
   },
   persistence: PackageImportPersistence
 ): Promise<PackageImportProcessResult> => {
@@ -152,7 +167,8 @@ export const processPackageMetricsRowsImport = async (
     const metrics = computePackageDailyMetrics(input.rows, {
       metricDate: input.metricDate,
       sourceFilename: input.filename,
-      computedAt: input.computedAt ?? new Date().toISOString()
+      computedAt: input.computedAt ?? new Date().toISOString(),
+      inventoryQty: input.inventoryQty ?? null
     });
     await persistence.upsertMetrics(metrics);
     await persistence.updateRun(run.id, {
@@ -184,6 +200,7 @@ export const processPackageMetricsImport = async (
     filename: string;
     fileBase64: string;
     computedAt?: string;
+    inventoryQty?: number | null;
   },
   persistence: PackageImportPersistence
 ): Promise<PackageImportProcessResult> => {
@@ -193,7 +210,8 @@ export const processPackageMetricsImport = async (
       metricDate: input.metricDate,
       filename: input.filename,
       rows: parsedRows,
-      computedAt: input.computedAt
+      computedAt: input.computedAt,
+      inventoryQty: input.inventoryQty ?? null
     },
     persistence
   );

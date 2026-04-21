@@ -79,21 +79,34 @@ describe('api/package-metrics-import', () => {
   });
 
   test('allows import when user has package metrics operate permission', async () => {
+    const maybeSingle = vi.fn(async () => ({ data: { inventory_level: 4937303 }, error: null }));
     const serviceSupabase = {
       auth: {
         getUser: async () => ({ data: { user: { id: 'u1', email: 'user@example.com' } }, error: null })
       },
-      from: () => ({
-        insert: () => ({
-          select: () => ({
-            single: async () => ({ data: { id: 'run-1' }, error: null })
-          })
-        }),
-        update: () => ({
-          eq: async () => ({ error: null })
-        }),
-        upsert: async () => ({ error: null })
-      })
+      from: (table: string) => {
+        if (table === 'volume_forecast_daily_inputs') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle
+              })
+            })
+          };
+        }
+
+        return {
+          insert: () => ({
+            select: () => ({
+              single: async () => ({ data: { id: 'run-1' }, error: null })
+            })
+          }),
+          update: () => ({
+            eq: async () => ({ error: null })
+          }),
+          upsert: async () => ({ error: null })
+        };
+      }
     };
     const userSupabase = {
       rpc: async () => ({
@@ -138,6 +151,14 @@ describe('api/package-metrics-import', () => {
     await handler(req, res);
 
     expect(processPackageMetricsRowsImport).toHaveBeenCalledOnce();
+    expect(processPackageMetricsRowsImport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metricDate: '2026-04-21',
+        inventoryQty: 4937303
+      }),
+      expect.anything()
+    );
+    expect(maybeSingle).toHaveBeenCalledOnce();
     expect(res.code).toBe(200);
     expect(res.body?.status).toBe('ok');
   });
