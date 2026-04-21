@@ -4,6 +4,7 @@ import { isValidStaffId, normalizeStaffId } from './lib/staffId';
 import { LABEL_TONE_KEYS, type LabelToneKey, loadLabelToneMap } from './lib/labelTone';
 import { isScheduleOnlyAgency } from './shared/agencyRules';
 import { canUnlockPunchScreen, normalizeAdminAccessContext } from './shared/adminAccess';
+import { isEmployeeTerminated } from './shared/employeeStatus';
 
 type PunchAction = 'IN' | 'OUT';
 
@@ -939,18 +940,19 @@ export default function App() {
 
   const checkEmployeeRegistered = async (staff: string) => {
     if (!supabase) {
-      return { registered: false, scheduleOnly: false, error: 'Missing Supabase configuration.' };
+      return { registered: false, scheduleOnly: false, terminated: false, error: 'Missing Supabase configuration.' };
     }
 
     const mapRes = await fetchEmployeeMap([staff]);
     if (mapRes.error) {
-      return { registered: false, scheduleOnly: false, error: mapRes.error };
+      return { registered: false, scheduleOnly: false, terminated: false, error: mapRes.error };
     }
 
     const employee = mapRes.map[staff];
     return {
       registered: Boolean(employee),
       scheduleOnly: isScheduleOnlyAgency(String(employee?.agency ?? '').trim()),
+      terminated: isEmployeeTerminated({ terminatedAt: employee?.terminatedAt }),
       error: null as string | null
     };
   };
@@ -1546,7 +1548,7 @@ export default function App() {
   const fetchEmployeeMap = async (staffIds: string[]) => {
     if (!supabase || staffIds.length === 0) {
       return {
-        map: {} as Record<string, { name: string; agency: string; position: string; label: string; shift: string }>,
+        map: {} as Record<string, { name: string; agency: string; position: string; label: string; shift: string; terminatedAt: string | null }>,
         error: null as string | null
       };
     }
@@ -1562,7 +1564,7 @@ export default function App() {
     );
     if (ids.length === 0) {
       return {
-        map: {} as Record<string, { name: string; agency: string; position: string; label: string; shift: string }>,
+        map: {} as Record<string, { name: string; agency: string; position: string; label: string; shift: string; terminatedAt: string | null }>,
         error: null as string | null
       };
     }
@@ -1573,7 +1575,13 @@ export default function App() {
       const queries =
         mode === 'cased'
           ? [
-              'staff_id, name, "Agency", "Position", label, shift',  // Mixed case: check lowercase label first
+              'staff_id, name, "Agency", "Position", label, shift, terminated_at',
+              'staff_id, name, "Agency", "Position", "Label", shift, terminated_at',
+              'staff_id, name, "Agency", "Position", label, terminated_at',
+              'staff_id, name, "Agency", "Position", "Label", terminated_at',
+              'staff_id, name, "Agency", "Position", shift, terminated_at',
+              'staff_id, name, "Agency", "Position", terminated_at',
+              'staff_id, name, "Agency", "Position", label, shift',
               'staff_id, name, "Agency", "Position", "Label", shift',
               'staff_id, name, "Agency", "Position", label',
               'staff_id, name, "Agency", "Position", "Label"',
@@ -1581,6 +1589,10 @@ export default function App() {
               'staff_id, name, "Agency", "Position"'
             ]
           : [
+              'staff_id, name, agency, position, label, shift, terminated_at',
+              'staff_id, name, agency, position, label, terminated_at',
+              'staff_id, name, agency, position, shift, terminated_at',
+              'staff_id, name, agency, position, terminated_at',
               'staff_id, name, agency, position, label, shift',
               'staff_id, name, agency, position, label',
               'staff_id, name, agency, position, shift',
@@ -1608,12 +1620,12 @@ export default function App() {
     }
     if (rows.error) {
       return {
-        map: {} as Record<string, { name: string; agency: string; position: string; label: string; shift: string }>,
+        map: {} as Record<string, { name: string; agency: string; position: string; label: string; shift: string; terminatedAt: string | null }>,
         error: rows.error.message
       };
     }
 
-    const map: Record<string, { name: string; agency: string; position: string; label: string; shift: string }> = {};
+    const map: Record<string, { name: string; agency: string; position: string; label: string; shift: string; terminatedAt: string | null }> = {};
     for (const r of (rows.data as any[] | null) ?? []) {
       const staffRaw = String(r.staff_id ?? '').trim();
       const staff = normalizeStaffId(staffRaw);
@@ -1623,7 +1635,8 @@ export default function App() {
         agency: String(r.agency ?? r.Agency ?? '').trim(),
         position: String(r.position ?? r.Position ?? '').trim(),
         label: String(r.label ?? r.Label ?? '').trim(),
-        shift: String(r.shift ?? '').trim()
+        shift: String(r.shift ?? '').trim(),
+        terminatedAt: String(r.terminated_at ?? '').trim() || null
       };
       map[staff] = profile;
       if (staffRaw && staffRaw !== staff) {
@@ -2600,6 +2613,11 @@ const fetchPunchBoardUph = async (
       }
       if (registered.scheduleOnly) {
         setUiStatus({ tone: 'error', message: `Employee does not use punch: ${normalizedId}` });
+        playError();
+        return;
+      }
+      if (registered.terminated) {
+        setUiStatus({ tone: 'error', message: `Employee is terminated and cannot punch: ${normalizedId}` });
         playError();
         return;
       }

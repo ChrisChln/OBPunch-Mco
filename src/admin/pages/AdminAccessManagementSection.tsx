@@ -246,8 +246,8 @@ export default function AdminAccessManagementSection({
                 </button>
               </div>
 
-              <div className="flex-1 overflow-hidden px-6 py-5">
-                <div className="grid gap-4 md:grid-cols-3">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 py-5">
+                <div className="shrink-0 grid gap-4 md:grid-cols-3">
                   <div>
                   <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
                     {t('账号', 'User')}
@@ -314,7 +314,7 @@ export default function AdminAccessManagementSection({
                   </div>
                 </div>
 
-                <div className="mt-6">
+                <div className="mt-6 shrink-0">
                   <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
                   {t('Agency 范围', 'Agency Scope')}
                   </div>
@@ -350,7 +350,7 @@ export default function AdminAccessManagementSection({
                   </div>
                 </div>
 
-                <div className="mt-6 flex min-h-0 flex-col">
+                <div className="mt-6 flex min-h-0 flex-1 flex-col">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
