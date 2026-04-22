@@ -79,7 +79,7 @@ const NAV_ITEMS: NavItem[] = [
   { page: 'efficiency', label: (t) => t('人效', 'Efficiency') }
 ];
 
-NAV_ITEMS.splice(1, 0, { page: 'package_metrics', label: (t) => t('包裹日报', 'Package Metrics') });
+NAV_ITEMS.splice(1, 0, { page: 'package_metrics', label: (t) => t('日报&耗材', 'Package Metrics') });
 
 const NavIcon = ({ page }: { page: AdminPage }) => {
   const Icon = PAGE_ICONS[page] ?? HiHome;

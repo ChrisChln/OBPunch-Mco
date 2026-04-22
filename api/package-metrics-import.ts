@@ -3,12 +3,22 @@ import { createServiceSupabase, parseJsonBody } from './_forecastShared';
 import { isDateOnly, type PackageMetricsParsedRow } from '../src/shared/packageMetrics';
 import { getModuleMapFromContext, hasModuleAccess, normalizeAdminAccessContext } from '../src/shared/adminAccess';
 import { processPackageMetricsImport, processPackageMetricsRowsImport } from './_packageMetricsImportCore';
+import { computeScheduledHeadcountForDate } from './_packageStaffingSync';
 
 type PackageMetricsImportBody = {
   metric_date?: string;
   filename?: string;
   file_base64?: string;
   rows?: PackageMetricsParsedRow[];
+};
+
+const applyDevCorsHeaders = (req: any, res: any) => {
+  const origin = String(req.headers?.origin ?? '');
+  if (!/^https?:\/\/localhost(?::\d+)?$/i.test(origin)) return;
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 };
 
 const loadForecastInventoryQty = async (supabase: any, metricDate: string) => {
@@ -68,6 +78,13 @@ const ensureAuthenticatedUser = async (req: any, res: any, supabase: any) => {
 };
 
 export default async function handler(req: any, res: any) {
+  applyDevCorsHeaders(req, res);
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
@@ -138,9 +155,11 @@ export default async function handler(req: any, res: any) {
         if (updateRes.error) throw updateRes.error;
       },
       upsertMetrics: async (payload: any) => {
+        const scheduledHeadcount = await computeScheduledHeadcountForDate(supabase, metricDate);
         const upsertRes = await supabase.from('ob_package_daily_metrics').upsert(
           {
             ...payload,
+            scheduled_headcount: scheduledHeadcount,
             updated_at: new Date().toISOString()
           },
           { onConflict: 'metric_date' }

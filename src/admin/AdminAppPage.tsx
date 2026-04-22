@@ -186,7 +186,7 @@ type DailyListCapacityView = {
 };
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
-const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
+const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'Water Spider', 'FLEX TEAM'] as const;
 const DAILY_LIST_VISIBLE_POSITIONS = ALLOWED_POSITIONS.filter((position) => position !== 'FLEX TEAM') as Exclude<AllowedPosition, 'FLEX TEAM'>[];
 const createEmptyPositionFlags = (): Record<AllowedPosition, boolean> => ({
   Pick: false,
@@ -194,6 +194,7 @@ const createEmptyPositionFlags = (): Record<AllowedPosition, boolean> => ({
   Rebin: false,
   Preship: false,
   Transfer: false,
+  'Water Spider': false,
   'FLEX TEAM': false
 });
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
@@ -289,7 +290,7 @@ type EffVolumeHistoryRow = {
   last_filled_hour?: number | null;
 } & Record<(typeof EFF_HOUR_COLUMNS)[number], number | null>;
 type ScheduleRecommendedPosition = {
-  key: 'Pick' | 'Rebin' | 'Pack' | 'Preship';
+  key: 'Pick' | 'Rebin' | 'Pack' | 'Preship' | 'Water Spider';
   total: number;
   ds: number;
   ns: number;
@@ -836,6 +837,9 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   const normalized = String(value ?? '').trim().toLowerCase();
   const hit = ALLOWED_POSITIONS.find((p) => p.toLowerCase() === normalized);
   if (hit) return hit;
+  if (normalized === 'water spider' || normalized === 'waterspider' || normalized === 'water-spider') {
+    return 'Water Spider';
+  }
   if (
     normalized === '兜底组' ||
     normalized === '兜底' ||
@@ -1894,6 +1898,7 @@ export default function AdminAppPage() {
     Rebin: 'amber',
     Preship: 'rose',
     Transfer: 'violet',
+    'Water Spider': 'sky',
     'FLEX TEAM': 'slate'
   });
   const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
@@ -2074,7 +2079,8 @@ export default function AdminAppPage() {
           pack:
             effCalcRequirement(derivedDs.singlePiece, payload.areaEfficiencyDs.single_pack, 'round') +
             effCalcRequirement(derivedDs.multiPiece, payload.areaEfficiencyDs.multi_pack, 'round'),
-          preship: effCalcRequirement(derivedDs.totalPackages, payload.areaEfficiencyDs.pre_ship, 'round')
+          preship: effCalcRequirement(derivedDs.totalPackages, payload.areaEfficiencyDs.pre_ship, 'round'),
+          waterSpider: effCalcRequirement(derivedDs.totalPackages, payload.areaEfficiencyDs.waterspider, 'floor')
         };
         const nsValues = {
           pick: effCalcRequirement(derivedNs.totalPieces, payload.areaEfficiencyNs.pick, 'ceil'),
@@ -2086,7 +2092,8 @@ export default function AdminAppPage() {
           pack:
             effCalcRequirement(derivedNs.singlePiece, payload.areaEfficiencyNs.single_pack, 'round') +
             effCalcRequirement(derivedNs.multiPiece, payload.areaEfficiencyNs.multi_pack, 'round'),
-          preship: effCalcRequirement(derivedNs.totalPackages, payload.areaEfficiencyNs.pre_ship, 'round')
+          preship: effCalcRequirement(derivedNs.totalPackages, payload.areaEfficiencyNs.pre_ship, 'round'),
+          waterSpider: effCalcRequirement(derivedNs.totalPackages, payload.areaEfficiencyNs.waterspider, 'floor')
         };
 
         nextByDate[planningDate] = [
@@ -2098,7 +2105,13 @@ export default function AdminAppPage() {
             total: dsValues.rebin + dsValues.con + nsValues.rebin + nsValues.con
           },
           { key: 'Pack', ds: dsValues.pack, ns: nsValues.pack, total: dsValues.pack + nsValues.pack },
-          { key: 'Preship', ds: dsValues.preship, ns: nsValues.preship, total: dsValues.preship + nsValues.preship }
+          { key: 'Preship', ds: dsValues.preship, ns: nsValues.preship, total: dsValues.preship + nsValues.preship },
+          {
+            key: 'Water Spider',
+            ds: dsValues.waterSpider,
+            ns: nsValues.waterSpider,
+            total: dsValues.waterSpider + nsValues.waterSpider
+          }
         ];
       }
 
@@ -2319,6 +2332,7 @@ export default function AdminAppPage() {
       Rebin: 'amber',
       Preship: 'rose',
       Transfer: 'violet',
+      'Water Spider': 'sky',
       'FLEX TEAM': 'slate'
     };
     for (const pos of ALLOWED_POSITIONS) {
@@ -2524,6 +2538,7 @@ export default function AdminAppPage() {
     if (v === 'rebin') return 'Rebin';
     if (v === 'preship') return 'Preship';
     if (v === 'transfer') return 'Transfer';
+    if (v === 'water spider' || v === 'waterspider' || v === 'water-spider') return 'Water Spider';
     if (
       v === '兜底组' ||
       v === '兜底' ||
@@ -2822,6 +2837,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           Rebin: Boolean(flagsObj.Rebin),
           Preship: Boolean(flagsObj.Preship),
           Transfer: Boolean(flagsObj.Transfer),
+          'Water Spider': Boolean(flagsObj['Water Spider']) || Boolean(flagsObj.Waterspider) || Boolean(flagsObj.waterspider),
           'FLEX TEAM':
             Boolean(flagsObj['FLEX TEAM']) || Boolean(flagsObj['Flex Team（机动组）']) || Boolean(flagsObj['兜底组']) || Boolean(flagsObj['Wrap-up Team'])
         };
@@ -2873,6 +2889,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             Rebin: Boolean(byDate.Rebin),
             Preship: Boolean(byDate.Preship),
             Transfer: Boolean(byDate.Transfer),
+            'Water Spider': Boolean(byDate['Water Spider']) || Boolean(byDate.Waterspider) || Boolean(byDate.waterspider),
             'FLEX TEAM':
               Boolean(byDate['FLEX TEAM']) || Boolean(byDate['Flex Team（机动组）']) || Boolean(byDate['兜底组']) || Boolean(byDate['Wrap-up Team'])
           };
@@ -2889,6 +2906,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               Rebin: Boolean(rawSelected.Rebin),
               Preship: Boolean(rawSelected.Preship),
               Transfer: Boolean(rawSelected.Transfer),
+              'Water Spider': Boolean(rawSelected['Water Spider']) || Boolean(rawSelected.Waterspider) || Boolean(rawSelected.waterspider),
               'FLEX TEAM':
                 Boolean(rawSelected['FLEX TEAM']) || Boolean(rawSelected['Flex Team（机动组）']) || Boolean(rawSelected['兜底组']) || Boolean(rawSelected['Wrap-up Team'])
             };
@@ -13373,6 +13391,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       else if (deferredSchedulePosition === 'Rebin') filteredRows = rows.filter((item) => item.key === 'Rebin');
       else if (deferredSchedulePosition === 'Pack') filteredRows = rows.filter((item) => item.key === 'Pack');
       else if (deferredSchedulePosition === 'Preship') filteredRows = rows.filter((item) => item.key === 'Preship');
+      else if (deferredSchedulePosition === 'Water Spider') filteredRows = rows.filter((item) => item.key === 'Water Spider');
       else if (deferredSchedulePosition === 'Transfer') {
         next[date] = null;
         continue;
@@ -16511,6 +16530,7 @@ ${rowsToHtml(late)}
                                     Rebin: false,
                                     Preship: false,
                                     Transfer: false,
+                                    'Water Spider': false,
                                     'FLEX TEAM': false
                                   })
                                 }

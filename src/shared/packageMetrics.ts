@@ -40,6 +40,7 @@ export type PackageDailyMetrics = {
   calendar_completed_item_qty: number;
   calendar_backlog_order_count: number;
   calendar_backlog_item_qty: number;
+  scheduled_headcount?: number | null;
   source_filename: string;
   source_row_count: number;
   computed_at: string;
@@ -271,11 +272,6 @@ export const buildPackageDailyReportText = (options: {
     `全天进单量：${formatInteger(options.metrics.calendar_inbound_order_count)}单，${formatInteger(options.metrics.calendar_inbound_item_qty)}件`,
     `全天完成单量：${formatInteger(options.metrics.calendar_completed_order_count)}单，${formatInteger(options.metrics.calendar_completed_item_qty)}件`,
     `全天未完成单量：${formatInteger(options.metrics.calendar_backlog_order_count)}单，${formatInteger(options.metrics.calendar_backlog_item_qty)}件`,
-    '',
-    '',
-    '',
-    '',
-    '',
     '',
     'O岗出勤',
     `编制：${formatInteger(options.labor.scheduledCount)}人`,
