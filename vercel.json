@@ -19,7 +19,7 @@
     },
     {
       "path": "/api/consumable-alert-sync",
-      "schedule": "15 * * * *"
+      "schedule": "15 16 * * *"
     }
   ]
 }
