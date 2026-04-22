@@ -112,6 +112,24 @@ describe('package metrics computation', () => {
     expect(metrics.inventory_conversion_ratio).toBeCloseTo(14 / 4937303, 6);
   });
 
+  it('treats in-transit shipments as completed for assessment SLA', () => {
+    const metrics = computePackageDailyMetrics(
+      [
+        { quantity: 2, inboundAt: '2026-04-20 14:00:00', shippingStatus: '发货中', packedAt: '2026-04-21 09:30:00' }
+      ],
+      {
+        metricDate: '2026-04-21',
+        sourceFilename: 'package.xlsx',
+        computedAt: '2026-04-21T18:00:00.000Z'
+      }
+    );
+
+    expect(metrics.assessment_total_order_count).toBe(1);
+    expect(metrics.assessment_completed_order_count).toBe(1);
+    expect(metrics.assessment_completed_item_qty).toBe(2);
+    expect(metrics.assessment_unfinished_order_count).toBe(0);
+  });
+
   it('computes piece efficiency, order efficiency and SLA from existing metrics', () => {
     const derived = computePackageDerivedMetrics(
       {

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
+import { ArrowUpRight, CalendarDays, Clock3, FileUp, Package2, Rows3 } from 'lucide-react';
 import { normalizeStaffId } from '../../lib/staffId';
 import {
   addDaysDateOnly,
@@ -14,6 +15,7 @@ import {
   type PackageDailyReportLabor,
   type PackageMetricsParsedRow
 } from '../../shared/packageMetrics';
+import ConsumablesWorkspace from '../components/ConsumablesWorkspace';
 import StyledDateInput from '../components/StyledDateInput';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -22,6 +24,8 @@ type PackageMetricsPageProps = {
   t: TranslateFn;
   isLocked: boolean;
   isReadOnly?: boolean;
+  canViewConsumables?: boolean;
+  canOperateConsumables?: boolean;
   supabase: any;
   themeMode: 'light' | 'dark';
   serverTime: Date;
@@ -587,12 +591,15 @@ export default function PackageMetricsPage({
   t,
   isLocked,
   isReadOnly = false,
+  canViewConsumables = false,
+  canOperateConsumables = false,
   supabase,
   themeMode,
   serverTime
 }: PackageMetricsPageProps) {
   const defaultMetricDate = getDateOnlyInTimeZone(serverTime);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const redesignedFileInputRef = useRef<HTMLInputElement | null>(null);
   const [metricDate, setMetricDate] = useState(defaultMetricDate);
   const [rangeStart, setRangeStart] = useState(addDaysDateOnly(defaultMetricDate, -6));
   const [rangeEnd, setRangeEnd] = useState(defaultMetricDate);
@@ -702,6 +709,68 @@ export default function PackageMetricsPage({
     () => metricsRows.find((row) => row.metric_date === metricDate) ?? null,
     [metricDate, metricsRows]
   );
+  const selectedTotalHours = selectedMetricsRow ? laborSummaryByDate[selectedMetricsRow.metric_date]?.totalHours ?? null : null;
+  const selectedDerivedMetrics = selectedMetricsRow ? computePackageDerivedMetrics(selectedMetricsRow, selectedTotalHours) : null;
+  const selectedSummaryItems = selectedMetricsRow
+    ? [
+        { label: t('选中日期', 'Selected'), value: selectedMetricsRow.metric_date.replace(/-/g, '/') },
+        {
+          label: t('考核总量', 'Assessment Orders'),
+          value: formatMetricValue('assessment_total_order_count', selectedMetricsRow.assessment_total_order_count)
+        },
+        {
+          label: t('完成单量', 'Completed Orders'),
+          value: formatMetricValue('assessment_completed_order_count', selectedMetricsRow.assessment_completed_order_count)
+        },
+        { label: t('SLA', 'SLA'), value: formatRatioValue(selectedDerivedMetrics?.slaRatio ?? null) },
+        { label: t('总工时', 'Hours'), value: formatHoursValue(selectedTotalHours) },
+        { label: t('单效', 'Order Efficiency'), value: formatEfficiencyValue(selectedDerivedMetrics?.orderEfficiency ?? null) }
+      ]
+    : [];
+  const uploadDisabled = isLocked || isReadOnly || loading;
+  const selectedWeekLabel = selectedMetricsRow?.weekLabel ?? '-';
+  const selectedDateLabel = selectedMetricsRow?.metric_date.replace(/-/g, '/') ?? '--/--/--';
+  const rangeDayCount =
+    rangeStart && rangeEnd
+      ? Math.max(
+          1,
+          Math.round(
+            (new Date(`${rangeEnd}T00:00:00`).getTime() - new Date(`${rangeStart}T00:00:00`).getTime()) / 86400000
+          ) + 1
+        )
+      : 0;
+  const selectedPrimaryStats = selectedMetricsRow
+    ? [
+        {
+          label: 'Assessment',
+          value: formatMetricValue('assessment_total_order_count', selectedMetricsRow.assessment_total_order_count)
+        },
+        {
+          label: 'Completed',
+          value: formatMetricValue('assessment_completed_order_count', selectedMetricsRow.assessment_completed_order_count)
+        },
+        {
+          label: 'Inbound',
+          value: formatMetricValue('calendar_inbound_order_count', selectedMetricsRow.calendar_inbound_order_count)
+        },
+        {
+          label: 'Backlog',
+          value: formatMetricValue('assessment_unfinished_order_count', selectedMetricsRow.assessment_unfinished_order_count)
+        }
+      ]
+    : [];
+  const selectedSecondaryStats = selectedMetricsRow
+    ? [
+        { label: 'SLA', value: formatRatioValue(selectedDerivedMetrics?.slaRatio ?? null) },
+        { label: 'Hours', value: formatHoursValue(selectedTotalHours) },
+        { label: 'Order Eff.', value: formatEfficiencyValue(selectedDerivedMetrics?.orderEfficiency ?? null) },
+        {
+          label: 'Multi Ratio',
+          value: formatMetricValue('assessment_multi_order_ratio', selectedMetricsRow.assessment_multi_order_ratio)
+        }
+      ]
+    : [];
+  const activeFileName = selectedFile?.name ?? t('未选择任何文件', 'No file selected');
 
   const handleUpload = async () => {
     if (!supabase || !selectedFile || isLocked || isReadOnly) return;
@@ -764,6 +833,9 @@ export default function PackageMetricsPage({
       setSelectedFile(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
+      }
+      if (redesignedFileInputRef.current) {
+        redesignedFileInputRef.current.value = '';
       }
       setStatus({
         tone: 'success',
@@ -835,36 +907,364 @@ export default function PackageMetricsPage({
   };
 
   return (
-    <section className="px-6 py-8">
-      <div className={[shellClass, 'rounded-[28px] p-6'].join(' ')}>
-        <div className="flex flex-col gap-6">
-          <div className="flex flex-col gap-2">
-            <h2 className="font-display text-2xl tracking-[0.08em]">{t('包裹日报', 'Package Metrics')}</h2>
+    <section className="px-4 py-5 md:px-6 md:py-6">
+      <div className={[shellClass, 'rounded-[30px] p-4 md:p-5'].join(' ')}>
+        <div className="flex flex-col gap-4">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_360px]">
+            <div
+              className={[
+                'overflow-hidden rounded-[28px] border',
+                themeMode === 'light'
+                  ? 'border-slate-200 bg-[radial-gradient(circle_at_top_left,rgba(15,23,42,0.07),transparent_38%),linear-gradient(180deg,rgba(248,250,252,0.99),rgba(241,245,249,0.94))]'
+                  : 'border-slate-800/80 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_28%),linear-gradient(180deg,rgba(15,23,42,0.96),rgba(2,6,23,0.82))]'
+              ].join(' ')}
+            >
+              <div className="border-b border-white/5 px-5 py-5 md:px-6">
+                <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+                  <div className="space-y-2">
+                    <div className={['text-[11px] font-semibold uppercase tracking-[0.22em]', mutedClass].join(' ')}>Outbound Desk</div>
+                    <div className="flex flex-wrap items-end gap-3">
+                      <h2 className="font-display text-[30px] leading-none tracking-[0.05em]">Outbound Daily</h2>
+                      <div
+                        className={[
+                          'inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold',
+                          themeMode === 'light' ? 'bg-slate-900 text-white' : 'bg-white/10 text-slate-100'
+                        ].join(' ')}
+                      >
+                        {selectedDateLabel} / {selectedWeekLabel}
+                      </div>
+                    </div>
+                  </div>
+                  <div className={['flex items-center gap-2 text-sm', mutedClass].join(' ')}>
+                    <CalendarDays className="h-4 w-4" />
+                    <span>Selected metric date</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-0 md:grid-cols-2 xl:grid-cols-4">
+                {selectedPrimaryStats.map((item, index) => (
+                  <div
+                    key={item.label}
+                    className={[
+                      'px-5 py-5 md:px-6',
+                      index < selectedPrimaryStats.length - 1 ? 'border-b md:border-b-0 md:border-r border-white/5' : ''
+                    ].join(' ')}
+                  >
+                    <div className={['text-[11px] font-semibold uppercase tracking-[0.16em]', mutedClass].join(' ')}>{item.label}</div>
+                    <div className="mt-3 text-[30px] font-semibold leading-none">{item.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {selectedSecondaryStats.length > 0 ? (
+                <div
+                  className={[
+                    'grid gap-px px-3 pb-3 pt-1 md:grid-cols-4',
+                    themeMode === 'light' ? 'bg-slate-200/70' : 'bg-white/5'
+                  ].join(' ')}
+                >
+                  {selectedSecondaryStats.map((item) => (
+                    <div
+                      key={item.label}
+                      className={[
+                        'px-4 py-4',
+                        themeMode === 'light' ? 'bg-white/90' : 'bg-slate-950/40'
+                      ].join(' ')}
+                    >
+                      <div className={['text-[11px] font-semibold uppercase tracking-[0.16em]', mutedClass].join(' ')}>{item.label}</div>
+                      <div className="mt-2 text-lg font-semibold">{item.value}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="grid gap-4">
+              <div className={[subtlePanelClass, 'rounded-[28px] p-4'].join(' ')}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-base font-semibold">Metric Date</div>
+                    <div className={['mt-1 text-sm', mutedClass].join(' ')}>Controls where the import lands</div>
+                  </div>
+                  <CalendarDays className={['h-4 w-4 shrink-0', mutedClass].join(' ')} />
+                </div>
+                <div className="mt-4">
+                  <StyledDateInput value={metricDate} onChange={setMetricDate} themeMode={themeMode} />
+                </div>
+              </div>
+
+              <div className={[subtlePanelClass, 'rounded-[28px] p-4'].join(' ')}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-base font-semibold">Import</div>
+                    <div className={['mt-1 truncate text-sm', mutedClass].join(' ')}>{activeFileName}</div>
+                  </div>
+                  <FileUp className={['h-4 w-4 shrink-0', mutedClass].join(' ')} />
+                </div>
+                <input
+                  ref={redesignedFileInputRef}
+                  type="file"
+                  disabled={uploadDisabled}
+                  accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                  onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+                  className="sr-only"
+                />
+                <button
+                  type="button"
+                  disabled={uploadDisabled}
+                  onClick={() => redesignedFileInputRef.current?.click()}
+                  className={[
+                    'mt-4 flex w-full items-center justify-between gap-3 rounded-[22px] border px-4 py-4 text-left transition',
+                    themeMode === 'light'
+                      ? 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 disabled:bg-slate-100 disabled:text-slate-400'
+                      : 'border-slate-800 bg-slate-950/70 hover:border-slate-700 hover:bg-slate-900 disabled:bg-slate-900 disabled:text-slate-500'
+                  ].join(' ')}
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold">Choose file</div>
+                    <div className={['mt-1 truncate text-sm', selectedFile ? cellClass : mutedClass].join(' ')}>{activeFileName}</div>
+                  </div>
+                  <ArrowUpRight className={['h-4 w-4 shrink-0', mutedClass].join(' ')} />
+                </button>
+                <button
+                  type="button"
+                  disabled={uploadDisabled || !selectedFile}
+                  onClick={handleUpload}
+                  className={[buttonClass, 'mt-4 flex w-full items-center justify-center gap-2 rounded-[18px] py-3'].join(' ')}
+                >
+                  {loading ? (
+                    <span
+                      className={[
+                        'inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-r-transparent',
+                        themeMode === 'light' ? 'opacity-90' : 'opacity-80'
+                      ].join(' ')}
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <FileUp className="h-4 w-4" />
+                  )}
+                  <span>{loading ? 'Importing...' : 'Upload & Compute'}</span>
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)_auto]">
+          <div className={[subtlePanelClass, 'overflow-hidden rounded-[28px] p-0'].join(' ')}>
+            <div
+              className={[
+                'grid gap-4 border-b px-4 py-4 md:px-5 xl:grid-cols-[minmax(0,1fr)_auto]',
+                themeMode === 'light' ? 'border-slate-200 bg-white/65' : 'border-slate-800 bg-slate-950/25'
+              ].join(' ')}
+            >
+              <div className="flex min-w-0 flex-wrap items-center gap-3">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={[
+                      'flex h-10 w-10 items-center justify-center rounded-2xl',
+                      themeMode === 'light' ? 'bg-slate-900 text-white' : 'bg-white/10 text-slate-100'
+                    ].join(' ')}
+                  >
+                    <Rows3 className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="text-base font-semibold">Outbound Records</div>
+                    <div className={['mt-1 text-sm', mutedClass].join(' ')}>
+                      {selectedDateLabel} / Window {rangeDayCount} days
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <div
+                    className={[
+                      'inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold',
+                      themeMode === 'light' ? 'bg-slate-100 text-slate-700' : 'bg-white/5 text-slate-300'
+                    ].join(' ')}
+                  >
+                    <Package2 className="h-3.5 w-3.5" />
+                    {selectedMetricsRow
+                      ? `Completed ${formatMetricValue('assessment_completed_order_count', selectedMetricsRow.assessment_completed_order_count)}`
+                      : 'No data'}
+                  </div>
+                  <div
+                    className={[
+                      'inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold',
+                      themeMode === 'light' ? 'bg-slate-100 text-slate-700' : 'bg-white/5 text-slate-300'
+                    ].join(' ')}
+                  >
+                    <Clock3 className="h-3.5 w-3.5" />
+                    {selectedMetricsRow ? `SLA ${formatRatioValue(selectedDerivedMetrics?.slaRatio ?? null)}` : 'SLA -'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                <StyledDateInput value={rangeStart} onChange={setRangeStart} themeMode={themeMode} max={rangeEnd} size="compact" />
+                <span className={['text-xs', mutedClass].join(' ')}>to</span>
+                <StyledDateInput value={rangeEnd} onChange={setRangeEnd} themeMode={themeMode} min={rangeStart} size="compact" />
+                <button type="button" className={buttonClass} onClick={() => void handleReportClick()} disabled={!selectedMetricsRow || tableLoading}>
+                  Report
+                </button>
+                <button
+                  type="button"
+                  className={secondaryButtonClass}
+                  onClick={() => {
+                    const nextEnd = getDateOnlyInTimeZone(serverTime);
+                    setRangeEnd(nextEnd);
+                    setRangeStart(addDaysDateOnly(nextEnd, -6));
+                  }}
+                >
+                  Last 7 Days
+                </button>
+              </div>
+            </div>
+
+            <div
+              className={[
+                'overflow-hidden',
+                themeMode === 'light'
+                  ? 'bg-white/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_10px_30px_rgba(15,23,42,0.06)]'
+                  : 'bg-slate-950/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_18px_44px_rgba(2,6,23,0.26)]'
+              ].join(' ')}
+            >
+              {metricsRows.length === 0 ? (
+                <div className={['px-4 py-10 text-center text-sm', mutedClass].join(' ')}>
+                  {tableLoading ? 'Loading...' : 'No saved metrics in the selected range.'}
+                </div>
+              ) : (
+                <div className="flex min-w-0">
+                  <div className={['shrink-0', frozenWrapClass].join(' ')}>
+                    <table className="w-[250px] border-separate border-spacing-0 text-left">
+                      <thead className={tableHeadClass}>
+                        <tr>
+                          <th className="w-[130px] border-b border-r border-slate-800 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.16em]">
+                            Date
+                          </th>
+                          <th className="w-[120px] border-b border-slate-800 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.16em]">
+                            Week
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {metricsRows.map((row) => {
+                          const isSelected = row.metric_date === metricDate;
+                          return (
+                            <tr key={`frozen-${row.metric_date}`} className={[rowBaseClass, isSelected ? rowSelectedClass : ''].join(' ')}>
+                              <td className={['border-r border-slate-800 px-4 py-4 align-middle', cellClass].join(' ')}>
+                                <button type="button" className="w-full text-left" onClick={() => setMetricDate(row.metric_date)}>
+                                  <div className="text-base font-semibold">{row.metric_date.replace(/-/g, '/')}</div>
+                                </button>
+                              </td>
+                              <td className={['px-4 py-4 align-middle', cellClass].join(' ')}>
+                                <div className="text-base font-semibold">{row.weekLabel}</div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="metrics-scroll-fade min-w-0 flex-1 overflow-x-auto metrics-scrollbar">
+                    <table className="min-w-[3200px] border-separate border-spacing-0 text-left">
+                      <thead className={tableHeadClass}>
+                        <tr>
+                          {METRIC_COLUMNS.map((column) => (
+                            <th
+                              key={column.key}
+                              className={[column.width, 'border-b border-r border-slate-800 px-4 py-3 text-center text-[11px] font-semibold uppercase tracking-[0.12em] last:border-r-0'].join(' ')}
+                            >
+                              <div className="truncate">{t(column.zh, column.en)}</div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {metricsRows.map((row) => {
+                          const isSelected = row.metric_date === metricDate;
+                          const totalHours = laborSummaryByDate[row.metric_date]?.totalHours ?? null;
+                          return (
+                            <tr key={`metrics-${row.metric_date}`} className={[rowBaseClass, isSelected ? rowSelectedClass : ''].join(' ')}>
+                              {METRIC_COLUMNS.map((column) => (
+                                <td
+                                  key={`${row.metric_date}-${column.key}`}
+                                  className={['border-r border-slate-800 px-4 py-4 align-middle text-center text-base font-semibold last:border-r-0', cellClass].join(' ')}
+                                >
+                                  {column.render(row, totalHours)}
+                                </td>
+                              ))}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="hidden">
+          <div
+            className={[
+              'rounded-[24px] border px-4 py-4',
+              themeMode === 'light'
+                ? 'border-slate-200 bg-[radial-gradient(circle_at_top_left,rgba(15,23,42,0.04),transparent_45%),linear-gradient(180deg,rgba(248,250,252,0.98),rgba(241,245,249,0.92))]'
+                : 'border-slate-800/80 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.14),transparent_34%),linear-gradient(180deg,rgba(15,23,42,0.86),rgba(2,6,23,0.74))]'
+            ].join(' ')}
+          >
+            <div className="space-y-1">
+              <div className={['text-[11px] font-semibold uppercase tracking-[0.22em]', mutedClass].join(' ')}>{t('运营看板', 'Operations')}</div>
+              <h2 className="font-display text-[28px] leading-none tracking-[0.06em]">{t('出库日报', 'Outbound Daily')}</h2>
+            </div>
+          </div>
+
+          <div className="grid gap-3 xl:max-w-[1120px] xl:grid-cols-[180px_minmax(420px,760px)_auto] xl:gap-x-0 xl:justify-start">
             <div>
-              <label className={['mb-2 block text-sm font-medium', mutedClass].join(' ')}>{t('统计日期', 'Metric Date')}</label>
+              <label className={['mb-2 block text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{t('统计日期', 'Metric Date')}</label>
               <StyledDateInput value={metricDate} onChange={setMetricDate} themeMode={themeMode} />
             </div>
-            <div>
-              <label className={['mb-2 block text-sm font-medium', mutedClass].join(' ')}>{t('数据文件', 'Source File')}</label>
+            <div className="xl:max-w-[760px]">
+              <label className={['mb-2 block text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{t('数据入口', 'Data Entry')}</label>
               <input
                 ref={fileInputRef}
                 type="file"
                 disabled={isLocked || isReadOnly || loading}
                 accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                 onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
-                className={[
-                  'block w-full rounded-2xl border px-4 py-3 text-sm',
-                  themeMode === 'light'
-                    ? 'border-slate-200 bg-slate-50 text-slate-900'
-                    : 'border-slate-800 bg-slate-950 text-slate-100'
-                ].join(' ')}
+                className="sr-only"
               />
+              <button
+                type="button"
+                disabled={isLocked || isReadOnly || loading}
+                onClick={() => fileInputRef.current?.click()}
+                className={[
+                  'flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left text-sm transition xl:rounded-r-none xl:border-r-0',
+                  themeMode === 'light'
+                    ? 'border-slate-200 bg-white text-slate-900 hover:border-slate-300 hover:bg-slate-50 disabled:bg-slate-100 disabled:text-slate-400'
+                    : 'border-slate-800 bg-slate-950/90 text-slate-100 hover:border-slate-700 hover:bg-slate-900 disabled:bg-slate-900 disabled:text-slate-500'
+                ].join(' ')}
+              >
+                <span
+                  className={[
+                    'inline-flex shrink-0 items-center rounded-xl px-3 py-2 text-sm font-semibold',
+                    themeMode === 'light' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-950'
+                  ].join(' ')}
+                >
+                  {t('选择文件', 'Choose File')}
+                </span>
+                <span className={['min-w-0 truncate', selectedFile ? cellClass : mutedClass].join(' ')}>
+                  {selectedFile?.name ?? t('未选择任何文件', 'No file selected')}
+                </span>
+              </button>
             </div>
-            <div className="flex items-end gap-2">
-              <button type="button" disabled={isLocked || isReadOnly || loading || !selectedFile} onClick={handleUpload} className={buttonClass}>
+            <div className="flex items-end gap-2 xl:self-end">
+              <button
+                type="button"
+                disabled={isLocked || isReadOnly || loading || !selectedFile}
+                onClick={handleUpload}
+                className={[buttonClass, 'min-w-[132px] justify-center xl:min-h-[54px] xl:rounded-l-none'].join(' ')}
+              >
                 <span className="inline-flex items-center gap-2">
                   {loading ? (
                     <span
@@ -881,10 +1281,28 @@ export default function PackageMetricsPage({
             </div>
           </div>
 
-          <div className={[subtlePanelClass, 'p-4'].join(' ')}>
+          {selectedSummaryItems.length > 0 ? (
+            <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+              {selectedSummaryItems.map((item) => (
+                <div
+                  key={item.label}
+                  className={[
+                    'rounded-2xl px-3 py-3',
+                    themeMode === 'light' ? 'bg-slate-50 ring-1 ring-slate-200/70' : 'bg-slate-900/70 ring-1 ring-slate-800/70'
+                  ].join(' ')}
+                >
+                  <div className={['text-[11px] font-semibold uppercase tracking-[0.16em]', mutedClass].join(' ')}>{item.label}</div>
+                  <div className="mt-2 text-lg font-semibold">{item.value}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <div className={[subtlePanelClass, 'p-3 md:p-4'].join(' ')}>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-base font-semibold">{t('日报记录', 'Daily Records')}</div>
+              <div className="flex items-center gap-3">
+                <div className="text-base font-semibold">{t('出库记录', 'Outbound Records')}</div>
+                <div className={['text-xs', mutedClass].join(' ')}>{selectedFile ? selectedFile.name : t('未选择文件', 'No file selected')}</div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <StyledDateInput value={rangeStart} onChange={setRangeStart} themeMode={themeMode} max={rangeEnd} size="compact" />
@@ -953,7 +1371,7 @@ export default function PackageMetricsPage({
                     </table>
                   </div>
 
-                  <div className="min-w-0 flex-1 overflow-x-auto">
+                  <div className="metrics-scroll-fade min-w-0 flex-1 overflow-x-auto metrics-scrollbar">
                     <table className="min-w-[3200px] border-separate border-spacing-0 text-left">
                       <thead className={tableHeadClass}>
                         <tr>
@@ -992,7 +1410,19 @@ export default function PackageMetricsPage({
             </div>
           </div>
 
-          <div className={['text-sm', statusClass].join(' ')}>{status.message || '\u00A0'}</div>
+          </div>
+
+          <ConsumablesWorkspace
+            t={t}
+            themeMode={themeMode}
+            isLocked={isLocked}
+            canView={canViewConsumables}
+            canOperate={canOperateConsumables}
+            supabase={supabase}
+            serverTime={serverTime}
+          />
+
+          <div className={['pt-1 text-sm', statusClass].join(' ')}>{status.message || '\u00A0'}</div>
         </div>
       </div>
 

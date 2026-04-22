@@ -154,7 +154,9 @@ export const buildCalendarWindow = (metricDate: string) => ({
 const isWithinWindow = (value: string | null | undefined, start: string, endExclusive: string) =>
   Boolean(value) && String(value) >= start && String(value) < endExclusive;
 
-const isFinishedStatus = (status: string) => status.trim() === '已发货';
+const FINISHED_STATUSES = new Set(['已发货', '发货中']);
+
+const isFinishedStatus = (status: string) => FINISHED_STATUSES.has(status.trim());
 const isBacklogStatus = (status: string) => status.trim() === '待发货';
 
 const safeRatio = (numerator: number, denominator: number) =>

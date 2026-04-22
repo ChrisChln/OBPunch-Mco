@@ -1291,6 +1291,7 @@ export default function AdminAppPage() {
       devices: hasModuleAccess(adminModuleMap, 'devices', 'operate'),
       forecast: hasModuleAccess(adminModuleMap, 'forecast', 'operate'),
       packageMetrics: hasModuleAccess(adminModuleMap, 'package_metrics', 'operate'),
+      consumables: hasModuleAccess(adminModuleMap, 'consumables', 'operate'),
       predictionModel: hasModuleAccess(adminModuleMap, 'prediction_model', 'operate'),
       efficiency: hasModuleAccess(adminModuleMap, 'efficiency', 'operate'),
       leaveApproval: hasModuleAccess(adminModuleMap, 'leave_approval', 'operate'),
@@ -1307,6 +1308,7 @@ export default function AdminAppPage() {
     devices: devicesCanOperate,
     forecast: forecastCanOperate,
     packageMetrics: packageMetricsCanOperate,
+    consumables: consumablesCanOperate,
     predictionModel: predictionModelCanOperate,
     efficiency: efficiencyCanOperate,
     leaveApproval: leaveApprovalCanOperate,
@@ -15182,6 +15184,8 @@ ${rowsToHtml(late)}
                 t={t}
                 isLocked={isLocked}
                 isReadOnly={!packageMetricsCanOperate}
+                canViewConsumables={hasModuleAccess(adminModuleMap, 'consumables', 'view')}
+                canOperateConsumables={consumablesCanOperate}
                 supabase={supabase}
                 themeMode={themeMode}
                 serverTime={serverTime}

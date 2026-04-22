@@ -47,6 +47,16 @@ describe('adminAccess', () => {
     expect(map.forecast).toBe('operate');
   });
 
+  test('consumables is independent from package metrics', () => {
+    const map = buildEffectiveModuleMap('level3', [
+      { module_key: 'package_metrics', access_level: 'operate' },
+      { module_key: 'consumables', access_level: 'hidden' }
+    ]);
+
+    expect(map.package_metrics).toBe('operate');
+    expect(map.consumables).toBe('hidden');
+  });
+
   test('checks view and operate access correctly', () => {
     const map = buildEffectiveModuleMap('agency', [{ module_key: 'agency', access_level: 'operate' }]);
     expect(hasModuleAccess(map, 'agency', 'view')).toBe(true);
