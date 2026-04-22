@@ -8161,6 +8161,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const fromState = getScheduleFromState('rest');
       const toState = getScheduleToState('empty');
       summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
+    } else if (action === 'agency_schedule_state_set') {
+      const fromState = getScheduleFromState('empty');
+      const toState = getScheduleToState('rest');
+      summary = `${fmtScheduleState(fromState)} -> ${fmtScheduleState(toState)}`;
+      push('Agency', payload?.agency);
+      push(t('岗位', 'Position'), payload?.position);
+      push(t('日期', 'Date'), payload?.work_date ?? payload?.template_date);
+    } else if (action === 'agency_substitute_assign') {
+      const toState = getScheduleToState('planned_temp_work');
+      summary = `${t('休息', 'Off')} -> ${fmtScheduleState(toState)}`;
+      push('Agency', payload?.agency);
+      push(t('岗位', 'Position'), payload?.position);
+      push(t('日期', 'Date'), payload?.work_date ?? payload?.template_date);
+      push(t('替补员工', 'Substitute'), payload?.substitute_staff_id);
     } else if (action === 'schedule_auto_week_reset') {
       summary = t('自动周重置已执行', 'Automatic weekly reset applied');
       push(t('重置周起始', 'Reset week start'), payload?.week_start);
@@ -13236,7 +13250,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       'schedule_temp_rest',
       'schedule_planned_temp_rest',
       'schedule_rest',
-      'schedule_clear'
+      'schedule_clear',
+      'agency_schedule_state_set',
+      'agency_substitute_assign'
     ]);
     for (const row of cellAuditRows) {
       const action = String(row.action ?? '').trim();
