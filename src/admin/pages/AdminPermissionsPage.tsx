@@ -47,7 +47,7 @@ const ROLE_OPTIONS: AdminRole[] = ['level1', 'level2', 'level3', 'agency'];
 const ACCESS_OPTIONS: AdminModuleAccessLevel[] = ['hidden', 'view', 'operate'];
 
 const MODULE_LABELS: Record<AdminModuleKey, { zh: string; en: string }> = {
-  package_metrics: { zh: '包裹日报', en: 'Package Metrics' },
+  package_metrics: { zh: '日报&耗材', en: 'Package Metrics' },
   consumables: { zh: '耗材', en: 'Consumables' },
   home: { zh: '首页', en: 'Home' },
   employees: { zh: '员工', en: 'Employees' },

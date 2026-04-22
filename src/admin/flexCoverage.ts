@@ -10,7 +10,7 @@ export type FlexCoverageEntry = {
   shift: FlexCoverageShift;
 };
 export type RecommendedPositionRow = {
-  key: 'Pick' | 'Rebin' | 'Pack' | 'Preship';
+  key: 'Pick' | 'Rebin' | 'Pack' | 'Preship' | 'Water Spider';
   total: number;
   ds: number;
   ns: number;

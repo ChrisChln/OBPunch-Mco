@@ -15,6 +15,11 @@ import {
   type PackageDailyReportLabor,
   type PackageMetricsParsedRow
 } from '../../shared/packageMetrics';
+import {
+  isPackageMetricsStaffingPosition,
+  normalizeOutboundStaffingPosition,
+  shouldCountScheduledPackageMetricsStaff
+} from '../../shared/packageStaffing';
 import ConsumablesWorkspace from '../components/ConsumablesWorkspace';
 import StyledDateInput from '../components/StyledDateInput';
 
@@ -65,6 +70,7 @@ type ScheduleRow = {
   staff_id?: string | null;
   date?: string | null;
   position?: string | null;
+  note?: string | null;
 };
 
 type AttendanceMarkRow = {
@@ -77,7 +83,6 @@ type PackageLaborSummaryByDate = Record<string, PackageDailyReportLabor>;
 const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? Math.max(0, Math.min(23, DAY_CUTOFF_HOUR_RAW)) : 5;
-const TRACKED_POSITIONS = new Set(['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer']);
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 
 const formatMetricValue = (key: keyof PackageDailyMetrics, value: unknown) => {
@@ -107,6 +112,8 @@ const formatRatioValue = (value: number | null) => {
 };
 
 const IMPORT_FILE_NAME_MAX_LENGTH = 36;
+const IMPORT_STATUS_AUTO_DISMISS_MS = 3000;
+const IMPORT_REQUEST_NETWORK_ERROR = '__package_metrics_import_request_network_error__';
 
 const truncateMiddle = (value: string, maxLength: number) => {
   const text = String(value ?? '');
@@ -117,6 +124,19 @@ const truncateMiddle = (value: string, maxLength: number) => {
   const tail = Math.floor(visible * 0.35);
   return `${text.slice(0, head)}...${text.slice(text.length - tail)}`;
 };
+
+const parseMissingHeaderNames = (value: unknown) => {
+  const text = String(value ?? '').trim();
+  if (!text) return [];
+  const match = text.match(/missing required headers:\s*(.+)$/i);
+  if (!match?.[1]) return [];
+  return match[1]
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const isImportRequestNetworkError = (value: unknown) => String(value ?? '').includes(IMPORT_REQUEST_NETWORK_ERROR);
 
 const METRIC_COLUMNS: MetricColumn[] = [
   {
@@ -303,10 +323,13 @@ const parseJsonResponse = (text: string) => {
   return JSON.parse(trimmed);
 };
 
-const isNetworkFetchError = (error: unknown) => {
-  if (!(error instanceof Error)) return false;
-  if (error.name === 'TypeError') return true;
-  return /failed to fetch|networkerror|load failed/i.test(error.message);
+const resolvePackageMetricsImportUrls = () => {
+  if (typeof window === 'undefined') return ['/api/package-metrics-import'];
+  const urls = ['/api/package-metrics-import'];
+  if (window.location.hostname === 'localhost' && window.location.port !== '3000') {
+    urls.push('http://localhost:3000/api/package-metrics-import');
+  }
+  return urls;
 };
 
 const getWeekdayLabel = (dateOnly: string) => {
@@ -437,6 +460,13 @@ const getOperationalDayRange = (workDate: string) => {
   return { start, end };
 };
 
+const getOperationalMetricDate = (referenceTime: Date) => {
+  if (Number.isNaN(referenceTime.getTime())) return '';
+  const shifted = new Date(referenceTime);
+  shifted.setHours(shifted.getHours() - DAY_CUTOFF_HOUR, 0, 0, 0);
+  return getDateOnlyInTimeZone(shifted);
+};
+
 const getOverlapHours = (startA: Date, endA: Date, startB: Date, endB: Date) => {
   const start = Math.max(startA.getTime(), startB.getTime());
   const end = Math.min(endA.getTime(), endB.getTime());
@@ -444,7 +474,7 @@ const getOverlapHours = (startA: Date, endA: Date, startB: Date, endB: Date) => 
   return (end - start) / 3600000;
 };
 
-const computeSystemHoursByStaff = (punches: PunchRow[], rangeStart: Date, rangeEnd: Date) => {
+const computeSystemHoursByStaff = (punches: PunchRow[], rangeStart: Date, rangeEnd: Date, activeOpenIntervalEnd?: Date | null) => {
   const byStaff = new Map<string, Array<{ at: Date; action: 'IN' | 'OUT' }>>();
 
   for (const row of punches) {
@@ -458,6 +488,10 @@ const computeSystemHoursByStaff = (punches: PunchRow[], rangeStart: Date, rangeE
   }
 
   const result = new Map<string, number>();
+  const openIntervalEnd =
+    activeOpenIntervalEnd && !Number.isNaN(activeOpenIntervalEnd.getTime())
+      ? new Date(Math.min(activeOpenIntervalEnd.getTime(), rangeEnd.getTime()))
+      : rangeEnd;
   for (const [staffId, rows] of byStaff.entries()) {
     rows.sort((a, b) => a.at.getTime() - b.at.getTime());
     let openIn: Date | null = null;
@@ -474,7 +508,7 @@ const computeSystemHoursByStaff = (punches: PunchRow[], rangeStart: Date, rangeE
     }
 
     if (openIn) {
-      hours += getOverlapHours(openIn, rangeEnd, rangeStart, rangeEnd);
+      hours += getOverlapHours(openIn, openIntervalEnd, rangeStart, rangeEnd);
     }
     result.set(staffId, Math.round(hours * 100) / 100);
   }
@@ -482,20 +516,10 @@ const computeSystemHoursByStaff = (punches: PunchRow[], rangeStart: Date, rangeE
   return result;
 };
 
-const normalizeTrackedPosition = (value: unknown): string => {
-  const normalized = String(value ?? '').trim().toLowerCase();
-  if (!normalized) return '';
-  if (normalized === 'pick') return 'Pick';
-  if (normalized === 'pack') return 'Pack';
-  if (normalized === 'rebin') return 'Rebin';
-  if (normalized === 'preship' || normalized === 'pre ship' || normalized === 'pre-ship') return 'Preship';
-  if (normalized === 'transfer') return 'Transfer';
-  return '';
-};
-
 const fetchEmployeePositions = async (supabase: any, staffIds: string[]) => {
-  const result = new Map<string, string>();
-  if (!supabase || staffIds.length === 0) return result;
+  const positionByStaff = new Map<string, string>();
+  const activeStaffIds = new Set<string>();
+  if (!supabase || staffIds.length === 0) return { positionByStaff, activeStaffIds };
 
   const batches: string[][] = [];
   for (let index = 0; index < staffIds.length; index += 500) {
@@ -503,29 +527,40 @@ const fetchEmployeePositions = async (supabase: any, staffIds: string[]) => {
   }
 
   for (const batch of batches) {
-    let response = await supabase.from(EMPLOYEE_TABLE).select('staff_id, position').in('staff_id', batch);
+    let response = await supabase.from(EMPLOYEE_TABLE).select('staff_id, active, terminated_at, position').in('staff_id', batch);
     if (response.error) {
-      response = await supabase.from(EMPLOYEE_TABLE).select('staff_id, "Position"').in('staff_id', batch);
+      response = await supabase.from(EMPLOYEE_TABLE).select('staff_id, active, terminated_at, "Position"').in('staff_id', batch);
     }
     if (response.error) {
       throw new Error(String(response.error.message ?? 'Failed to load employee positions.'));
     }
 
-    for (const row of (response.data as Array<{ staff_id?: string | null; position?: string | null; Position?: string | null }> | null) ?? []) {
+    for (const row of (response.data as Array<{
+      staff_id?: string | null;
+      active?: boolean | null;
+      terminated_at?: string | null;
+      position?: string | null;
+      Position?: string | null;
+    }> | null) ?? []) {
       const staffId = normalizeStaffId(String(row.staff_id ?? ''));
       if (!staffId) continue;
-      const position = normalizeTrackedPosition(row.position ?? row.Position ?? '');
-      if (position) result.set(staffId, position);
+      const terminatedAt = String(row.terminated_at ?? '').trim();
+      if (terminatedAt) continue;
+      if (row.active === false) continue;
+      activeStaffIds.add(staffId);
+      const position = normalizeOutboundStaffingPosition(row.position ?? row.Position ?? '');
+      if (position) positionByStaff.set(staffId, position);
     }
   }
 
-  return result;
+  return { positionByStaff, activeStaffIds };
 };
 
-const loadPackageLaborSummaryByDate = async (supabase: any, metricDates: string[]) => {
-  const dates = Array.from(new Set(metricDates.filter(Boolean))).sort();
+const loadPackageLaborSummaryByDate = async (supabase: any, metricsRows: PackageMetricsViewRow[], serverNow: Date) => {
+  const dates = Array.from(new Set(metricsRows.map((row) => row.metric_date).filter(Boolean))).sort();
   const result: PackageLaborSummaryByDate = {};
   if (!supabase || dates.length === 0) return result;
+  const metricsByDate = new Map(metricsRows.map((row) => [row.metric_date, row] as const));
 
   const firstRange = getOperationalDayRange(dates[0]);
   const lastRange = getOperationalDayRange(dates[dates.length - 1]);
@@ -549,7 +584,7 @@ const loadPackageLaborSummaryByDate = async (supabase: any, metricDates: string[
     (from, to) =>
       supabase
         .from('ob_schedules')
-        .select('staff_id, date, position')
+        .select('staff_id, date, position, note')
         .gte('date', dates[0])
         .lte('date', dates[dates.length - 1])
         .order('date', { ascending: true })
@@ -577,7 +612,7 @@ const loadPackageLaborSummaryByDate = async (supabase: any, metricDates: string[
         .filter(Boolean)
     )
   );
-  const positionByStaff = await fetchEmployeePositions(supabase, staffIds);
+  const { positionByStaff, activeStaffIds } = await fetchEmployeePositions(supabase, staffIds);
 
   const scheduledStaffByDate = new Map<string, Set<string>>();
   for (const row of schedules) {
@@ -585,8 +620,9 @@ const loadPackageLaborSummaryByDate = async (supabase: any, metricDates: string[
     if (!metricDate) continue;
     const staffId = normalizeStaffId(String(row.staff_id ?? ''));
     if (!staffId) continue;
-    const position = normalizeTrackedPosition(row.position ?? '') || (positionByStaff.get(staffId) ?? '');
-    if (!TRACKED_POSITIONS.has(position)) continue;
+    if (!activeStaffIds.has(staffId)) continue;
+    const position = normalizeOutboundStaffingPosition(row.position ?? '') || (positionByStaff.get(staffId) ?? '');
+    if (!shouldCountScheduledPackageMetricsStaff(position, row.note)) continue;
     if (!scheduledStaffByDate.has(metricDate)) scheduledStaffByDate.set(metricDate, new Set<string>());
     scheduledStaffByDate.get(metricDate)!.add(staffId);
   }
@@ -597,27 +633,40 @@ const loadPackageLaborSummaryByDate = async (supabase: any, metricDates: string[
     if (!metricDate) continue;
     const staffId = normalizeStaffId(String(row.staff_id ?? ''));
     if (!staffId) continue;
+    if (!activeStaffIds.has(staffId)) continue;
     const scheduledStaff = scheduledStaffByDate.get(metricDate);
     const position = positionByStaff.get(staffId) ?? '';
-    if (!TRACKED_POSITIONS.has(position) && !scheduledStaff?.has(staffId)) continue;
+    if (!isPackageMetricsStaffingPosition(position) && !scheduledStaff?.has(staffId)) continue;
     if (!lateStaffByDate.has(metricDate)) lateStaffByDate.set(metricDate, new Set<string>());
     lateStaffByDate.get(metricDate)!.add(staffId);
   }
 
+  const currentOperationalMetricDate = getOperationalMetricDate(serverNow);
+
   for (const metricDate of dates) {
     const range = getOperationalDayRange(metricDate);
     if (!range) continue;
-    const hoursByStaff = computeSystemHoursByStaff(punches, range.start, range.end);
+    const activeOpenIntervalEnd = metricDate === currentOperationalMetricDate ? serverNow : null;
+    const hoursByStaff = computeSystemHoursByStaff(punches, range.start, range.end, activeOpenIntervalEnd);
     let totalHours = 0;
     let presentCount = 0;
+    const expectedStaff = new Set<string>([
+      ...(scheduledStaffByDate.get(metricDate) ?? new Set<string>()),
+      ...(lateStaffByDate.get(metricDate) ?? new Set<string>())
+    ]);
     for (const [staffId, hours] of hoursByStaff.entries()) {
-      if (!TRACKED_POSITIONS.has(positionByStaff.get(staffId) ?? '')) continue;
+      if (!activeStaffIds.has(staffId)) continue;
+      if (!isPackageMetricsStaffingPosition(positionByStaff.get(staffId) ?? '')) continue;
       totalHours += hours;
-      if (hours > 0) presentCount += 1;
+      if (hours > 0) {
+        presentCount += 1;
+        expectedStaff.add(staffId);
+      }
     }
+    const persistedScheduledHeadcount = Number(metricsByDate.get(metricDate)?.scheduled_headcount ?? null);
 
     result[metricDate] = {
-      scheduledCount: scheduledStaffByDate.get(metricDate)?.size ?? 0,
+      scheduledCount: Number.isFinite(persistedScheduledHeadcount) && persistedScheduledHeadcount >= 0 ? persistedScheduledHeadcount : expectedStaff.size,
       presentCount,
       lateCount: lateStaffByDate.get(metricDate)?.size ?? 0,
       earlyLeaveCount: 0,
@@ -687,6 +736,29 @@ export default function PackageMetricsPage({
     if (status.tone === 'error') return themeMode === 'light' ? 'text-rose-700' : 'text-rose-300';
     return mutedClass;
   }, [mutedClass, status.tone, themeMode]);
+  const statusToastClass = useMemo(() => {
+    if (status.tone === 'success') {
+      return themeMode === 'light'
+        ? 'border-emerald-200 bg-emerald-50/95 text-emerald-700 shadow-[0_18px_38px_rgba(16,185,129,0.18)]'
+        : 'border-emerald-500/30 bg-emerald-500/12 text-emerald-200 shadow-[0_18px_38px_rgba(5,150,105,0.2)]';
+    }
+    if (status.tone === 'error') {
+      return themeMode === 'light'
+        ? 'border-rose-200 bg-rose-50/95 text-rose-700 shadow-[0_18px_38px_rgba(244,63,94,0.16)]'
+        : 'border-rose-500/30 bg-rose-500/12 text-rose-200 shadow-[0_18px_38px_rgba(190,24,93,0.24)]';
+    }
+    return themeMode === 'light'
+      ? 'border-slate-200 bg-white/95 text-slate-600 shadow-[0_18px_38px_rgba(15,23,42,0.1)]'
+      : 'border-slate-700/80 bg-slate-900/95 text-slate-300 shadow-[0_18px_38px_rgba(2,6,23,0.4)]';
+  }, [status.tone, themeMode]);
+
+  useEffect(() => {
+    if (!status.message || status.tone === 'idle') return undefined;
+    const timer = window.setTimeout(() => {
+      setStatus((current) => (current.message === status.message && current.tone === status.tone ? { tone: 'idle', message: '' } : current));
+    }, IMPORT_STATUS_AUTO_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+  }, [status.message, status.tone]);
 
   useEffect(() => {
     let cancelled = false;
@@ -711,8 +783,7 @@ export default function PackageMetricsPage({
           ...row,
           weekLabel: getWeekdayLabel(row.metric_date)
         }));
-        const nextLaborSummary =
-          nextRows.length > 0 ? await loadPackageLaborSummaryByDate(supabase, nextRows.map((row) => row.metric_date)) : {};
+        const nextLaborSummary = nextRows.length > 0 ? await loadPackageLaborSummaryByDate(supabase, nextRows, serverTime) : {};
 
         if (cancelled) return;
         setMetricsRows(nextRows);
@@ -744,7 +815,7 @@ export default function PackageMetricsPage({
     return () => {
       cancelled = true;
     };
-  }, [metricDate, rangeEnd, rangeStart, reloadKey, supabase, t]);
+  }, [metricDate, rangeEnd, rangeStart, reloadKey, serverTime, supabase, t]);
 
   const selectedMetricsRow = useMemo(
     () => metricsRows.find((row) => row.metric_date === metricDate) ?? null,
@@ -835,18 +906,43 @@ export default function PackageMetricsPage({
           )
         );
       }
-      const response = await fetch('/api/package-metrics-import', {
+      const requestBody = JSON.stringify({
+        metric_date: metricDate,
+        filename: selectedFile.name,
+        rows
+      });
+      const requestInit: RequestInit = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${accessToken}`
         },
-        body: JSON.stringify({
-          metric_date: metricDate,
-          filename: selectedFile.name,
-          rows
-        })
-      });
+        body: requestBody
+      };
+      const importUrls = resolvePackageMetricsImportUrls();
+      let response: Response | null = null;
+      let lastNetworkError: unknown = null;
+
+      for (let index = 0; index < importUrls.length; index += 1) {
+        const url = importUrls[index];
+        try {
+          response = await fetch(url, requestInit);
+          lastNetworkError = null;
+          break;
+        } catch (fetchError) {
+          lastNetworkError = fetchError;
+          if (index === importUrls.length - 1) {
+            const reason = fetchError instanceof Error ? fetchError.message : String(fetchError ?? 'Unknown network failure');
+            throw new Error(`${IMPORT_REQUEST_NETWORK_ERROR}: ${reason}`);
+          }
+        }
+      }
+
+      if (!response) {
+        const reason =
+          lastNetworkError instanceof Error ? lastNetworkError.message : String(lastNetworkError ?? 'Import request failed.');
+        throw new Error(`${IMPORT_REQUEST_NETWORK_ERROR}: ${reason}`);
+      }
 
       const responseText = await response.text();
       const result = parseJsonResponse(responseText);
@@ -881,12 +977,20 @@ export default function PackageMetricsPage({
         )
       });
     } catch (error: any) {
-      const message = isNetworkFetchError(error)
-        ? t(
-            '无法连接导入服务，请检查 `/api/package-metrics-import` 和 Vite 代理 `http://localhost:3000` 是否已启动。',
-            'Cannot reach the import API. Check that `/api/package-metrics-import` is available and the Vite proxy target `http://localhost:3000` is running.'
-          )
-        : String(error?.message ?? error ?? t('导入失败。', 'Import failed.'));
+      const rawMessage = String(error?.message ?? error ?? '');
+      const missingHeaders = parseMissingHeaderNames(rawMessage);
+      const message =
+        missingHeaders.length > 0
+          ? t(
+              `表格字段缺失，请完善 ${missingHeaders.join('、')} 后重新导入。`,
+              `Missing required columns: ${missingHeaders.join(', ')}. Complete them and import again.`
+            )
+          : isImportRequestNetworkError(rawMessage)
+            ? t(
+                '无法连接导入服务，请检查 `/api/package-metrics-import` 和 Vite 代理 `http://localhost:3000` 是否已启动。',
+                'Cannot reach the import API. Check that `/api/package-metrics-import` is available and the Vite proxy target `http://localhost:3000` is running.'
+              )
+            : rawMessage || t('导入失败。', 'Import failed.');
       setStatus({
         tone: 'error',
         message
@@ -1446,9 +1550,16 @@ export default function PackageMetricsPage({
             serverTime={serverTime}
           />
 
-          <div className={['pt-1 text-sm', statusClass].join(' ')}>{status.message || '\u00A0'}</div>
         </div>
       </div>
+
+      {status.message && status.tone !== 'idle' ? (
+        <div className="pointer-events-none fixed right-4 top-20 z-50 max-w-[min(28rem,calc(100vw-2rem))]">
+          <div className={['rounded-2xl border px-4 py-3 text-sm leading-6 backdrop-blur', statusToastClass].join(' ')}>
+            <div className={['font-medium', statusClass].join(' ')}>{status.message}</div>
+          </div>
+        </div>
+      ) : null}
 
       {reasonDialogOpen ? (
         <div

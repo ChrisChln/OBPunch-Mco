@@ -24,7 +24,7 @@ export type Status = {
   message: string;
 };
 
-export type AllowedPosition = 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer' | 'FLEX TEAM';
+export type AllowedPosition = 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer' | 'Water Spider' | 'FLEX TEAM';
 export type EmploymentType = 'FT' | 'PT';
 
 // DeviceType 现在支持任意自定义值，允许用户在导入时定义新类型
