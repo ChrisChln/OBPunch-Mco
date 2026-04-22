@@ -25,6 +25,7 @@ export type PackageDailyMetrics = {
   assessment_total_order_count: number;
   assessment_unfinished_order_count: number;
   calendar_inbound_order_count: number;
+  calendar_inbound_final_hour_present: boolean | null;
   assessment_single_item_qty: number;
   assessment_multi_item_qty: number;
   assessment_multi_item_ratio: number;
@@ -316,6 +317,7 @@ export const computePackageDailyMetrics = (
   let assessmentCompletedItemQty = 0;
   let calendarInboundOrderCount = 0;
   let calendarInboundItemQty = 0;
+  let calendarInboundFinalHourPresent = false;
   let calendarCompletedOrderCount = 0;
   let calendarCompletedItemQty = 0;
   let calendarBacklogOrderCount = 0;
@@ -355,6 +357,9 @@ export const computePackageDailyMetrics = (
     if (inboundAt && isWithinWindow(inboundAt, calendarWindow.start, calendarWindow.endExclusive)) {
       calendarInboundOrderCount += 1;
       calendarInboundItemQty += quantity;
+      if (inboundAt.slice(11, 13) === '23') {
+        calendarInboundFinalHourPresent = true;
+      }
     }
 
     if (packedAt && isWithinWindow(packedAt, calendarWindow.start, calendarWindow.endExclusive)) {
@@ -379,6 +384,7 @@ export const computePackageDailyMetrics = (
     assessment_total_order_count: assessmentTotalOrderCount,
     assessment_unfinished_order_count: assessmentUnfinishedOrderCount,
     calendar_inbound_order_count: calendarInboundOrderCount,
+    calendar_inbound_final_hour_present: calendarInboundFinalHourPresent,
     assessment_single_item_qty: assessmentSingleItemQty,
     assessment_multi_item_qty: assessmentMultiItemQty,
     assessment_multi_item_ratio: safeRatio(assessmentMultiItemQty, assessmentTotalItemQty),

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { ArrowUpRight, CalendarDays, Clock3, FileUp, Package2, Rows3 } from 'lucide-react';
+import { ArrowUpRight, Clock3, FileUp, Package2, Rows3 } from 'lucide-react';
 import { normalizeStaffId } from '../../lib/staffId';
 import {
   addDaysDateOnly,
@@ -41,12 +41,18 @@ type PackageMetricsViewRow = {
   weekLabel: string;
 } & PackageDailyMetrics;
 
+type PackageMetricsDisplayRow = {
+  metric_date: string;
+  weekLabel: string;
+  data: PackageMetricsViewRow | null;
+};
+
 type MetricColumn = {
   key: string;
   zh: string;
   en: string;
   width: string;
-  render: (row: PackageMetricsViewRow, totalHours: number | null) => string;
+  render: (row: PackageMetricsViewRow, totalHours: number | null, options?: { hideWholeDayInbound?: boolean }) => string;
 };
 
 type PunchRow = {
@@ -100,6 +106,18 @@ const formatRatioValue = (value: number | null) => {
   return `${(value * 100).toFixed(2)}%`;
 };
 
+const IMPORT_FILE_NAME_MAX_LENGTH = 36;
+
+const truncateMiddle = (value: string, maxLength: number) => {
+  const text = String(value ?? '');
+  if (text.length <= maxLength) return text;
+  if (maxLength <= 3) return `${text.slice(0, maxLength)}...`;
+  const visible = maxLength - 3;
+  const head = Math.ceil(visible * 0.65);
+  const tail = Math.floor(visible * 0.35);
+  return `${text.slice(0, head)}...${text.slice(text.length - tail)}`;
+};
+
 const METRIC_COLUMNS: MetricColumn[] = [
   {
     key: 'assessment_single_order_count',
@@ -141,7 +159,8 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '全天进单量',
     en: 'Inbound Orders',
     width: 'min-w-[138px]',
-    render: (row) => formatMetricValue('calendar_inbound_order_count', row.calendar_inbound_order_count)
+    render: (row, _totalHours, options) =>
+      options?.hideWholeDayInbound ? '-' : formatMetricValue('calendar_inbound_order_count', row.calendar_inbound_order_count)
   },
   {
     key: 'assessment_single_item_qty',
@@ -176,7 +195,8 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '全天进件量',
     en: 'Inbound Pieces',
     width: 'min-w-[138px]',
-    render: (row) => formatMetricValue('calendar_inbound_item_qty', row.calendar_inbound_item_qty)
+    render: (row, _totalHours, options) =>
+      options?.hideWholeDayInbound ? '-' : formatMetricValue('calendar_inbound_item_qty', row.calendar_inbound_item_qty)
   },
   {
     key: 'inventory_qty',
@@ -293,6 +313,27 @@ const getWeekdayLabel = (dateOnly: string) => {
   const date = new Date(`${dateOnly}T00:00:00`);
   if (Number.isNaN(date.getTime())) return '-';
   return WEEKDAY_LABELS[date.getDay()] ?? '-';
+};
+
+const isWholeDayInboundComplete = (row: PackageMetricsViewRow | null) => row?.calendar_inbound_final_hour_present === true;
+
+const buildMetricsDisplayRows = (rangeStart: string, rangeEnd: string, rows: PackageMetricsViewRow[]): PackageMetricsDisplayRow[] => {
+  if (!rangeStart || !rangeEnd || rangeStart > rangeEnd) return [];
+  const rowByDate = new Map(rows.map((row) => [row.metric_date, row] as const));
+  const displayRows: PackageMetricsDisplayRow[] = [];
+  let cursor = rangeEnd;
+
+  while (cursor >= rangeStart) {
+    const data = rowByDate.get(cursor) ?? null;
+    displayRows.push({
+      metric_date: cursor,
+      weekLabel: getWeekdayLabel(cursor),
+      data
+    });
+    cursor = addDaysDateOnly(cursor, -1);
+  }
+
+  return displayRows;
 };
 
 const readRowsFromWorkbook = async (file: File): Promise<PackageMetricsParsedRow[]> => {
@@ -730,15 +771,6 @@ export default function PackageMetricsPage({
   const uploadDisabled = isLocked || isReadOnly || loading;
   const selectedWeekLabel = selectedMetricsRow?.weekLabel ?? '-';
   const selectedDateLabel = selectedMetricsRow?.metric_date.replace(/-/g, '/') ?? '--/--/--';
-  const rangeDayCount =
-    rangeStart && rangeEnd
-      ? Math.max(
-          1,
-          Math.round(
-            (new Date(`${rangeEnd}T00:00:00`).getTime() - new Date(`${rangeStart}T00:00:00`).getTime()) / 86400000
-          ) + 1
-        )
-      : 0;
   const selectedPrimaryStats = selectedMetricsRow
     ? [
         {
@@ -751,7 +783,9 @@ export default function PackageMetricsPage({
         },
         {
           label: 'Inbound',
-          value: formatMetricValue('calendar_inbound_order_count', selectedMetricsRow.calendar_inbound_order_count)
+          value: isWholeDayInboundComplete(selectedMetricsRow)
+            ? formatMetricValue('calendar_inbound_order_count', selectedMetricsRow.calendar_inbound_order_count)
+            : '-'
         },
         {
           label: 'Backlog',
@@ -771,6 +805,8 @@ export default function PackageMetricsPage({
       ]
     : [];
   const activeFileName = selectedFile?.name ?? t('未选择任何文件', 'No file selected');
+  const displayFileName = truncateMiddle(activeFileName, IMPORT_FILE_NAME_MAX_LENGTH);
+  const displayRows = useMemo(() => buildMetricsDisplayRows(rangeStart, rangeEnd, metricsRows), [metricsRows, rangeEnd, rangeStart]);
 
   const handleUpload = async () => {
     if (!supabase || !selectedFile || isLocked || isReadOnly) return;
@@ -910,7 +946,7 @@ export default function PackageMetricsPage({
     <section className="px-4 py-5 md:px-6 md:py-6">
       <div className={[shellClass, 'rounded-[30px] p-4 md:p-5'].join(' ')}>
         <div className="flex flex-col gap-4">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_360px]">
+          <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.55fr)_360px]">
             <div
               className={[
                 'overflow-hidden rounded-[28px] border',
@@ -923,21 +959,20 @@ export default function PackageMetricsPage({
                 <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
                   <div className="space-y-2">
                     <div className={['text-[11px] font-semibold uppercase tracking-[0.22em]', mutedClass].join(' ')}>Outbound Desk</div>
-                    <div className="flex flex-wrap items-end gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                       <h2 className="font-display text-[30px] leading-none tracking-[0.05em]">Outbound Daily</h2>
-                      <div
-                        className={[
-                          'inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold',
-                          themeMode === 'light' ? 'bg-slate-900 text-white' : 'bg-white/10 text-slate-100'
-                        ].join(' ')}
-                      >
-                        {selectedDateLabel} / {selectedWeekLabel}
+                      <div className="w-[170px]">
+                        <StyledDateInput value={metricDate} onChange={setMetricDate} themeMode={themeMode} />
                       </div>
                     </div>
                   </div>
-                  <div className={['flex items-center gap-2 text-sm', mutedClass].join(' ')}>
-                    <CalendarDays className="h-4 w-4" />
-                    <span>Selected metric date</span>
+                  <div
+                    className={[
+                      'inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold',
+                      themeMode === 'light' ? 'bg-slate-900 text-white' : 'bg-white/10 text-slate-100'
+                    ].join(' ')}
+                  >
+                    {selectedDateLabel} / {selectedWeekLabel}
                   </div>
                 </div>
               </div>
@@ -980,25 +1015,14 @@ export default function PackageMetricsPage({
               ) : null}
             </div>
 
-            <div className="grid gap-4">
-              <div className={[subtlePanelClass, 'rounded-[28px] p-4'].join(' ')}>
+            <div className="grid h-full gap-4">
+              <div className={[subtlePanelClass, 'flex h-full min-h-[356px] flex-col rounded-[28px] p-4'].join(' ')}>
                 <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-base font-semibold">Metric Date</div>
-                    <div className={['mt-1 text-sm', mutedClass].join(' ')}>Controls where the import lands</div>
-                  </div>
-                  <CalendarDays className={['h-4 w-4 shrink-0', mutedClass].join(' ')} />
-                </div>
-                <div className="mt-4">
-                  <StyledDateInput value={metricDate} onChange={setMetricDate} themeMode={themeMode} />
-                </div>
-              </div>
-
-              <div className={[subtlePanelClass, 'rounded-[28px] p-4'].join(' ')}>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <div className="text-base font-semibold">Import</div>
-                    <div className={['mt-1 truncate text-sm', mutedClass].join(' ')}>{activeFileName}</div>
+                    <div className={['mt-1 truncate text-sm', mutedClass].join(' ')} title={activeFileName}>
+                      {displayFileName}
+                    </div>
                   </div>
                   <FileUp className={['h-4 w-4 shrink-0', mutedClass].join(' ')} />
                 </div>
@@ -1015,23 +1039,25 @@ export default function PackageMetricsPage({
                   disabled={uploadDisabled}
                   onClick={() => redesignedFileInputRef.current?.click()}
                   className={[
-                    'mt-4 flex w-full items-center justify-between gap-3 rounded-[22px] border px-4 py-4 text-left transition',
+                    'mt-4 flex min-h-[154px] w-full items-start justify-between gap-3 rounded-[22px] border px-4 py-4 text-left transition',
                     themeMode === 'light'
                       ? 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 disabled:bg-slate-100 disabled:text-slate-400'
                       : 'border-slate-800 bg-slate-950/70 hover:border-slate-700 hover:bg-slate-900 disabled:bg-slate-900 disabled:text-slate-500'
                   ].join(' ')}
                 >
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold">Choose file</div>
-                    <div className={['mt-1 truncate text-sm', selectedFile ? cellClass : mutedClass].join(' ')}>{activeFileName}</div>
+                    <div className={['mt-1 truncate text-sm', selectedFile ? cellClass : mutedClass].join(' ')} title={activeFileName}>
+                      {displayFileName}
+                    </div>
                   </div>
-                  <ArrowUpRight className={['h-4 w-4 shrink-0', mutedClass].join(' ')} />
+                  <ArrowUpRight className={['mt-0.5 h-4 w-4 shrink-0', mutedClass].join(' ')} />
                 </button>
                 <button
                   type="button"
                   disabled={uploadDisabled || !selectedFile}
                   onClick={handleUpload}
-                  className={[buttonClass, 'mt-4 flex w-full items-center justify-center gap-2 rounded-[18px] py-3'].join(' ')}
+                  className={[buttonClass, 'mt-auto flex w-full items-center justify-center gap-2 rounded-[18px] py-3'].join(' ')}
                 >
                   {loading ? (
                     <span
@@ -1069,9 +1095,6 @@ export default function PackageMetricsPage({
                   </div>
                   <div>
                     <div className="text-base font-semibold">Outbound Records</div>
-                    <div className={['mt-1 text-sm', mutedClass].join(' ')}>
-                      {selectedDateLabel} / Window {rangeDayCount} days
-                    </div>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -1127,7 +1150,7 @@ export default function PackageMetricsPage({
                   : 'bg-slate-950/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_18px_44px_rgba(2,6,23,0.26)]'
               ].join(' ')}
             >
-              {metricsRows.length === 0 ? (
+              {displayRows.length === 0 ? (
                 <div className={['px-4 py-10 text-center text-sm', mutedClass].join(' ')}>
                   {tableLoading ? 'Loading...' : 'No saved metrics in the selected range.'}
                 </div>
@@ -1146,7 +1169,7 @@ export default function PackageMetricsPage({
                         </tr>
                       </thead>
                       <tbody>
-                        {metricsRows.map((row) => {
+                        {displayRows.map((row) => {
                           const isSelected = row.metric_date === metricDate;
                           return (
                             <tr key={`frozen-${row.metric_date}`} className={[rowBaseClass, isSelected ? rowSelectedClass : ''].join(' ')}>
@@ -1180,9 +1203,10 @@ export default function PackageMetricsPage({
                         </tr>
                       </thead>
                       <tbody>
-                        {metricsRows.map((row) => {
+                        {displayRows.map((row) => {
                           const isSelected = row.metric_date === metricDate;
-                          const totalHours = laborSummaryByDate[row.metric_date]?.totalHours ?? null;
+                          const totalHours = row.data ? laborSummaryByDate[row.metric_date]?.totalHours ?? null : null;
+                          const hideWholeDayInbound = !isWholeDayInboundComplete(row.data);
                           return (
                             <tr key={`metrics-${row.metric_date}`} className={[rowBaseClass, isSelected ? rowSelectedClass : ''].join(' ')}>
                               {METRIC_COLUMNS.map((column) => (
@@ -1190,7 +1214,7 @@ export default function PackageMetricsPage({
                                   key={`${row.metric_date}-${column.key}`}
                                   className={['border-r border-slate-800 px-4 py-4 align-middle text-center text-base font-semibold last:border-r-0', cellClass].join(' ')}
                                 >
-                                  {column.render(row, totalHours)}
+                                  {row.data ? column.render(row.data, totalHours, { hideWholeDayInbound }) : '-'}
                                 </td>
                               ))}
                             </tr>
