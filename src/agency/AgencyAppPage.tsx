@@ -1,9 +1,17 @@
 ﻿import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
+import { Check, Hourglass } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { createSupabaseClient } from '../lib/supabase';
 import { hasModuleAccess, getModuleMapFromContext, type AdminAccessContext } from '../shared/adminAccess';
 import { addDays, startOfWeekMonday, toDateOnly, type AgencyShift } from '../shared/agencyShared';
+import {
+  DAILY_LIST_LIGHTS_KEY,
+  createEmptyDailyListLightFlags,
+  normalizeDailyListLightPosition,
+  readDailyListLightsForDate,
+  type DailyListLightFlags
+} from '../shared/dailyListLights';
 import {
   cancelAgencyTerminationRequest,
   createAgencyTerminationRequest,
@@ -63,6 +71,7 @@ type SchedulePickerOption = {
 
 const EMPLOYEE_RENDER_PAGE_SIZE = 80;
 const MOBILE_SCHEDULE_MAX_WIDTH = 900;
+const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? Math.min(Math.max(DAY_CUTOFF_HOUR_RAW, 0), 23) : 5;
 const TIMECARD_ABSENT_VISIBLE_HOUR_RAW = Number(import.meta.env.VITE_TIMECARD_ABSENT_VISIBLE_HOUR ?? 12);
@@ -263,6 +272,14 @@ const shiftChipClass = (shift: AgencyEmployeeRow['shift']) => {
   if (shift === 'late') return 'badge-elevated-dark border-violet-300/30 bg-violet-400/[0.13] text-violet-100';
   return 'badge-elevated-dark border-white/12 bg-white/[0.05] text-slate-200';
 };
+
+const agencyStatusLabel = (status: AgencyEmployeeRow['agencyStatus']) =>
+  status === 'ready' ? 'Ready' : 'Wait for Confirm';
+
+const agencyStatusChipClass = (status: AgencyEmployeeRow['agencyStatus']) =>
+  status === 'ready'
+    ? 'border-emerald-400/35 bg-emerald-500/12 text-emerald-100'
+    : 'border-amber-400/35 bg-amber-500/12 text-amber-100';
 
 const formatStartTime = (value: string) => {
   const match = String(value ?? '').trim().match(/^(\d{1,2}):(\d{2})$/);
@@ -570,6 +587,7 @@ export default function AgencyAppPage() {
   const [weekSchedule, setWeekSchedule] = useState<AgencyWeekSchedule | null>(null);
   const [absentMarkKeys, setAbsentMarkKeys] = useState<Set<string>>(() => new Set());
   const [currentOperationalPunchStaffIds, setCurrentOperationalPunchStaffIds] = useState<Set<string>>(() => new Set());
+  const [dailyListLightFlags, setDailyListLightFlags] = useState<DailyListLightFlags>(createEmptyDailyListLightFlags);
   const [scheduleStateOverrides, setScheduleStateOverrides] = useState(() => new Map<string, AgencyScheduleState>());
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState('Syncing board');
@@ -768,6 +786,33 @@ export default function AgencyAppPage() {
   useEffect(() => {
     void refreshBoard();
   }, [refreshBoard]);
+
+  useEffect(() => {
+    let active = true;
+    const loadDailyListLights = async () => {
+      if (!supabase || !user || !canViewAgency) {
+        setDailyListLightFlags(createEmptyDailyListLightFlags());
+        return;
+      }
+      const res = await supabase
+        .from(APP_SETTINGS_TABLE)
+        .select('value')
+        .eq('key', DAILY_LIST_LIGHTS_KEY)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      if (!active) return;
+      if (res.error) {
+        setDailyListLightFlags(createEmptyDailyListLightFlags());
+        return;
+      }
+      const row = (((res.data as Array<{ value?: unknown }> | null) ?? [])[0] ?? null) as { value?: unknown } | null;
+      setDailyListLightFlags(readDailyListLightsForDate(row?.value ?? null, selectedDate));
+    };
+    void loadDailyListLights();
+    return () => {
+      active = false;
+    };
+  }, [canViewAgency, selectedDate, supabase, user]);
 
   useEffect(() => {
     let active = true;
@@ -1202,6 +1247,7 @@ export default function AgencyAppPage() {
     (showAgencyColumn ? 1 : 0) +
     1 +
     1 +
+    1 +
     (showStartTimeColumn ? 1 : 0);
 
   const scheduleCellByStaffDate = useMemo(() => {
@@ -1246,6 +1292,11 @@ export default function AgencyAppPage() {
   const employeeRows = useMemo<AgencyEmployeeRow[]>(
     () =>
       (weekSchedule?.employees ?? []).map((row) => ({
+        agencyStatus: (() => {
+          const readinessPosition = normalizeDailyListLightPosition(row.position);
+          if (!readinessPosition) return 'wait_confirm' as const;
+          return dailyListLightFlags[readinessPosition] ? ('ready' as const) : ('wait_confirm' as const);
+        })(),
         staff_id: row.staff_id,
         name: row.name,
         agency: row.agency,
@@ -1259,7 +1310,7 @@ export default function AgencyAppPage() {
         has_late: false,
         termination_status: row.termination_status
       })),
-    [absentMarkKeys, selectedDate, weekSchedule, weeklyWorkCountByStaffId]
+    [absentMarkKeys, dailyListLightFlags, selectedDate, weekSchedule, weeklyWorkCountByStaffId]
   );
 
   const selectedDateNewHireRequests = useMemo<AgencyNewHireRequestRow[]>(
@@ -1852,6 +1903,7 @@ export default function AgencyAppPage() {
                       {showAgencyColumn ? <th className="w-[92px] px-1 py-2">Agency</th> : null}
                       <th className={[compactScheduleView ? 'w-[88px]' : 'w-[96px]', 'px-1 py-2'].join(' ')}>Position</th>
                       <th className={[compactScheduleView ? 'w-[66px]' : 'w-[72px]', 'px-1 py-2 text-center'].join(' ')}>Shift</th>
+                      <th className={[compactScheduleView ? 'w-[128px]' : 'w-[152px]', 'px-1 py-2 text-center'].join(' ')}>Status</th>
                       {showStartTimeColumn ? <th className="w-[86px] px-1 py-2 text-center">Start time</th> : null}
                       {visibleWeekDates.map((workDate) => (
                         <th
@@ -1927,6 +1979,17 @@ export default function AgencyAppPage() {
                         <td className="px-1 py-2 text-center">
                           <span className={['inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold', shiftChipClass(employee.shift)].join(' ')}>
                             {shiftLabel(employee.shift)}
+                          </span>
+                        </td>
+                        <td className="px-1 py-2 text-center">
+                          <span
+                            className={[
+                              'inline-flex items-center justify-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.04em]',
+                              agencyStatusChipClass(employee.agencyStatus)
+                            ].join(' ')}
+                          >
+                            {employee.agencyStatus === 'ready' ? <Check className="h-3.5 w-3.5" /> : <Hourglass className="h-3.5 w-3.5" />}
+                            <span>{agencyStatusLabel(employee.agencyStatus)}</span>
                           </span>
                         </td>
                         {showStartTimeColumn ? (

@@ -49,6 +49,16 @@ import {
   hasModuleAccess,
   type AdminAccessContext
 } from '../shared/adminAccess';
+import {
+  DAILY_LIST_LIGHTS_KEY,
+  DAILY_LIST_LIGHT_POSITIONS,
+  buildDailyListLightsSettingValue,
+  createEmptyDailyListLightFlags,
+  normalizeDailyListLightPosition,
+  readDailyListLightsForDate,
+  type DailyListLightFlags,
+  type DailyListLightPosition
+} from '../shared/dailyListLights';
 import { isScheduleOnlyAgency } from '../shared/agencyRules';
 import {
   createAdminAccessRequest,
@@ -187,16 +197,7 @@ type DailyListCapacityView = {
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'Water Spider', 'FLEX TEAM'] as const;
-const DAILY_LIST_VISIBLE_POSITIONS = ALLOWED_POSITIONS.filter((position) => position !== 'FLEX TEAM') as Exclude<AllowedPosition, 'FLEX TEAM'>[];
-const createEmptyPositionFlags = (): Record<AllowedPosition, boolean> => ({
-  Pick: false,
-  Pack: false,
-  Rebin: false,
-  Preship: false,
-  Transfer: false,
-  'Water Spider': false,
-  'FLEX TEAM': false
-});
+const DAILY_LIST_VISIBLE_POSITIONS = DAILY_LIST_LIGHT_POSITIONS.filter((position) => position !== 'FLEX TEAM');
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
@@ -230,7 +231,6 @@ const LATE_MIN_VALID_PUNCH_COUNT = 2;
 const SCHEDULE_WEEK_RESET_KEY = 'schedule_transient_reset_week';
 const SCHEDULE_WEEK_ROLLOVER_KEY = 'schedule_week_rollover_marker';
 const SCHEDULE_DAILY_PLAN_ACTIVATION_KEY = 'schedule_daily_plan_activation_marker';
-const DAILY_LIST_LIGHTS_KEY = 'daily_list_position_lights';
 const SCHEDULE_LABEL_TONES_KEY = 'schedule_label_tones_v1';
 const SCHEDULE_POSITION_TONES_KEY = 'schedule_position_tones_v1';
 const SCHEDULE_REST_NOTE = '__rest__';
@@ -1932,11 +1932,11 @@ export default function AdminAppPage() {
   const [dailyListNewHireLabel, setDailyListNewHireLabel] = useState('');
   const [dailyListNewHireEntryTime, setDailyListNewHireEntryTime] = useState('');
   const [dailyListNewHireNote, setDailyListNewHireNote] = useState('');
-  const [dailyListSelectedPositions, setDailyListSelectedPositions] = useState<Record<AllowedPosition, boolean>>(
-    createEmptyPositionFlags
+  const [dailyListSelectedPositions, setDailyListSelectedPositions] = useState<DailyListLightFlags>(
+    createEmptyDailyListLightFlags
   );
-  const [dailyListFilterPositions, setDailyListFilterPositions] = useState<Record<AllowedPosition, boolean>>(
-    createEmptyPositionFlags
+  const [dailyListFilterPositions, setDailyListFilterPositions] = useState<DailyListLightFlags>(
+    createEmptyDailyListLightFlags
   );
   const dailyListTargetDateKey = useMemo(() => {
     const parsedTarget =
@@ -2556,6 +2556,11 @@ export default function AdminAppPage() {
     return null;
   };
 
+  const normalizeDailyListPositionKey = (value: string) => {
+    const normalized = normalizeDailyListLightPosition(value);
+    return normalized || null;
+  };
+
 const getShiftBucket = (inAtIso: string) => {
     const dt = new Date(inAtIso);
     if (Number.isNaN(dt.getTime())) return null;
@@ -2811,7 +2816,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }, [busy]);
 
   const saveDailyListSelectedPositionsGlobal = async (
-    next: Record<AllowedPosition, boolean>,
+    next: DailyListLightFlags,
     targetDateOverride?: string
   ) => {
     if (!supabase) return;
@@ -2825,33 +2830,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       .order('updated_at', { ascending: false })
       .limit(1);
     const currentValue = ((((baseRes.data as any[]) ?? [])[0] as AppSettingRow | undefined)?.value ?? {}) as Record<string, unknown>;
-    const selectedByDateRaw = (currentValue.selected_by_date ?? null) as Record<string, unknown> | null;
-    const selectedByDate: Record<string, Record<AllowedPosition, boolean>> = {};
-    if (selectedByDateRaw && typeof selectedByDateRaw === 'object') {
-      for (const [dateKey, flagsRaw] of Object.entries(selectedByDateRaw)) {
-        if (!isDateOnlyValue(dateKey)) continue;
-        const flagsObj = (flagsRaw ?? {}) as Record<string, unknown>;
-        selectedByDate[dateKey] = {
-          Pick: Boolean(flagsObj.Pick),
-          Pack: Boolean(flagsObj.Pack),
-          Rebin: Boolean(flagsObj.Rebin),
-          Preship: Boolean(flagsObj.Preship),
-          Transfer: Boolean(flagsObj.Transfer),
-          'Water Spider': Boolean(flagsObj['Water Spider']) || Boolean(flagsObj.Waterspider) || Boolean(flagsObj.waterspider),
-          'FLEX TEAM':
-            Boolean(flagsObj['FLEX TEAM']) || Boolean(flagsObj['Flex Team（机动组）']) || Boolean(flagsObj['兜底组']) || Boolean(flagsObj['Wrap-up Team'])
-        };
-      }
-    }
-    selectedByDate[targetDate] = next;
+    const updatedAt = new Date(serverTime).toISOString();
     const payload = {
       key: DAILY_LIST_LIGHTS_KEY,
-      value: {
-        selected_by_date: selectedByDate,
-        updated_at: new Date(serverTime).toISOString(),
+      value: buildDailyListLightsSettingValue(currentValue, targetDate, next, {
+        updatedAt,
         operator: user?.email ?? null
-      },
-      updated_at: new Date(serverTime).toISOString()
+      }),
+      updated_at: updatedAt
     };
     const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
     if (!upsertRes.error) return;
@@ -2874,51 +2860,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (res.error) return;
 
     const row = (((res.data as any[]) ?? [])[0] ?? null) as AppSettingRow | null;
-    const empty = createEmptyPositionFlags();
-    let next = empty;
-
-    if (row) {
-      const value = (row.value ?? {}) as Record<string, unknown>;
-      const selectedByDateRaw = (value.selected_by_date ?? null) as Record<string, unknown> | null;
-      if (selectedByDateRaw && typeof selectedByDateRaw === 'object') {
-        const byDate = (selectedByDateRaw[targetDate] ?? null) as Record<string, unknown> | null;
-        if (byDate && typeof byDate === 'object') {
-          next = {
-            Pick: Boolean(byDate.Pick),
-            Pack: Boolean(byDate.Pack),
-            Rebin: Boolean(byDate.Rebin),
-            Preship: Boolean(byDate.Preship),
-            Transfer: Boolean(byDate.Transfer),
-            'Water Spider': Boolean(byDate['Water Spider']) || Boolean(byDate.Waterspider) || Boolean(byDate.waterspider),
-            'FLEX TEAM':
-              Boolean(byDate['FLEX TEAM']) || Boolean(byDate['Flex Team（机动组）']) || Boolean(byDate['兜底组']) || Boolean(byDate['Wrap-up Team'])
-          };
-        }
-      } else {
-        // Backward compatibility for legacy single-day payload.
-        const legacyDate = String(value.operational_date ?? '');
-        if (legacyDate === targetDate) {
-          const rawSelected = (value.selected_positions ?? null) as Record<string, unknown> | null;
-          if (rawSelected && typeof rawSelected === 'object') {
-            next = {
-              Pick: Boolean(rawSelected.Pick),
-              Pack: Boolean(rawSelected.Pack),
-              Rebin: Boolean(rawSelected.Rebin),
-              Preship: Boolean(rawSelected.Preship),
-              Transfer: Boolean(rawSelected.Transfer),
-              'Water Spider': Boolean(rawSelected['Water Spider']) || Boolean(rawSelected.Waterspider) || Boolean(rawSelected.waterspider),
-              'FLEX TEAM':
-                Boolean(rawSelected['FLEX TEAM']) || Boolean(rawSelected['Flex Team（机动组）']) || Boolean(rawSelected['兜底组']) || Boolean(rawSelected['Wrap-up Team'])
-            };
-          }
-        }
-      }
-    }
-
-    setDailyListSelectedPositions(next);
+    setDailyListSelectedPositions(
+      row ? readDailyListLightsForDate(row.value, targetDate) : createEmptyDailyListLightFlags()
+    );
   };
 
-  const toggleDailyListSelectedPosition = (position: AllowedPosition) => {
+  const toggleDailyListSelectedPosition = (position: DailyListLightPosition) => {
     setDailyListSelectedPositions((prev) => {
       const next = {
         ...prev,
@@ -3693,7 +3640,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const openScheduleDailyList = (source: string) => {
     const targetDate = toDateOnly(addDays(new Date(serverTime), 1));
     setDailyListDateInput(targetDate);
-    setDailyListFilterPositions(createEmptyPositionFlags());
+    setDailyListFilterPositions(createEmptyDailyListLightFlags());
     void loadDailyListSelectedPositionsGlobal({ targetDateOverride: targetDate });
     setDailyListOpen(true);
     void writeAudit({
@@ -13523,7 +13470,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const countByKey: Record<string, number> = {};
     const addRows = (rows: DailyListRow[], shift: 'early' | 'late') => {
       for (const row of rows) {
-        const normalizedPosition = normalizePositionKey(String(row.position ?? '').trim());
+        const normalizedPosition = normalizeDailyListPositionKey(String(row.position ?? '').trim());
         if (!normalizedPosition) continue;
         const key = `${shift}:${normalizedPosition}`;
         countByKey[key] = (countByKey[key] ?? 0) + 1;
@@ -13532,7 +13479,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     addRows(tomorrowDailyList.earlyRows, 'early');
     addRows(tomorrowDailyList.lateRows, 'late');
     return (['early', 'late'] as const).flatMap((shift) =>
-      ALLOWED_POSITIONS.map((position) => ({
+      DAILY_LIST_LIGHT_POSITIONS.map((position) => ({
         key: `${shift}:${position}`,
         shift,
         position,
@@ -13546,14 +13493,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const early = tomorrowAttendanceCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
         const late = tomorrowAttendanceCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
         const recommendedRows = scheduleRecommendedAdjustedByDate[tomorrowDailyList.targetDate] ?? [];
-        const recommended = recommendedRows.find((item) => item.key === position);
-        const earlyRecommended = recommended ? recommended.ds : null;
-        const lateRecommended = recommended ? recommended.ns : null;
+        const recommended = recommendedRows.filter((item) => normalizeDailyListPositionKey(item.key) === position);
+        const earlyRecommended = recommended.length > 0 ? recommended.reduce((sum, item) => sum + item.ds, 0) : null;
+        const lateRecommended = recommended.length > 0 ? recommended.reduce((sum, item) => sum + item.ns, 0) : null;
         const earlyCapacity = sumDailyListCapacityRows(
-          tomorrowDailyList.earlyRows.filter((row) => normalizePositionKey(String(row.position ?? '').trim()) === position)
+          tomorrowDailyList.earlyRows.filter((row) => normalizeDailyListPositionKey(String(row.position ?? '').trim()) === position)
         );
         const lateCapacity = sumDailyListCapacityRows(
-          tomorrowDailyList.lateRows.filter((row) => normalizePositionKey(String(row.position ?? '').trim()) === position)
+          tomorrowDailyList.lateRows.filter((row) => normalizeDailyListPositionKey(String(row.position ?? '').trim()) === position)
         );
         const totalCapacity =
           earlyCapacity === null && lateCapacity === null
@@ -13586,10 +13533,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (selectedDailyFilterPositions.length === 0) {
       return { earlyRows: tomorrowDailyList.earlyRows, lateRows: tomorrowDailyList.lateRows };
     }
-    const allowed = new Set<AllowedPosition>(selectedDailyFilterPositions);
+    const allowed = new Set<DailyListLightPosition>(selectedDailyFilterPositions);
     const match = (row: DailyListRow) => {
-      const pos = normalizePositionKey(String(row.position ?? '').trim());
-      return Boolean(pos && allowed.has(pos as AllowedPosition));
+      const pos = normalizeDailyListPositionKey(String(row.position ?? '').trim());
+      return Boolean(pos && allowed.has(pos));
     };
     return {
       earlyRows: tomorrowDailyList.earlyRows.filter(match),
@@ -16524,15 +16471,7 @@ ${rowsToHtml(late)}
                               <button
                                 type="button"
                                 onClick={() =>
-                                  setDailyListFilterPositions({
-                                    Pick: false,
-                                    Pack: false,
-                                    Rebin: false,
-                                    Preship: false,
-                                    Transfer: false,
-                                    'Water Spider': false,
-                                    'FLEX TEAM': false
-                                  })
+                                  setDailyListFilterPositions(createEmptyDailyListLightFlags())
                                 }
                                 className={[
                                   'ml-auto rounded-lg px-3 py-1 text-xs font-semibold transition',

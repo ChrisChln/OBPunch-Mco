@@ -17,6 +17,7 @@ export type AgencyEmployeeRow = {
   start_time: string;
   label: string;
   state: string;
+  agencyStatus: 'ready' | 'wait_confirm';
   fixed_work_count: number;
   has_absent: boolean;
   has_late: boolean;
