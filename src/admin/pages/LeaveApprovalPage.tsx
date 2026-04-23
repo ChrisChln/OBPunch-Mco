@@ -363,10 +363,33 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
   };
   void resolveEmployeeMatch;
 
-  const writeAudit = async (action: string, staffId: string | null, payload: Record<string, unknown>, target = LEAVE_REQUEST_TABLE) => {
+  const writeAudit = async (
+    action: string,
+    staffId: string | null,
+    payload: Record<string, unknown>,
+    target = LEAVE_REQUEST_TABLE,
+    actorOverride?: string | null
+  ) => {
     if (!supabase) return;
-    const { error: auditError } = await supabase.from(AUDIT_TABLE).insert([{ actor: actorDisplay, action, staff_id: staffId, target, payload }] as any[]);
+    const actor = String(actorOverride ?? '').trim() || actorDisplay;
+    const { error: auditError } = await supabase.from(AUDIT_TABLE).insert([{ actor, action, staff_id: staffId, target, payload }] as any[]);
     if (auditError) throw new Error(String(auditError.message ?? `Failed to write audit log for ${action}.`));
+  };
+
+  const resolveLeaveSubmitterActor = async (row: LeaveRow) => {
+    if (!supabase || row.source !== 'agency_schedule' || !row.matched_staff_id) return '';
+    const res = await supabase
+      .from(AUDIT_TABLE)
+      .select('actor, created_at, id, payload')
+      .eq('action', 'agency_leave_request_create')
+      .eq('staff_id', row.matched_staff_id)
+      .eq('target', 'agency')
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(20);
+    if (res.error || !Array.isArray(res.data)) return '';
+    const matched = res.data.find((item: any) => String(item?.payload?.work_date ?? '').trim() === row.leave_date);
+    return String((matched as any)?.actor ?? '').trim();
   };
 
   const isMissingLeaveDecisionRpcError = (error: unknown) => {
@@ -413,6 +436,7 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
 
   const updateLeaveStatusFallback = async (row: LeaveRow, status: 'approved' | 'rejected') => {
     const nowIso = new Date(serverTime).toISOString();
+    const submitterActor = await resolveLeaveSubmitterActor(row);
     let nextStatus: LeaveStatus = status;
     if (status === 'approved') {
       if (!row.matched_staff_id) throw new Error('This request is unmatched. Match by name or ID before approval.');
@@ -509,8 +533,9 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
             from_state: existingScheduleState,
             position: positionValue,
             leave_request_id: row.id,
-            leave_type: row.leave_type
-          }, SCHEDULE_TABLE);
+            leave_type: row.leave_type,
+            reviewed_by: actorDisplay
+          }, SCHEDULE_TABLE, submitterActor);
         } else {
           const existingExcuseState = existingScheduleState === 'leave' || existingScheduleState === 'planned_leave';
           if (isPastLeaveDate && existingExcuseState) {

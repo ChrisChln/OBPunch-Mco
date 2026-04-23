@@ -449,7 +449,7 @@ const LoginPanel = ({
     <div className="relative grid min-h-[520px] gap-8 px-6 py-6 md:grid-cols-[minmax(0,1.3fr)_minmax(380px,0.9fr)] md:px-8 md:py-8 xl:px-10 xl:py-10">
       <div className="flex min-h-[240px] flex-col justify-between rounded-[28px] border border-white/8 bg-white/[0.03] p-6 md:p-8">
         <div>
-          <div className="text-[11px] uppercase tracking-[0.32em] text-sky-200/80">ObPunch Agency</div>
+          <div className="text-[11px] uppercase tracking-[0.32em] text-sky-200/80">OBT Agency</div>
           <h1 className="mt-6 max-w-[9ch] font-display text-5xl leading-[0.92] tracking-[0.03em] text-white md:text-6xl xl:text-7xl">
             Secure Agency Access
           </h1>
@@ -1665,7 +1665,7 @@ export default function AgencyAppPage() {
         <header className={cardClass}>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="text-[11px] uppercase tracking-[0.28em] text-slate-400">ObPunch Agency</div>
+              <div className="text-[11px] uppercase tracking-[0.28em] text-slate-400">OBT Agency</div>
               <h1 className="mt-4 font-display text-5xl tracking-[0.04em] text-white">Agency Board</h1>
               <div className="mt-3 text-sm text-slate-400">{displayName || user?.email || 'Signed out'}</div>
             </div>

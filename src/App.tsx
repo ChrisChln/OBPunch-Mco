@@ -3068,7 +3068,7 @@ const fetchPunchBoardUph = async (
             <div className="relative grid min-h-[520px] gap-8 px-6 py-6 md:grid-cols-[minmax(0,1.3fr)_minmax(380px,0.9fr)] md:px-8 md:py-8 xl:px-10 xl:py-10">
               <div className="flex min-h-[240px] flex-col justify-between rounded-[28px] border border-white/8 bg-white/[0.03] p-6 md:p-8">
                 <div>
-                  <div className="text-[11px] uppercase tracking-[0.32em] text-sky-200/80">ObPunch Security</div>
+                  <div className="text-[11px] uppercase tracking-[0.32em] text-sky-200/80">OBT Security</div>
                   <h1 className="mt-6 max-w-[10ch] font-display text-5xl leading-[0.92] tracking-[0.03em] text-white md:text-6xl xl:text-7xl">
                     Punch Screen
                     <br />
@@ -3217,8 +3217,9 @@ const fetchPunchBoardUph = async (
             <div className="space-y-6">
               <header className="glass reveal rounded-3xl px-6 py-6 shadow-glow">
                 <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <h1 className="font-display text-4xl tracking-[0.08em]">ObPunch</h1>
+                  <div className="flex items-center gap-4">
+                    <img src="/img/Logo.png" alt="OBT logo" className="h-12 w-12 rounded-2xl object-contain shadow-[0_10px_30px_rgba(0,0,0,0.22)]" />
+                    <h1 className="font-display text-4xl tracking-[0.08em]">OBT</h1>
                   </div>
                   <div className="text-right">
                     <div className="flex items-center justify-end gap-2 text-sm text-slate-300">
@@ -3616,7 +3617,7 @@ const fetchPunchBoardUph = async (
             <header className="glass reveal rounded-3xl px-6 py-6 shadow-glow">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">ObPunch</p>
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">OBT</p>
                 </div>
                 <div className="text-right">
                   <div className="flex items-center justify-end gap-2 text-sm text-slate-300">
