@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -23,6 +23,10 @@ body {
     linear-gradient(180deg, #111315 0%, #17191c 50%, #111315 100%);
   min-height: 100vh;
   min-width: 320px;
+}
+
+.punch-screen {
+  font-family: "Poppins", "Manrope", sans-serif;
 }
 
 body[data-theme='light'] {
@@ -902,5 +906,522 @@ body[data-theme='light'] .metrics-scroll-fade::after {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+.punch-clock-card {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background:
+    radial-gradient(circle at 78% 46%, rgba(255, 255, 255, 0.08), transparent 24%),
+    linear-gradient(135deg, #0f172a 0%, #020617 100%);
+}
+
+.punch-scan-shell {
+  position: relative;
+  overflow: hidden;
+  border-radius: 28px;
+  border: 2px solid rgba(15, 23, 42, 0.28);
+  background: rgb(255, 255, 255);
+  padding: 14px;
+  box-shadow: none;
+  transition:
+    border-color 200ms ease,
+    transform 200ms ease;
+}
+
+.punch-scan-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.punch-scan-mascot {
+  position: relative;
+  width: min(260px, 30vw);
+  height: clamp(150px, 20vh, 220px);
+  margin-top: 10px;
+  background: rgb(255, 255, 255);
+  transform: translateX(92px);
+  pointer-events: none;
+  user-select: none;
+}
+
+.punch-scan-mascot-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center top;
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.punch-scan-mascot-scan {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.punch-scan-area:focus-within .punch-scan-mascot-scan {
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+}
+
+.punch-scan-area:focus-within .punch-scan-mascot-good {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.punch-scan-shell::before {
+  content: '';
+  position: absolute;
+  inset: 10px;
+  border-radius: 22px;
+  border: 1px solid rgba(15, 23, 42, 0.22);
+  pointer-events: none;
+}
+
+.punch-scan-shell::after {
+  content: '';
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  top: 50%;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(15, 23, 42, 0.28), transparent);
+  opacity: 0.72;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.punch-scan-shell:focus-within {
+  border-color: rgba(15, 23, 42, 0.72);
+  box-shadow: none;
+  transform: translateY(-1px);
+}
+
+.punch-scan-input {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 7rem;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.92);
+  padding: 0 36px;
+  text-align: center;
+  font-size: clamp(1.5rem, 2vw, 2.25rem);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  color: #020617;
+  outline: none;
+  transition:
+    border-color 200ms ease,
+    background-color 200ms ease;
+}
+
+.punch-scan-input::placeholder {
+  color: #64748b;
+  opacity: 0.78;
+}
+
+.punch-scan-input:focus {
+  border-color: rgba(15, 23, 42, 0.5);
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.punch-scan-input:focus::placeholder {
+  color: transparent;
+  opacity: 0;
+}
+
+.punch-scan-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+@media (max-width: 640px) {
+  .punch-scan-shell {
+    border-radius: 24px;
+    padding: 12px;
+  }
+
+  .punch-scan-input {
+    height: 5rem;
+    padding: 0 24px;
+    font-size: 1.15rem;
+  }
+
+  .punch-scan-mascot {
+    width: min(210px, 58vw);
+    height: 140px;
+    margin-top: 8px;
+    transform: translateX(0);
+  }
+
+}
+
+.punch-clock-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.72;
+  background-size: 180% 180%;
+  transform: translate3d(0, 0, 0) scale(1.04);
+  animation: punchClockBreath 12s cubic-bezier(0.45, 0, 0.2, 1) infinite alternate;
+}
+
+.punch-clock-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.punch-clock-card-morning {
+  border-color: rgba(125, 211, 252, 0.35);
+  background:
+    radial-gradient(circle at 76% 48%, rgba(186, 230, 253, 0.34), transparent 28%),
+    linear-gradient(135deg, #0c4a6e 0%, #0284c7 54%, #38bdf8 100%);
+}
+
+.punch-clock-card-morning::before {
+  background:
+    radial-gradient(circle at 18% 22%, rgba(255, 255, 255, 0.28), transparent 26%),
+    radial-gradient(circle at 76% 62%, rgba(125, 211, 252, 0.34), transparent 34%),
+    linear-gradient(110deg, rgba(240, 249, 255, 0.16), rgba(14, 165, 233, 0.02) 56%, rgba(186, 230, 253, 0.14));
+}
+
+.punch-clock-card-afternoon {
+  border-color: rgba(255, 116, 61, 0.42);
+  background:
+    radial-gradient(circle at 76% 48%, rgba(124, 45, 18, 0.2), transparent 33%),
+    linear-gradient(135deg, #b9471f 0%, #ff743d 56%, #f59e0b 100%);
+}
+
+.punch-clock-card-afternoon::before {
+  background:
+    radial-gradient(circle at 22% 18%, rgba(255, 247, 237, 0.2), transparent 30%),
+    radial-gradient(circle at 82% 56%, rgba(120, 53, 15, 0.2), transparent 32%),
+    linear-gradient(110deg, rgba(255, 237, 213, 0.12), rgba(255, 116, 61, 0.04) 54%, rgba(120, 53, 15, 0.12));
+}
+
+.punch-clock-card-evening {
+  border-color: rgba(196, 181, 253, 0.34);
+  background:
+    radial-gradient(circle at 78% 44%, rgba(168, 85, 247, 0.22), transparent 30%),
+    radial-gradient(circle at 62% 18%, rgba(59, 130, 246, 0.18), transparent 28%),
+    linear-gradient(135deg, #111827 0%, #312e81 58%, #581c87 100%);
+}
+
+.punch-clock-card-evening::before {
+  background:
+    radial-gradient(circle at 20% 18%, rgba(191, 219, 254, 0.14), transparent 28%),
+    radial-gradient(circle at 82% 56%, rgba(216, 180, 254, 0.24), transparent 34%),
+    linear-gradient(110deg, rgba(49, 46, 129, 0.2), rgba(88, 28, 135, 0.06) 54%, rgba(147, 51, 234, 0.18));
+}
+
+.punch-clock-card-evening::after {
+  opacity: 0.72;
+  background-image:
+    radial-gradient(circle at 78% 20%, rgba(255, 255, 255, 0.82) 0 1px, transparent 1.6px),
+    radial-gradient(circle at 86% 64%, rgba(255, 255, 255, 0.58) 0 1px, transparent 1.4px),
+    radial-gradient(circle at 68% 42%, rgba(255, 255, 255, 0.7) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 92% 34%, rgba(255, 255, 255, 0.5) 0 1px, transparent 1.5px);
+  animation: punchClockStars 8s ease-in-out infinite alternate;
+}
+
+@keyframes punchClockBreath {
+  0% {
+    opacity: 0.54;
+    background-position: 0% 48%;
+    transform: translate3d(-1.4%, -1%, 0) scale(1.02);
+  }
+  48% {
+    opacity: 0.84;
+    background-position: 54% 46%;
+  }
+  100% {
+    opacity: 0.68;
+    background-position: 100% 52%;
+    transform: translate3d(1.6%, 1%, 0) scale(1.06);
+  }
+}
+
+@keyframes punchClockStars {
+  from {
+    opacity: 0.42;
+  }
+  to {
+    opacity: 0.82;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .punch-clock-card::before,
+  .punch-clock-card-evening::after {
+    animation: none;
+  }
+}
+
+.time-of-day-lottie {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.time-of-day-lottie::before {
+  content: '';
+  position: absolute;
+  inset: 8% 4%;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  filter: blur(18px);
+}
+
+.time-of-day-lottie-afternoon::before {
+  inset: 4% 2%;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(124, 45, 18, 0.22), transparent 44%),
+    radial-gradient(circle at 50% 50%, rgba(255, 247, 237, 0.12), transparent 58%);
+  filter: blur(14px);
+}
+
+.time-of-day-lottie-player {
+  position: absolute;
+  inset: -18% -12% -14%;
+  width: 124%;
+  height: 132%;
+  opacity: 0.9;
+}
+
+.time-of-day-lottie-morning .time-of-day-lottie-player,
+.time-of-day-lottie-afternoon .time-of-day-lottie-player {
+  mix-blend-mode: screen;
+}
+
+.time-of-day-lottie-evening .time-of-day-lottie-player {
+  opacity: 0.82;
+  mix-blend-mode: lighten;
+}
+
+.time-of-day-lottie-static {
+  position: absolute;
+  inset: 14% 8%;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 44% 42%, rgba(255, 255, 255, 0.18), transparent 24%),
+    radial-gradient(circle at 58% 54%, rgba(148, 163, 184, 0.16), transparent 38%);
+}
+
+.punch-success-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  pointer-events: none;
+}
+
+.punch-success-card {
+  width: min(1120px, calc(100vw - 48px));
+  min-height: 184px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(184px, auto);
+  align-items: center;
+  gap: 24px;
+  border-radius: 36px;
+  padding: 28px;
+  color: #020617;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow:
+    0 30px 90px rgba(15, 23, 42, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(26px) saturate(1.35);
+  -webkit-backdrop-filter: blur(26px) saturate(1.35);
+  overflow: hidden;
+}
+
+.punch-success-card::before {
+  content: '';
+  position: absolute;
+  inset: -40%;
+  opacity: 0.22;
+  pointer-events: none;
+}
+
+.punch-success-card-in {
+  animation: punchSuccessIn 1.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.punch-success-card-in::before {
+  background: radial-gradient(circle at 22% 18%, rgba(16, 185, 129, 0.88), transparent 34%),
+    radial-gradient(circle at 86% 78%, rgba(187, 247, 208, 0.88), transparent 30%);
+}
+
+.punch-success-card-out {
+  animation: punchSuccessOut 1.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.punch-success-card-out::before {
+  background: radial-gradient(circle at 80% 20%, rgba(244, 63, 94, 0.76), transparent 34%),
+    radial-gradient(circle at 12% 82%, rgba(254, 205, 211, 0.86), transparent 30%);
+}
+
+.punch-success-orb {
+  position: relative;
+  z-index: 1;
+  width: 96px;
+  height: 96px;
+  display: grid;
+  place-items: center;
+  border-radius: 28px;
+  color: white;
+}
+
+.punch-success-card-in .punch-success-orb {
+  background: linear-gradient(180deg, #10b981, #047857);
+  box-shadow: 0 18px 46px rgba(16, 185, 129, 0.38);
+}
+
+.punch-success-card-out .punch-success-orb {
+  background: linear-gradient(180deg, #fb7185, #be123c);
+  box-shadow: 0 18px 46px rgba(244, 63, 94, 0.34);
+}
+
+.punch-success-eyebrow,
+.punch-success-name,
+.punch-success-meta,
+.punch-success-action {
+  position: relative;
+  z-index: 1;
+}
+
+.punch-success-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.punch-success-name {
+  margin-top: 12px;
+  overflow: visible;
+  white-space: nowrap;
+  font-size: clamp(42px, 5vw, 76px);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.punch-success-action {
+  min-width: 184px;
+  border-radius: 28px;
+  padding: 22px 28px;
+  text-align: center;
+  font-size: clamp(64px, 8vw, 108px);
+  font-weight: 800;
+  line-height: 0.9;
+  color: white;
+  letter-spacing: 0;
+}
+
+.punch-success-card-in .punch-success-action {
+  background: #059669;
+  box-shadow: 0 20px 52px rgba(5, 150, 105, 0.32);
+}
+
+.punch-success-card-out .punch-success-action {
+  background: #e11d48;
+  box-shadow: 0 20px 52px rgba(225, 29, 72, 0.3);
+}
+
+@keyframes punchSuccessIn {
+  0% {
+    opacity: 0;
+    transform: translateY(28px) scale(0.92);
+    filter: blur(10px);
+  }
+  18% {
+    opacity: 1;
+    transform: translateY(0) scale(1.015);
+    filter: blur(0);
+  }
+  72% {
+    opacity: 1;
+    transform: translateY(-6px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-22px) scale(0.98);
+  }
+}
+
+@keyframes punchSuccessOut {
+  0% {
+    opacity: 0;
+    transform: translateX(36px) scale(0.94);
+    filter: blur(10px);
+  }
+  18% {
+    opacity: 1;
+    transform: translateX(0) scale(1.015);
+    filter: blur(0);
+  }
+  72% {
+    opacity: 1;
+    transform: translateX(-6px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-30px) scale(0.98);
+  }
+}
+
+@media (max-width: 640px) {
+  .punch-success-card {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+    gap: 18px;
+    padding: 22px;
+  }
+
+  .punch-success-orb {
+    width: 76px;
+    height: 76px;
+    border-radius: 24px;
+  }
+
+  .punch-success-action {
+    min-width: 0;
+    width: 100%;
+    font-size: 72px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .punch-success-card-in,
+  .punch-success-card-out {
+    animation: none;
   }
 }

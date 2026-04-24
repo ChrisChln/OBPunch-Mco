@@ -15065,7 +15065,7 @@ ${rowsToHtml(late)}
       <div className={['min-h-screen px-5 py-8', themeMode === 'light' ? 'admin-theme-light' : 'admin-theme-dark'].join(' ')}>
         <div className="mx-auto w-full max-w-2xl space-y-6">
           <header className="glass rounded-3xl px-6 py-6 shadow-glow">
-            <h1 className="font-display text-4xl tracking-[0.08em]">OBT Admin</h1>
+            <h1 className="font-display text-4xl tracking-[0.08em]">OBP Admin</h1>
             <p className="mt-2 text-sm text-ember">缺少 Supabase 配置，请检查 .env</p>
           </header>
         </div>

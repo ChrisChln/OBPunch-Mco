@@ -153,7 +153,7 @@ function AdminHeader({
         <div className="flex items-center">
           <img src={TOP_MENU_LOGO_SRC} alt="Top menu logo" className="h-10 w-10 shrink-0 object-contain" />
           <span className={['ml-3 font-display text-lg font-bold tracking-[0.06em]', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>
-            OBT Admin
+            OBP Admin
           </span>
         </div>
 
