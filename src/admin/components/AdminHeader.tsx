@@ -25,7 +25,7 @@ type AdminHeaderProps = {
   onLogout: () => void | Promise<void>;
 };
 
-const TOP_MENU_LOGO_SRC = '/img/monacoin.png';
+const TOP_MENU_LOGO_SRC = '/img/Logo.png';
 
 const Icon = ({ children, className = '' }: { children: ReactNode; className?: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
@@ -153,7 +153,7 @@ function AdminHeader({
         <div className="flex items-center">
           <img src={TOP_MENU_LOGO_SRC} alt="Top menu logo" className="h-10 w-10 shrink-0 object-contain" />
           <span className={['ml-3 font-display text-lg font-bold tracking-[0.06em]', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>
-            ObPunch Admin
+            OBP Admin
           </span>
         </div>
 

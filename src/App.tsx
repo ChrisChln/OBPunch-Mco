@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronDown, Clock3, LayoutDashboard, LogIn, LogOut, Shield, UserRound, Waypoints } from 'lucide-react';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib/supabase';
 import { isValidStaffId, normalizeStaffId } from './lib/staffId';
 import { LABEL_TONE_KEYS, type LabelToneKey, loadLabelToneMap } from './lib/labelTone';
+import { getBarcodePromptGroupKey, getBarcodePrompts, getRandomBarcodePromptIndex } from './lib/barcodePrompt';
 import { isScheduleOnlyAgency } from './shared/agencyRules';
 import { canUnlockPunchScreen, normalizeAdminAccessContext } from './shared/adminAccess';
 import { isEmployeeTerminated } from './shared/employeeStatus';
+import { TimeOfDayLottie, type AmbientPeriod } from './components/TimeOfDayLottie';
 
 type PunchAction = 'IN' | 'OUT';
 
@@ -27,6 +30,25 @@ type PunchBoardRow = {
   staff_id: string;
   action: PunchAction;
   created_at: string | null;
+};
+
+type LastPunchSummary = {
+  staffId: string;
+  staffName: string;
+  action: PunchAction;
+  at: string | null;
+};
+
+type PunchDisplaySummary =
+  | (LastPunchSummary & { status: 'success' })
+  | {
+      status: 'error';
+      message: string;
+      at: string | null;
+    };
+
+type PunchSuccessAnimation = LastPunchSummary & {
+  key: number;
 };
 
 type DailyRosterItem = {
@@ -81,6 +103,14 @@ type DeviceQuickLogRow = {
   action: 'borrow' | 'return';
   device_sn: string;
 };
+type DeviceActionFeedback = {
+  id: number;
+  at: string;
+  mode: 'borrow' | 'return';
+  status: 'success' | 'error';
+  title: string;
+  detail: string;
+};
 type PunchBoardDeviceStatus = {
   text: string;
   tone: 'none' | 'borrowed' | 'overdue';
@@ -93,6 +123,7 @@ const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefine
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const EMPLOYEE_REQUESTS_TABLE = (import.meta.env.VITE_EMPLOYEE_REQUESTS_TABLE as string | undefined) ?? 'ob_employee_requests';
+const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
 const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
@@ -148,6 +179,39 @@ const formatTime = (value: Date) =>
     minute: '2-digit',
     second: '2-digit'
   });
+
+const formatPunchDate = (value: Date) =>
+  value.toLocaleDateString('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+
+const formatPunchClock = (value: Date) =>
+  value.toLocaleTimeString('en-GB', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
+const formatPunchSummaryTime = (value: string | null) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+};
+
+const getAmbientPeriod = (value: Date): AmbientPeriod => {
+  const hour = value.getHours();
+  if (hour >= 5 && hour < 12) return 'morning';
+  if (hour >= 12 && hour < 18) return 'afternoon';
+  return 'evening';
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -264,74 +328,6 @@ const cloneArrivalMetricsRows = (rows: ArrivalMetric[]): ArrivalMetric[] =>
     scheduledNotClockInStaff: [...row.scheduledNotClockInStaff]
   }));
 
-const getDefaultPositionToneKey = (value: string): LabelToneKey => {
-  const pos = normalizeAllowedPosition(value);
-  if (pos === 'Pick') return 'sky';
-  if (pos === 'Pack') return 'emerald';
-  if (pos === 'Rebin') return 'amber';
-  if (pos === 'Preship') return 'rose';
-  if (pos === 'Transfer') return 'violet';
-  return 'slate';
-};
-const POSITION_BADGE_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
-  sky: 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]',
-  emerald: 'badge-elevated-dark border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]',
-  amber: 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]',
-  violet: 'badge-elevated-dark border-violet-300/30 text-violet-100 bg-violet-400/[0.13]',
-  rose: 'badge-elevated-dark border-rose-300/30 text-rose-100 bg-rose-400/[0.13]',
-  slate: 'badge-elevated-dark border-white/12 text-slate-200 bg-white/[0.05]'
-};
-const POSITION_FRAME_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
-  sky: 'border-sky-400/35 bg-sky-500/[0.04]',
-  emerald: 'border-emerald-400/35 bg-emerald-500/[0.04]',
-  amber: 'border-amber-400/35 bg-amber-500/[0.04]',
-  violet: 'border-violet-400/35 bg-violet-500/[0.04]',
-  rose: 'border-rose-400/35 bg-rose-500/[0.04]',
-  slate: 'border-white/10 bg-white/5'
-};
-const ON_CLOCK_PANEL_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
-  sky: 'border border-sky-400/25 bg-sky-950/45',
-  emerald: 'border border-emerald-400/25 bg-emerald-950/45',
-  amber: 'border border-amber-400/25 bg-amber-950/45',
-  violet: 'border border-violet-400/25 bg-violet-950/45',
-  rose: 'border border-rose-400/25 bg-rose-950/45',
-  slate: 'border border-white/15 bg-slate-950/70'
-};
-const ON_CLOCK_VALUE_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
-  sky: 'text-sky-300',
-  emerald: 'text-emerald-300',
-  amber: 'text-amber-300',
-  violet: 'text-violet-300',
-  rose: 'text-rose-300',
-  slate: 'text-slate-200'
-};
-const getPositionToneKey = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
-  const pos = normalizeAllowedPosition(value);
-  return (pos ? toneMap?.[pos] : undefined) ?? getDefaultPositionToneKey(value);
-};
-const getPositionBadgeClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
-  const tone = getPositionToneKey(value, toneMap);
-  return POSITION_BADGE_TONE_CLASS_DARK[tone] ?? POSITION_BADGE_TONE_CLASS_DARK.slate;
-};
-const getPositionFrameClass = (value: AllowedPosition, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
-  const tone = getPositionToneKey(value, toneMap);
-  return POSITION_FRAME_TONE_CLASS_DARK[tone] ?? POSITION_FRAME_TONE_CLASS_DARK.slate;
-};
-const getOnClockPanelClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
-  const tone = getPositionToneKey(value, toneMap);
-  return ON_CLOCK_PANEL_TONE_CLASS_DARK[tone] ?? ON_CLOCK_PANEL_TONE_CLASS_DARK.slate;
-};
-const getOnClockValueClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
-  const tone = getPositionToneKey(value, toneMap);
-  return ON_CLOCK_VALUE_TONE_CLASS_DARK[tone] ?? ON_CLOCK_VALUE_TONE_CLASS_DARK.slate;
-};
-
-const formatShiftLabel = (value: string) => {
-  const v = value.trim().toLowerCase();
-  if (v === 'early') return 'Morning shift';
-  if (v === 'late') return 'Night shift';
-  return '-';
-};
 const normalizeShiftValue = (value: string): '' | 'early' | 'late' => {
   const v = value.trim().toLowerCase();
   if (v === 'early' || v === 'morning' || v === 'day') return 'early';
@@ -486,9 +482,11 @@ export default function App() {
   const [busyVisible, setBusyVisible] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const punchMenuRef = useRef<HTMLDivElement | null>(null);
   const deviceBorrowStaffRef = useRef<HTMLInputElement | null>(null);
   const deviceBorrowSnRef = useRef<HTMLInputElement | null>(null);
   const deviceReturnSnRef = useRef<HTMLInputElement | null>(null);
+  const statusToastTimerRef = useRef<number | null>(null);
   const successInAudioRef = useRef<HTMLAudioElement | null>(null);
   const successOutAudioRef = useRef<HTMLAudioElement | null>(null);
   const errorAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -531,9 +529,17 @@ export default function App() {
   const [unlockPassword, setUnlockPassword] = useState('');
   const [unlockBusy, setUnlockBusy] = useState(false);
   const PUNCH_UNLOCKED_LABEL_KEY = 'punch_screen_unlocked_by';
+  const PUNCH_UNLOCKED_AVATAR_KEY = 'punch_screen_unlocked_avatar';
   const [unlockByLabel, setUnlockByLabel] = useState(() => {
     try {
       return localStorage.getItem(PUNCH_UNLOCKED_LABEL_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [punchUserAvatarUrl, setPunchUserAvatarUrl] = useState(() => {
+    try {
+      return localStorage.getItem(PUNCH_UNLOCKED_AVATAR_KEY) || '';
     } catch {
       return '';
     }
@@ -542,6 +548,7 @@ export default function App() {
     tone: 'idle',
     message: ''
   });
+  const [punchMenuOpen, setPunchMenuOpen] = useState(false);
 
   const [staffId, setStaffId] = useState('');
   const normalizedId = useMemo(() => normalizeStaffId(staffId), [staffId]);
@@ -550,7 +557,6 @@ export default function App() {
   const defaultUiStatusMessage = 'Enter US ID to start punch';
   const [uiStatus, setUiStatus] = useState<Status>({ tone: 'idle', message: defaultUiStatusMessage });
   const [statusToast, setStatusToast] = useState<Status | null>(null);
-  const [punchSuccessOverlay, setPunchSuccessOverlay] = useState<{ title: string; name: string; at: number } | null>(null);
   const unlockEmailRef = useRef<HTMLInputElement | null>(null);
   const unlockPasswordRef = useRef<HTMLInputElement | null>(null);
   const preservePunchUnlockOnNextSignOutRef = useRef(false);
@@ -716,6 +722,12 @@ export default function App() {
 
   const [offsetMs, setOffsetMs] = useState(0);
   const [serverTime, setServerTime] = useState(() => new Date());
+  const barcodePromptGroupKey = getBarcodePromptGroupKey(serverTime);
+  const barcodePrompts = useMemo(() => getBarcodePrompts(barcodePromptGroupKey), [barcodePromptGroupKey]);
+  const [barcodePromptIndex, setBarcodePromptIndex] = useState(() =>
+    getRandomBarcodePromptIndex(getBarcodePromptGroupKey(new Date()))
+  );
+  const barcodePrompt = barcodePrompts[barcodePromptIndex % barcodePrompts.length] ?? 'Scan your barcode';
 
   const [punches, setPunches] = useState<Record<string, unknown>[]>([]);
   const [punchesError, setPunchesError] = useState<string | null>(null);
@@ -724,14 +736,14 @@ export default function App() {
   const [employeeError, setEmployeeError] = useState<string | null>(null);
 
   const [punchBoard, setPunchBoard] = useState<PunchBoardRow[]>([]);
-  const [punchBoardError, setPunchBoardError] = useState<string | null>(null);
+  const [, setPunchBoardError] = useState<string | null>(null);
   const [punchBoardEmployeeMap, setPunchBoardEmployeeMap] = useState<
     Record<string, { name: string; agency: string; position: string; label: string }>
   >({});
-  const [punchBoardDeviceStatusByStaffId, setPunchBoardDeviceStatusByStaffId] = useState<Record<string, PunchBoardDeviceStatus>>({});
+  const [, setPunchBoardDeviceStatusByStaffId] = useState<Record<string, PunchBoardDeviceStatus>>({});
   const [, setPunchBoardUphByStaffId] = useState<Record<string, number | null>>({});
   const [, setLabelToneByName] = useState<Record<string, LabelToneKey>>(() => loadLabelToneMap());
-  const [schedulePositionToneByPosition, setSchedulePositionToneByPosition] = useState<Record<AllowedPosition, LabelToneKey>>({
+  const [, setSchedulePositionToneByPosition] = useState<Record<AllowedPosition, LabelToneKey>>({
     Pick: 'sky',
     Pack: 'emerald',
     Rebin: 'amber',
@@ -739,12 +751,11 @@ export default function App() {
     Transfer: 'violet',
     'FLEX TEAM': 'slate'
   });
-  const [punchLogPositionFilter, setPunchLogPositionFilter] = useState<AllowedPosition | ''>('');
   const [dailyRoster, setDailyRoster] = useState<DailyRosterItem[]>([]);
   const [, setDailyRosterError] = useState<string | null>(null);
   const [, setRosterShiftByStaffId] = useState<Record<string, '' | 'early' | 'late'>>({});
   const [, setAbsentRoster] = useState<AbsentRosterItem[]>([]);
-  const [arrivalMetrics, setArrivalMetrics] = useState<ArrivalMetric[]>(() => {
+  const [, setArrivalMetrics] = useState<ArrivalMetric[]>(() => {
     const fallback = createEmptyArrivalMetrics();
     try {
       const raw = localStorage.getItem(ARRIVAL_METRICS_STORAGE_KEY);
@@ -760,19 +771,15 @@ export default function App() {
       return fallback;
     }
   });
-  const [attendanceHoverSearchByKey, setAttendanceHoverSearchByKey] = useState<Record<string, string>>({});
   useEffect(() => {
     const sync = () => setLabelToneByName(loadLabelToneMap());
     window.addEventListener('storage', sync);
     return () => window.removeEventListener('storage', sync);
   }, []);
-  const getAppPositionBadgeClass = (position: string) => getPositionBadgeClass(position, schedulePositionToneByPosition);
-  const getAppPositionFrameClass = (position: AllowedPosition) => getPositionFrameClass(position, schedulePositionToneByPosition);
-  const getAppOnClockPanelClass = (position: AllowedPosition) => getOnClockPanelClass(position, schedulePositionToneByPosition);
-  const getAppOnClockValueClass = (position: AllowedPosition) => getOnClockValueClass(position, schedulePositionToneByPosition);
-
   const [lastPunchAction, setLastPunchAction] = useState<PunchAction | null>(null);
   const [lastPunchActionError, setLastPunchActionError] = useState<string | null>(null);
+  const [lastPunchSummary, setLastPunchSummary] = useState<PunchDisplaySummary | null>(null);
+  const [punchSuccessAnimation, setPunchSuccessAnimation] = useState<PunchSuccessAnimation | null>(null);
   const [deviceReturnReminder, setDeviceReturnReminder] = useState<{
     staffId: string;
     staffName: string;
@@ -782,36 +789,30 @@ export default function App() {
   const [deviceBorrowSn, setDeviceBorrowSn] = useState('');
   const [deviceReturnSn, setDeviceReturnSn] = useState('');
   const [deviceQuickBusy, setDeviceQuickBusy] = useState<'' | 'borrow' | 'return'>('');
-  const [deviceQuickError, setDeviceQuickError] = useState<string | null>(null);
-  const [deviceQuickLogs, setDeviceQuickLogs] = useState<DeviceQuickLogRow[]>([]);
-  const [deviceQuickNameByStaffId, setDeviceQuickNameByStaffId] = useState<Record<string, string>>({});
-  const [deviceQuickNameBySn, setDeviceQuickNameBySn] = useState<Record<string, string>>({});
+  const [, setDeviceQuickError] = useState<string | null>(null);
+  const [, setDeviceQuickLogs] = useState<DeviceQuickLogRow[]>([]);
+  const [, setDeviceQuickNameByStaffId] = useState<Record<string, string>>({});
+  const [, setDeviceQuickNameBySn] = useState<Record<string, string>>({});
+  const [deviceActionFeedback, setDeviceActionFeedback] = useState<DeviceActionFeedback | null>(null);
   useEffect(() => {
     if (!deviceReturnReminder) return;
-    setPunchSuccessOverlay(null);
     const timer = window.setTimeout(() => {
       setDeviceReturnReminder(null);
     }, 4000);
     return () => window.clearTimeout(timer);
   }, [deviceReturnReminder]);
 
-  const punchBoardFiltered = useMemo(() => {
-    if (!punchLogPositionFilter) return punchBoard;
-    return punchBoard.filter((row) => {
-      const employee = punchBoardEmployeeMap[normalizeStaffId(row.staff_id)] ?? punchBoardEmployeeMap[row.staff_id];
-      return normalizeAllowedPosition(String(employee?.position ?? '')) === punchLogPositionFilter;
-    });
-  }, [punchBoard, punchBoardEmployeeMap, punchLogPositionFilter]);
+  useEffect(() => {
+    if (!punchSuccessAnimation) return;
+    const timer = window.setTimeout(() => {
+      setPunchSuccessAnimation(null);
+    }, 1700);
+    return () => window.clearTimeout(timer);
+  }, [punchSuccessAnimation]);
+
   const rosterStaffIds = useMemo(
     () => Array.from(new Set(dailyRoster.map((row) => normalizeStaffId(row.staff_id)).filter(Boolean))),
     [dailyRoster]
-  );
-  const arrivalMetricByKey = useMemo(
-    () =>
-      Object.fromEntries(
-        arrivalMetrics.map((metric) => [`${metric.position}:${metric.shift}`, metric] as const)
-      ) as Record<string, ArrivalMetric>,
-    [arrivalMetrics]
   );
   const [lastPunchActionLoading, setLastPunchActionLoading] = useState(false);
 
@@ -855,6 +856,53 @@ export default function App() {
     }
   };
 
+  const loadPunchAvatarByEmail = async (emailRaw: string) => {
+    if (!supabase) return '';
+    const email = String(emailRaw ?? '').trim();
+    if (!email) return '';
+
+    const res = await supabase
+      .from(USER_PROFILE_TABLE)
+      .select('avatar_url')
+      .eq('user_email', email)
+      .maybeSingle();
+
+    if (res.error) return '';
+    return String((res.data as { avatar_url?: unknown } | null)?.avatar_url ?? '').trim();
+  };
+
+  useEffect(() => {
+    if (!supabase || !unlockByLabel) {
+      try {
+        setPunchUserAvatarUrl(localStorage.getItem(PUNCH_UNLOCKED_AVATAR_KEY) || '');
+      } catch {
+        setPunchUserAvatarUrl('');
+      }
+      return;
+    }
+
+    let active = true;
+    const loadPunchUserAvatar = async () => {
+      const email = String(unlockByLabel).trim();
+      if (!email) {
+        if (active) setPunchUserAvatarUrl('');
+        return;
+      }
+
+      const avatarUrl = await loadPunchAvatarByEmail(email);
+      if (!active) return;
+      if (avatarUrl) {
+        setPunchUserAvatarUrl(avatarUrl);
+        try { localStorage.setItem(PUNCH_UNLOCKED_AVATAR_KEY, avatarUrl); } catch {}
+      }
+    };
+
+    void loadPunchUserAvatar();
+    return () => {
+      active = false;
+    };
+  }, [unlockByLabel]);
+
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
@@ -872,6 +920,28 @@ export default function App() {
       inputRef.current?.focus();
     }
   }, [isLocked, page]);
+
+  useEffect(() => {
+    if (!punchMenuOpen) return;
+
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (punchMenuRef.current?.contains(target)) return;
+      setPunchMenuOpen(false);
+    };
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPunchMenuOpen(false);
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [punchMenuOpen]);
 
   useEffect(() => {
     if (!busy) {
@@ -892,6 +962,17 @@ export default function App() {
     tick();
     return () => window.clearInterval(timer);
   }, [offsetMs]);
+
+  useEffect(() => {
+    setBarcodePromptIndex(getRandomBarcodePromptIndex(barcodePromptGroupKey));
+  }, [barcodePromptGroupKey]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setBarcodePromptIndex(getRandomBarcodePromptIndex(barcodePromptGroupKey));
+    }, 90 * 1000);
+    return () => window.clearInterval(timer);
+  }, [barcodePromptGroupKey]);
 
   useEffect(() => {
     let active = true;
@@ -1228,10 +1309,43 @@ export default function App() {
     return { staffId: currentStaff, error: null as string | null };
   };
 
+  const resolveDeviceDisplayName = async (snRaw: string) => {
+    if (!supabase) return normalizeDeviceSn(snRaw) || String(snRaw ?? '').trim();
+    const sn = normalizeDeviceSn(snRaw);
+    if (!sn) return String(snRaw ?? '').trim();
+    const deviceRes = await supabase
+      .from(DEVICE_TABLE)
+      .select('device_name')
+      .eq('device_sn', sn)
+      .maybeSingle();
+    if (deviceRes.error) return sn;
+    const name = String((deviceRes.data as { device_name?: unknown } | null)?.device_name ?? '').trim();
+    return name || sn;
+  };
+
   const submitDeviceQuickAction = async (mode: 'borrow' | 'return') => {
-    if (!supabase) {
-      setDeviceQuickError('Missing Supabase configuration.');
+    const actionName = mode === 'borrow' ? 'Borrow' : 'Return';
+    const reportDeviceFailure = (message: string) => {
+      setDeviceQuickError(message);
+      setDeviceActionFeedback({
+        id: Date.now(),
+        at: new Date().toISOString(),
+        mode,
+        status: 'error',
+        title: `${actionName} failed`,
+        detail: message
+      });
+      setUiStatus({ tone: 'error', message });
+      if (mode === 'borrow') {
+        setDeviceBorrowStaffId('');
+        setDeviceBorrowSn('');
+        window.setTimeout(() => deviceBorrowStaffRef.current?.focus(), 0);
+      }
       playError();
+    };
+
+    if (!supabase) {
+      reportDeviceFailure('Missing Supabase configuration.');
       return;
     }
     if (deviceQuickBusy) return;
@@ -1241,33 +1355,28 @@ export default function App() {
     let staffId = '';
     const sn = normalizeDeviceSn(mode === 'borrow' ? deviceBorrowSn : deviceReturnSn);
     if (!sn) {
-      setDeviceQuickError('Device SN is required.');
-      playError();
+      reportDeviceFailure('Device SN is required.');
       return;
     }
     if (mode === 'borrow') {
       staffId = normalizeStaffId(deviceBorrowStaffId);
       if (!isValidStaffId(staffId)) {
-        setDeviceQuickError('Invalid USID.');
-        playError();
+        reportDeviceFailure('Invalid USID.');
         return;
       }
       const lastPunch = await fetchLastPunch(staffId);
       if (lastPunch.error) {
-        setDeviceQuickError(lastPunch.error);
-        playError();
+        reportDeviceFailure(lastPunch.error);
         return;
       }
       if (lastPunch.action !== 'IN') {
-        setDeviceQuickError('Employee must be signed in before borrowing a device.');
-        playError();
+        reportDeviceFailure('Employee must be signed in before borrowing a device.');
         return;
       }
     } else {
       const holder = await resolveBorrowerBySn(sn);
       if (holder.error) {
-        setDeviceQuickError(holder.error);
-        playError();
+        reportDeviceFailure(holder.error);
         return;
       }
       staffId = holder.staffId;
@@ -1283,8 +1392,7 @@ export default function App() {
     ]);
     setDeviceQuickBusy('');
     if (insertRes.error) {
-      setDeviceQuickError(insertRes.error.message);
-      playError();
+      reportDeviceFailure(insertRes.error.message);
       return;
     }
 
@@ -1298,6 +1406,22 @@ export default function App() {
       deviceReturnSnRef.current?.focus();
       playSound('successOut');
     }
+    setUiStatus({
+      tone: 'success',
+      message: mode === 'borrow' ? `Borrowed · ${staffId} · ${sn}` : `Returned · ${sn}`
+    });
+    const [staffName, deviceName] = await Promise.all([
+      resolveStaffDisplayName(staffId),
+      resolveDeviceDisplayName(sn)
+    ]);
+    setDeviceActionFeedback({
+      id: Date.now(),
+      at: new Date().toISOString(),
+      mode,
+      status: 'success',
+      title: `${actionName} success`,
+      detail: `${staffName} · ${deviceName}`
+    });
     void fetchDeviceQuickLogs();
     void fetchPunchBoardDeviceStatus(punchBoard.map((row) => row.staff_id));
   };
@@ -1344,10 +1468,21 @@ export default function App() {
       }
 
       const display = String(signInRes.data.user?.email ?? email).trim();
+      const userMetadata = (signInRes.data.user?.user_metadata ?? {}) as Record<string, unknown>;
+      const metadataAvatarUrl = String(userMetadata.avatar_url ?? userMetadata.picture ?? '').trim();
+      const avatarUrl = (await loadPunchAvatarByEmail(display)) || metadataAvatarUrl;
       setPunchUnlocked(true);
       try { localStorage.setItem(PUNCH_UNLOCKED_KEY, '1'); } catch {}
       setUnlockByLabel(display);
       try { localStorage.setItem(PUNCH_UNLOCKED_LABEL_KEY, display); } catch {}
+      setPunchUserAvatarUrl(avatarUrl);
+      try {
+        if (avatarUrl) {
+          localStorage.setItem(PUNCH_UNLOCKED_AVATAR_KEY, avatarUrl);
+        } else {
+          localStorage.removeItem(PUNCH_UNLOCKED_AVATAR_KEY);
+        }
+      } catch {}
       setUnlockPassword('');
       preservePunchUnlockOnNextSignOutRef.current = true;
       const signOutRes = await supabase.auth.signOut();
@@ -1356,7 +1491,9 @@ export default function App() {
         setPunchUnlocked(false);
         try { localStorage.removeItem(PUNCH_UNLOCKED_KEY); } catch {}
         setUnlockByLabel('');
+        setPunchUserAvatarUrl('');
         try { localStorage.removeItem(PUNCH_UNLOCKED_LABEL_KEY); } catch {}
+        try { localStorage.removeItem(PUNCH_UNLOCKED_AVATAR_KEY); } catch {}
         setUnlockStatus({ tone: 'error', message: `解锁成功但退出管理员会话失败：${signOutRes.error.message}` });
         return;
       }
@@ -1383,7 +1520,9 @@ export default function App() {
     setUnlockEmail('');
     setUnlockPassword('');
     setUnlockByLabel('');
+    setPunchUserAvatarUrl('');
     try { localStorage.removeItem(PUNCH_UNLOCKED_LABEL_KEY); } catch {}
+    try { localStorage.removeItem(PUNCH_UNLOCKED_AVATAR_KEY); } catch {}
     setUnlockStatus({ tone: 'idle', message: '' });
     setStaffId('');
     setPage('punch');
@@ -1425,8 +1564,19 @@ export default function App() {
 
         setPunchUnlocked(true);
         try { localStorage.setItem(PUNCH_UNLOCKED_KEY, '1'); } catch {}
+        const userMetadata = (sessionUser?.user_metadata ?? {}) as Record<string, unknown>;
+        const metadataAvatarUrl = String(userMetadata.avatar_url ?? userMetadata.picture ?? '').trim();
+        const avatarUrl = (await loadPunchAvatarByEmail(sessionEmail)) || metadataAvatarUrl;
         setUnlockByLabel(sessionEmail);
         try { localStorage.setItem(PUNCH_UNLOCKED_LABEL_KEY, sessionEmail); } catch {}
+        setPunchUserAvatarUrl(avatarUrl);
+        try {
+          if (avatarUrl) {
+            localStorage.setItem(PUNCH_UNLOCKED_AVATAR_KEY, avatarUrl);
+          } else {
+            localStorage.removeItem(PUNCH_UNLOCKED_AVATAR_KEY);
+          }
+        } catch {}
         setUnlockStatus({ tone: 'success', message: `Unlocked by admin: ${sessionEmail}` });
         setUiStatus({ tone: 'idle', message: defaultUiStatusMessage });
       } finally {
@@ -1445,10 +1595,19 @@ export default function App() {
         preservePunchUnlockOnNextSignOutRef.current = false;
         return;
       }
+      try {
+        if (localStorage.getItem(PUNCH_UNLOCKED_KEY) === '1') {
+          return;
+        }
+      } catch {
+        // If storage cannot be read, fall through to the locked state.
+      }
       setPunchUnlocked(false);
       try { localStorage.removeItem(PUNCH_UNLOCKED_KEY); } catch {}
       setUnlockByLabel('');
+      setPunchUserAvatarUrl('');
       try { localStorage.removeItem(PUNCH_UNLOCKED_LABEL_KEY); } catch {}
+      try { localStorage.removeItem(PUNCH_UNLOCKED_AVATAR_KEY); } catch {}
       setUnlockPassword('');
       setUnlockStatus({ tone: 'idle', message: '' });
     });
@@ -2455,6 +2614,20 @@ const fetchPunchBoardUph = async (
 
     setPunchBoard(filteredRows);
     setPunchBoardEmployeeMap(filteredEmployeeMap);
+    const latestPunch = filteredRows[0];
+    if (latestPunch) {
+      const latestStaffId = normalizeStaffId(latestPunch.staff_id) || latestPunch.staff_id;
+      const employee = filteredEmployeeMap[latestStaffId] ?? filteredEmployeeMap[latestPunch.staff_id];
+      setLastPunchSummary({
+        status: 'success',
+        staffId: latestStaffId,
+        staffName: String(employee?.name ?? '').trim() || latestStaffId,
+        action: latestPunch.action,
+        at: latestPunch.created_at
+      });
+    } else {
+      setLastPunchSummary(null);
+    }
     await fetchPunchBoardDeviceStatus(filteredStaffIds);
     const normalizedStaffIds = Array.from(new Set(filteredStaffIds.map((v) => normalizeStaffId(v)).filter(Boolean))).sort((a, b) =>
       a.localeCompare(b, 'en-US')
@@ -2488,7 +2661,7 @@ const fetchPunchBoardUph = async (
       // Trigger in parallel so Attendance/Absent panels are not blocked by punch log fetch.
       void fetchArrivalMetrics();
       void fetchAbsentRoster();
-      void fetchPunchBoard({ position: punchLogPositionFilter });
+      void fetchPunchBoard();
       void fetchDeviceQuickLogs();
       void fetchScheduleLabelToneSetting();
       void fetchSchedulePositionToneSetting();
@@ -2503,7 +2676,7 @@ const fetchPunchBoardUph = async (
     return () => {
       window.clearInterval(timer);
     };
-  }, [page, punchLogPositionFilter]);
+  }, [page]);
 
   useEffect(() => {
     if (page !== 'punch') return;
@@ -2524,7 +2697,7 @@ const fetchPunchBoardUph = async (
       if (disposed) return;
       void fetchArrivalMetrics();
       void fetchAbsentRoster();
-      void fetchPunchBoard({ position: punchLogPositionFilter });
+      void fetchPunchBoard();
     };
 
     const scheduleRefresh = () => {
@@ -2555,7 +2728,7 @@ const fetchPunchBoardUph = async (
       }
       void supabase.removeChannel(channel);
     };
-  }, [page, punchLogPositionFilter]);
+  }, [page]);
 
   useEffect(() => {
     if (page !== 'punch') return;
@@ -2563,20 +2736,24 @@ const fetchPunchBoardUph = async (
   }, [page, rosterStaffIds]);
 
   useEffect(() => {
-    if (!punchSuccessOverlay) return;
-    const timer = window.setTimeout(() => setPunchSuccessOverlay(null), 1600);
-    return () => window.clearTimeout(timer);
-  }, [punchSuccessOverlay]);
-
-  useEffect(() => {
     if (!uiStatus.message || uiStatus.message === defaultUiStatusMessage) return;
+    if (statusToastTimerRef.current) {
+      window.clearTimeout(statusToastTimerRef.current);
+      statusToastTimerRef.current = null;
+    }
     setStatusToast(uiStatus);
-    const timer = window.setTimeout(() => {
+    statusToastTimerRef.current = window.setTimeout(() => {
       setStatusToast((current) =>
         current?.message === uiStatus.message && current.tone === uiStatus.tone ? null : current
       );
-    }, 1500);
-    return () => window.clearTimeout(timer);
+      statusToastTimerRef.current = null;
+    }, 2000);
+    return () => {
+      if (statusToastTimerRef.current) {
+        window.clearTimeout(statusToastTimerRef.current);
+        statusToastTimerRef.current = null;
+      }
+    };
   }, [defaultUiStatusMessage, uiStatus]);
 
   const submitPunch = async (
@@ -2627,6 +2804,7 @@ const fetchPunchBoardUph = async (
         : await fetchLastPunch(normalizedId);
       if (latest.error) {
         setUiStatus({ tone: 'error', message: `Failed to load last punch: ${latest.error}` });
+        setLastPunchSummary({ status: 'error', message: `Failed to load last punch`, at: new Date().toISOString() });
         playError();
         return;
       }
@@ -2642,6 +2820,7 @@ const fetchPunchBoardUph = async (
               ? 'Last action is IN. Please punch OUT next.'
               : 'Last action is OUT. Please punch IN next.';
         setUiStatus({ tone: 'error', message: msg });
+        setLastPunchSummary({ status: 'error', message: msg, at: new Date().toISOString() });
         playError();
         setLastPunchAction(latest.action);
         setLastPunchActionError(null);
@@ -2661,20 +2840,34 @@ const fetchPunchBoardUph = async (
 
       if (error) {
         setUiStatus({ tone: 'error', message: `Punch failed: ${error.message}` });
+        setLastPunchSummary({ status: 'error', message: 'Punch failed', at: new Date().toISOString() });
         playError();
         return;
       }
 
-      setUiStatus({ tone: 'success', message: `Punch success: ${action}` });
       const staffName = await resolveStaffDisplayName(normalizedId);
-      setPunchSuccessOverlay({
-        title: action === 'IN' ? 'Hello' : 'Bye',
-        name: staffName,
-        at: Date.now()
+      setUiStatus({
+        tone: 'success',
+        message: `${action === 'IN' ? 'IN' : 'OUT'} · ${staffName || normalizedId}`
       });
       playSuccess(action);
       setLastPunchAction(action);
       setLastPunchActionError(null);
+      const punchedAt = new Date().toISOString();
+      setLastPunchSummary({
+        status: 'success',
+        staffId: normalizedId,
+        staffName: staffName || normalizedId,
+        action,
+        at: punchedAt
+      });
+      setPunchSuccessAnimation({
+        key: Date.now(),
+        staffId: normalizedId,
+        staffName: staffName || normalizedId,
+        action,
+        at: punchedAt
+      });
       if (options?.clearInput ?? true) {
         setStaffId('');
       }
@@ -2688,7 +2881,7 @@ const fetchPunchBoardUph = async (
           setDeviceReturnReminder({ staffId: normalizedId, staffName: reminderName, items: outstanding.items });
         }
       }
-      void fetchPunchBoard({ position: punchLogPositionFilter });
+      void fetchPunchBoard();
       void fetchAbsentRoster();
       void fetchArrivalMetrics();
     });
@@ -2700,11 +2893,13 @@ const fetchPunchBoardUph = async (
     }
     if (!isValidId) {
       setUiStatus({ tone: 'error', message: 'Invalid staff ID format (example: US010454).' });
+      setLastPunchSummary({ status: 'error', message: 'Invalid staff ID', at: new Date().toISOString() });
       playError();
       return;
     }
     if (!supabase) {
       setUiStatus({ tone: 'error', message: 'Missing Supabase configuration. Please check environment variables.' });
+      setLastPunchSummary({ status: 'error', message: 'Missing system configuration', at: new Date().toISOString() });
       playError();
       return;
     }
@@ -2712,6 +2907,7 @@ const fetchPunchBoardUph = async (
     const latest = await fetchLastPunch(normalizedId);
     if (latest.error) {
       setUiStatus({ tone: 'error', message: `Failed to load last punch: ${latest.error}` });
+      setLastPunchSummary({ status: 'error', message: 'Failed to load last punch', at: new Date().toISOString() });
       playError();
       return;
     }
@@ -2742,7 +2938,7 @@ const fetchPunchBoardUph = async (
         inputMode="text"
         autoCapitalize="characters"
         spellCheck={false}
-        placeholder="Scan your barcode"
+        placeholder={barcodePrompt}
         className="mt-3 w-full rounded-2xl border border-white/10 bg-black/30 px-5 py-4 text-2xl text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
       />
       {isValidId && (
@@ -2763,123 +2959,6 @@ const fetchPunchBoardUph = async (
           )}
         </div>
       )}
-    </section>
-  );
-
-  const dailyRosterPanel = (
-    <section className="glass reveal flex h-full flex-col rounded-3xl px-4 py-5">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="font-display text-xl tracking-[0.08em]">Device Desk</h3>
-        <button
-          type="button"
-          disabled={isLocked || Boolean(deviceQuickBusy)}
-          onClick={() => {
-            void fetchDeviceQuickLogs();
-            void fetchPunchBoardDeviceStatus(punchBoard.map((row) => row.staff_id));
-          }}
-          className="rounded-lg bg-white/10 px-2 py-1 text-xs text-slate-300 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          Refresh
-        </button>
-      </div>
-
-      <div className="mt-3 rounded-2xl border border-emerald-400/50 bg-emerald-500/5 p-3">
-        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">Borrow</div>
-        <input
-          ref={deviceBorrowStaffRef}
-          value={deviceBorrowStaffId}
-          onChange={(event) => setDeviceBorrowStaffId(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              deviceBorrowSnRef.current?.focus();
-            }
-          }}
-          placeholder="USID"
-          className="mt-2 h-10 w-full rounded-xl border border-emerald-300/50 bg-black/40 px-3 text-sm text-slate-100 outline-none transition placeholder:text-white focus:border-emerald-300"
-        />
-        <input
-          ref={deviceBorrowSnRef}
-          value={deviceBorrowSn}
-          onChange={(event) => setDeviceBorrowSn(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              void submitDeviceQuickAction('borrow');
-            }
-          }}
-          placeholder="Device SN"
-          className="mt-2 h-10 w-full rounded-xl border border-emerald-300/50 bg-black/40 px-3 text-sm text-slate-100 outline-none transition placeholder:text-white focus:border-emerald-300"
-        />
-        <button
-          type="button"
-          disabled={isLocked || deviceQuickBusy !== ''}
-          onClick={() => void submitDeviceQuickAction('borrow')}
-          className="mt-2 h-10 w-full rounded-xl bg-emerald-500/85 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {deviceQuickBusy === 'borrow' ? 'Submitting...' : 'Borrow now'}
-        </button>
-      </div>
-
-      <div className="mt-3 rounded-2xl border border-rose-400/50 bg-rose-500/5 p-3">
-        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-300">Return</div>
-        <input
-          ref={deviceReturnSnRef}
-          value={deviceReturnSn}
-          onChange={(event) => setDeviceReturnSn(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              void submitDeviceQuickAction('return');
-            }
-          }}
-          placeholder="Scan Device SN"
-          className="mt-2 h-10 w-full rounded-xl border border-rose-300/60 bg-black/40 px-3 text-sm text-slate-100 outline-none transition placeholder:text-white focus:border-rose-300"
-        />
-        <button
-          type="button"
-          disabled={isLocked || deviceQuickBusy !== ''}
-          onClick={() => void submitDeviceQuickAction('return')}
-          className="mt-2 h-10 w-full rounded-xl bg-rose-500/85 text-sm font-semibold text-rose-50 transition hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {deviceQuickBusy === 'return' ? 'Submitting...' : 'Return now'}
-        </button>
-      </div>
-
-      <div className="mt-3 min-h-0 flex-1 rounded-2xl border border-white/10 bg-white/[0.03] p-3 flex flex-col">
-        <div className="flex items-center justify-between gap-2">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">Log</div>
-          <div className="text-[10px] text-slate-500">Auto refresh 5s</div>
-        </div>
-        {deviceQuickError && <p className="mt-2 text-xs text-ember">{deviceQuickError}</p>}
-        {!deviceQuickError && deviceQuickLogs.length === 0 && <p className="mt-2 text-xs text-slate-500">No device logs.</p>}
-        {!deviceQuickError && deviceQuickLogs.length > 0 && (
-          <div className="no-scrollbar mt-2 min-h-0 flex-1 space-y-1.5 overflow-auto pr-1">
-            {deviceQuickLogs.map((row) => {
-              const timeText = row.created_at ? new Date(row.created_at).toLocaleString('en-CA', { hour12: false }) : '-';
-              const actionClass =
-                row.action === 'borrow'
-                  ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
-                  : 'border-rose-400/60 bg-rose-500/10 text-rose-200';
-              return (
-                <div key={String(row.id)} className="rounded-xl bg-black/25 px-2.5 py-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={['inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]', actionClass].join(' ')}>
-                      {row.action}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-xs text-slate-100">
-                      {(deviceQuickNameByStaffId[normalizeStaffId(row.staff_id)] || '-') +
-                        ' · ' +
-                        (deviceQuickNameBySn[normalizeDeviceSn(row.device_sn)] || '-')}
-                    </span>
-                    <span className="text-[10px] text-slate-500">{timeText}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
     </section>
   );
 
@@ -3034,10 +3113,10 @@ const fetchPunchBoardUph = async (
   }, [page]);
 
   const statusToastClass: Record<StatusTone, string> = {
-    idle: 'border-white/12 bg-[#1a1b20]/92 text-stone-100',
-    pending: 'border-sky-400/35 bg-sky-500/10 text-sky-100',
-    success: 'border-emerald-400/35 bg-emerald-500/10 text-emerald-100',
-    error: 'border-rose-400/40 bg-rose-500/12 text-rose-100'
+    idle: 'border-slate-200 bg-white text-slate-700 shadow-[0_18px_40px_rgba(148,163,184,0.18)]',
+    pending: 'border-sky-200 bg-sky-50 text-sky-700 shadow-[0_18px_40px_rgba(186,230,253,0.35)]',
+    success: 'border-emerald-200 bg-emerald-50 text-emerald-700 shadow-[0_18px_40px_rgba(187,247,208,0.4)]',
+    error: 'border-rose-200 bg-rose-50 text-rose-700 shadow-[0_18px_40px_rgba(254,205,211,0.42)]'
   };
 
   const tabClass = (active: boolean) =>
@@ -3054,6 +3133,9 @@ const fetchPunchBoardUph = async (
     error: 'text-rose-300'
   };
 
+  const ambientPeriod = getAmbientPeriod(serverTime);
+  const punchUserInitial = (String(unlockByLabel || 'User').trim().charAt(0) || 'U').toUpperCase();
+
   if (!punchUnlocked) {
     return (
       <div className="min-h-screen px-5 py-8 text-paper">
@@ -3068,7 +3150,7 @@ const fetchPunchBoardUph = async (
             <div className="relative grid min-h-[520px] gap-8 px-6 py-6 md:grid-cols-[minmax(0,1.3fr)_minmax(380px,0.9fr)] md:px-8 md:py-8 xl:px-10 xl:py-10">
               <div className="flex min-h-[240px] flex-col justify-between rounded-[28px] border border-white/8 bg-white/[0.03] p-6 md:p-8">
                 <div>
-                  <div className="text-[11px] uppercase tracking-[0.32em] text-sky-200/80">ObPunch Security</div>
+                  <div className="text-[11px] uppercase tracking-[0.32em] text-sky-200/80">OBP Security</div>
                   <h1 className="mt-6 max-w-[10ch] font-display text-5xl leading-[0.92] tracking-[0.03em] text-white md:text-6xl xl:text-7xl">
                     Punch Screen
                     <br />
@@ -3079,7 +3161,7 @@ const fetchPunchBoardUph = async (
               </div>
 
               <div className="flex items-center">
-                <div className="w-full rounded-[30px] border border-white/10 bg-black/35 p-6 shadow-[0_28px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl md:p-8">
+                <div className="w-full rounded-[30px] border border-white/10 bg-sky-700/35 p-6 shadow-[0_28px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl md:p-8">
                   <div className="text-[11px] uppercase tracking-[0.3em] text-slate-400">Sign In</div>
                   <div className="mt-4 font-display text-4xl tracking-[0.03em] text-white md:text-5xl">Administrator Unlock</div>
 
@@ -3147,59 +3229,20 @@ const fetchPunchBoardUph = async (
   }
 
   return (
-    <div className="min-h-screen px-5 py-8 text-paper">
-      {page === 'punch' && punchSuccessOverlay && !deviceReturnReminder && (
-        <div className="pointer-events-none fixed inset-0 z-[120] flex items-center justify-center">
-          {(() => {
-            const isBye = punchSuccessOverlay.title.toLowerCase() === 'bye';
-            return (
-          <div
-            key={punchSuccessOverlay.at}
-            className={[
-              'rounded-3xl bg-[#020612] px-12 py-8 text-center animate-pulse',
-              isBye
-                ? 'border border-rose-500/80 shadow-[0_0_64px_rgba(244,63,94,0.42)]'
-                : 'border border-neon/80 shadow-[0_0_64px_rgba(132,255,0,0.48)]'
-            ].join(' ')}
-          >
-            <div
-              className={[
-                'text-2xl font-black uppercase tracking-[0.32em]',
-                isBye ? 'text-rose-300' : 'text-neon/90'
-              ].join(' ')}
-              style={{
-                fontFamily: '"Black Ops One", Impact, "Arial Black", sans-serif',
-                textShadow: '0 1px 10px rgba(0,0,0,0.35)',
-                WebkitTextStroke: '0.6px rgba(0, 0, 0, 0.6)'
-              }}
-            >
-              {punchSuccessOverlay.title}
-            </div>
-            <div
-              className={[
-                'mt-2 text-6xl font-black tracking-[0.06em]',
-                isBye ? 'text-rose-400' : 'text-neon'
-              ].join(' ')}
-              style={{
-                fontFamily: '"Black Ops One", Impact, "Arial Black", sans-serif',
-                textShadow: '0 2px 14px rgba(0,0,0,0.45)',
-                letterSpacing: '0.02em',
-                WebkitTextStroke: '1px rgba(0, 0, 0, 0.65)'
-              }}
-            >
-              {punchSuccessOverlay.name}
-            </div>
-          </div>
-            );
-          })()}
-        </div>
-      )}
+    <div
+      className={[
+        'min-h-screen',
+        page === 'punch'
+          ? 'h-screen overflow-hidden bg-[#fbfbfa] px-0 py-0 text-slate-950'
+          : 'px-2 py-2 text-paper md:px-4 md:py-4'
+      ].join(' ')}
+    >
       {statusToast && (
-        <div className="pointer-events-none fixed inset-x-0 top-6 z-[110] flex justify-center px-4">
+        <div className="pointer-events-none fixed right-4 top-4 z-[110] flex max-w-[min(92vw,420px)] justify-end md:right-6 md:top-6">
           <div
             key={`${statusToast.tone}:${statusToast.message}`}
             className={[
-              'max-w-[min(92vw,720px)] rounded-[22px] border px-5 py-3 text-sm font-medium shadow-[0_20px_60px_rgba(0,0,0,0.4)] backdrop-blur-xl',
+              'w-full rounded-[20px] border px-4 py-3 text-sm font-semibold backdrop-blur-xl',
               statusToastClass[statusToast.tone]
             ].join(' ')}
           >
@@ -3207,408 +3250,371 @@ const fetchPunchBoardUph = async (
           </div>
         </div>
       )}
-      <div className="flex w-full flex-col gap-6">
-        {page === 'punch' ? (
-          <section
-            className="reveal grid gap-6 lg:grid-cols-[minmax(460px,1.15fr)_minmax(0,2fr)_minmax(0,3fr)] lg:items-start"
+      {page === 'punch' && punchSuccessAnimation ? (
+        <div className="punch-success-overlay" aria-live="polite">
+          <div
+            key={punchSuccessAnimation.key}
+            className={[
+              'punch-success-card',
+              punchSuccessAnimation.action === 'IN' ? 'punch-success-card-in' : 'punch-success-card-out'
+            ].join(' ')}
           >
-            <div className="lg:sticky lg:top-8 lg:h-[calc(100vh-4rem)]">{dailyRosterPanel}</div>
+            <div className="punch-success-orb">
+              {punchSuccessAnimation.action === 'IN' ? <LogIn className="h-12 w-12" /> : <LogOut className="h-12 w-12" />}
+            </div>
+            <div className="min-w-0">
+              <div className="punch-success-eyebrow">
+                <CheckCircle2 className="h-4 w-4" />
+                Punch saved
+              </div>
+              <div className="punch-success-name">{punchSuccessAnimation.staffName}</div>
+            </div>
+            <div className="punch-success-action">{punchSuccessAnimation.action}</div>
+          </div>
+        </div>
+      ) : null}
+      <div className="flex w-full flex-col gap-4">
+        {page === 'punch' ? (
+          <section className="reveal h-screen w-full overflow-hidden">
+            <div className="punch-screen relative flex h-screen flex-col overflow-hidden bg-[#fbfbfa]">
+              <header className="relative z-50 flex items-center justify-between border-b border-slate-200 bg-white/95 px-5 py-3 backdrop-blur md:px-8">
+                <div className="flex items-center gap-3">
+                  <img src="/img/Logo.png" alt="OBP logo" className="h-10 w-10 rounded-full object-cover shadow-[0_10px_24px_rgba(15,23,42,0.10)]" />
+                  <div className="text-2xl font-semibold tracking-[0.02em] text-slate-950">OBPUNCH</div>
+                </div>
 
-            <div className="space-y-6">
-              <header className="glass reveal rounded-3xl px-6 py-6 shadow-glow">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <h1 className="font-display text-4xl tracking-[0.08em]">ObPunch</h1>
-                  </div>
-                  <div className="text-right">
-                    <div className="flex items-center justify-end gap-2 text-sm text-slate-300">
-                      <span className="pulse-dot h-2 w-2 rounded-full bg-neon"></span>
-                      <span>Time</span>
-                    </div>
-                    <div className="mt-2 font-display text-3xl tracking-[0.08em] text-neon">{formatTime(serverTime)}</div>
-                  </div>
+                <div ref={punchMenuRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setPunchMenuOpen((prev) => !prev)}
+                    className="flex cursor-pointer items-center gap-2 rounded-full bg-transparent px-1 py-1 text-slate-600 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                    aria-label="Open menu"
+                  >
+                    <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-slate-200 bg-slate-950 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(15,23,42,0.12)]" aria-label="User avatar">
+                      {punchUserAvatarUrl ? (
+                        <img src={punchUserAvatarUrl} alt="User avatar" className="h-full w-full object-cover" />
+                      ) : unlockByLabel ? (
+                        punchUserInitial
+                      ) : (
+                        <UserRound className="h-5 w-5" />
+                      )}
+                    </span>
+                    <ChevronDown className="h-4 w-4" />
+                  </button>
+                  {punchMenuOpen ? (
+                    <>
+                      <div className="absolute right-0 top-[calc(100%+0.5rem)] z-[999] min-w-[220px] rounded-[20px] border border-slate-200 bg-white p-2 shadow-[0_24px_70px_rgba(15,23,42,0.18)]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPunchMenuOpen(false);
+                            window.location.href = '/admin.html';
+                          }}
+                          className="flex w-full cursor-pointer items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm text-slate-800 transition hover:bg-slate-100"
+                        >
+                          <Shield className="h-4 w-4 text-sky-600" />
+                          <span>Admin</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPunchMenuOpen(false);
+                            window.location.href = '/Dashboard';
+                          }}
+                          className="flex w-full cursor-pointer items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm text-slate-800 transition hover:bg-slate-100"
+                        >
+                          <LayoutDashboard className="h-4 w-4 text-emerald-600" />
+                          <span>Dashboard</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPunchMenuOpen(false);
+                            window.location.href = '/device.html';
+                          }}
+                          className="flex w-full cursor-pointer items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm text-slate-800 transition hover:bg-slate-100"
+                        >
+                          <Waypoints className="h-4 w-4 text-amber-600" />
+                          <span>Device</span>
+                        </button>
+                        <div className="my-1 h-px bg-slate-200" />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPunchMenuOpen(false);
+                            void logoutPunchScreen();
+                          }}
+                          className="flex w-full cursor-pointer items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm text-rose-700 transition hover:bg-rose-50"
+                        >
+                          <LogOut className="h-4 w-4 text-rose-600" />
+                          <span>Logout</span>
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               </header>
 
-              {staffIdPanel}
-
-              <div className="glass reveal relative z-40 overflow-visible rounded-[28px] px-5 py-5">
-                <div className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">Attendance</div>
-                <div className="space-y-3 overflow-visible">
-                  {ALLOWED_POSITIONS.filter((position) => position !== 'Transfer' && position !== 'FLEX TEAM').map((position) => {
-                    const positionFrameClass = getAppPositionFrameClass(position);
-                    const early = arrivalMetricByKey[`${position}:early`] ?? {
-                      shift: 'early' as const,
-                      position,
-                      expected: 0,
-                      present: 0,
-                      onClock: 0,
-                      onClockStaff: [],
-                      restWorked: 0,
-                      restWorkedStaff: [],
-                      scheduledNotClockInStaff: []
-                    };
-                    const late = arrivalMetricByKey[`${position}:late`] ?? {
-                      shift: 'late' as const,
-                      position,
-                      expected: 0,
-                      present: 0,
-                      onClock: 0,
-                      onClockStaff: [],
-                      restWorked: 0,
-                      restWorkedStaff: [],
-                      scheduledNotClockInStaff: []
-                    };
-                    const earlyHoverKey = `${position}:early`;
-                    const lateHoverKey = `${position}:late`;
-                    const earlySearch = String(attendanceHoverSearchByKey[earlyHoverKey] ?? '').trim().toLowerCase();
-                    const lateSearch = String(attendanceHoverSearchByKey[lateHoverKey] ?? '').trim().toLowerCase();
-                    const filterStaffBySearch = (list: string[], needle: string) =>
-                      !needle ? list : list.filter((staffName) => staffName.toLowerCase().includes(needle));
-                    const earlyOnClockStaffFiltered = filterStaffBySearch(early.onClockStaff, earlySearch);
-                    const earlyRestWorkedStaffFiltered = filterStaffBySearch(early.restWorkedStaff, earlySearch);
-                    const earlyMissingStaffFiltered = filterStaffBySearch(early.scheduledNotClockInStaff, earlySearch);
-                    const lateOnClockStaffFiltered = filterStaffBySearch(late.onClockStaff, lateSearch);
-                    const lateRestWorkedStaffFiltered = filterStaffBySearch(late.restWorkedStaff, lateSearch);
-                    const lateMissingStaffFiltered = filterStaffBySearch(late.scheduledNotClockInStaff, lateSearch);
-                    return (
-                      <div key={position} className="grid gap-2.5 overflow-visible md:grid-cols-2">
-                        <div className={['rounded-[22px] border px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]', positionFrameClass].join(' ')}>
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <div className="text-[13px] font-semibold text-stone-100">
-                                {formatShiftLabel(early.shift)} {position}
-                              </div>
-                              <div className="mt-1.5 text-[11px] text-stone-400">
-                                {early.present}/{early.expected}
-                                <span
-                                  className={[
-                                    'ml-2 font-semibold',
-                                    early.expected > 0 && (early.present / early.expected) * 100 < 80
-                                      ? 'text-rose-300'
-                                      : early.expected > 0 && (early.present / early.expected) * 100 >= 90
-                                        ? 'text-stone-100'
-                                        : 'text-stone-300'
-                                  ].join(' ')}
-                                >
-                                  {early.expected > 0 ? `${((early.present / early.expected) * 100).toFixed(1)}%` : '0.0%'}
-                                </span>
-                              </div>
-                            </div>
-                            <div
-                              className={['group relative z-10 min-w-[82px] rounded-[18px] px-2.5 py-1.5 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] hover:z-50', getAppOnClockPanelClass(position)].join(' ')}
-                            >
-                              <div className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">On Clock</div>
-                              <div
-                                className={[
-                                  'mt-1 text-[2rem] font-semibold leading-none',
-                                  getAppOnClockValueClass(position)
-                                ].join(' ')}
-                              >
-                                {early.onClockStaff.length}
-                              </div>
-                              <div className="pointer-events-auto absolute left-1/2 top-full z-30 hidden w-[min(50rem,calc(100vw-2rem))] -translate-x-1/2 gap-2 group-hover:grid md:grid-cols-3">
-                                <div className="md:col-span-3">
-                                  <input
-                                    type="text"
-                                    value={attendanceHoverSearchByKey[earlyHoverKey] ?? ''}
-                                    onChange={(event) =>
-                                      setAttendanceHoverSearchByKey((prev) => ({ ...prev, [earlyHoverKey]: event.target.value }))
-                                    }
-                                    placeholder="Search name / USID"
-                                    className="w-full rounded-[14px] border border-white/15 bg-slate-950/95 px-3 py-2 text-xs text-stone-100 outline-none transition placeholder:text-stone-500 focus:border-white/20"
-                                  />
-                                </div>
-                                <div className="min-w-0 rounded-[16px] border border-white/15 bg-slate-950/95 p-3 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-stone-400">Attendance Staff</div>
-                                  {earlyOnClockStaffFiltered.length === 0 ? (
-                                    <div className="text-xs text-slate-300">{earlySearch ? 'No matches' : 'No one on clock'}</div>
-                                  ) : (
-                                    <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
-                                      {earlyOnClockStaffFiltered.map((staffName) => (
-                                        <div key={`early-on-${position}-${staffName}`} className="truncate py-0.5">
-                                          {staffName}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="min-w-0 rounded-[16px] border border-sky-300/30 bg-slate-950/95 p-3 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-stone-400">Off Worked Staff</div>
-                                  {earlyRestWorkedStaffFiltered.length === 0 ? (
-                                    <div className="text-xs text-slate-300">{earlySearch ? 'No matches' : 'No rest-worked staff'}</div>
-                                  ) : (
-                                    <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
-                                      {earlyRestWorkedStaffFiltered.map((staffName) => (
-                                        <div key={`early-rest-${position}-${staffName}`} className="truncate py-0.5">
-                                          {staffName}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="min-w-0 rounded-[16px] border border-amber-300/30 bg-slate-950/95 p-3 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-stone-400">
-                                    Scheduled Not Clock In
-                                  </div>
-                                  {earlyMissingStaffFiltered.length === 0 ? (
-                                    <div className="text-xs text-slate-300">{earlySearch ? 'No matches' : 'No missing clock-in staff'}</div>
-                                  ) : (
-                                    <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
-                                      {earlyMissingStaffFiltered.map((staffName) => (
-                                        <div key={`early-missing-${position}-${staffName}`} className="truncate py-0.5">
-                                          {staffName}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                        <div className={['rounded-[22px] border px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]', positionFrameClass].join(' ')}>
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <div className="text-[13px] font-semibold text-stone-100">
-                                {formatShiftLabel(late.shift)} {position}
-                              </div>
-                              <div className="mt-1.5 text-[11px] text-stone-400">
-                                {late.present}/{late.expected}
-                                <span
-                                  className={[
-                                    'ml-2 font-semibold',
-                                    late.expected > 0 && (late.present / late.expected) * 100 < 80
-                                      ? 'text-rose-300'
-                                      : late.expected > 0 && (late.present / late.expected) * 100 >= 90
-                                        ? 'text-stone-100'
-                                        : 'text-stone-300'
-                                  ].join(' ')}
-                                >
-                                  {late.expected > 0 ? `${((late.present / late.expected) * 100).toFixed(1)}%` : '0.0%'}
-                                </span>
-                              </div>
-                            </div>
-                            <div
-                              className={['group relative z-10 min-w-[82px] rounded-[18px] px-2.5 py-1.5 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] hover:z-50', getAppOnClockPanelClass(position)].join(' ')}
-                            >
-                              <div className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">On Clock</div>
-                              <div
-                                className={[
-                                  'mt-1 text-[2rem] font-semibold leading-none',
-                                  getAppOnClockValueClass(position)
-                                ].join(' ')}
-                              >
-                                {late.onClockStaff.length}
-                              </div>
-                              <div className="pointer-events-auto absolute left-1/2 top-full z-30 hidden w-[min(50rem,calc(100vw-2rem))] -translate-x-1/2 gap-2 group-hover:grid md:grid-cols-3">
-                                <div className="md:col-span-3">
-                                  <input
-                                    type="text"
-                                    value={attendanceHoverSearchByKey[lateHoverKey] ?? ''}
-                                    onChange={(event) =>
-                                      setAttendanceHoverSearchByKey((prev) => ({ ...prev, [lateHoverKey]: event.target.value }))
-                                    }
-                                    placeholder="Search name / USID"
-                                    className="w-full rounded-[14px] border border-white/15 bg-slate-950/95 px-3 py-2 text-xs text-stone-100 outline-none transition placeholder:text-stone-500 focus:border-white/20"
-                                  />
-                                </div>
-                                <div className="min-w-0 rounded-[16px] border border-white/15 bg-slate-950/95 p-3 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-stone-400">Attendance Staff</div>
-                                  {lateOnClockStaffFiltered.length === 0 ? (
-                                    <div className="text-xs text-slate-300">{lateSearch ? 'No matches' : 'No one on clock'}</div>
-                                  ) : (
-                                    <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
-                                      {lateOnClockStaffFiltered.map((staffName) => (
-                                        <div key={`late-on-${position}-${staffName}`} className="truncate py-0.5">
-                                          {staffName}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="min-w-0 rounded-[16px] border border-sky-300/30 bg-slate-950/95 p-3 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-stone-400">Off Worked Staff</div>
-                                  {lateRestWorkedStaffFiltered.length === 0 ? (
-                                    <div className="text-xs text-slate-300">{lateSearch ? 'No matches' : 'No rest-worked staff'}</div>
-                                  ) : (
-                                    <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
-                                      {lateRestWorkedStaffFiltered.map((staffName) => (
-                                        <div key={`late-rest-${position}-${staffName}`} className="truncate py-0.5">
-                                          {staffName}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="min-w-0 rounded-[16px] border border-amber-300/30 bg-slate-950/95 p-3 text-left shadow-2xl">
-                                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-stone-400">
-                                    Scheduled Not Clock In
-                                  </div>
-                                  {lateMissingStaffFiltered.length === 0 ? (
-                                    <div className="text-xs text-slate-300">{lateSearch ? 'No matches' : 'No missing clock-in staff'}</div>
-                                  ) : (
-                                    <div className="max-h-44 overflow-auto overscroll-contain pr-1 text-xs text-slate-200">
-                                      {lateMissingStaffFiltered.map((staffName) => (
-                                        <div key={`late-missing-${position}-${staffName}`} className="truncate py-0.5">
-                                          {staffName}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
+              <div className="relative z-10 grid min-h-0 flex-1 items-start gap-4 overflow-hidden p-4 md:p-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+                <section className="flex min-h-0 flex-col overflow-hidden rounded-[24px] border border-slate-200 bg-[rgb(255,255,255)] px-4 pt-4 pb-0 shadow-[0_18px_50px_rgba(15,23,42,0.06)] md:px-5 md:pt-5">
+                  <div
+                    className={[
+                      'punch-clock-card',
+                      `punch-clock-card-${ambientPeriod}`,
+                      'relative isolate grid min-h-[180px] overflow-hidden rounded-[24px] p-6 text-white shadow-[0_24px_60px_rgba(15,23,42,0.18)] md:min-h-[200px] md:grid-cols-[minmax(0,1fr)_minmax(280px,38%)] md:p-8'
+                    ].join(' ')}
+                  >
+                    <div className="relative z-10 flex min-w-0 flex-col justify-between">
+                      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-white/75">
+                        <Clock3 className="h-4 w-4" />
+                        Live
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            <div className="lg:sticky lg:top-8 lg:h-[calc(100vh-4rem)]">
-              <section className="glass reveal flex h-full flex-col rounded-3xl px-6 py-6 shadow-glow">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="font-display text-2xl tracking-[0.08em]">Punch Log</h2>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void logoutPunchScreen()}
-                      className="rounded-2xl border border-amber-300/35 bg-amber-400/[0.08] px-4 py-2 text-sm font-medium text-amber-100 transition hover:bg-amber-400/[0.14]"
-                    >
-                      Logout
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        window.location.href = '/admin.html';
-                      }}
-                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15"
-                    >
-                      Admin
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        window.location.href = '/Dashboard';
-                      }}
-                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15"
-                    >
-                      Dashboard
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        window.location.href = '/device.html';
-                      }}
-                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15"
-                    >
-                      Device
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isLocked}
-                      onClick={() => void fetchPunchBoard({ position: punchLogPositionFilter })}
-                      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      Refresh
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-2 text-xs text-slate-400">Unlocked by {unlockByLabel || '-'}</div>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {ALLOWED_POSITIONS.map((pos) => (
-                    <button
-                      key={pos}
-                      type="button"
-                      disabled={isLocked}
-                      onClick={() => setPunchLogPositionFilter((prev) => (prev === pos ? '' : pos))}
-                      className={[
-                        'rounded-xl px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] transition disabled:cursor-not-allowed disabled:opacity-60',
-                        punchLogPositionFilter === pos
-                          ? 'bg-neon text-ink shadow-glow'
-                          : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                      ].join(' ')}
-                      title={`Filter: ${pos}`}
-                    >
-                      {pos}
-                    </button>
-                  ))}
-                </div>
-
-                {punchBoardError && <p className="mt-3 text-sm text-ember">Load failed: {punchBoardError}</p>}
-                {!punchBoardError && punchBoardFiltered.length === 0 && <p className="mt-3 text-sm text-slate-400">No data</p>}
-
-                {!punchBoardError && punchBoardFiltered.length > 0 && (
-                  <div className="no-scrollbar mt-4 flex-1 overflow-auto pr-1">
-                    <div className="space-y-2">
-                      <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_6.5rem] items-center gap-3 px-4 text-xs uppercase tracking-[0.25em] text-slate-500 sm:grid-cols-[3.5rem_minmax(0,1fr)_7rem_8.5rem_9.5rem]">
-                        <div>Action</div>
-                        <div className="sm:hidden">Info</div>
-                        <div className="hidden sm:block">Name</div>
-                        <div className="hidden sm:block">Position</div>
-                        <div className="hidden text-center sm:block">Device</div>
-                        <div className="text-right">Time</div>
+                      <div className="text-[clamp(4rem,7.5vw,8rem)] font-semibold leading-none tracking-normal text-white">
+                        {formatPunchClock(serverTime)}
                       </div>
-                      {punchBoardFiltered.map((p) => {
-                        const employee = punchBoardEmployeeMap[normalizeStaffId(p.staff_id)] ?? punchBoardEmployeeMap[p.staff_id];
-                        const time = p.created_at
-                          ? new Date(p.created_at).toLocaleString('zh-CN', { hour12: false })
-                          : '';
-                        const isIn = p.action === 'IN';
-                        const name = employee?.name || p.staff_id || '-';
-                        const position = employee?.position || '-';
-                        const staffKey = normalizeStaffId(p.staff_id) || p.staff_id;
-                        const deviceStatus = punchBoardDeviceStatusByStaffId[staffKey] ?? { text: 'No borrowed device', tone: 'none' as const };
-                        const deviceStatusClass =
-                          deviceStatus.tone === 'overdue'
-                            ? 'border-rose-400/70 bg-rose-500/20 text-rose-100'
-                            : deviceStatus.tone === 'borrowed'
-                              ? 'border-amber-400/70 bg-amber-500/20 text-amber-100'
-                              : 'border-emerald-400/70 bg-emerald-500/20 text-emerald-100';
-                        return (
-                          <div key={String(p.id)} className="rounded-2xl bg-white/5 px-4 py-3">
-                            <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_6.5rem] items-center gap-3 sm:grid-cols-[3.5rem_minmax(0,1fr)_7rem_8.5rem_9.5rem]">
-                              <span className={['font-display text-xl', isIn ? 'text-mint' : 'text-ember'].join(' ')}>
-                                {p.action}
-                              </span>
-                              <span className="min-w-0">
-                                <span className="block truncate text-sm text-slate-200 sm:hidden">{name}</span>
-                                <span className="mt-0.5 block truncate text-xs text-slate-400 sm:hidden">{position} · Device {deviceStatus.text}</span>
-                                <span className="hidden truncate text-sm text-slate-200 sm:block">{name}</span>
-                              </span>
-                              <span className="hidden min-w-0 truncate text-sm text-slate-200 sm:block">
-                                <span
-                                  className={[
-                                    'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
-                                    getAppPositionBadgeClass(position)
-                                  ].join(' ')}
-                                >
-                                  {position || '-'}
-                                </span>
-                              </span>
-                              <span className="hidden text-center text-sm text-slate-200 sm:block">
-                                <span
-                                  className={[
-                                    'inline-flex min-h-[1.7rem] w-[8.2rem] items-center justify-center rounded-lg border px-2 py-1 text-[11px] font-semibold',
-                                    deviceStatusClass
-                                  ].join(' ')}
-                                  title={deviceStatus.text}
-                                >
-                                  <span className="truncate">{deviceStatus.text}</span>
-                                </span>
-                              </span>
-                              <span className="text-right text-xs text-slate-400">{time}</span>
-                            </div>
-                          </div>
-                        );
-                      })}
+                    </div>
+                    <div className="absolute right-8 top-8 z-20 text-base font-semibold tracking-[0.14em] text-white/80">
+                      {formatPunchDate(serverTime)}
+                    </div>
+                    <div className="pointer-events-none absolute inset-y-4 right-28 z-10 hidden w-[30%] min-w-[280px] max-w-[460px] md:block">
+                      <TimeOfDayLottie period={ambientPeriod} />
                     </div>
                   </div>
-                )}
-              </section>
+
+                  <div
+                    className={[
+                      'mt-4 rounded-[24px] border p-4 transition-colors md:p-5',
+                      lastPunchSummary?.status === 'error'
+                        ? 'border-red-300 bg-red-50'
+                        : lastPunchSummary?.status === 'success' && lastPunchSummary.action === 'IN'
+                        ? 'border-emerald-300 bg-emerald-50/80'
+                        : lastPunchSummary?.status === 'success' && lastPunchSummary.action === 'OUT'
+                          ? 'border-rose-300 bg-white'
+                          : 'border-slate-200 bg-[#f6f7f8]'
+                    ].join(' ')}
+                  >
+                    <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <div
+                          className={[
+                            'text-xs font-semibold uppercase tracking-[0.18em]',
+                            lastPunchSummary?.status === 'error'
+                              ? 'text-red-700'
+                              : lastPunchSummary?.status === 'success' && lastPunchSummary.action === 'IN'
+                              ? 'text-emerald-700'
+                              : lastPunchSummary?.status === 'success' && lastPunchSummary.action === 'OUT'
+                                ? 'text-rose-700'
+                                : 'text-slate-500'
+                          ].join(' ')}
+                        >
+                          Last Punch
+                        </div>
+                        <div className="mt-2 flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1">
+                          <div className="min-w-0 text-4xl font-semibold tracking-normal text-slate-950 md:text-5xl">
+                            {lastPunchSummary?.status === 'error'
+                              ? lastPunchSummary.message
+                              : lastPunchSummary?.staffName ?? 'Waiting'}
+                          </div>
+                          <div className="text-xl font-semibold text-slate-600 md:text-2xl">
+                            {lastPunchSummary ? formatPunchSummaryTime(lastPunchSummary.at) : 'No punch yet'}
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        className={[
+                          'inline-flex h-20 min-w-40 items-center justify-center rounded-[20px] px-7 text-5xl font-semibold leading-none tracking-normal shadow-[0_16px_36px_rgba(15,23,42,0.12)] md:h-24 md:min-w-52 md:text-6xl',
+                          lastPunchSummary?.status === 'error'
+                            ? 'bg-red-600 text-white ring-1 ring-red-700'
+                            : lastPunchSummary?.status === 'success' && lastPunchSummary.action === 'IN'
+                            ? 'bg-emerald-600 text-white ring-1 ring-emerald-700'
+                            : lastPunchSummary?.status === 'success' && lastPunchSummary.action === 'OUT'
+                              ? 'bg-rose-600 text-white ring-1 ring-rose-700'
+                              : 'bg-white text-slate-400 ring-1 ring-slate-200'
+                        ].join(' ')}
+                      >
+                        {lastPunchSummary?.status === 'error'
+                          ? 'ERROR'
+                          : lastPunchSummary?.status === 'success'
+                            ? lastPunchSummary.action
+                            : '-'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-1 items-start justify-center pt-8 md:pt-10">
+                    <div className="punch-scan-area w-full max-w-[1280px]">
+                      <div className="punch-scan-shell">
+                        <input
+                          id="punch-staff-id"
+                          ref={inputRef}
+                          value={staffId}
+                          onChange={(event) => setStaffId(event.target.value)}
+                          onKeyDown={onStaffIdKeyDown}
+                          disabled={isLocked}
+                          inputMode="text"
+                          autoCapitalize="characters"
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder={barcodePrompt}
+                          className="punch-scan-input"
+                        />
+                      </div>
+                      <div className="punch-scan-mascot" aria-hidden="true">
+                        <img src="/img/SCAN%20HERE.png" alt="" className="punch-scan-mascot-image punch-scan-mascot-scan" />
+                        <img src="/img/GOOG.png" alt="" className="punch-scan-mascot-image punch-scan-mascot-good" />
+                      </div>
+                      {!lastPunchActionLoading && lastPunchActionError ? (
+                        <div className="mt-4 flex justify-center">
+                          <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-medium text-rose-700">
+                            {lastPunchActionError}
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </section>
+
+                <aside className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-[0_18px_46px_rgba(15,23,42,0.06)]">
+                  <section className="mb-4 rounded-[20px] bg-[#f8fafc] p-4 ring-1 ring-slate-200/80">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Device Log</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-950">Latest action</div>
+                      </div>
+                      <span
+                        className={`inline-flex h-8 items-center rounded-full px-3 text-xs font-semibold ${
+                          deviceActionFeedback?.status === 'success'
+                            ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+                            : deviceActionFeedback?.status === 'error'
+                              ? 'bg-rose-50 text-rose-700 ring-1 ring-rose-200'
+                              : 'bg-white text-slate-500 ring-1 ring-slate-200'
+                        }`}
+                      >
+                        {deviceActionFeedback?.status === 'success' ? 'Success' : deviceActionFeedback?.status === 'error' ? 'Failed' : 'Idle'}
+                      </span>
+                    </div>
+
+                    {deviceActionFeedback ? (
+                      <div className="mt-3 rounded-[16px] border border-slate-200 bg-white p-3">
+                        <div className="flex items-start gap-3">
+                          <div
+                            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl ${
+                              deviceActionFeedback.status === 'success' ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'
+                            }`}
+                          >
+                            {deviceActionFeedback.status === 'success' ? <CheckCircle2 className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="truncate text-sm font-semibold text-slate-950">{deviceActionFeedback.title}</p>
+                              <span className="shrink-0 text-xs font-medium text-slate-400">{formatPunchSummaryTime(deviceActionFeedback.at)}</span>
+                            </div>
+                            <p className="mt-1 truncate text-xs font-medium text-slate-500">{deviceActionFeedback.detail}</p>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded-[16px] border border-dashed border-slate-200 bg-white px-3 py-4 text-sm font-medium text-slate-400">
+                        No device action yet
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="rounded-[20px] bg-[#f8fafc] p-4 ring-1 ring-slate-200/80">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-950 text-white">
+                        <ArrowUpRight className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Device</div>
+                        <div className="text-xl font-semibold tracking-normal text-slate-950">Borrow Device</div>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-3">
+                      <label className="grid gap-2">
+                        <span className="text-xs font-medium text-slate-500">USID</span>
+                        <input
+                          ref={deviceBorrowStaffRef}
+                          value={deviceBorrowStaffId}
+                          onChange={(event) => setDeviceBorrowStaffId(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              deviceBorrowSnRef.current?.focus();
+                            }
+                          }}
+                          placeholder="USID"
+                          className="h-11 rounded-[14px] border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-slate-400"
+                        />
+                      </label>
+                      <label className="grid gap-2">
+                        <span className="text-xs font-medium text-slate-500">Device SN</span>
+                        <input
+                          ref={deviceBorrowSnRef}
+                          value={deviceBorrowSn}
+                          onChange={(event) => setDeviceBorrowSn(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              void submitDeviceQuickAction('borrow');
+                            }
+                          }}
+                          placeholder="Device SN"
+                          className="h-11 rounded-[14px] border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-slate-400"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        disabled={isLocked || deviceQuickBusy !== ''}
+                        onClick={() => void submitDeviceQuickAction('borrow')}
+                        className="mt-1 inline-flex h-11 cursor-pointer items-center justify-center rounded-[14px] bg-slate-950 text-sm font-semibold text-white shadow-[0_12px_26px_rgba(15,23,42,0.14)] transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {deviceQuickBusy === 'borrow' ? 'Submitting...' : 'Borrow'}
+                      </button>
+                    </div>
+                  </section>
+
+                  <div className="my-4 h-px bg-slate-200" />
+
+                  <section className="rounded-[20px] bg-white p-4 ring-1 ring-slate-200">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#f6f7f8] text-slate-950 ring-1 ring-slate-200">
+                        <ArrowDownLeft className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Device</div>
+                        <div className="text-xl font-semibold tracking-normal text-slate-950">Return Device</div>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-3">
+                      <label className="grid gap-2">
+                        <span className="text-xs font-medium text-slate-500">Device SN</span>
+                        <input
+                          ref={deviceReturnSnRef}
+                          value={deviceReturnSn}
+                          onChange={(event) => setDeviceReturnSn(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              void submitDeviceQuickAction('return');
+                            }
+                          }}
+                          placeholder="Scan Device SN"
+                          className="h-11 rounded-[14px] border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-slate-400"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        disabled={isLocked || deviceQuickBusy !== ''}
+                        onClick={() => void submitDeviceQuickAction('return')}
+                        className="mt-1 inline-flex h-11 cursor-pointer items-center justify-center rounded-[14px] bg-white text-sm font-semibold text-slate-950 ring-1 ring-slate-200 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {deviceQuickBusy === 'return' ? 'Submitting...' : 'Return'}
+                      </button>
+                    </div>
+                  </section>
+                </aside>
+              </div>
             </div>
           </section>
         ) : (
@@ -3616,7 +3622,7 @@ const fetchPunchBoardUph = async (
             <header className="glass reveal rounded-3xl px-6 py-6 shadow-glow">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">ObPunch</p>
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">OBP</p>
                 </div>
                 <div className="text-right">
                   <div className="flex items-center justify-end gap-2 text-sm text-slate-300">
