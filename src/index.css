@@ -918,6 +918,7 @@ body[data-theme='light'] .metrics-scroll-fade::after {
 
 .punch-scan-shell {
   position: relative;
+  width: min(100%, 640px);
   overflow: hidden;
   border-radius: 28px;
   border: 2px solid rgba(15, 23, 42, 0.28);
@@ -1012,9 +1013,9 @@ body[data-theme='light'] .metrics-scroll-fade::after {
   border-radius: 20px;
   border: 1px solid rgba(148, 163, 184, 0.28);
   background: rgba(255, 255, 255, 0.92);
-  padding: 0 36px;
+  padding: 0 28px;
   text-align: center;
-  font-size: clamp(1.5rem, 2vw, 2.25rem);
+  font-size: clamp(0.9375rem, 1.15vw, 1.25rem);
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0;
@@ -1054,8 +1055,8 @@ body[data-theme='light'] .metrics-scroll-fade::after {
 
   .punch-scan-input {
     height: 5rem;
-    padding: 0 24px;
-    font-size: 1.15rem;
+    padding: 0 18px;
+    font-size: 0.875rem;
   }
 
   .punch-scan-mascot {
