@@ -1331,7 +1331,7 @@ export default function WorkHourComparisonPage({
     }
   };
 
-  const markCurrentAsFixed = async () => {
+  const markCurrentAsFixed = async (options: { createMistakeReport: boolean }) => {
     if (isReadOnly) return;
     if (!supabase || !punchFlowTarget) return;
     setMarkFixedLoading(true);
@@ -1344,29 +1344,31 @@ export default function WorkHourComparisonPage({
         'unknown';
       const fixedAt = new Date().toISOString();
 
-      const { data: existingMistakeRows, error: existingMistakeError } = await supabase
-        .from(MISTAKE_REPORT_TABLE)
-        .select('id')
-        .eq('employee_staff_id', punchFlowTarget.staffId)
-        .eq('operational_date', selectedDate)
-        .limit(1);
-      if (existingMistakeError) {
-        throw new Error(String(existingMistakeError.message ?? 'Failed to check existing mistake report.'));
-      }
-
-      if (!Array.isArray(existingMistakeRows) || existingMistakeRows.length === 0) {
-        const reason = `Work hour discrepancy resolved: system hours and iAMS hours were reconciled by ${fixedBy}`;
-        const { error: createMistakeError } = await supabase
+      if (options.createMistakeReport) {
+        const { data: existingMistakeRows, error: existingMistakeError } = await supabase
           .from(MISTAKE_REPORT_TABLE)
-          .insert({
-            position: String(punchFlowTarget.position ?? '').trim() || 'Unknown',
-            employee_staff_id: punchFlowTarget.staffId,
-            reason,
-            reporter_staff_id: fixedBy,
-            operational_date: selectedDate
-          });
-        if (createMistakeError) {
-          throw new Error(String(createMistakeError.message ?? 'Failed to create mistake report.'));
+          .select('id')
+          .eq('employee_staff_id', punchFlowTarget.staffId)
+          .eq('operational_date', selectedDate)
+          .limit(1);
+        if (existingMistakeError) {
+          throw new Error(String(existingMistakeError.message ?? 'Failed to check existing mistake report.'));
+        }
+
+        if (!Array.isArray(existingMistakeRows) || existingMistakeRows.length === 0) {
+          const reason = `Work hour discrepancy resolved: system hours and iAMS hours were reconciled by ${fixedBy}`;
+          const { error: createMistakeError } = await supabase
+            .from(MISTAKE_REPORT_TABLE)
+            .insert({
+              position: String(punchFlowTarget.position ?? '').trim() || 'Unknown',
+              employee_staff_id: punchFlowTarget.staffId,
+              reason,
+              reporter_staff_id: fixedBy,
+              operational_date: selectedDate
+            });
+          if (createMistakeError) {
+            throw new Error(String(createMistakeError.message ?? 'Failed to create mistake report.'));
+          }
         }
       }
 
@@ -1753,14 +1755,24 @@ export default function WorkHourComparisonPage({
                     </button>
                   )}
                   {punchFlowTarget && Math.abs(punchFlowTarget.diffHours) >= DISCREPANCY_THRESHOLD && !punchFlowTarget.fixedBy && (
-                    <button
-                      type="button"
-                      onClick={() => void markCurrentAsFixed()}
-                      disabled={writeLocked || markFixedLoading}
-                      className={buttonPrimaryClass}
-                    >
-                      {markFixedLoading ? t('处理中...', 'Saving...') : t('已修复', 'Mark as fixed')}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void markCurrentAsFixed({ createMistakeReport: false })}
+                        disabled={writeLocked || markFixedLoading}
+                        className={buttonSecondaryClass}
+                      >
+                        {markFixedLoading ? t('处理中...', 'Saving...') : t('已核实', 'Verified')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void markCurrentAsFixed({ createMistakeReport: true })}
+                        disabled={writeLocked || markFixedLoading}
+                        className={buttonPrimaryClass}
+                      >
+                        {markFixedLoading ? t('处理中...', 'Saving...') : t('已修复', 'Mark as fixed')}
+                      </button>
+                    </>
                   )}
                   {punchFlowTarget?.fixedBy && (
                     <span className={['text-sm font-semibold', isLight ? 'text-sky-700' : 'text-sky-300'].join(' ')}>

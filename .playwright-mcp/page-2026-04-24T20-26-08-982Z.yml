@@ -1,0 +1,62 @@
+- generic [ref=e4]:
+  - generic [ref=e6]:
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - img "OBP logo" [ref=e9]
+        - generic [ref=e10]: OBP
+      - button "Open menu" [ref=e12] [cursor=pointer]:
+        - generic "User avatar" [ref=e13]:
+          - img [ref=e14]
+        - img [ref=e17]
+    - generic [ref=e19]:
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - generic [ref=e22]:
+            - generic [ref=e23]:
+              - img [ref=e24]
+              - text: Live
+            - generic [ref=e27]: 16:26:07
+          - generic [ref=e28]: 2026-04-24
+        - generic [ref=e30]:
+          - generic [ref=e31]:
+            - generic [ref=e32]: Last Punch
+            - generic [ref=e33]:
+              - generic [ref=e34]: Waiting
+              - generic [ref=e35]: No punch yet
+          - generic [ref=e36]: "-"
+        - textbox "Every scan is a step forward." [active] [ref=e40]
+      - complementary [ref=e41]:
+        - generic [ref=e42]:
+          - generic [ref=e43]:
+            - img [ref=e45]
+            - generic [ref=e48]:
+              - generic [ref=e49]: Device
+              - generic [ref=e50]: Borrow Device
+          - generic [ref=e51]:
+            - generic [ref=e52]:
+              - generic [ref=e53]: USID
+              - textbox "USID" [ref=e54]
+            - generic [ref=e55]:
+              - generic [ref=e56]: Device SN
+              - textbox "Device SN" [ref=e57]
+            - button "Borrow" [ref=e58] [cursor=pointer]
+        - generic [ref=e60]:
+          - generic [ref=e61]:
+            - img [ref=e63]
+            - generic [ref=e66]:
+              - generic [ref=e67]: Device
+              - generic [ref=e68]: Return Device
+          - generic [ref=e69]:
+            - generic [ref=e70]:
+              - generic [ref=e71]: Device SN
+              - textbox "Device SN" [ref=e72]:
+                - /placeholder: Scan Device SN
+            - button "Return" [ref=e73] [cursor=pointer]
+        - generic [ref=e74]:
+          - generic [ref=e75]:
+            - generic [ref=e76]:
+              - generic [ref=e77]: Device Log
+              - generic [ref=e78]: Latest action
+            - generic [ref=e79]: Idle
+          - generic [ref=e80]: No device action yet
+  - contentinfo
