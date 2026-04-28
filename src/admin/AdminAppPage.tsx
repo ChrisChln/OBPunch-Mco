@@ -1733,6 +1733,7 @@ export default function AdminAppPage() {
   const [todoPendingCount, setTodoPendingCount] = useState(0);
 
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
+  const homeEmployeesRef = useRef<EmployeeRow[]>([]);
   const [tempAccounts, setTempAccounts] = useState<
     Array<{
       staff_id: string;
@@ -1756,6 +1757,9 @@ export default function AdminAppPage() {
   const [employeeShiftFilter, setEmployeeShiftFilter] = useState<'' | 'early' | 'late'>('');
   const [employeeLabels, setEmployeeLabels] = useState<string[]>([]);
   const [, setEmployeesHasMore] = useState(false);
+  useEffect(() => {
+    homeEmployeesRef.current = employees;
+  }, [employees]);
   const [employeeNewStaffId, setEmployeeNewStaffId] = useState('');
   const [employeeNewName, setEmployeeNewName] = useState('');
   const [employeeNewAgency, setEmployeeNewAgency] = useState('');
@@ -2793,7 +2797,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     };
     const intervalMs =
       page === 'home'
-        ? 5000
+        ? 60000
         : page === 'schedule'
           ? 60000
           : page === 'timecard'
@@ -4954,8 +4958,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       includePunchMeta: false,
       streamPartialState: false
     });
+    await fetchRealtimeAttendance();
     // Home dashboard should use current week punch presence, independent of Schedule page week navigation.
-    await fetchSchedulePunchPresence({ employeesOverride: latestEmployees, weekOffsetOverride: 0, mode: 'operational_day' });
+    await fetchSchedulePunchPresence({
+      employeesOverride: latestEmployees,
+      weekOffsetOverride: 0,
+      mode: 'operational_day',
+      keepPreviousWhileLoading: true
+    });
   };
 
   const scheduleWeekRolloverInFlightRef = useRef(false);
@@ -5177,6 +5187,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     employeesOverride?: EmployeeRow[] | null;
     weekOffsetOverride?: number;
     mode?: 'week' | 'operational_day';
+    keepPreviousWhileLoading?: boolean;
   }) => {
     const requestId = schedulePunchPresenceRequestRef.current + 1;
     schedulePunchPresenceRequestRef.current = requestId;
@@ -5191,7 +5202,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       return;
     }
-    if (!isStale()) {
+    const keepPreviousWhileLoading = options?.keepPreviousWhileLoading === true;
+    if (!keepPreviousWhileLoading && !isStale()) {
       setSchedulePunchPresenceReady(false);
       setSchedulePunchPresenceWeekOffset(null);
     }
@@ -5246,11 +5258,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
         if (res.error) {
           if (!isStale()) {
-            setSchedulePunchPresenceKeys(new Set());
-            setScheduleFirstInByStaffDayKey({});
-            setHomePunchesByStaffId({});
-            setSchedulePunchPresenceReady(false);
-            setSchedulePunchPresenceWeekOffset(null);
+            if (!keepPreviousWhileLoading) {
+              setSchedulePunchPresenceKeys(new Set());
+              setScheduleFirstInByStaffDayKey({});
+              setHomePunchesByStaffId({});
+              setSchedulePunchPresenceReady(false);
+              setSchedulePunchPresenceWeekOffset(null);
+            }
           }
           return;
         }
@@ -5318,10 +5332,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       if (res.error) {
         if (!isStale()) {
-          setSchedulePunchPresenceKeys(new Set());
-          setScheduleFirstInByStaffDayKey({});
-          setSchedulePunchPresenceReady(false);
-          setSchedulePunchPresenceWeekOffset(null);
+          if (!keepPreviousWhileLoading) {
+            setSchedulePunchPresenceKeys(new Set());
+            setScheduleFirstInByStaffDayKey({});
+            setSchedulePunchPresenceReady(false);
+            setSchedulePunchPresenceWeekOffset(null);
+          }
         }
         return;
       }
@@ -11604,11 +11620,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const sync = async () => {
       if (!active) return;
       await fetchRealtimeAttendance();
-      if (employees.length > 0) {
-        await fetchSchedulePunchPresence({ employeesOverride: employees, weekOffsetOverride: 0, mode: 'operational_day' });
+      const currentEmployees = homeEmployeesRef.current;
+      if (currentEmployees.length > 0) {
+        await fetchSchedulePunchPresence({
+          employeesOverride: currentEmployees,
+          weekOffsetOverride: 0,
+          mode: 'operational_day',
+          keepPreviousWhileLoading: true
+        });
       }
     };
-    void sync();
     const timer = window.setInterval(() => {
       if (document.hidden) return;
       void sync();
@@ -11617,7 +11638,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       active = false;
       window.clearInterval(timer);
     };
-  }, [user, offsetMs, page, employees]);
+  }, [user, offsetMs, page]);
 
   useEffect(() => {
     if (page !== 'punches') {
