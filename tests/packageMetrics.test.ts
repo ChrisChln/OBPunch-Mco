@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAssessmentWindow,
   buildCalendarWindow,
+  buildPackageDailyReportText,
   computePackageDailyMetrics,
   computePackageDerivedMetrics,
+  computePackageTransferRemainderRows,
   inspectPackageMetricsDateCoverage,
   normalizePackageTimestamp
 } from '../src/shared/packageMetrics';
@@ -114,6 +116,111 @@ describe('package metrics computation', () => {
     expect(derived.pieceEfficiency).toBeNull();
     expect(derived.orderEfficiency).toBeNull();
     expect(derived.slaRatio).toBeCloseTo(0.98, 6);
+  });
+
+  it('includes saved transfer metrics in the daily report', () => {
+    const metrics = computePackageDailyMetrics([], {
+      metricDate: '2026-04-18',
+      sourceFilename: 'package.xlsx',
+      computedAt: '2026-04-18T18:00:00.000Z'
+    });
+
+    const report = buildPackageDailyReportText({
+      metricDate: '2026-04-18',
+      metrics: {
+        ...metrics,
+        transfer_b2b_inbound_order_count: 7,
+        transfer_b2b_inbound_box_count: 10,
+        transfer_b2b_inbound_item_qty: 120,
+        transfer_b2b_shipped_order_count: 5,
+        transfer_b2b_shipped_box_count: 8,
+        transfer_b2b_shipped_item_qty: 96,
+        transfer_b2b_unshipped_order_count: 2,
+        transfer_b2b_unshipped_box_count: 2,
+        transfer_b2b_unshipped_item_qty: 24,
+        transfer_c2b_inbound_order_count: 9,
+        transfer_c2b_inbound_box_count: 11,
+        transfer_c2b_inbound_item_qty: 132,
+        transfer_c2b_shipped_order_count: 7,
+        transfer_c2b_shipped_box_count: 9,
+        transfer_c2b_shipped_item_qty: 108,
+        transfer_c2b_unshipped_order_count: 2,
+        transfer_c2b_unshipped_box_count: 2,
+        transfer_c2b_unshipped_item_qty: 24,
+        transfer_whole_day_inbound_box_count: 14,
+        transfer_whole_day_inbound_item_qty: 168,
+        transfer_avg_items_per_box: 12
+      },
+      labor: {
+        scheduledCount: 0,
+        presentCount: 0,
+        lateCount: 0,
+        earlyLeaveCount: 0,
+        totalHours: null
+      }
+    });
+
+    expect(report).toContain('B2B');
+    expect(report).toContain('调拨进单量：7单，10箱，120件');
+    expect(report).toContain('调拨未发货量：2单，2箱，24件');
+    expect(report).toContain('C2B');
+  });
+
+  it('rolls transfer unshipped counts across dates and floors at zero', () => {
+    const rows = computePackageTransferRemainderRows([
+      {
+        metric_date: '2026-04-18',
+        transfer_b2b_inbound_order_count: 1000,
+        transfer_b2b_shipped_order_count: 700,
+        transfer_b2b_inbound_box_count: 1000,
+        transfer_b2b_shipped_box_count: 700,
+        transfer_b2b_inbound_item_qty: 2000,
+        transfer_b2b_shipped_item_qty: 1500,
+        transfer_c2b_inbound_order_count: 300,
+        transfer_c2b_shipped_order_count: 100,
+        transfer_c2b_inbound_box_count: 300,
+        transfer_c2b_shipped_box_count: 100,
+        transfer_c2b_inbound_item_qty: 600,
+        transfer_c2b_shipped_item_qty: 300
+      },
+      {
+        metric_date: '2026-04-19',
+        transfer_b2b_inbound_order_count: 1000,
+        transfer_b2b_shipped_order_count: 1100,
+        transfer_b2b_inbound_box_count: 1000,
+        transfer_b2b_shipped_box_count: 1100,
+        transfer_b2b_inbound_item_qty: 2000,
+        transfer_b2b_shipped_item_qty: 2300,
+        transfer_c2b_inbound_order_count: 300,
+        transfer_c2b_shipped_order_count: 700,
+        transfer_c2b_inbound_box_count: 300,
+        transfer_c2b_shipped_box_count: 700,
+        transfer_c2b_inbound_item_qty: 600,
+        transfer_c2b_shipped_item_qty: 1200
+      },
+      {
+        metric_date: '2026-04-20',
+        transfer_b2b_inbound_order_count: 1000,
+        transfer_b2b_shipped_order_count: 1200,
+        transfer_b2b_inbound_box_count: 1000,
+        transfer_b2b_shipped_box_count: 1200,
+        transfer_b2b_inbound_item_qty: 2000,
+        transfer_b2b_shipped_item_qty: 2600,
+        transfer_c2b_inbound_order_count: 300,
+        transfer_c2b_shipped_order_count: 100,
+        transfer_c2b_inbound_box_count: 300,
+        transfer_c2b_shipped_box_count: 100,
+        transfer_c2b_inbound_item_qty: 600,
+        transfer_c2b_shipped_item_qty: 200
+      }
+    ]);
+
+    expect(rows.map((row) => row.transfer_b2b_unshipped_order_count)).toEqual([300, 200, 0]);
+    expect(rows.map((row) => row.transfer_b2b_unshipped_box_count)).toEqual([300, 200, 0]);
+    expect(rows.map((row) => row.transfer_b2b_unshipped_item_qty)).toEqual([500, 200, 0]);
+    expect(rows.map((row) => row.transfer_c2b_unshipped_order_count)).toEqual([200, 0, 200]);
+    expect(rows.map((row) => row.transfer_c2b_unshipped_box_count)).toEqual([200, 0, 200]);
+    expect(rows.map((row) => row.transfer_c2b_unshipped_item_qty)).toEqual([300, 0, 400]);
   });
 
   it('normalizes parseable timestamps', () => {

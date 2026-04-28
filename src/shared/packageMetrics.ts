@@ -40,6 +40,27 @@ export type PackageDailyMetrics = {
   calendar_completed_item_qty: number;
   calendar_backlog_order_count: number;
   calendar_backlog_item_qty: number;
+  transfer_b2b_inbound_order_count?: number | null;
+  transfer_b2b_inbound_box_count?: number | null;
+  transfer_b2b_inbound_item_qty?: number | null;
+  transfer_b2b_shipped_order_count?: number | null;
+  transfer_b2b_shipped_box_count?: number | null;
+  transfer_b2b_shipped_item_qty?: number | null;
+  transfer_b2b_unshipped_order_count?: number | null;
+  transfer_b2b_unshipped_box_count?: number | null;
+  transfer_b2b_unshipped_item_qty?: number | null;
+  transfer_c2b_inbound_order_count?: number | null;
+  transfer_c2b_inbound_box_count?: number | null;
+  transfer_c2b_inbound_item_qty?: number | null;
+  transfer_c2b_shipped_order_count?: number | null;
+  transfer_c2b_shipped_box_count?: number | null;
+  transfer_c2b_shipped_item_qty?: number | null;
+  transfer_c2b_unshipped_order_count?: number | null;
+  transfer_c2b_unshipped_box_count?: number | null;
+  transfer_c2b_unshipped_item_qty?: number | null;
+  transfer_whole_day_inbound_box_count?: number | null;
+  transfer_whole_day_inbound_item_qty?: number | null;
+  transfer_avg_items_per_box?: number | null;
   scheduled_headcount?: number | null;
   source_filename: string;
   source_row_count: number;
@@ -65,6 +86,41 @@ export type PackageDailyReportLabor = {
   lateCount: number;
   earlyLeaveCount: number;
   totalHours: number | null;
+};
+
+export type PackageTransferRemainderState = {
+  b2bOrder: number;
+  b2bBox: number;
+  b2bItem: number;
+  c2bOrder: number;
+  c2bBox: number;
+  c2bItem: number;
+};
+
+export type PackageTransferRemainderRowInput = {
+  metric_date: string;
+  transfer_b2b_inbound_order_count?: number | null;
+  transfer_b2b_inbound_box_count?: number | null;
+  transfer_b2b_inbound_item_qty?: number | null;
+  transfer_b2b_shipped_order_count?: number | null;
+  transfer_b2b_shipped_box_count?: number | null;
+  transfer_b2b_shipped_item_qty?: number | null;
+  transfer_c2b_inbound_order_count?: number | null;
+  transfer_c2b_inbound_box_count?: number | null;
+  transfer_c2b_inbound_item_qty?: number | null;
+  transfer_c2b_shipped_order_count?: number | null;
+  transfer_c2b_shipped_box_count?: number | null;
+  transfer_c2b_shipped_item_qty?: number | null;
+};
+
+export type PackageTransferRemainderRow = {
+  metric_date: string;
+  transfer_b2b_unshipped_order_count: number;
+  transfer_b2b_unshipped_box_count: number;
+  transfer_b2b_unshipped_item_qty: number;
+  transfer_c2b_unshipped_order_count: number;
+  transfer_c2b_unshipped_box_count: number;
+  transfer_c2b_unshipped_item_qty: number;
 };
 
 const pad = (value: number) => String(value).padStart(2, '0');
@@ -164,6 +220,75 @@ const isBacklogStatus = (status: string) => status.trim() === '待发货';
 const safeRatio = (numerator: number, denominator: number) =>
   denominator > 0 ? Number((numerator / denominator).toFixed(6)) : 0;
 
+const normalizeNonNegativeIntegerMetric = (value: unknown) => {
+  const normalized = Number(value ?? 0);
+  if (!Number.isFinite(normalized) || normalized <= 0) return 0;
+  return Math.round(normalized);
+};
+
+export const computePackageTransferRemainderRows = (
+  rows: PackageTransferRemainderRowInput[],
+  initialState: Partial<PackageTransferRemainderState> = {}
+): PackageTransferRemainderRow[] => {
+  let b2bOrder = normalizeNonNegativeIntegerMetric(initialState.b2bOrder);
+  let b2bBox = normalizeNonNegativeIntegerMetric(initialState.b2bBox);
+  let b2bItem = normalizeNonNegativeIntegerMetric(initialState.b2bItem);
+  let c2bOrder = normalizeNonNegativeIntegerMetric(initialState.c2bOrder);
+  let c2bBox = normalizeNonNegativeIntegerMetric(initialState.c2bBox);
+  let c2bItem = normalizeNonNegativeIntegerMetric(initialState.c2bItem);
+
+  return [...rows]
+    .sort((a, b) => String(a.metric_date).localeCompare(String(b.metric_date)))
+    .map((row) => {
+      b2bOrder = Math.max(
+        0,
+        b2bOrder +
+          normalizeNonNegativeIntegerMetric(row.transfer_b2b_inbound_order_count) -
+          normalizeNonNegativeIntegerMetric(row.transfer_b2b_shipped_order_count)
+      );
+      b2bBox = Math.max(
+        0,
+        b2bBox +
+          normalizeNonNegativeIntegerMetric(row.transfer_b2b_inbound_box_count) -
+          normalizeNonNegativeIntegerMetric(row.transfer_b2b_shipped_box_count)
+      );
+      b2bItem = Math.max(
+        0,
+        b2bItem +
+          normalizeNonNegativeIntegerMetric(row.transfer_b2b_inbound_item_qty) -
+          normalizeNonNegativeIntegerMetric(row.transfer_b2b_shipped_item_qty)
+      );
+      c2bOrder = Math.max(
+        0,
+        c2bOrder +
+          normalizeNonNegativeIntegerMetric(row.transfer_c2b_inbound_order_count) -
+          normalizeNonNegativeIntegerMetric(row.transfer_c2b_shipped_order_count)
+      );
+      c2bBox = Math.max(
+        0,
+        c2bBox +
+          normalizeNonNegativeIntegerMetric(row.transfer_c2b_inbound_box_count) -
+          normalizeNonNegativeIntegerMetric(row.transfer_c2b_shipped_box_count)
+      );
+      c2bItem = Math.max(
+        0,
+        c2bItem +
+          normalizeNonNegativeIntegerMetric(row.transfer_c2b_inbound_item_qty) -
+          normalizeNonNegativeIntegerMetric(row.transfer_c2b_shipped_item_qty)
+      );
+
+      return {
+        metric_date: row.metric_date,
+        transfer_b2b_unshipped_order_count: b2bOrder,
+        transfer_b2b_unshipped_box_count: b2bBox,
+        transfer_b2b_unshipped_item_qty: b2bItem,
+        transfer_c2b_unshipped_order_count: c2bOrder,
+        transfer_c2b_unshipped_box_count: c2bBox,
+        transfer_c2b_unshipped_item_qty: c2bItem
+      };
+    });
+};
+
 export const inspectPackageMetricsDateCoverage = (
   rows: Pick<PackageMetricsRowInput, 'inboundAt'>[],
   metricDate: string
@@ -246,6 +371,31 @@ const formatEfficiencyText = (value: number | null | undefined) => {
   return normalized.toFixed(2);
 };
 
+const hasTransferDailyMetrics = (metrics: PackageDailyMetrics) =>
+  [
+    metrics.transfer_b2b_inbound_box_count,
+    metrics.transfer_b2b_inbound_order_count,
+    metrics.transfer_b2b_inbound_item_qty,
+    metrics.transfer_b2b_shipped_order_count,
+    metrics.transfer_b2b_shipped_box_count,
+    metrics.transfer_b2b_shipped_item_qty,
+    metrics.transfer_b2b_unshipped_order_count,
+    metrics.transfer_b2b_unshipped_box_count,
+    metrics.transfer_b2b_unshipped_item_qty,
+    metrics.transfer_c2b_inbound_order_count,
+    metrics.transfer_c2b_inbound_box_count,
+    metrics.transfer_c2b_inbound_item_qty,
+    metrics.transfer_c2b_shipped_order_count,
+    metrics.transfer_c2b_shipped_box_count,
+    metrics.transfer_c2b_shipped_item_qty,
+    metrics.transfer_c2b_unshipped_order_count,
+    metrics.transfer_c2b_unshipped_box_count,
+    metrics.transfer_c2b_unshipped_item_qty,
+    metrics.transfer_whole_day_inbound_box_count,
+    metrics.transfer_whole_day_inbound_item_qty,
+    metrics.transfer_avg_items_per_box
+  ].some((value) => value != null && Number.isFinite(Number(value)) && Number(value) > 0);
+
 export const buildPackageDailyReportText = (options: {
   metricDate: string;
   metrics: PackageDailyMetrics;
@@ -260,6 +410,22 @@ export const buildPackageDailyReportText = (options: {
       ? options.labor.presentCount / options.labor.scheduledCount
       : 0;
   const derived = computePackageDerivedMetrics(options.metrics, options.labor.totalHours);
+  const transferLines = hasTransferDailyMetrics(options.metrics)
+    ? [
+        '',
+        'B2B',
+        `调拨进单量：${formatInteger(options.metrics.transfer_b2b_inbound_order_count)}单，${formatInteger(options.metrics.transfer_b2b_inbound_box_count)}箱，${formatInteger(options.metrics.transfer_b2b_inbound_item_qty)}件`,
+        `调拨发货量：${formatInteger(options.metrics.transfer_b2b_shipped_order_count)}单，${formatInteger(options.metrics.transfer_b2b_shipped_box_count)}箱，${formatInteger(options.metrics.transfer_b2b_shipped_item_qty)}件`,
+        `调拨未发货量：${formatInteger(options.metrics.transfer_b2b_unshipped_order_count)}单，${formatInteger(options.metrics.transfer_b2b_unshipped_box_count)}箱，${formatInteger(options.metrics.transfer_b2b_unshipped_item_qty)}件`,
+        '',
+        '',
+        'C2B',
+        `调拨进单量：${formatInteger(options.metrics.transfer_c2b_inbound_order_count)}单，${formatInteger(options.metrics.transfer_c2b_inbound_box_count)}箱，${formatInteger(options.metrics.transfer_c2b_inbound_item_qty)}件`,
+        `调拨发货量：${formatInteger(options.metrics.transfer_c2b_shipped_order_count)}单，${formatInteger(options.metrics.transfer_c2b_shipped_box_count)}箱，${formatInteger(options.metrics.transfer_c2b_shipped_item_qty)}件`,
+        `调拨未发货量：${formatInteger(options.metrics.transfer_c2b_unshipped_order_count)}单，${formatInteger(options.metrics.transfer_c2b_unshipped_box_count)}箱，${formatInteger(options.metrics.transfer_c2b_unshipped_item_qty)}件`,
+        ''
+      ]
+    : [];
 
   return [
     `${stationLabel} ${formatReportDate(options.metricDate)} 出库日报：`,
@@ -272,6 +438,7 @@ export const buildPackageDailyReportText = (options: {
     `全天进单量：${formatInteger(options.metrics.calendar_inbound_order_count)}单，${formatInteger(options.metrics.calendar_inbound_item_qty)}件`,
     `全天完成单量：${formatInteger(options.metrics.calendar_completed_order_count)}单，${formatInteger(options.metrics.calendar_completed_item_qty)}件`,
     `全天未完成单量：${formatInteger(options.metrics.calendar_backlog_order_count)}单，${formatInteger(options.metrics.calendar_backlog_item_qty)}件`,
+    ...transferLines,
     '',
     'O岗出勤',
     `编制：${formatInteger(options.labor.scheduledCount)}人`,

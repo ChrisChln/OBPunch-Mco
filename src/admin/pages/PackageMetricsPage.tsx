@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { ArrowUpRight, Clock3, FileUp, Package2, Rows3 } from 'lucide-react';
+import { ArrowUpRight, CheckSquare, Clock3, FileUp, Package2, Rows3, Save, Shuffle, X, XCircle } from 'lucide-react';
 import { normalizeStaffId } from '../../lib/staffId';
 import {
   addDaysDateOnly,
@@ -57,7 +57,34 @@ type MetricColumn = {
   zh: string;
   en: string;
   width: string;
+  category: MetricColumnCategory;
   render: (row: PackageMetricsViewRow, totalHours: number | null, options?: { hideWholeDayInbound?: boolean }) => string;
+};
+
+type MetricColumnCategory =
+  | 'toc_order'
+  | 'toc_piece'
+  | 'toc_day'
+  | 'b2b'
+  | 'c2b'
+  | 'transfer_day'
+  | 'b2b_backlog'
+  | 'c2b_backlog'
+  | 'summary';
+
+type MetricColumnCategoryOption = {
+  key: MetricColumnCategory;
+  zh: string;
+  en: string;
+};
+
+type TransferMetricField = {
+  key: keyof PackageDailyMetrics;
+  zh: string;
+  en: string;
+  groupZh: string;
+  groupEn: string;
+  integerOnly?: boolean;
 };
 
 type PunchRow = {
@@ -114,6 +141,7 @@ const formatRatioValue = (value: number | null) => {
 const IMPORT_FILE_NAME_MAX_LENGTH = 36;
 const IMPORT_STATUS_AUTO_DISMISS_MS = 3000;
 const IMPORT_REQUEST_NETWORK_ERROR = '__package_metrics_import_request_network_error__';
+const REQUEST_RETRY_DELAY_MS = 750;
 
 const truncateMiddle = (value: string, maxLength: number) => {
   const text = String(value ?? '');
@@ -138,12 +166,268 @@ const parseMissingHeaderNames = (value: unknown) => {
 
 const isImportRequestNetworkError = (value: unknown) => String(value ?? '').includes(IMPORT_REQUEST_NETWORK_ERROR);
 
+const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const isFetchNetworkFailure = (value: unknown) => {
+  const text = String(value instanceof Error ? value.message : value ?? '').toLowerCase();
+  return text.includes('failed to fetch') || text.includes('networkerror') || text.includes('load failed');
+};
+
+const formatNetworkFailureMessage = (t: TranslateFn) =>
+  t(
+    '连接服务失败。页面停留较久时会话或本地 API 连接可能已断开，请刷新页面后重试。',
+    'Connection failed. If this page has been open for a while, refresh it and try again.'
+  );
+
+const formatRequestErrorMessage = (error: unknown, t: TranslateFn, fallbackZh: string, fallbackEn: string) => {
+  const rawMessage = String((error as { message?: unknown } | null)?.message ?? error ?? '').trim();
+  if (isFetchNetworkFailure(rawMessage) || isImportRequestNetworkError(rawMessage)) return formatNetworkFailureMessage(t);
+  return rawMessage || t(fallbackZh, fallbackEn);
+};
+
+const getFreshAccessToken = async (supabase: any, t: TranslateFn) => {
+  const sessionRes = await supabase.auth.getSession();
+  let session = sessionRes.data?.session ?? null;
+  const expiresAtMs = Number(session?.expires_at ?? 0) * 1000;
+  const shouldRefresh = !session?.access_token || (expiresAtMs > 0 && expiresAtMs - Date.now() < 60_000);
+
+  if (shouldRefresh) {
+    const refreshRes = await supabase.auth.refreshSession();
+    if (refreshRes.error) {
+      throw new Error(t('当前会话已失效，请刷新页面后重新登录。', 'Your session has expired. Refresh the page and sign in again.'));
+    }
+    session = refreshRes.data?.session ?? null;
+  }
+
+  const accessToken = String(session?.access_token ?? '');
+  if (!accessToken) {
+    throw new Error(t('当前会话已失效，请刷新页面后重新登录。', 'Your session has expired. Refresh the page and sign in again.'));
+  }
+  return accessToken;
+};
+
+const fetchWithRetry = async (url: string, init: RequestInit) => {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    if (!isFetchNetworkFailure(error)) throw error;
+    await delay(REQUEST_RETRY_DELAY_MS);
+    return await fetch(url, init);
+  }
+};
+
+const METRIC_COLUMN_CATEGORIES: MetricColumnCategoryOption[] = [
+  { key: 'toc_order', zh: 'ToC考核（单量）', en: 'ToC Orders' },
+  { key: 'toc_piece', zh: 'ToC考核（件数）', en: 'ToC Pieces' },
+  { key: 'toc_day', zh: 'ToC全天', en: 'ToC Day' },
+  { key: 'b2b', zh: 'B2B', en: 'B2B' },
+  { key: 'c2b', zh: 'C2B', en: 'C2B' },
+  { key: 'transfer_day', zh: '全天', en: 'Whole Day' },
+  { key: 'b2b_backlog', zh: 'B2B待发货', en: 'B2B Backlog' },
+  { key: 'c2b_backlog', zh: 'C2B待发货', en: 'C2B Backlog' },
+  { key: 'summary', zh: '总结', en: 'Summary' }
+];
+
+const DEFAULT_METRIC_COLUMN_CATEGORIES = METRIC_COLUMN_CATEGORIES.map((item) => item.key);
+
+const getTransferMetricCategory = (field: TransferMetricField): MetricColumnCategory => {
+  if (field.groupZh === 'B2B') return 'b2b';
+  if (field.groupZh === 'C2B') return 'c2b';
+  return 'transfer_day';
+};
+
+const getTransferRemainderCategory = (field: TransferMetricField): MetricColumnCategory =>
+  field.groupZh === 'B2B' ? 'b2b_backlog' : 'c2b_backlog';
+
+const TRANSFER_METRIC_FIELDS: TransferMetricField[] = [
+  {
+    key: 'transfer_b2b_inbound_order_count',
+    zh: '进单单量',
+    en: 'Inbound Orders',
+    groupZh: 'B2B',
+    groupEn: 'B2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_b2b_inbound_box_count',
+    zh: '进单箱数',
+    en: 'Inbound Boxes',
+    groupZh: 'B2B',
+    groupEn: 'B2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_b2b_inbound_item_qty',
+    zh: '进单件数',
+    en: 'Inbound Pieces',
+    groupZh: 'B2B',
+    groupEn: 'B2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_b2b_shipped_order_count',
+    zh: '发货单量',
+    en: 'Shipped Orders',
+    groupZh: 'B2B',
+    groupEn: 'B2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_b2b_shipped_box_count',
+    zh: '发货箱数',
+    en: 'Shipped Boxes',
+    groupZh: 'B2B',
+    groupEn: 'B2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_b2b_shipped_item_qty',
+    zh: '发货件数',
+    en: 'Shipped Pieces',
+    groupZh: 'B2B',
+    groupEn: 'B2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_c2b_inbound_order_count',
+    zh: '进单单量',
+    en: 'Inbound Orders',
+    groupZh: 'C2B',
+    groupEn: 'C2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_c2b_inbound_box_count',
+    zh: '进单箱数',
+    en: 'Inbound Boxes',
+    groupZh: 'C2B',
+    groupEn: 'C2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_c2b_inbound_item_qty',
+    zh: '进单件数',
+    en: 'Inbound Pieces',
+    groupZh: 'C2B',
+    groupEn: 'C2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_c2b_shipped_order_count',
+    zh: '发货单量',
+    en: 'Shipped Orders',
+    groupZh: 'C2B',
+    groupEn: 'C2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_c2b_shipped_box_count',
+    zh: '发货箱数',
+    en: 'Shipped Boxes',
+    groupZh: 'C2B',
+    groupEn: 'C2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_c2b_shipped_item_qty',
+    zh: '发货件数',
+    en: 'Shipped Pieces',
+    groupZh: 'C2B',
+    groupEn: 'C2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_whole_day_inbound_box_count',
+    zh: '全天进单箱数',
+    en: 'Whole-day Inbound Boxes',
+    groupZh: '全天',
+    groupEn: 'Whole Day',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_whole_day_inbound_item_qty',
+    zh: '全天进单件数',
+    en: 'Whole-day Inbound Pieces',
+    groupZh: '全天',
+    groupEn: 'Whole Day',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_avg_items_per_box',
+    zh: '单箱平均件数',
+    en: 'Avg Pieces / Box',
+    groupZh: '全天',
+    groupEn: 'Whole Day'
+  }
+];
+
+const TRANSFER_REMAINDER_FIELDS: TransferMetricField[] = [
+  {
+    key: 'transfer_b2b_unshipped_order_count',
+    zh: '未发货单量',
+    en: 'Unshipped Orders',
+    groupZh: 'B2B',
+    groupEn: 'B2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_b2b_unshipped_box_count',
+    zh: '未发货箱数',
+    en: 'Unshipped Boxes',
+    groupZh: 'B2B',
+    groupEn: 'B2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_b2b_unshipped_item_qty',
+    zh: '未发货件数',
+    en: 'Unshipped Pieces',
+    groupZh: 'B2B',
+    groupEn: 'B2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_c2b_unshipped_order_count',
+    zh: '未发货单量',
+    en: 'Unshipped Orders',
+    groupZh: 'C2B',
+    groupEn: 'C2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_c2b_unshipped_box_count',
+    zh: '未发货箱数',
+    en: 'Unshipped Boxes',
+    groupZh: 'C2B',
+    groupEn: 'C2B',
+    integerOnly: true
+  },
+  {
+    key: 'transfer_c2b_unshipped_item_qty',
+    zh: '未发货件数',
+    en: 'Unshipped Pieces',
+    groupZh: 'C2B',
+    groupEn: 'C2B',
+    integerOnly: true
+  }
+];
+
+const createEmptyTransferForm = () =>
+  Object.fromEntries(TRANSFER_METRIC_FIELDS.map((field) => [field.key, ''])) as Record<keyof PackageDailyMetrics, string>;
+
+const normalizeTransferInputValue = (value: unknown) => {
+  if (value == null || value === '') return '';
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? String(numericValue) : '';
+};
+
 const METRIC_COLUMNS: MetricColumn[] = [
   {
     key: 'assessment_single_order_count',
     zh: '考核单品单量',
     en: 'Single Orders',
     width: 'min-w-[148px]',
+    category: 'toc_order',
     render: (row) => formatMetricValue('assessment_single_order_count', row.assessment_single_order_count)
   },
   {
@@ -151,6 +435,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '考核多品单量',
     en: 'Multi Orders',
     width: 'min-w-[148px]',
+    category: 'toc_order',
     render: (row) => formatMetricValue('assessment_multi_order_count', row.assessment_multi_order_count)
   },
   {
@@ -158,6 +443,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '考核多品单比例',
     en: 'Multi Ratio',
     width: 'min-w-[148px]',
+    category: 'toc_order',
     render: (row) => formatMetricValue('assessment_multi_order_ratio', row.assessment_multi_order_ratio)
   },
   {
@@ -165,6 +451,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '考核订单总量',
     en: 'Total Orders',
     width: 'min-w-[148px]',
+    category: 'toc_order',
     render: (row) => formatMetricValue('assessment_total_order_count', row.assessment_total_order_count)
   },
   {
@@ -172,6 +459,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '未完成考核订单',
     en: 'Unfinished Orders',
     width: 'min-w-[156px]',
+    category: 'toc_order',
     render: (row) => formatMetricValue('assessment_unfinished_order_count', row.assessment_unfinished_order_count)
   },
   {
@@ -179,6 +467,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '全天进单量',
     en: 'Inbound Orders',
     width: 'min-w-[138px]',
+    category: 'toc_day',
     render: (row, _totalHours, options) =>
       options?.hideWholeDayInbound ? '-' : formatMetricValue('calendar_inbound_order_count', row.calendar_inbound_order_count)
   },
@@ -187,6 +476,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '考核单品件数',
     en: 'Single Pieces',
     width: 'min-w-[148px]',
+    category: 'toc_piece',
     render: (row) => formatMetricValue('assessment_single_item_qty', row.assessment_single_item_qty)
   },
   {
@@ -194,6 +484,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '考核多品件数',
     en: 'Multi Pieces',
     width: 'min-w-[148px]',
+    category: 'toc_piece',
     render: (row) => formatMetricValue('assessment_multi_item_qty', row.assessment_multi_item_qty)
   },
   {
@@ -201,6 +492,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '考核多品件数比例',
     en: 'Multi Piece Ratio',
     width: 'min-w-[148px]',
+    category: 'toc_piece',
     render: (row) => formatMetricValue('assessment_multi_item_ratio', row.assessment_multi_item_ratio)
   },
   {
@@ -208,6 +500,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '考核总件数',
     en: 'Total Pieces',
     width: 'min-w-[148px]',
+    category: 'toc_day',
     render: (row) => formatMetricValue('assessment_total_item_qty', row.assessment_total_item_qty)
   },
   {
@@ -215,6 +508,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '全天进件量',
     en: 'Inbound Pieces',
     width: 'min-w-[138px]',
+    category: 'toc_day',
     render: (row, _totalHours, options) =>
       options?.hideWholeDayInbound ? '-' : formatMetricValue('calendar_inbound_item_qty', row.calendar_inbound_item_qty)
   },
@@ -223,6 +517,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '库存量',
     en: 'Inventory',
     width: 'min-w-[138px]',
+    category: 'summary',
     render: (row) => formatMetricValue('inventory_qty', row.inventory_qty)
   },
   {
@@ -230,6 +525,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '库存转换率',
     en: 'Inventory Rate',
     width: 'min-w-[138px]',
+    category: 'summary',
     render: (row) => formatMetricValue('inventory_conversion_ratio', row.inventory_conversion_ratio)
   },
   {
@@ -237,6 +533,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '未完成考核件数',
     en: 'Unfinished Pieces',
     width: 'min-w-[156px]',
+    category: 'toc_piece',
     render: (row) => formatMetricValue('assessment_unfinished_item_qty', row.assessment_unfinished_item_qty)
   },
   {
@@ -244,6 +541,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '考核单完成量',
     en: 'Completed Orders',
     width: 'min-w-[148px]',
+    category: 'toc_order',
     render: (row) => formatMetricValue('assessment_completed_order_count', row.assessment_completed_order_count)
   },
   {
@@ -251,6 +549,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '考核单完成件数',
     en: 'Completed Pieces',
     width: 'min-w-[148px]',
+    category: 'toc_piece',
     render: (row) => formatMetricValue('assessment_completed_item_qty', row.assessment_completed_item_qty)
   },
   {
@@ -258,6 +557,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '全天完成单量',
     en: 'Whole-day Orders',
     width: 'min-w-[148px]',
+    category: 'toc_day',
     render: (row) => formatMetricValue('calendar_completed_order_count', row.calendar_completed_order_count)
   },
   {
@@ -265,6 +565,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '全天完成件数',
     en: 'Whole-day Pieces',
     width: 'min-w-[148px]',
+    category: 'toc_day',
     render: (row) => formatMetricValue('calendar_completed_item_qty', row.calendar_completed_item_qty)
   },
   {
@@ -272,6 +573,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '全天剩余积压',
     en: 'Backlog Orders',
     width: 'min-w-[148px]',
+    category: 'toc_day',
     render: (row) => formatMetricValue('calendar_backlog_order_count', row.calendar_backlog_order_count)
   },
   {
@@ -279,13 +581,31 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '全天剩余积压件数',
     en: 'Backlog Pieces',
     width: 'min-w-[156px]',
+    category: 'toc_day',
     render: (row) => formatMetricValue('calendar_backlog_item_qty', row.calendar_backlog_item_qty)
   },
+  ...TRANSFER_METRIC_FIELDS.map((field) => ({
+    key: String(field.key),
+    zh: `调拨${field.groupZh}${field.zh}`,
+    en: `Transfer ${field.groupEn} ${field.en}`,
+    width: 'min-w-[156px]',
+    category: getTransferMetricCategory(field),
+    render: (row: PackageMetricsViewRow) => formatMetricValue(field.key, row[field.key])
+  })),
+  ...TRANSFER_REMAINDER_FIELDS.map((field) => ({
+    key: String(field.key),
+    zh: `调拨${field.groupZh}${field.zh}`,
+    en: `Transfer ${field.groupEn} ${field.en}`,
+    width: 'min-w-[156px]',
+    category: getTransferRemainderCategory(field),
+    render: (row: PackageMetricsViewRow) => formatMetricValue(field.key, row[field.key])
+  })),
   {
     key: 'timecard_hours',
     zh: '总工时',
     en: 'Hours',
     width: 'min-w-[128px]',
+    category: 'summary',
     render: (_row, totalHours) => formatHoursValue(totalHours)
   },
   {
@@ -293,6 +613,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '件效',
     en: 'Piece Efficiency',
     width: 'min-w-[128px]',
+    category: 'summary',
     render: (row, totalHours) => formatEfficiencyValue(computePackageDerivedMetrics(row, totalHours).pieceEfficiency)
   },
   {
@@ -300,6 +621,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: '单效',
     en: 'Order Efficiency',
     width: 'min-w-[128px]',
+    category: 'summary',
     render: (row, totalHours) => formatEfficiencyValue(computePackageDerivedMetrics(row, totalHours).orderEfficiency)
   },
   {
@@ -307,6 +629,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
     zh: 'SLA',
     en: 'SLA',
     width: 'min-w-[118px]',
+    category: 'summary',
     render: (row, totalHours) => formatRatioValue(computePackageDerivedMetrics(row, totalHours).slaRatio)
   }
 ];
@@ -332,6 +655,15 @@ const resolvePackageMetricsImportUrls = () => {
   return urls;
 };
 
+const resolvePackageMetricsTransferUrls = () => {
+  if (typeof window === 'undefined') return ['/api/package-metrics-transfer'];
+  const urls = ['/api/package-metrics-transfer'];
+  if (window.location.hostname === 'localhost' && window.location.port !== '3000') {
+    urls.push('http://localhost:3000/api/package-metrics-transfer');
+  }
+  return urls;
+};
+
 const getWeekdayLabel = (dateOnly: string) => {
   const date = new Date(`${dateOnly}T00:00:00`);
   if (Number.isNaN(date.getTime())) return '-';
@@ -339,6 +671,45 @@ const getWeekdayLabel = (dateOnly: string) => {
 };
 
 const isWholeDayInboundComplete = (row: PackageMetricsViewRow | null) => row?.calendar_inbound_final_hour_present === true;
+
+const applyForecastInventoryToMetricsRows = async (
+  supabase: any,
+  rows: PackageMetricsViewRow[],
+  rangeStart: string,
+  rangeEnd: string
+): Promise<PackageMetricsViewRow[]> => {
+  if (!supabase || rows.length === 0) return rows;
+
+  const inventoryRes = await supabase
+    .from('volume_forecast_daily_inputs')
+    .select('input_date, inventory_level')
+    .gte('input_date', rangeStart)
+    .lte('input_date', rangeEnd);
+
+  if (inventoryRes.error) return rows;
+
+  const inventoryByDate = new Map<string, number>();
+  for (const row of (inventoryRes.data as Array<{ input_date?: string | null; inventory_level?: number | null }> | null) ?? []) {
+    const inputDate = String(row.input_date ?? '').trim();
+    const inventoryLevel = Number(row.inventory_level ?? null);
+    if (!inputDate || !Number.isFinite(inventoryLevel) || inventoryLevel < 0) continue;
+    inventoryByDate.set(inputDate, inventoryLevel);
+  }
+
+  if (inventoryByDate.size === 0) return rows;
+
+  return rows.map((row) => {
+    if (!inventoryByDate.has(row.metric_date)) return row;
+    const inventoryQty = inventoryByDate.get(row.metric_date) ?? 0;
+    const inboundItemQty = Number(row.calendar_inbound_item_qty ?? 0);
+    return {
+      ...row,
+      inventory_qty: inventoryQty,
+      inventory_conversion_ratio:
+        inventoryQty > 0 && Number.isFinite(inboundItemQty) ? Number((inboundItemQty / inventoryQty).toFixed(6)) : null
+    };
+  });
+};
 
 const buildMetricsDisplayRows = (rangeStart: string, rangeEnd: string, rows: PackageMetricsViewRow[]): PackageMetricsDisplayRow[] => {
   if (!rangeStart || !rangeEnd || rangeStart > rangeEnd) return [];
@@ -704,6 +1075,12 @@ export default function PackageMetricsPage({
   const [unfinishedReason, setUnfinishedReason] = useState('');
   const [dailyReportText, setDailyReportText] = useState('');
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
+  const [transferDialogOpen, setTransferDialogOpen] = useState(false);
+  const [transferSaving, setTransferSaving] = useState(false);
+  const [transferForm, setTransferForm] = useState(() => createEmptyTransferForm());
+  const [transferInventoryLevel, setTransferInventoryLevel] = useState('');
+  const [transferInventoryLoading, setTransferInventoryLoading] = useState(false);
+  const [selectedMetricCategories, setSelectedMetricCategories] = useState<MetricColumnCategory[]>(DEFAULT_METRIC_COLUMN_CATEGORIES);
 
   const shellClass =
     themeMode === 'light'
@@ -779,10 +1156,11 @@ export default function PackageMetricsPage({
           throw new Error(t('读取日报失败，请先执行 SQL 并确认表权限。', 'Failed to load saved metrics. Run the SQL and confirm table access.'));
         }
 
-        const nextRows = ((res.data as PackageDailyMetrics[] | null) ?? []).map((row) => ({
+        const persistedRows = ((res.data as PackageDailyMetrics[] | null) ?? []).map((row) => ({
           ...row,
           weekLabel: getWeekdayLabel(row.metric_date)
         }));
+        const nextRows = await applyForecastInventoryToMetricsRows(supabase, persistedRows, rangeStart, rangeEnd);
         const nextLaborSummary = nextRows.length > 0 ? await loadPackageLaborSummaryByDate(supabase, nextRows, serverTime) : {};
 
         if (cancelled) return;
@@ -878,17 +1256,24 @@ export default function PackageMetricsPage({
   const activeFileName = selectedFile?.name ?? t('未选择任何文件', 'No file selected');
   const displayFileName = truncateMiddle(activeFileName, IMPORT_FILE_NAME_MAX_LENGTH);
   const displayRows = useMemo(() => buildMetricsDisplayRows(rangeStart, rangeEnd, metricsRows), [metricsRows, rangeEnd, rangeStart]);
+  const selectedMetricCategorySet = useMemo(() => new Set(selectedMetricCategories), [selectedMetricCategories]);
+  const visibleMetricColumns = useMemo(
+    () => METRIC_COLUMNS.filter((column) => selectedMetricCategorySet.has(column.category)),
+    [selectedMetricCategorySet]
+  );
+  const metricTableMinWidth = `${Math.max(900, visibleMetricColumns.length * 156)}px`;
+  const toggleMetricCategory = (category: MetricColumnCategory) => {
+    setSelectedMetricCategories((current) =>
+      current.includes(category) ? current.filter((item) => item !== category) : [...current, category]
+    );
+  };
 
   const handleUpload = async () => {
     if (!supabase || !selectedFile || isLocked || isReadOnly) return;
 
     setLoading(true);
     try {
-      const sessionRes = await supabase.auth.getSession();
-      const accessToken = String(sessionRes.data?.session?.access_token ?? '');
-      if (!accessToken) {
-        throw new Error(t('当前会话已失效，请重新登录。', 'Your session has expired. Sign in again.'));
-      }
+      const accessToken = await getFreshAccessToken(supabase, t);
 
       const rows = await readRowsFromWorkbook(selectedFile);
       const coverage = inspectPackageMetricsDateCoverage(rows, metricDate);
@@ -926,7 +1311,7 @@ export default function PackageMetricsPage({
       for (let index = 0; index < importUrls.length; index += 1) {
         const url = importUrls[index];
         try {
-          response = await fetch(url, requestInit);
+          response = await fetchWithRetry(url, requestInit);
           lastNetworkError = null;
           break;
         } catch (fetchError) {
@@ -985,18 +1370,144 @@ export default function PackageMetricsPage({
               `表格字段缺失，请完善 ${missingHeaders.join('、')} 后重新导入。`,
               `Missing required columns: ${missingHeaders.join(', ')}. Complete them and import again.`
             )
-          : isImportRequestNetworkError(rawMessage)
-            ? t(
-                '无法连接导入服务，请检查 `/api/package-metrics-import` 和 Vite 代理 `http://localhost:3000` 是否已启动。',
-                'Cannot reach the import API. Check that `/api/package-metrics-import` is available and the Vite proxy target `http://localhost:3000` is running.'
-              )
-            : rawMessage || t('导入失败。', 'Import failed.');
+          : formatRequestErrorMessage(error, t, '导入失败。', 'Import failed.');
       setStatus({
         tone: 'error',
         message
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openTransferDialog = () => {
+    const nextForm = createEmptyTransferForm();
+    for (const field of TRANSFER_METRIC_FIELDS) {
+      nextForm[field.key] = normalizeTransferInputValue(selectedMetricsRow?.[field.key]);
+    }
+    setTransferForm(nextForm);
+    setTransferInventoryLevel(normalizeTransferInputValue(selectedMetricsRow?.inventory_qty));
+    setTransferDialogOpen(true);
+
+    if (!supabase) return;
+    setTransferInventoryLoading(true);
+    void supabase
+      .from('volume_forecast_daily_inputs')
+      .select('inventory_level')
+      .eq('input_date', metricDate)
+      .maybeSingle()
+      .then((res: any) => {
+        if (res.error) {
+          setStatus({
+            tone: 'error',
+            message: String(res.error.message ?? t('读取库存量失败。', 'Failed to load inventory.'))
+          });
+          return;
+        }
+        setTransferInventoryLevel(normalizeTransferInputValue(res.data?.inventory_level ?? selectedMetricsRow?.inventory_qty));
+      })
+      .finally(() => setTransferInventoryLoading(false));
+  };
+
+  const handleTransferValueChange = (key: keyof PackageDailyMetrics, value: string) => {
+    setTransferForm((current) => ({
+      ...current,
+      [key]: value
+    }));
+  };
+
+  const buildTransferPayload = () => {
+    const values: Partial<Record<keyof PackageDailyMetrics, number | null>> = {};
+
+    for (const field of TRANSFER_METRIC_FIELDS) {
+      const rawValue = String(transferForm[field.key] ?? '').trim();
+      if (!rawValue) {
+        values[field.key] = null;
+        continue;
+      }
+      const numericValue = Number(rawValue.replace(/,/g, ''));
+      if (!Number.isFinite(numericValue) || numericValue < 0) {
+        throw new Error(t(`${field.groupZh}${field.zh} 必须是非负数字。`, `${field.groupEn} ${field.en} must be a non-negative number.`));
+      }
+      if (field.integerOnly && !Number.isInteger(numericValue)) {
+        throw new Error(t(`${field.groupZh}${field.zh} 必须是整数。`, `${field.groupEn} ${field.en} must be a whole number.`));
+      }
+      values[field.key] = field.key === 'transfer_avg_items_per_box' ? Number(numericValue.toFixed(2)) : numericValue;
+    }
+
+    return values;
+  };
+
+  const buildTransferInventoryPayload = () => {
+    const rawValue = String(transferInventoryLevel ?? '').trim();
+    if (!rawValue) return null;
+    const numericValue = Number(rawValue.replace(/,/g, ''));
+    if (!Number.isFinite(numericValue) || numericValue < 0 || !Number.isInteger(numericValue)) {
+      throw new Error(t('库存量必须是非负整数。', 'Inventory must be a non-negative whole number.'));
+    }
+    return numericValue;
+  };
+
+  const handleTransferSave = async () => {
+    if (!supabase || isLocked || isReadOnly || transferSaving) return;
+
+    setTransferSaving(true);
+    try {
+      const accessToken = await getFreshAccessToken(supabase, t);
+
+      const requestInit: RequestInit = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+          metric_date: metricDate,
+          values: buildTransferPayload(),
+          inventory_level: buildTransferInventoryPayload()
+        })
+      };
+      let response: Response | null = null;
+      let lastNetworkError: unknown = null;
+
+      for (const url of resolvePackageMetricsTransferUrls()) {
+        try {
+          response = await fetchWithRetry(url, requestInit);
+          lastNetworkError = null;
+          break;
+        } catch (fetchError) {
+          lastNetworkError = fetchError;
+        }
+      }
+
+      if (!response) {
+        const reason =
+          lastNetworkError instanceof Error ? lastNetworkError.message : String(lastNetworkError ?? 'Transfer save request failed.');
+        throw new Error(reason);
+      }
+
+      const responseText = await response.text();
+      const result = parseJsonResponse(responseText);
+      if (!response.ok) {
+        const serverMessage = String(
+          result && typeof result === 'object' ? (result as any).error ?? responseText : responseText || ''
+        ).trim();
+        throw new Error(serverMessage || response.statusText || t('保存调拨数据失败。', 'Failed to save transfer data.'));
+      }
+
+      setTransferDialogOpen(false);
+      setReloadKey((value) => value + 1);
+      setStatus({
+        tone: 'success',
+        message: t('调拨数据已保存。', 'Transfer data saved.')
+      });
+    } catch (error: any) {
+      setStatus({
+        tone: 'error',
+        message: formatRequestErrorMessage(error, t, '保存调拨数据失败。', 'Failed to save transfer data.')
+      });
+    } finally {
+      setTransferSaving(false);
     }
   };
 
@@ -1183,7 +1694,7 @@ export default function PackageMetricsPage({
           <div className={[subtlePanelClass, 'overflow-hidden rounded-[28px] p-0'].join(' ')}>
             <div
               className={[
-                'grid gap-4 border-b px-4 py-4 md:px-5 xl:grid-cols-[minmax(0,1fr)_auto]',
+                'grid gap-4 border-b px-4 py-4 md:px-5 xl:grid-cols-[minmax(280px,1fr)_auto]',
                 themeMode === 'light' ? 'border-slate-200 bg-white/65' : 'border-slate-800 bg-slate-950/25'
               ].join(' ')}
             >
@@ -1226,15 +1737,34 @@ export default function PackageMetricsPage({
               </div>
 
               <div className="flex flex-wrap items-center gap-2 xl:justify-end">
-                <StyledDateInput value={rangeStart} onChange={setRangeStart} themeMode={themeMode} max={rangeEnd} size="compact" />
-                <span className={['text-xs', mutedClass].join(' ')}>to</span>
-                <StyledDateInput value={rangeEnd} onChange={setRangeEnd} themeMode={themeMode} min={rangeStart} size="compact" />
-                <button type="button" className={buttonClass} onClick={() => void handleReportClick()} disabled={!selectedMetricsRow || tableLoading}>
+                <button
+                  type="button"
+                  className={[
+                    secondaryButtonClass,
+                    'inline-flex min-h-10 items-center gap-2 rounded-2xl px-4'
+                  ].join(' ')}
+                  onClick={openTransferDialog}
+                  disabled={isLocked || isReadOnly || transferSaving}
+                >
+                  <Shuffle className="h-4 w-4" />
+                  <span>{t('调拨数据', 'Transfer')}</span>
+                </button>
+                <div
+                  className={[
+                    'inline-flex items-center gap-2 rounded-2xl border p-1',
+                    themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-slate-800 bg-slate-950/70'
+                  ].join(' ')}
+                >
+                  <StyledDateInput value={rangeStart} onChange={setRangeStart} themeMode={themeMode} max={rangeEnd} size="compact" />
+                  <span className={['px-1 text-xs font-semibold', mutedClass].join(' ')}>to</span>
+                  <StyledDateInput value={rangeEnd} onChange={setRangeEnd} themeMode={themeMode} min={rangeStart} size="compact" />
+                </div>
+                <button type="button" className={[buttonClass, 'min-h-10 rounded-2xl px-4'].join(' ')} onClick={() => void handleReportClick()} disabled={!selectedMetricsRow || tableLoading}>
                   Report
                 </button>
                 <button
                   type="button"
-                  className={secondaryButtonClass}
+                  className={[secondaryButtonClass, 'min-h-10 rounded-2xl px-4'].join(' ')}
                   onClick={() => {
                     const nextEnd = getDateOnlyInTimeZone(serverTime);
                     setRangeEnd(nextEnd);
@@ -1243,6 +1773,71 @@ export default function PackageMetricsPage({
                 >
                   Last 7 Days
                 </button>
+              </div>
+
+              <div
+                className={[
+                  'rounded-[22px] border p-2 xl:col-span-2',
+                  themeMode === 'light' ? 'border-slate-200 bg-white/80' : 'border-slate-800 bg-slate-950/45'
+                ].join(' ')}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <div
+                    className={[
+                      'inline-flex items-center gap-1 rounded-2xl border p-1',
+                      themeMode === 'light' ? 'border-slate-200 bg-slate-50' : 'border-slate-800 bg-slate-900/70'
+                    ].join(' ')}
+                  >
+                    <button
+                      type="button"
+                      className={[
+                        'inline-flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold transition',
+                        themeMode === 'light' ? 'text-slate-700 hover:bg-white' : 'text-slate-200 hover:bg-slate-800'
+                      ].join(' ')}
+                      onClick={() => setSelectedMetricCategories(DEFAULT_METRIC_COLUMN_CATEGORIES)}
+                    >
+                      <CheckSquare className="h-3.5 w-3.5" />
+                      <span>{t('全选', 'All')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={[
+                        'inline-flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold transition',
+                        themeMode === 'light' ? 'text-slate-700 hover:bg-white' : 'text-slate-200 hover:bg-slate-800'
+                      ].join(' ')}
+                      onClick={() => setSelectedMetricCategories([])}
+                    >
+                      <XCircle className="h-3.5 w-3.5" />
+                      <span>{t('清空', 'Clear')}</span>
+                    </button>
+                  </div>
+                  {METRIC_COLUMN_CATEGORIES.map((category) => {
+                    const checked = selectedMetricCategorySet.has(category.key);
+                    return (
+                      <label
+                        key={category.key}
+                        className={[
+                          'inline-flex h-9 cursor-pointer items-center gap-2 rounded-2xl border px-3 text-xs font-semibold transition',
+                          checked
+                            ? themeMode === 'light'
+                              ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                              : 'border-slate-200 bg-slate-100 text-slate-950'
+                            : themeMode === 'light'
+                              ? 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                              : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600 hover:bg-slate-800'
+                        ].join(' ')}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleMetricCategory(category.key)}
+                          className="h-3.5 w-3.5 accent-current"
+                        />
+                        <span>{t(category.zh, category.en)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -1293,39 +1888,45 @@ export default function PackageMetricsPage({
                   </div>
 
                   <div className="metrics-scroll-fade min-w-0 flex-1 overflow-x-auto metrics-scrollbar">
-                    <table className="min-w-[3200px] border-separate border-spacing-0 text-left">
-                      <thead className={tableHeadClass}>
-                        <tr>
-                          {METRIC_COLUMNS.map((column) => (
-                            <th
-                              key={column.key}
-                              className={[column.width, 'border-b border-r border-slate-800 px-4 py-3 text-center text-[11px] font-semibold uppercase tracking-[0.12em] last:border-r-0'].join(' ')}
-                            >
-                              <div className="truncate">{t(column.zh, column.en)}</div>
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {displayRows.map((row) => {
-                          const isSelected = row.metric_date === metricDate;
-                          const totalHours = row.data ? laborSummaryByDate[row.metric_date]?.totalHours ?? null : null;
-                          const hideWholeDayInbound = !isWholeDayInboundComplete(row.data);
-                          return (
-                            <tr key={`metrics-${row.metric_date}`} className={[rowBaseClass, isSelected ? rowSelectedClass : ''].join(' ')}>
-                              {METRIC_COLUMNS.map((column) => (
-                                <td
-                                  key={`${row.metric_date}-${column.key}`}
-                                  className={['border-r border-slate-800 px-4 py-4 align-middle text-center text-base font-semibold last:border-r-0', cellClass].join(' ')}
-                                >
-                                  {row.data ? column.render(row.data, totalHours, { hideWholeDayInbound }) : '-'}
-                                </td>
-                              ))}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                    {visibleMetricColumns.length === 0 ? (
+                      <div className={['flex min-h-[360px] items-center justify-center px-6 text-sm font-semibold', mutedClass].join(' ')}>
+                        {t('未选择分类', 'No columns selected')}
+                      </div>
+                    ) : (
+                      <table className="border-separate border-spacing-0 text-left" style={{ minWidth: metricTableMinWidth }}>
+                        <thead className={tableHeadClass}>
+                          <tr>
+                            {visibleMetricColumns.map((column) => (
+                              <th
+                                key={column.key}
+                                className={[column.width, 'border-b border-r border-slate-800 px-4 py-3 text-center text-[11px] font-semibold uppercase tracking-[0.12em] last:border-r-0'].join(' ')}
+                              >
+                                <div className="truncate">{t(column.zh, column.en)}</div>
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {displayRows.map((row) => {
+                            const isSelected = row.metric_date === metricDate;
+                            const totalHours = row.data ? laborSummaryByDate[row.metric_date]?.totalHours ?? null : null;
+                            const hideWholeDayInbound = !isWholeDayInboundComplete(row.data);
+                            return (
+                              <tr key={`metrics-${row.metric_date}`} className={[rowBaseClass, isSelected ? rowSelectedClass : ''].join(' ')}>
+                                {visibleMetricColumns.map((column) => (
+                                  <td
+                                    key={`${row.metric_date}-${column.key}`}
+                                    className={['border-r border-slate-800 px-4 py-4 align-middle text-center text-base font-semibold last:border-r-0', cellClass].join(' ')}
+                                  >
+                                    {row.data ? column.render(row.data, totalHours, { hideWholeDayInbound }) : '-'}
+                                  </td>
+                                ))}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    )}
                   </div>
                 </div>
               )}
@@ -1500,38 +2101,44 @@ export default function PackageMetricsPage({
                   </div>
 
                   <div className="metrics-scroll-fade min-w-0 flex-1 overflow-x-auto metrics-scrollbar">
-                    <table className="min-w-[3200px] border-separate border-spacing-0 text-left">
-                      <thead className={tableHeadClass}>
-                        <tr>
-                          {METRIC_COLUMNS.map((column) => (
-                            <th
-                              key={column.key}
-                              className={[column.width, 'border-b border-r border-slate-800 px-4 py-3 text-center text-[11px] font-semibold uppercase tracking-[0.12em] last:border-r-0'].join(' ')}
-                            >
-                              <div className="truncate">{t(column.zh, column.en)}</div>
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {metricsRows.map((row) => {
-                          const isSelected = row.metric_date === metricDate;
-                          const totalHours = laborSummaryByDate[row.metric_date]?.totalHours ?? null;
-                          return (
-                            <tr key={`metrics-${row.metric_date}`} className={[rowBaseClass, isSelected ? rowSelectedClass : ''].join(' ')}>
-                              {METRIC_COLUMNS.map((column) => (
-                                <td
-                                  key={`${row.metric_date}-${column.key}`}
-                                  className={['border-r border-slate-800 px-4 py-4 align-middle text-center text-base font-semibold last:border-r-0', cellClass].join(' ')}
-                                >
-                                  {column.render(row, totalHours)}
-                                </td>
-                              ))}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                    {visibleMetricColumns.length === 0 ? (
+                      <div className={['flex min-h-[360px] items-center justify-center px-6 text-sm font-semibold', mutedClass].join(' ')}>
+                        {t('未选择分类', 'No columns selected')}
+                      </div>
+                    ) : (
+                      <table className="border-separate border-spacing-0 text-left" style={{ minWidth: metricTableMinWidth }}>
+                        <thead className={tableHeadClass}>
+                          <tr>
+                            {visibleMetricColumns.map((column) => (
+                              <th
+                                key={column.key}
+                                className={[column.width, 'border-b border-r border-slate-800 px-4 py-3 text-center text-[11px] font-semibold uppercase tracking-[0.12em] last:border-r-0'].join(' ')}
+                              >
+                                <div className="truncate">{t(column.zh, column.en)}</div>
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {metricsRows.map((row) => {
+                            const isSelected = row.metric_date === metricDate;
+                            const totalHours = laborSummaryByDate[row.metric_date]?.totalHours ?? null;
+                            return (
+                              <tr key={`metrics-${row.metric_date}`} className={[rowBaseClass, isSelected ? rowSelectedClass : ''].join(' ')}>
+                                {visibleMetricColumns.map((column) => (
+                                  <td
+                                    key={`${row.metric_date}-${column.key}`}
+                                    className={['border-r border-slate-800 px-4 py-4 align-middle text-center text-base font-semibold last:border-r-0', cellClass].join(' ')}
+                                  >
+                                    {column.render(row, totalHours)}
+                                  </td>
+                                ))}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    )}
                   </div>
                 </div>
               )}
@@ -1557,6 +2164,156 @@ export default function PackageMetricsPage({
         <div className="pointer-events-none fixed right-4 top-20 z-50 max-w-[min(28rem,calc(100vw-2rem))]">
           <div className={['rounded-2xl border px-4 py-3 text-sm leading-6 backdrop-blur', statusToastClass].join(' ')}>
             <div className={['font-medium', statusClass].join(' ')}>{status.message}</div>
+          </div>
+        </div>
+      ) : null}
+
+      {transferDialogOpen ? (
+        <div
+          className={[
+            'fixed inset-0 z-[100] flex items-center justify-center p-4',
+            themeMode === 'light' ? 'bg-slate-900/35' : 'bg-black/70'
+          ].join(' ')}
+          onClick={() => {
+            if (!transferSaving) setTransferDialogOpen(false);
+          }}
+        >
+          <div
+            className={[
+              'max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-[28px] border shadow-2xl',
+              themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-slate-800 bg-slate-950'
+            ].join(' ')}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div
+              className={[
+                'flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4',
+                themeMode === 'light' ? 'border-slate-200' : 'border-slate-800'
+              ].join(' ')}
+            >
+              <div className="flex items-center gap-3">
+                <div
+                  className={[
+                    'flex h-10 w-10 items-center justify-center rounded-2xl',
+                    themeMode === 'light' ? 'bg-slate-900 text-white' : 'bg-white/10 text-slate-100'
+                  ].join(' ')}
+                >
+                  <Shuffle className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="text-lg font-semibold">{t('调拨数据', 'Transfer')}</div>
+                  <div className={['mt-0.5 text-xs font-semibold', mutedClass].join(' ')}>
+                    {metricDate.replace(/-/g, '/')}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="grid min-w-[220px] gap-1">
+                  <span className={['text-xs font-semibold', mutedClass].join(' ')}>{t('库存量', 'Inventory')}</span>
+                  <input
+                    value={transferInventoryLevel}
+                    onChange={(event) => setTransferInventoryLevel(event.target.value)}
+                    disabled={transferSaving || transferInventoryLoading}
+                    inputMode="numeric"
+                    className={[
+                      'h-10 w-full rounded-2xl border px-3 text-sm font-semibold outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                      themeMode === 'light'
+                        ? 'border-slate-200 bg-white text-slate-900 focus:border-slate-400'
+                        : 'border-slate-800 bg-slate-950 text-slate-100 focus:border-slate-600'
+                    ].join(' ')}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className={secondaryButtonClass}
+                  onClick={() => setTransferDialogOpen(false)}
+                  disabled={transferSaving}
+                  aria-label={t('关闭', 'Close')}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="max-h-[calc(90vh-150px)] overflow-y-auto px-5 py-5">
+              <div className="grid gap-4 lg:grid-cols-3">
+                {['B2B', 'C2B', '全天'].map((groupZh) => {
+                  const groupFields = TRANSFER_METRIC_FIELDS.filter((field) => field.groupZh === groupZh);
+                  const remainderFields = TRANSFER_REMAINDER_FIELDS.filter((field) => field.groupZh === groupZh);
+                  const groupEn = groupFields[0]?.groupEn ?? groupZh;
+                  return (
+                    <div
+                      key={groupZh}
+                      className={[
+                        'rounded-[24px] border p-4',
+                        themeMode === 'light' ? 'border-slate-200 bg-slate-50/75' : 'border-slate-800 bg-slate-900/40'
+                      ].join(' ')}
+                    >
+                      <div className="mb-4 text-sm font-semibold">{t(groupZh, groupEn)}</div>
+                      <div className="grid gap-3">
+                        {groupFields.map((field) => (
+                          <label key={String(field.key)} className="grid gap-1.5">
+                            <span className={['text-xs font-semibold', mutedClass].join(' ')}>{t(field.zh, field.en)}</span>
+                            <input
+                              value={transferForm[field.key] ?? ''}
+                              inputMode="decimal"
+                              disabled={transferSaving}
+                              onChange={(event) => handleTransferValueChange(field.key, event.target.value)}
+                              className={[
+                                'h-11 w-full rounded-2xl border px-3 text-sm font-semibold outline-none transition',
+                                themeMode === 'light'
+                                  ? 'border-slate-200 bg-white text-slate-900 focus:border-slate-400'
+                                  : 'border-slate-800 bg-slate-950 text-slate-100 focus:border-slate-600'
+                              ].join(' ')}
+                            />
+                          </label>
+                        ))}
+                        {remainderFields.map((field) => (
+                          <label key={String(field.key)} className="grid gap-1.5">
+                            <span className={['text-xs font-semibold', mutedClass].join(' ')}>{t(field.zh, field.en)}</span>
+                            <input
+                              value={normalizeTransferInputValue(selectedMetricsRow?.[field.key])}
+                              readOnly
+                              disabled
+                              className={[
+                                'h-11 w-full rounded-2xl border px-3 text-sm font-semibold outline-none disabled:cursor-not-allowed disabled:opacity-100',
+                                themeMode === 'light'
+                                  ? 'border-slate-200 bg-slate-100 text-slate-700'
+                                  : 'border-slate-800 bg-slate-900/70 text-slate-300'
+                              ].join(' ')}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div
+              className={[
+                'flex justify-end gap-3 border-t px-5 py-4',
+                themeMode === 'light' ? 'border-slate-200 bg-slate-50/80' : 'border-slate-800 bg-slate-950'
+              ].join(' ')}
+            >
+              <button type="button" className={secondaryButtonClass} onClick={() => setTransferDialogOpen(false)} disabled={transferSaving}>
+                {t('取消', 'Cancel')}
+              </button>
+              <button
+                type="button"
+                className={[buttonClass, 'inline-flex items-center gap-2'].join(' ')}
+                onClick={() => void handleTransferSave()}
+                disabled={transferSaving}
+              >
+                {transferSaving ? (
+                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-r-transparent" aria-hidden="true" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                <span>{transferSaving ? t('保存中...', 'Saving...') : t('保存', 'Save')}</span>
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
