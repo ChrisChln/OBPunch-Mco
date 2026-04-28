@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
-import { createServiceSupabase, parseJsonBody } from './_forecastShared';
-import { computePackageTransferRemainderRows, isDateOnly } from '../src/shared/packageMetrics';
-import { getModuleMapFromContext, hasModuleAccess, normalizeAdminAccessContext } from '../src/shared/adminAccess';
+import { createServiceSupabase, parseJsonBody } from './_forecastShared.js';
+import { computePackageTransferRemainderRows, isDateOnly } from '../src/shared/packageMetrics.js';
+import { getModuleMapFromContext, hasModuleAccess, normalizeAdminAccessContext } from '../src/shared/adminAccess.js';
 
 const TRANSFER_FIELD_KEYS = [
   'transfer_b2b_inbound_order_count',
