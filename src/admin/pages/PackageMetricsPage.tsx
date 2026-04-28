@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { ArrowUpRight, CheckSquare, Clock3, FileUp, Package2, Rows3, Save, Shuffle, X, XCircle } from 'lucide-react';
+import { ArrowUpRight, CheckSquare, ChevronDown, ChevronUp, Clock3, FileUp, Package2, Rows3, Save, Shuffle, X, XCircle } from 'lucide-react';
 import { normalizeStaffId } from '../../lib/staffId';
 import {
   addDaysDateOnly,
@@ -419,6 +419,13 @@ const normalizeTransferInputValue = (value: unknown) => {
   if (value == null || value === '') return '';
   const numericValue = Number(value);
   return Number.isFinite(numericValue) ? String(numericValue) : '';
+};
+
+const parseTransferFormNumber = (value: unknown) => {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const numericValue = Number(text.replace(/,/g, ''));
+  return Number.isFinite(numericValue) && numericValue >= 0 ? numericValue : null;
 };
 
 const METRIC_COLUMNS: MetricColumn[] = [
@@ -1080,6 +1087,7 @@ export default function PackageMetricsPage({
   const [transferForm, setTransferForm] = useState(() => createEmptyTransferForm());
   const [transferInventoryLevel, setTransferInventoryLevel] = useState('');
   const [transferInventoryLoading, setTransferInventoryLoading] = useState(false);
+  const [transferRemaindersOpen, setTransferRemaindersOpen] = useState(false);
   const [selectedMetricCategories, setSelectedMetricCategories] = useState<MetricColumnCategory[]>(DEFAULT_METRIC_COLUMN_CATEGORIES);
 
   const shellClass =
@@ -1387,6 +1395,7 @@ export default function PackageMetricsPage({
     }
     setTransferForm(nextForm);
     setTransferInventoryLevel(normalizeTransferInputValue(selectedMetricsRow?.inventory_qty));
+    setTransferRemaindersOpen(false);
     setTransferDialogOpen(true);
 
     if (!supabase) return;
@@ -1416,10 +1425,56 @@ export default function PackageMetricsPage({
     }));
   };
 
+  const transferWholeDayValues = useMemo(() => {
+    const inboundBoxes =
+      (parseTransferFormNumber(transferForm.transfer_b2b_inbound_box_count) ?? 0) +
+      (parseTransferFormNumber(transferForm.transfer_c2b_inbound_box_count) ?? 0);
+    const inboundPieces =
+      (parseTransferFormNumber(transferForm.transfer_b2b_inbound_item_qty) ?? 0) +
+      (parseTransferFormNumber(transferForm.transfer_c2b_inbound_item_qty) ?? 0);
+    const avgItemsPerBox = inboundBoxes > 0 ? Number((inboundPieces / inboundBoxes).toFixed(2)) : 0;
+
+    return {
+      transfer_whole_day_inbound_box_count: inboundBoxes,
+      transfer_whole_day_inbound_item_qty: inboundPieces,
+      transfer_avg_items_per_box: avgItemsPerBox
+    };
+  }, [
+    transferForm.transfer_b2b_inbound_box_count,
+    transferForm.transfer_b2b_inbound_item_qty,
+    transferForm.transfer_c2b_inbound_box_count,
+    transferForm.transfer_c2b_inbound_item_qty
+  ]);
+
+  const getTransferFieldDisplayValue = (field: TransferMetricField) => {
+    if (field.key === 'transfer_whole_day_inbound_box_count') {
+      return normalizeTransferInputValue(transferWholeDayValues.transfer_whole_day_inbound_box_count);
+    }
+    if (field.key === 'transfer_whole_day_inbound_item_qty') {
+      return normalizeTransferInputValue(transferWholeDayValues.transfer_whole_day_inbound_item_qty);
+    }
+    if (field.key === 'transfer_avg_items_per_box') {
+      return normalizeTransferInputValue(transferWholeDayValues.transfer_avg_items_per_box);
+    }
+    return transferForm[field.key] ?? '';
+  };
+
   const buildTransferPayload = () => {
     const values: Partial<Record<keyof PackageDailyMetrics, number | null>> = {};
 
     for (const field of TRANSFER_METRIC_FIELDS) {
+      if (field.key === 'transfer_whole_day_inbound_box_count') {
+        values[field.key] = transferWholeDayValues.transfer_whole_day_inbound_box_count;
+        continue;
+      }
+      if (field.key === 'transfer_whole_day_inbound_item_qty') {
+        values[field.key] = transferWholeDayValues.transfer_whole_day_inbound_item_qty;
+        continue;
+      }
+      if (field.key === 'transfer_avg_items_per_box') {
+        values[field.key] = transferWholeDayValues.transfer_avg_items_per_box;
+        continue;
+      }
       const rawValue = String(transferForm[field.key] ?? '').trim();
       if (!rawValue) {
         values[field.key] = null;
@@ -1432,7 +1487,7 @@ export default function PackageMetricsPage({
       if (field.integerOnly && !Number.isInteger(numericValue)) {
         throw new Error(t(`${field.groupZh}${field.zh} 必须是整数。`, `${field.groupEn} ${field.en} must be a whole number.`));
       }
-      values[field.key] = field.key === 'transfer_avg_items_per_box' ? Number(numericValue.toFixed(2)) : numericValue;
+      values[field.key] = numericValue;
     }
 
     return values;
@@ -2174,9 +2229,6 @@ export default function PackageMetricsPage({
             'fixed inset-0 z-[100] flex items-center justify-center p-4',
             themeMode === 'light' ? 'bg-slate-900/35' : 'bg-black/70'
           ].join(' ')}
-          onClick={() => {
-            if (!transferSaving) setTransferDialogOpen(false);
-          }}
         >
           <div
             className={[
@@ -2255,35 +2307,67 @@ export default function PackageMetricsPage({
                           <label key={String(field.key)} className="grid gap-1.5">
                             <span className={['text-xs font-semibold', mutedClass].join(' ')}>{t(field.zh, field.en)}</span>
                             <input
-                              value={transferForm[field.key] ?? ''}
+                              value={getTransferFieldDisplayValue(field)}
                               inputMode="decimal"
-                              disabled={transferSaving}
+                              readOnly={field.groupZh === '全天'}
+                              disabled={transferSaving || field.groupZh === '全天'}
                               onChange={(event) => handleTransferValueChange(field.key, event.target.value)}
                               className={[
-                                'h-11 w-full rounded-2xl border px-3 text-sm font-semibold outline-none transition',
-                                themeMode === 'light'
-                                  ? 'border-slate-200 bg-white text-slate-900 focus:border-slate-400'
-                                  : 'border-slate-800 bg-slate-950 text-slate-100 focus:border-slate-600'
+                                'h-11 w-full rounded-2xl border px-3 text-sm font-semibold outline-none transition disabled:cursor-not-allowed disabled:opacity-100',
+                                field.groupZh === '全天'
+                                  ? themeMode === 'light'
+                                    ? 'border-slate-200 bg-slate-100 text-slate-700'
+                                    : 'border-slate-800 bg-slate-900/70 text-slate-300'
+                                  : themeMode === 'light'
+                                    ? 'border-slate-200 bg-white text-slate-900 focus:border-slate-400'
+                                    : 'border-slate-800 bg-slate-950 text-slate-100 focus:border-slate-600'
                               ].join(' ')}
                             />
                           </label>
                         ))}
-                        {remainderFields.map((field) => (
-                          <label key={String(field.key)} className="grid gap-1.5">
-                            <span className={['text-xs font-semibold', mutedClass].join(' ')}>{t(field.zh, field.en)}</span>
-                            <input
-                              value={normalizeTransferInputValue(selectedMetricsRow?.[field.key])}
-                              readOnly
-                              disabled
+                        {remainderFields.length > 0 ? (
+                          <div
+                            className={[
+                              'mt-1 border-t pt-3',
+                              themeMode === 'light' ? 'border-slate-200' : 'border-slate-800'
+                            ].join(' ')}
+                          >
+                            <button
+                              type="button"
                               className={[
-                                'h-11 w-full rounded-2xl border px-3 text-sm font-semibold outline-none disabled:cursor-not-allowed disabled:opacity-100',
+                                'flex h-9 w-full items-center justify-between rounded-2xl border px-3 text-xs font-semibold transition',
                                 themeMode === 'light'
-                                  ? 'border-slate-200 bg-slate-100 text-slate-700'
-                                  : 'border-slate-800 bg-slate-900/70 text-slate-300'
+                                  ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                                  : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900'
                               ].join(' ')}
-                            />
-                          </label>
-                        ))}
+                              onClick={() => setTransferRemaindersOpen((value) => !value)}
+                              aria-expanded={transferRemaindersOpen}
+                            >
+                              <span>{transferRemaindersOpen ? t('隐藏未发货', 'Hide Backlog') : t('展开未发货', 'Show Backlog')}</span>
+                              {transferRemaindersOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                            </button>
+                            {transferRemaindersOpen ? (
+                              <div className="mt-3 grid gap-3">
+                                {remainderFields.map((field) => (
+                                  <label key={String(field.key)} className="grid gap-1.5">
+                                    <span className={['text-xs font-semibold', mutedClass].join(' ')}>{t(field.zh, field.en)}</span>
+                                    <input
+                                      value={normalizeTransferInputValue(selectedMetricsRow?.[field.key])}
+                                      readOnly
+                                      disabled
+                                      className={[
+                                        'h-11 w-full rounded-2xl border px-3 text-sm font-semibold outline-none disabled:cursor-not-allowed disabled:opacity-100',
+                                        themeMode === 'light'
+                                          ? 'border-slate-200 bg-slate-100 text-slate-700'
+                                          : 'border-slate-800 bg-slate-900/70 text-slate-300'
+                                      ].join(' ')}
+                                    />
+                                  </label>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   );
