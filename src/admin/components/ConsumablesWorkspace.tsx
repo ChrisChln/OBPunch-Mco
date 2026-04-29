@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, BellRing, Boxes, CalendarDays, Plus, RefreshCcw, Save } from 'lucide-react';
+import AdminNoticeToast from './AdminNoticeToast';
 import {
   CONSUMABLE_ITEM_DEFINITIONS,
   CONSUMABLE_ITEMS_BY_KEY,
@@ -22,6 +23,7 @@ type ConsumablesWorkspaceProps = {
   canOperate: boolean;
   supabase: any;
   serverTime: Date;
+  onStatus?: (status: StatusState) => void;
 };
 
 type DashboardItemRow = {
@@ -156,7 +158,8 @@ export default function ConsumablesWorkspace({
   canView,
   canOperate,
   supabase,
-  serverTime
+  serverTime,
+  onStatus
 }: ConsumablesWorkspaceProps) {
   const isLight = themeMode === 'light';
   const today = getDateOnlyInTimeZone(serverTime);
@@ -192,16 +195,10 @@ export default function ConsumablesWorkspace({
     themeMode === 'light'
       ? 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
       : 'border border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800';
-  const statusClass =
-    status.tone === 'error'
-      ? isLight
-        ? 'text-rose-700'
-        : 'text-rose-300'
-      : status.tone === 'success'
-        ? isLight
-          ? 'text-emerald-700'
-          : 'text-emerald-300'
-        : mutedClass;
+  const publishStatus = (nextStatus: StatusState) => {
+    setStatus(nextStatus);
+    onStatus?.(nextStatus);
+  };
 
   useEffect(() => {
     if (!canView || !supabase) return;
@@ -224,7 +221,7 @@ export default function ConsumablesWorkspace({
       } catch (error: any) {
         if (cancelled) return;
         setDashboard({});
-        setStatus({
+        publishStatus({
           tone: 'error',
           message: String(error?.message ?? error ?? t('耗材数据加载失败。', 'Failed to load consumables.'))
         });
@@ -455,14 +452,14 @@ export default function ConsumablesWorkspace({
         ...prev,
         snapshots: mergeSnapshotRows(prev.snapshots, savedSnapshots)
       }));
-      setStatus({
+      publishStatus({
         tone: 'success',
         message: t('耗材盘点已保存。', 'Consumable snapshot saved.')
       });
       setSnapshotDraftDirty(false);
       setReloadKey((value) => value + 1);
     } catch (error: any) {
-      setStatus({
+      publishStatus({
         tone: 'error',
         message: String(error?.message ?? error ?? t('耗材盘点保存失败。', 'Failed to save consumable snapshot.'))
       });
@@ -490,13 +487,13 @@ export default function ConsumablesWorkspace({
         throw new Error(String(rpcRes.error.message ?? 'Failed to save adjustment.'));
       }
       setAdjustmentForm(buildInitialAdjustmentForm());
-      setStatus({
+      publishStatus({
         tone: 'success',
         message: t('耗材调整已保存。', 'Consumable adjustment saved.')
       });
       setReloadKey((value) => value + 1);
     } catch (error: any) {
-      setStatus({
+      publishStatus({
         tone: 'error',
         message: String(error?.message ?? error ?? t('耗材调整保存失败。', 'Failed to save consumable adjustment.'))
       });
@@ -800,7 +797,15 @@ export default function ConsumablesWorkspace({
           </div>
         </div>
 
-        <div className={['text-sm', statusClass].join(' ')}>{status.message || '\u00A0'}</div>
+        {!onStatus ? (
+          <AdminNoticeToast
+            open={Boolean(status.message && status.tone !== 'idle')}
+            tone={status.tone}
+            message={status.message}
+            themeMode={themeMode}
+            onClose={() => setStatus({ tone: 'idle', message: '' })}
+          />
+        ) : null}
       </div>
     </div>
   );
