@@ -20,6 +20,7 @@ import {
   normalizeOutboundStaffingPosition,
   shouldCountScheduledPackageMetricsStaff
 } from '../../shared/packageStaffing';
+import AdminNoticeToast from '../components/AdminNoticeToast';
 import ConsumablesWorkspace from '../components/ConsumablesWorkspace';
 import StyledDateInput from '../components/StyledDateInput';
 
@@ -1116,27 +1117,6 @@ export default function PackageMetricsPage({
       ? 'border-r border-slate-200 bg-white shadow-[10px_0_24px_rgba(15,23,42,0.06)]'
       : 'border-r border-slate-800 bg-slate-950 shadow-[10px_0_28px_rgba(2,6,23,0.5)]';
 
-  const statusClass = useMemo(() => {
-    if (status.tone === 'success') return themeMode === 'light' ? 'text-emerald-700' : 'text-emerald-300';
-    if (status.tone === 'error') return themeMode === 'light' ? 'text-rose-700' : 'text-rose-300';
-    return mutedClass;
-  }, [mutedClass, status.tone, themeMode]);
-  const statusToastClass = useMemo(() => {
-    if (status.tone === 'success') {
-      return themeMode === 'light'
-        ? 'border-emerald-200 bg-emerald-50/95 text-emerald-700 shadow-[0_18px_38px_rgba(16,185,129,0.18)]'
-        : 'border-emerald-500/30 bg-emerald-500/12 text-emerald-200 shadow-[0_18px_38px_rgba(5,150,105,0.2)]';
-    }
-    if (status.tone === 'error') {
-      return themeMode === 'light'
-        ? 'border-rose-200 bg-rose-50/95 text-rose-700 shadow-[0_18px_38px_rgba(244,63,94,0.16)]'
-        : 'border-rose-500/30 bg-rose-500/12 text-rose-200 shadow-[0_18px_38px_rgba(190,24,93,0.24)]';
-    }
-    return themeMode === 'light'
-      ? 'border-slate-200 bg-white/95 text-slate-600 shadow-[0_18px_38px_rgba(15,23,42,0.1)]'
-      : 'border-slate-700/80 bg-slate-900/95 text-slate-300 shadow-[0_18px_38px_rgba(2,6,23,0.4)]';
-  }, [status.tone, themeMode]);
-
   useEffect(() => {
     if (!status.message || status.tone === 'idle') return undefined;
     const timer = window.setTimeout(() => {
@@ -2210,18 +2190,19 @@ export default function PackageMetricsPage({
             canOperate={canOperateConsumables}
             supabase={supabase}
             serverTime={serverTime}
+            onStatus={setStatus}
           />
 
         </div>
       </div>
 
-      {status.message && status.tone !== 'idle' ? (
-        <div className="pointer-events-none fixed right-4 top-20 z-50 max-w-[min(28rem,calc(100vw-2rem))]">
-          <div className={['rounded-2xl border px-4 py-3 text-sm leading-6 backdrop-blur', statusToastClass].join(' ')}>
-            <div className={['font-medium', statusClass].join(' ')}>{status.message}</div>
-          </div>
-        </div>
-      ) : null}
+      <AdminNoticeToast
+        open={Boolean(status.message && status.tone !== 'idle')}
+        tone={status.tone}
+        message={status.message}
+        themeMode={themeMode}
+        onClose={() => setStatus({ tone: 'idle', message: '' })}
+      />
 
       {transferDialogOpen ? (
         <div
