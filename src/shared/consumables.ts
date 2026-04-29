@@ -1,19 +1,25 @@
 export const CONSUMABLE_TIMEZONE = 'America/New_York';
 
 export const CONSUMABLE_ITEM_DEFINITIONS = [
-  { key: 'box_48', label: 'Box 48', warningDays: 7, criticalDays: 3 },
-  { key: 'pm2', label: 'PM2', warningDays: 7, criticalDays: 3 },
-  { key: 'pm5', label: 'PM5', warningDays: 7, criticalDays: 3 },
-  { key: 'pm7', label: 'PM7', warningDays: 7, criticalDays: 3 },
-  { key: 'label_4x6', label: 'Label 4*6', warningDays: 7, criticalDays: 3 },
-  { key: 'label_4x2', label: 'Label 4*2', warningDays: 7, criticalDays: 3 },
-  { key: 'gaylord_48', label: 'Gaylord 48', warningDays: 7, criticalDays: 3 },
-  { key: 'gaylord_72', label: 'Gaylord 72', warningDays: 7, criticalDays: 3 },
-  { key: 'clear_tape', label: 'Clear Tape', warningDays: 7, criticalDays: 3 },
-  { key: 'wrap', label: 'Wrap', warningDays: 7, criticalDays: 3 }
+  { key: 'box_48', label: 'Box 48', group: 'standard', warningDays: 7, criticalDays: 3 },
+  { key: 'pm2', label: 'PM2', group: 'standard', warningDays: 7, criticalDays: 3 },
+  { key: 'pm5', label: 'PM5', group: 'standard', warningDays: 7, criticalDays: 3 },
+  { key: 'pm7', label: 'PM7', group: 'standard', warningDays: 7, criticalDays: 3 },
+  { key: 'label_4x6', label: 'Label 4*6', group: 'standard', warningDays: 7, criticalDays: 3 },
+  { key: 'label_4x2', label: 'Label 4*2', group: 'standard', warningDays: 7, criticalDays: 3 },
+  { key: 'gaylord_48', label: 'Gaylord 48', group: 'standard', warningDays: 7, criticalDays: 3 },
+  { key: 'gaylord_72', label: 'Gaylord 72', group: 'standard', warningDays: 7, criticalDays: 3 },
+  { key: 'clear_tape', label: 'Clear Tape', group: 'standard', warningDays: 7, criticalDays: 3 },
+  { key: 'wrap', label: 'Wrap', group: 'standard', warningDays: 7, criticalDays: 3 },
+  { key: 'transfer_color_tape_yellow', label: 'Transfer Color Tape - Yellow', group: 'transfer', warningDays: 7, criticalDays: 3 },
+  { key: 'transfer_color_tape_green', label: 'Transfer Color Tape - Green', group: 'transfer', warningDays: 7, criticalDays: 3 },
+  { key: 'transfer_clear_film', label: 'Transfer Clear Film', group: 'transfer', warningDays: 7, criticalDays: 3 },
+  { key: 'transfer_label_4x2', label: 'Transfer Label 4*2', group: 'transfer', warningDays: 7, criticalDays: 3 },
+  { key: 'transfer_label_4x6', label: 'Transfer Label 4*6', group: 'transfer', warningDays: 7, criticalDays: 3 }
 ] as const;
 
 export type ConsumableItemKey = (typeof CONSUMABLE_ITEM_DEFINITIONS)[number]['key'];
+export type ConsumableItemGroup = (typeof CONSUMABLE_ITEM_DEFINITIONS)[number]['group'];
 export type ConsumableAlertType = 'missing_snapshot' | 'low_stock_warning' | 'low_stock_critical';
 export type ConsumableAlertSeverity = 'info' | 'warning' | 'critical';
 
