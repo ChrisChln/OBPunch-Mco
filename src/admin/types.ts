@@ -148,6 +148,7 @@ export type DailyListRow = {
   position: string;
   shift: 'early' | 'late';
   start_time: string;
+  scheduleOnly?: boolean;
 };
 
 export type DeviceRow = {

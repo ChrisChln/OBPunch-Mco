@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { isValidStaffId, normalizeStaffId, STAFF_ID_PATTERN } from '../../src/lib/staffId';
+import { isValidStaffId, isValidStaffIdForUpdate, normalizeStaffId, STAFF_ID_PATTERN } from '../../src/lib/staffId';
 
 describe('staffId', () => {
   test('normalizes to uppercase + trim', () => {
@@ -17,5 +17,13 @@ describe('staffId', () => {
     expect(isValidStaffId('AB010454')).toBe(false);
     expect(isValidStaffId('US010454X')).toBe(false);
   });
-});
 
+  test('allows unchanged legacy staff IDs during updates', () => {
+    expect(isValidStaffIdForUpdate('SOFISUAZAT', ' sofisuazat ')).toBe(true);
+  });
+
+  test('requires valid format when staff ID changes', () => {
+    expect(isValidStaffIdForUpdate('SOFISUAZAT', 'US010454')).toBe(true);
+    expect(isValidStaffIdForUpdate('SOFISUAZAT', 'SOFIA')).toBe(false);
+  });
+});
