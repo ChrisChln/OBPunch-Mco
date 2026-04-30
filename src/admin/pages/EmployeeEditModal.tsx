@@ -18,6 +18,7 @@ type EmployeeEditModalProps = {
   setEmployeeEditName: (value: string) => void;
   employeeEditAgency: string;
   setEmployeeEditAgency: (value: string) => void;
+  employeeEditAgencyLocked?: boolean;
   employeeAgencyOptions: string[];
   employeeEditPosition: string;
   setEmployeeEditPosition: (value: string) => void;
@@ -55,6 +56,7 @@ export default function EmployeeEditModal({
   setEmployeeEditName,
   employeeEditAgency,
   setEmployeeEditAgency,
+  employeeEditAgencyLocked = false,
   employeeAgencyOptions,
   employeeEditPosition,
   setEmployeeEditPosition,
@@ -153,7 +155,7 @@ export default function EmployeeEditModal({
             <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <label className={['text-xs uppercase tracking-[0.25em]', labelClass].join(' ')}>Agency</label>
-                <select value={employeeEditAgency} onChange={(e) => setEmployeeEditAgency(e.target.value)} disabled={isLocked} className={fieldClass}>
+                <select value={employeeEditAgency} onChange={(e) => setEmployeeEditAgency(e.target.value)} disabled={isLocked || employeeEditAgencyLocked} className={fieldClass}>
                   <option value="">{t('选择中介', 'Select agency')}</option>
                   {employeeAgencyOptions.map((agency) => (
                     <option key={agency} value={agency}>
@@ -161,6 +163,7 @@ export default function EmployeeEditModal({
                     </option>
                   ))}
                 </select>
+                {employeeEditAgencyLocked && <p className={['mt-1 text-[11px]', noteClass].join(' ')}>{t('JDL员工不能修改Agency。', 'JDL employee agency is locked.')}</p>}
               </div>
               <div>
                 <label className={['text-xs uppercase tracking-[0.25em]', labelClass].join(' ')}>Position</label>

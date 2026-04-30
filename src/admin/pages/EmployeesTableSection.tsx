@@ -1,5 +1,7 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { isScheduleOnlyAgency } from '../../shared/agencyRules';
+
 type TranslateFn = (zh: string, en: string) => string;
 
 const DEFAULT_WORK_PASSWORD = 'Helloworld2!';
@@ -212,6 +214,7 @@ export default function EmployeesTableSection({
               const staff = String(e.staff_id ?? '').trim();
               const name = String(e.name ?? '').trim();
               const agency = String(e.agency ?? e.Agency ?? '').trim();
+              const isProtectedAgencyEmployee = isScheduleOnlyAgency(agency);
               const position = String(e.position ?? e.Position ?? '').trim();
               const employmentType = normalizeEmploymentType((e as any).employment_type ?? (e as any).EmploymentType ?? '');
               const label = String(e.label ?? e.Label ?? '').trim();
@@ -266,6 +269,7 @@ export default function EmployeesTableSection({
                       `Scheduled now: ${scheduledShift === 'early' ? 'Day' : 'Night'}`
                     )
                   : '';
+              const displayEmployeeId = isProtectedAgencyEmployee ? '-' : displayStaffId(staff);
               const isSelected = employeeBadgeBatchSelectedStaffIds.includes(staff);
               const selectedRowStyle = isSelected
                 ? themeMode === 'light'
@@ -292,7 +296,7 @@ export default function EmployeesTableSection({
                     isSelected ? '' : 'hover:bg-white/5'
                   ].join(' ')}
                 >
-                  <td className={['w-[118px] px-3 py-3 font-mono whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{displayStaffId(staff)}</td>
+                  <td className={['w-[118px] px-3 py-3 font-mono whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{displayEmployeeId}</td>
                   <td className={['w-[180px] max-w-[180px] px-3 py-3', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
                     <span className="block truncate" title={name || '-'}>{name || '-'}</span>
                   </td>
@@ -396,11 +400,12 @@ export default function EmployeesTableSection({
                     </button>
                     <button
                       type="button"
-                      disabled={isLocked}
+                      disabled={isLocked || isProtectedAgencyEmployee}
                       onClick={(evt) => {
                         evt.stopPropagation();
                         void deleteEmployeeRow(staff);
                       }}
+                      title={isProtectedAgencyEmployee ? t('JDL员工不能删除', 'JDL employees cannot be deleted') : undefined}
                       className="rounded-xl bg-ember px-3 py-1.5 text-xs font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {t('删', 'Del')}

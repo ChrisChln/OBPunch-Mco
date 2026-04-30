@@ -2,7 +2,7 @@
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
-import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
+import { isValidStaffId as isValidStaffIdValue, isValidStaffIdForUpdate, normalizeStaffId } from '../lib/staffId';
 import { matchesLooseSearch } from '../lib/textSearch';
 import {
   LABEL_TONE_KEYS,
@@ -108,6 +108,7 @@ import {
   type DailyCapacityProcKey,
   type DailyCapacityStaffStats
 } from './dailyCapacity';
+import { filterDailyListCountedRows, filterDailyListDisplayRows } from './dailyList';
 import {
   applyFlexCoverageToRecommendedRows,
   buildFlexCoverageByDayIndex,
@@ -401,6 +402,13 @@ const normalizeWorkAccountKey = (value: string) => {
   const allDigits = raw.match(/\d{5,}/g);
   if (allDigits && allDigits.length > 0) return allDigits[allDigits.length - 1];
   return raw.replace(/\s+/g, '');
+};
+
+const buildJdlStaffIdCandidatesForAccount = (email: string, userId: string) => {
+  const userToken = String(userId ?? '').replace(/-/g, '').slice(0, 8).toUpperCase();
+  const emailPrefix = String(email ?? '').split('@')[0] ?? '';
+  const base = emailPrefix.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || `USER${userToken}`;
+  return [base, `${base}${userToken}`].filter(Boolean);
 };
 
 const parseUph = (value: unknown) => {
@@ -1332,6 +1340,25 @@ export default function AdminAppPage() {
   const accountsCanManageAdminAccess = useMemo(
     () => canManageAdminAccess(adminAccessContext),
     [adminAccessContext]
+  );
+  const inactiveJdlStaffIds = useMemo(() => {
+    const next = new Set<string>();
+    for (const account of adminAccessAccounts) {
+      if (account.is_active) continue;
+      for (const staff of buildJdlStaffIdCandidatesForAccount(account.user_email, account.user_id)) {
+        const normalized = normalizeStaffId(staff);
+        if (normalized) next.add(normalized);
+      }
+    }
+    return next;
+  }, [adminAccessAccounts]);
+  const isInactiveJdlEmployee = useCallback(
+    (employee: EmployeeRow | null | undefined) => {
+      const staff = normalizeStaffId(String(employee?.staff_id ?? '').trim());
+      const agency = String(employee?.agency ?? employee?.Agency ?? '').trim();
+      return Boolean(staff && isScheduleOnlyAgency(agency) && inactiveJdlStaffIds.has(staff));
+    },
+    [inactiveJdlStaffIds]
   );
   const pendingTerminationRequestsByStaffId = useMemo(() => {
     const map = new Map<string, TerminationRequestRecord>();
@@ -3248,6 +3275,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       void fetchAdminAccessAccountsAndUsers({ lockUi: false });
     }
   }, [page, user?.id, accountsCanManageAdminAccess, adminModuleMap]);
+
+  useEffect(() => {
+    if (page !== 'employees' && page !== 'schedule') return;
+    if (!accountsCanManageAdminAccess) return;
+    void fetchAdminAccessAccountsAndUsers({ lockUi: false });
+  }, [page, user?.id, accountsCanManageAdminAccess]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -6330,6 +6363,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setEmployeesError('Agency is required.');
       return;
     }
+    if (isScheduleOnlyAgency(agency)) {
+      setEmployeesError(t('JDL只能由系统自动创建。', 'JDL can only be created by the system.'));
+      return;
+    }
     if (!position) {
       setEmployeesError('Position is required.');
       return;
@@ -6451,6 +6488,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const normalizedStaff = normalizeStaffId(staff);
     const employeeSnapshot =
       employees.find((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) === normalizedStaff) ?? null;
+    if (isScheduleOnlyAgency(String(employeeSnapshot?.agency ?? employeeSnapshot?.Agency ?? '').trim())) {
+      setEmployeesError(t('JDL员工不能删除。', 'JDL employees cannot be deleted.'));
+      return;
+    }
     const employeeName = employeeSnapshot?.name?.trim() || '';
     const displayName = employeeName ? `${employeeName} (${staff})` : staff;
 
@@ -7673,7 +7714,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setEmployeesError(`Only ${STAFF_ID_EDITOR_EMAIL} can change staff ID.`);
       return;
     }
-    if (!isPlaceholderOriginal && !isValidStaffIdValue(nextStaff)) {
+    if (!isPlaceholderOriginal && !isValidStaffIdForUpdate(originalStaff, nextStaff)) {
       setEmployeesError('Invalid staff ID format (e.g. US010454).');
       return;
     }
@@ -7683,7 +7724,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
 
     const name = employeeEditName.trim();
-    const agency = employeeEditAgency.trim();
+    const originalEmployeeForEdit =
+      employees.find((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) === originalStaff) ?? null;
+    const originalAgencyForEdit = String(originalEmployeeForEdit?.agency ?? originalEmployeeForEdit?.Agency ?? '').trim();
+    const isProtectedAgencyEdit = isScheduleOnlyAgency(originalAgencyForEdit);
+    const agency = isProtectedAgencyEdit ? 'JDL' : employeeEditAgency.trim();
+    if (!isProtectedAgencyEdit && isScheduleOnlyAgency(agency)) {
+      setEmployeesError(t('JDL只能由系统自动创建。', 'JDL can only be created by the system.'));
+      return;
+    }
     const positionRaw = employeeEditPosition.trim();
     const employmentType = normalizeEmploymentTypeValue(employeeEditEmploymentType);
     const label = employeeEditLabel.trim();
@@ -12367,11 +12416,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const employeeAgencyOptions = useMemo(() => {
     const out = new Set<string>();
     for (const e of employees) {
+      if (isInactiveJdlEmployee(e)) continue;
       const agency = String(e.agency ?? e.Agency ?? '').trim();
       if (agency) out.add(agency);
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
-  }, [employees]);
+  }, [employees, isInactiveJdlEmployee]);
+  const employeeManualAgencyOptions = useMemo(
+    () => employeeAgencyOptions.filter((agency) => !isScheduleOnlyAgency(agency)),
+    [employeeAgencyOptions]
+  );
+  const employeeEditAgencyOptions = useMemo(() => {
+    if (!isScheduleOnlyAgency(employeeEditAgency)) return employeeManualAgencyOptions;
+    return Array.from(new Set([employeeEditAgency, ...employeeManualAgencyOptions])).filter(Boolean);
+  }, [employeeEditAgency, employeeManualAgencyOptions]);
 
   const employeePositionOptions = useMemo(() => {
     const out = new Set<string>();
@@ -12444,6 +12502,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (page !== 'employees') return [];
     const { search: searchNeedle, agency: agencyNeedle, position: positionNeedle, shift: shiftNeedle, labels: labelNeedles } = employeeFilterNeedles;
     return employees.filter((e) => {
+      if (isInactiveJdlEmployee(e)) return false;
       const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
       const name = String(e.name ?? '').trim();
       const agency = String(e.agency ?? e.Agency ?? '').trim();
@@ -12464,7 +12523,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!searchNeedle) return true;
       return [staff, name, employmentType, label, workAccount].join(' ').toLowerCase().includes(searchNeedle);
     });
-  }, [page, employees, employeeFilterNeedles, employeeShiftByStaffId]);
+  }, [page, employees, employeeFilterNeedles, employeeShiftByStaffId, isInactiveJdlEmployee]);
 
   // Step 3: Apply hire date sorting (optional, depends on filtered rows + sort flag)
   const employeesAfterHireDateSort = useMemo(() => {
@@ -13409,8 +13468,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         : addDays(new Date(serverTime), 1);
     const targetDay = Number.isNaN(parsedTarget.getTime()) ? addDays(new Date(serverTime), 1) : parsedTarget;
     const dayIndex = (targetDay.getDay() + 6) % 7; // Mon=0..Sun=6
-    const earlyRows: DailyListRow[] = [];
-    const lateRows: DailyListRow[] = [];
+    const countedEarlyRows: DailyListRow[] = [];
+    const countedLateRows: DailyListRow[] = [];
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff) continue;
@@ -13418,22 +13477,24 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!row || !isWorkingScheduleRow(row)) continue;
       const profile = employeeProfileByStaffId.get(staff);
       if (!profile) continue;
-      if (isScheduleOnlyAgency(profile.agency)) continue;
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
       const assignedShift = normalizeShiftValue(String((employee as any).shift ?? (employee as any).Shift ?? '').trim());
       // New-hire demand rows may not have punch logs yet, so prefer employee.shift first.
       const shift = assignedShift || inferredShift;
       if (shift !== 'early' && shift !== 'late') continue;
+      const position = profile?.position || String(row.position ?? '').trim() || '';
+      if (!normalizeDailyListPositionKey(position)) continue;
       const item: DailyListRow = {
         staff_id: staff,
         name: profile?.name || '',
         agency: profile?.agency || '',
-        position: profile?.position || String(row.position ?? '').trim() || '',
+        position,
         shift,
-        start_time: resolveShiftStartTime(shift, profile?.position || String(row.position ?? '').trim() || '', profile?.shiftTime || '')
+        start_time: resolveShiftStartTime(shift, position, profile?.shiftTime || ''),
+        scheduleOnly: isScheduleOnlyAgency(profile.agency)
       };
-      if (shift === 'late') lateRows.push(item);
-      else earlyRows.push(item);
+      if (shift === 'late') countedLateRows.push(item);
+      else countedEarlyRows.push(item);
     }
     const positionRank = new Map(ALLOWED_POSITIONS.map((pos, idx) => [pos, idx] as const));
     const dailyListSort = (a: DailyListRow, b: DailyListRow) => {
@@ -13453,14 +13514,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       return String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US');
     };
-    earlyRows.sort(dailyListSort);
-    lateRows.sort(dailyListSort);
+    const validCountedEarlyRows = filterDailyListCountedRows(countedEarlyRows, normalizeDailyListPositionKey).sort(dailyListSort);
+    const validCountedLateRows = filterDailyListCountedRows(countedLateRows, normalizeDailyListPositionKey).sort(dailyListSort);
 
     return {
       targetDate: toDateOnly(targetDay),
       weekday: targetDay.toLocaleDateString('en-US', { weekday: 'short' }),
-      earlyRows,
-      lateRows
+      countedEarlyRows: validCountedEarlyRows,
+      countedLateRows: validCountedLateRows,
+      earlyRows: filterDailyListDisplayRows(validCountedEarlyRows),
+      lateRows: filterDailyListDisplayRows(validCountedLateRows)
     };
   }, [serverTime, dailyListDateInput, employees, scheduleRowsByStaffDayIndex, employeeProfileByStaffId, employeeShiftByStaffId]);
   const dailyListCapacityByRowKey = useMemo(() => {
@@ -13497,8 +13560,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         countByKey[key] = (countByKey[key] ?? 0) + 1;
       }
     };
-    addRows(tomorrowDailyList.earlyRows, 'early');
-    addRows(tomorrowDailyList.lateRows, 'late');
+    addRows(tomorrowDailyList.countedEarlyRows, 'early');
+    addRows(tomorrowDailyList.countedLateRows, 'late');
     return (['early', 'late'] as const).flatMap((shift) =>
       DAILY_LIST_LIGHT_POSITIONS.map((position) => ({
         key: `${shift}:${position}`,
@@ -13580,7 +13643,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return `${mm}/${dd}/${yyyy}`;
   }, [tomorrowDailyList.targetDate]);
   const dailyListTotalDemandCount = useMemo(
-    () => Number(tomorrowDailyList.earlyRows.length ?? 0) + Number(tomorrowDailyList.lateRows.length ?? 0),
+    () => Number(tomorrowDailyList.countedEarlyRows.length ?? 0) + Number(tomorrowDailyList.countedLateRows.length ?? 0),
     [tomorrowDailyList]
   );
 
@@ -13588,6 +13651,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (page !== 'schedule') return [];
     return employees
       .filter((employee) => {
+        if (isInactiveJdlEmployee(employee)) return false;
         const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
         const position = normalizeAllowedPosition(String(employee.position ?? employee.Position ?? '').trim());
         const employmentType = normalizeEmploymentTypeValue((employee as any).employment_type ?? (employee as any).EmploymentType ?? '');
@@ -13620,6 +13684,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     deferredScheduleLabels,
     deferredScheduleShift,
     employeeShiftByStaffId,
+    isInactiveJdlEmployee,
     scheduleWorkDayFilter,
     scheduleRowsByStaffDayIndex
   ]);
@@ -13627,13 +13692,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const scheduleLabelOptions = useMemo(() => {
     const out = new Set<string>();
     for (const employee of employees) {
+      if (isInactiveJdlEmployee(employee)) continue;
       const position = normalizeAllowedPosition(String(employee.position ?? employee.Position ?? '').trim());
       if (deferredSchedulePosition && position !== deferredSchedulePosition) continue;
       const label = String(employee.label ?? employee.Label ?? '').trim();
       if (label) out.add(label);
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
-  }, [employees, deferredSchedulePosition]);
+  }, [employees, deferredSchedulePosition, isInactiveJdlEmployee]);
   const dailyListNewHireLabelOptions = useMemo(() => {
     const targetPosition = normalizePositionKey(dailyListNewHirePosition);
     if (!targetPosition) return [];
@@ -16792,7 +16858,7 @@ ${rowsToHtml(late)}
                   setEmployeeNewName={setEmployeeNewName}
                   employeeNewAgency={employeeNewAgency}
                   setEmployeeNewAgency={setEmployeeNewAgency}
-                  employeeAgencyOptions={employeeAgencyOptions}
+                  employeeAgencyOptions={employeeManualAgencyOptions}
                   employeeNewPosition={employeeNewPosition}
                   setEmployeeNewPosition={setEmployeeNewPosition}
                   employeeNewEmploymentType={employeeNewEmploymentType}
@@ -16883,7 +16949,8 @@ ${rowsToHtml(late)}
                   setEmployeeEditName={setEmployeeEditName}
                   employeeEditAgency={employeeEditAgency}
                   setEmployeeEditAgency={setEmployeeEditAgency}
-                  employeeAgencyOptions={employeeAgencyOptions}
+                  employeeEditAgencyLocked={isScheduleOnlyAgency(employeeEditAgency)}
+                  employeeAgencyOptions={employeeEditAgencyOptions}
                   employeeEditPosition={employeeEditPosition}
                   setEmployeeEditPosition={setEmployeeEditPosition as unknown as (value: string) => void}
                   employeeEditEmploymentType={employeeEditEmploymentType}

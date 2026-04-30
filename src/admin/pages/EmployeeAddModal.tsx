@@ -1,5 +1,7 @@
 ﻿import { createPortal } from 'react-dom';
 
+import { isScheduleOnlyAgency } from '../../shared/agencyRules';
+
 type TranslateFn = (zh: string, en: string) => string;
 
 type EmployeeAddModalProps = {
@@ -70,13 +72,16 @@ export default function EmployeeAddModal({
   const isLight = themeMode === 'light';
   const NEW_AGENCY_OPTION = '__new_agency__';
   const normalizedAgency = String(employeeNewAgency ?? '').trim();
-  const hasAgencyInOptions = normalizedAgency ? employeeAgencyOptions.includes(normalizedAgency) : false;
+  const selectableAgencyOptions = employeeAgencyOptions.filter((agency) => !isScheduleOnlyAgency(agency));
+  const isProtectedAgencyInput = isScheduleOnlyAgency(normalizedAgency);
+  const hasAgencyInOptions = normalizedAgency ? selectableAgencyOptions.includes(normalizedAgency) : false;
   const agencySelectValue = !normalizedAgency ? '' : hasAgencyInOptions ? normalizedAgency : NEW_AGENCY_OPTION;
   const isAddDisabled =
     isLocked ||
     !employeeNewStaffId.trim() ||
     !employeeNewName.trim() ||
     !normalizedAgency ||
+    isProtectedAgencyInput ||
     !employeeNewPosition.trim() ||
     !employeeNewShift ||
     !employeeNewLabel.trim();
@@ -160,7 +165,7 @@ export default function EmployeeAddModal({
                   className={fieldClass}
                 >
                   <option value="">{t('选择中介', 'Select agency')}</option>
-                  {employeeAgencyOptions.map((agency) => (
+                  {selectableAgencyOptions.map((agency) => (
                     <option key={agency} value={agency}>
                       {agency}
                     </option>
@@ -176,6 +181,7 @@ export default function EmployeeAddModal({
                     className={fieldClass}
                   />
                 )}
+                {isProtectedAgencyInput && <p className="mt-1 text-[11px] text-ember">{t('JDL只能由系统自动创建。', 'JDL can only be created by the system.')}</p>}
               </div>
               <div>
                 <label className={['text-xs uppercase tracking-[0.25em]', labelClass].join(' ')}>Position</label>
