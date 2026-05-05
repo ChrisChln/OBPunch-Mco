@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 import { createSupabaseClient } from './lib/supabase';
 import { normalizeStaffId } from './lib/staffId';
 import { getLabelToneClass, loadLabelToneMap } from './lib/labelTone';
+import { isExactOperationalCutoffOut } from './shared/operationalPunches';
 import AppDialog from './components/AppDialog';
 
 type EmployeeRow = {
@@ -710,6 +711,7 @@ export default function DashboardPage() {
       for (const row of ((punchesRes.data as any[] | null) ?? [])) {
         const staffId = normalizeStaffId(String(row.staff_id ?? '').trim());
         if (!staffId) continue;
+        if (isExactOperationalCutoffOut(String(row.created_at ?? ''), row.action, DAY_CUTOFF_HOUR)) continue;
         const normalizedPunch: PunchRow = {
           id: String(row.id ?? ''),
           staff_id: staffId,
@@ -1358,42 +1360,6 @@ export default function DashboardPage() {
       return { shift, expected, present };
     });
   }, [cardPositions, cardStatsByKey]);
-  const summaryStats = useMemo(() => {
-    const onClock = rows.filter((row) => row.punches[row.punches.length - 1]?.action === 'IN').length;
-    const absent = rows.filter((row) => row.attendance === 'Absent').length;
-    const offWorked = rows.filter((row) => row.attendance === 'Off Worked').length;
-    return [
-      {
-        label: 'Scheduled',
-        value: rows.length,
-        detail: `${filteredRows.length} in view`,
-        cardClass: 'border-sky-300/18 bg-gradient-to-br from-sky-400/[0.14] via-sky-300/[0.05] to-transparent',
-        valueClass: 'text-sky-50'
-      },
-      {
-        label: 'On Clock',
-        value: onClock,
-        detail: 'Active right now',
-        cardClass: 'border-emerald-300/18 bg-gradient-to-br from-emerald-400/[0.14] via-emerald-300/[0.05] to-transparent',
-        valueClass: 'text-emerald-50'
-      },
-      {
-        label: 'Absent',
-        value: absent,
-        detail: 'Needs attention',
-        cardClass: 'border-rose-300/18 bg-gradient-to-br from-rose-400/[0.14] via-rose-300/[0.05] to-transparent',
-        valueClass: 'text-rose-50'
-      },
-      {
-        label: 'Off Worked',
-        value: offWorked,
-        detail: 'Worked on rest day',
-        cardClass: 'border-amber-300/18 bg-gradient-to-br from-amber-400/[0.14] via-amber-300/[0.05] to-transparent',
-        valueClass: 'text-amber-50'
-      }
-    ];
-  }, [rows, filteredRows.length]);
-
   const presentRows = useMemo(
     () => rows.filter((row) => row.attendance !== 'Absent' && !isNewHirePlaceholderStaffId(String(row.staff_id ?? '').trim())),
     [rows]
@@ -1932,7 +1898,7 @@ export default function DashboardPage() {
   return (
     <main className="min-h-screen px-4 py-4 text-paper sm:px-6 sm:py-6 lg:px-8 lg:py-8">
       <section className="glass mx-auto w-full max-w-[1580px] rounded-[32px] px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(420px,0.8fr)]">
+        <div>
           <div className="space-y-3">
             <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-stone-300">
               Operational Dashboard
@@ -1943,21 +1909,6 @@ export default function DashboardPage() {
               </h1>
               {user?.email && <p className="text-sm text-stone-400">Logged in as: {user.email}</p>}
             </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {summaryStats.map((item) => (
-              <div
-                key={item.label}
-                className={[
-                  'rounded-[24px] border px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
-                  item.cardClass
-                ].join(' ')}
-              >
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">{item.label}</div>
-                <div className={['mt-3 text-3xl font-semibold tracking-[-0.03em]', item.valueClass].join(' ')}>{item.value}</div>
-                <div className="mt-1 text-xs text-stone-400">{item.detail}</div>
-              </div>
-            ))}
           </div>
         </div>
 

@@ -49,7 +49,9 @@ type TableRow = HomeRosterRow & {
   punches: Array<{ action: 'IN' | 'OUT'; created_at: string }>;
 };
 
-const POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
+export const HOME_DASHBOARD_CARD_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
+type NormalizedPosition = (typeof HOME_DASHBOARD_CARD_POSITIONS)[number] | 'FLEX TEAM';
+const POSITIONS = HOME_DASHBOARD_CARD_POSITIONS;
 const OUTBOUND_SUMMARY_POSITIONS = POSITIONS.filter((position) => position !== 'Transfer');
 const iconStrokeClass = 'h-4 w-4 shrink-0';
 
@@ -66,7 +68,7 @@ const ChevronDownIcon = ({ className = iconStrokeClass }: IconProps) => (
   </svg>
 );
 
-const normalizePositionKey = (value: string): '' | (typeof POSITIONS)[number] => {
+const normalizePositionKey = (value: string): '' | NormalizedPosition => {
   const v = String(value ?? '').trim().toLowerCase();
   if (!v) return '';
   if (v.includes('pick')) return 'Pick';
@@ -317,7 +319,7 @@ function HomeDashboardPage({
 
   return (
     <main className="h-full w-full text-paper">
-      <section className="glass w-full px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
+      <section className="w-full px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
         <div className="space-y-3">
           <div className={['inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em]', isLight ? 'border-slate-200 bg-white text-slate-500' : 'border-white/10 bg-white/[0.04] text-stone-300'].join(' ')}>
             Operational Dashboard

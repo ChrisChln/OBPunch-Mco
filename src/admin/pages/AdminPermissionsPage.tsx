@@ -250,7 +250,7 @@ export default function AdminPermissionsPage({
           onSave={onSaveAccess}
         />
       ) : (
-        <section className="glass reveal rounded-3xl px-6 py-8">
+        <section className="px-6 py-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-display text-2xl tracking-[0.08em]">{t('当前权限', 'Current Access')}</h2>
             <button
@@ -306,7 +306,7 @@ export default function AdminPermissionsPage({
       )}
 
       {!canManage ? (
-        <section className="glass reveal rounded-3xl px-6 py-8">
+        <section className="px-6 py-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-display text-2xl tracking-[0.08em]">{t('权限申请', 'Request Access')}</h2>
             {pendingOwnRequest ? renderStatusPill('pending') : null}
@@ -457,7 +457,7 @@ export default function AdminPermissionsPage({
         </section>
       ) : null}
 
-      <section className="glass reveal rounded-3xl px-6 py-8">
+      <section className="px-6 py-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-display text-2xl tracking-[0.08em]">
             {canManage ? t('权限审批', 'Approvals') : t('申请记录', 'Requests')}

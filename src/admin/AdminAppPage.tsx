@@ -2,7 +2,12 @@
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
-import { isValidStaffId as isValidStaffIdValue, isValidStaffIdForUpdate, normalizeStaffId } from '../lib/staffId';
+import {
+  isValidScheduleStaffId,
+  isValidStaffId as isValidStaffIdValue,
+  isValidStaffIdForUpdate,
+  normalizeStaffId
+} from '../lib/staffId';
 import { matchesLooseSearch } from '../lib/textSearch';
 import {
   LABEL_TONE_KEYS,
@@ -108,7 +113,7 @@ import {
   type DailyCapacityProcKey,
   type DailyCapacityStaffStats
 } from './dailyCapacity';
-import { filterDailyListCountedRows, filterDailyListDisplayRows } from './dailyList';
+import { filterDailyListCountedRows, filterDailyListDisplayRows, selectDailyListCapacityRows } from './dailyList';
 import {
   applyFlexCoverageToRecommendedRows,
   buildFlexCoverageByDayIndex,
@@ -4352,7 +4357,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
     const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-    if (!staff || !isValidStaffIdValue(staff)) {
+    const agency = String(employee.agency ?? employee.Agency ?? '').trim();
+    if (!staff || !isValidScheduleStaffId(staff, agency)) {
       setScheduleError('Invalid staff id.');
       return;
     }
@@ -13533,8 +13539,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!staff) return;
       map.set(`${row.shift}__${staff}`, resolveDailyListCapacityForRow(row, dailyCapacityStaffStatsByStaffId, dailyCapacityTemplatePayload));
     };
-    for (const row of tomorrowDailyList.earlyRows) addRow(row);
-    for (const row of tomorrowDailyList.lateRows) addRow(row);
+    for (const row of selectDailyListCapacityRows(tomorrowDailyList.countedEarlyRows)) addRow(row);
+    for (const row of selectDailyListCapacityRows(tomorrowDailyList.countedLateRows)) addRow(row);
     return map;
   }, [tomorrowDailyList, dailyCapacityStaffStatsByStaffId, dailyCapacityTemplatePayload]);
   const sumDailyListCapacityRows = (rows: DailyListRow[]) => {
@@ -15388,7 +15394,7 @@ ${rowsToHtml(late)}
             )}
 
                         {page === 'schedule' && (
-              <section className="glass reveal rounded-3xl px-6 py-8">
+              <section className="px-6 py-8">
                 <ScheduleToolbar
                   t={t}
                   isLocked={isLocked}
@@ -16813,7 +16819,7 @@ ${rowsToHtml(late)}
             )}
 
             {page === 'employees' && (
-              <section className="glass reveal rounded-b-3xl rounded-t-none px-6 py-8">
+              <section className="px-6 py-8">
                 <EmployeesToolbar
                   t={t}
                   themeMode={themeMode}
@@ -17027,7 +17033,7 @@ ${rowsToHtml(late)}
             )}
 
             {page === 'timecard' && (
-              <section className="glass reveal rounded-none px-6 py-8">
+              <section className="px-6 py-8">
                 <TimecardControls
                   t={t}
                   themeMode={themeMode}

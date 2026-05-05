@@ -1923,7 +1923,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   };
 
   return (
-    <section className="glass reveal rounded-3xl px-6 py-8">
+    <section className="px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-display text-2xl tracking-[0.08em]">{t('Forecast', 'Forecast')}</h2>

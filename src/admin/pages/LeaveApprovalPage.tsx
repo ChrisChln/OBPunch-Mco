@@ -655,7 +655,7 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
   const labelClass = isLight ? 'text-xs uppercase tracking-[0.16em] text-slate-500' : 'text-xs uppercase tracking-[0.16em] text-white/60';
 
   return (
-    <section className="glass reveal rounded-3xl px-6 py-8">
+    <section className="px-6 py-8">
       <div>
         <h2 className="font-display text-2xl tracking-[0.08em]">{t('请假审批', 'Leave Approval')}</h2>
       </div>

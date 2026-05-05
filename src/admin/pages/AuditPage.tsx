@@ -54,7 +54,7 @@ export default function AuditPage({
   const writeLocked = isLocked || isReadOnly;
 
   return (
-    <section className="glass reveal rounded-3xl px-6 py-8">
+    <section className="px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-display text-2xl tracking-[0.08em]">{t('日志', 'Log')}</h2>
         <button

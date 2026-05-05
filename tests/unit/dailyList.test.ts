@@ -3,7 +3,8 @@ import {
   filterDailyListCountedRows,
   filterDailyListDisplayRows,
   isDailyListCountedRow,
-  isDailyListDisplayRow
+  isDailyListDisplayRow,
+  selectDailyListCapacityRows
 } from '../../src/admin/dailyList';
 import type { DailyListRow } from '../../src/admin/types';
 
@@ -54,6 +55,32 @@ describe('dailyList', () => {
     expect(filterDailyListCountedRows(rows, normalizePosition).map((row) => row.staff_id)).toEqual(['CENTRAL', 'US010454']);
     expect(filterDailyListDisplayRows(rows).map((row) => row.staff_id)).toEqual(['US010454']);
     expect(isDailyListDisplayRow(rows[0])).toBe(false);
+  });
+
+  test('uses counted rows for capacity while keeping schedule-only rows hidden', () => {
+    const rows: DailyListRow[] = [
+      {
+        staff_id: 'JDL-PICK',
+        name: 'JDL Pick',
+        agency: 'JDL',
+        position: 'Pick',
+        shift: 'early',
+        start_time: '07:00',
+        scheduleOnly: true
+      },
+      {
+        staff_id: 'US010454',
+        name: 'Gio Luki',
+        agency: 'Central',
+        position: 'Pick',
+        shift: 'early',
+        start_time: '08:00'
+      }
+    ];
+    const countedRows = filterDailyListCountedRows(rows, normalizePosition);
+
+    expect(selectDailyListCapacityRows(countedRows).map((row) => row.staff_id)).toEqual(['JDL-PICK', 'US010454']);
+    expect(filterDailyListDisplayRows(countedRows).map((row) => row.staff_id)).toEqual(['US010454']);
   });
 
   test('does not count rows without a valid position or shift', () => {

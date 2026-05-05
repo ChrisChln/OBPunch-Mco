@@ -528,7 +528,7 @@ export default function AdminAccessManagementSection({
       : null;
 
   return (
-    <section className="glass reveal rounded-3xl px-6 py-8">
+    <section className="px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-display text-2xl tracking-[0.08em]">{t('权限分配', 'Access')}</h2>
         <div className="flex flex-1 flex-wrap items-center justify-end gap-3">
