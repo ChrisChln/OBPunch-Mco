@@ -368,7 +368,7 @@ function HomeDashboardPage({
 
           <div className="space-y-3">
             {attendanceCardGroups.map((group) => (
-              <div key={`attendance:${group.shift}`} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+              <div key={`attendance:${group.shift}`} className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
                 {group.cards.map((card) => {
                   const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
                   return (

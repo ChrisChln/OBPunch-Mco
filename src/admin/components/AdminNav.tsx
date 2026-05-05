@@ -44,6 +44,7 @@ const NAV_ICON_STYLE = 'h-5 w-5';
 const PAGE_ICONS: Record<AdminPage, IconType> = {
   home: HiSquares2X2,
   package_metrics: HiChartBar,
+  consumables: HiCube,
   employees: HiUsers,
   employee_upload: HiUserGroup,
   accounts: HiBriefcase,
@@ -63,6 +64,8 @@ const PAGE_ICONS: Record<AdminPage, IconType> = {
 
 const NAV_ITEMS: NavItem[] = [
   { page: 'home', label: (t) => t('首页', 'Dashboard') },
+  { page: 'package_metrics', label: (t) => t('日报', 'Daily') },
+  { page: 'consumables', label: (t) => t('耗材', 'Consumables') },
   { page: 'employees', label: (t) => t('员工信息', 'Employees') },
   { page: 'accounts', label: (t) => t('账号管理', 'Accounts') },
   { page: 'permissions', label: (t) => t('权限', 'Permissions') },
@@ -78,8 +81,6 @@ const NAV_ITEMS: NavItem[] = [
   { page: 'prediction_model', label: (t) => t('预测模型', 'Prediction Model') },
   { page: 'efficiency', label: (t) => t('人效', 'Efficiency') }
 ];
-
-NAV_ITEMS.splice(1, 0, { page: 'package_metrics', label: (t) => t('日报&耗材', 'Package Metrics') });
 
 const NavIcon = ({ page }: { page: AdminPage }) => {
   const Icon = PAGE_ICONS[page] ?? HiHome;
@@ -129,7 +130,10 @@ function AdminNav({
 
   return (
     <aside
-      className="relative h-full min-h-0 w-[60px]"
+      className={[
+        'relative h-full min-h-0 shrink-0 overflow-hidden transition-[width] duration-200 ease-out',
+        expanded ? 'w-[240px]' : 'w-[60px]'
+      ].join(' ')}
       onMouseEnter={() => {
         clearCollapseTimer();
         if (!expanded) setExpanded(true);
@@ -144,7 +148,7 @@ function AdminNav({
     >
       <div
         className={[
-          'absolute inset-y-0 left-0 z-20 flex min-h-0 flex-col overflow-hidden transition-[width] duration-200 ease-out',
+          'flex h-full min-h-0 flex-col overflow-hidden transition-[width] duration-200 ease-out',
           expanded ? 'w-[240px] shadow-[0_10px_30px_rgba(2,6,23,0.24)]' : 'w-[60px]',
           shellClass
         ].join(' ')}
