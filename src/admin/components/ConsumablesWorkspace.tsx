@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, BellRing, Boxes, CalendarDays, Edit2, PackagePlus, Plus, RefreshCcw, Save, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Boxes, CalendarDays, Edit2, PackagePlus, Plus, RefreshCcw, Save, Trash2, X } from 'lucide-react';
 import AdminNoticeToast from './AdminNoticeToast';
 import {
   CONSUMABLE_GROUP_DEFINITIONS,
@@ -141,6 +141,12 @@ const formatLogDateTime = (value: string | null | undefined) => {
     minute: '2-digit',
     hour12: false
   }).replace(',', '');
+};
+
+const toEpochMs = (value: string | null | undefined) => {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const buildEmptySnapshotDraft = (items: Array<{ item_key: ConsumableItemKey }> = []) =>
@@ -385,10 +391,13 @@ export default function ConsumablesWorkspace({
         inboundOrdersByDate
       });
       const latestSnapshot = latestSnapshotByItem.get(item.item_key);
-      const latestSnapshotCutoff = latestSnapshot ? `${latestSnapshot.snapshot_date}T23:59:59.999Z` : null;
-      const postSnapshotAdjustmentQty = latestSnapshotCutoff
+      const latestSnapshotCutoffMs = latestSnapshot
+        ? toEpochMs(latestSnapshot.created_at) ?? toEpochMs(`${latestSnapshot.snapshot_date}T00:00:00Z`)
+        : null;
+      const postSnapshotAdjustmentQty = latestSnapshotCutoffMs != null
         ? itemAdjustments.reduce((sum, adjustment) => {
-            if (adjustment.effective_at <= latestSnapshotCutoff) return sum;
+            const adjustmentMs = toEpochMs(adjustment.effective_at);
+            if (adjustmentMs == null || adjustmentMs <= latestSnapshotCutoffMs) return sum;
             return sum + adjustment.delta_qty;
           }, 0)
         : 0;
@@ -418,24 +427,6 @@ export default function ConsumablesWorkspace({
       };
     });
   }, [adjustments, inboundOrdersByDate, items, latestSnapshotByItem, snapshots]);
-
-  const alertRows = useMemo(() => {
-    const persistedAlerts = ((dashboard.alerts ?? []) as DashboardAlertRow[]).filter((alert) => String(alert.status ?? 'open') !== 'resolved');
-    const synthesizedAlerts = cardRows
-      .filter((item) => item.alertType)
-      .map((item) => ({
-        id: `computed-${item.item_key}-${item.alertType}`,
-        alert_date: today,
-        item_key: item.item_key,
-        alert_type: item.alertType ?? '',
-        severity: item.severity ?? 'warning',
-        details_json: {
-          estimated_days_left: item.estimatedDaysLeft,
-          latest_remaining_qty: item.latestRemainingQty
-        }
-      }));
-    return [...persistedAlerts, ...synthesizedAlerts].slice(0, 8);
-  }, [cardRows, dashboard.alerts, today]);
 
   const groupedSnapshots = useMemo(() => {
     const groups = new Map<string, DashboardSnapshotRow[]>();
@@ -499,11 +490,12 @@ export default function ConsumablesWorkspace({
     setSnapshotDraft((prev) => ({ ...prev, [itemKey]: value }));
   };
 
-  const saveSnapshotBatch = async () => {
+  const saveSnapshotBatch = async (targetItems = items) => {
     if (!supabase || !canSubmitSnapshot || savingSnapshot) return;
+    if (targetItems.length === 0) return;
     setSavingSnapshot(true);
     try {
-      const itemsPayload = items.map((item) => {
+      const itemsPayload = targetItems.map((item) => {
         const qty = Number(snapshotDraft[item.item_key]);
         if (!Number.isFinite(qty) || qty < 0) {
           throw new Error(`${item.item_label}: ${t('请输入有效剩余数量。', 'Enter a valid remaining quantity.')}`);
@@ -712,119 +704,168 @@ export default function ConsumablesWorkspace({
           </div>
         </div>
 
-        {alertRows.length > 0 ? (
-          <div className="grid gap-2 md:grid-cols-2">
-            {alertRows.map((alert) => {
-              const isCritical = alert.severity === 'critical';
-              const isMissing = alert.alert_type === 'missing_snapshot';
-              const toneClass = isCritical
-                ? isLight
-                  ? 'border-rose-200 bg-rose-50 text-rose-800'
-                  : 'border-rose-500/30 bg-rose-500/10 text-rose-100'
-                : isLight
-                  ? 'border-amber-200 bg-amber-50 text-amber-800'
-                  : 'border-amber-500/30 bg-amber-500/10 text-amber-100';
-              const itemLabel = alert.item_key ? itemLabelByKey.get(alert.item_key) ?? CONSUMABLE_ITEMS_BY_KEY[alert.item_key]?.label ?? alert.item_key : t('本次盘点', 'Snapshot');
-              return (
-                <div key={alert.id ?? `${alert.alert_date}-${alert.alert_type}-${itemLabel}`} className={['rounded-2xl border px-4 py-3', toneClass].join(' ')}>
-                  <div className="flex items-start gap-3">
-                    {isMissing ? <BellRing className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold">
-                        {isMissing
-                          ? t(`待填盘点 ${alert.alert_date}`, `Snapshot due ${alert.alert_date}`)
-                          : `${itemLabel} · ${alert.alert_type === 'low_stock_critical' ? t('紧急', 'Critical') : t('预警', 'Warning')}`}
-                      </div>
-                      <div className="mt-1 text-xs opacity-80">
-                        {isMissing
-                          ? t('盘点尚未录入。', 'Snapshot is still missing.')
-                          : t('预计可用天数已进入预警区间。', 'Estimated days left has entered the alert window.')}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+        <section
+          className={[
+            'rounded-[24px] border px-4 py-3',
+            isLight
+              ? 'border-slate-200 bg-white/85 shadow-[0_14px_34px_rgba(15,23,42,0.06)]'
+              : 'border-slate-800/80 bg-slate-950/64 shadow-[0_18px_44px_rgba(2,6,23,0.26)]'
+          ].join(' ')}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm font-semibold">{t('状态灯', 'Status Lights')}</div>
+            <div className={['flex flex-wrap items-center gap-3 text-xs font-semibold', mutedClass].join(' ')}>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.68)]" />
+                {t('正常', 'Normal')}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-amber-300 shadow-[0_0_14px_rgba(252,211,77,0.68)]" />
+                {t('预警', 'Warning')}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-rose-400 shadow-[0_0_14px_rgba(251,113,133,0.68)]" />
+                {t('紧急', 'Critical')}
+              </span>
+            </div>
           </div>
-        ) : null}
+
+          <div className="mt-3 space-y-3 overflow-hidden">
+            {groupedCardRows
+              .filter((group) => group.items.length > 0)
+              .map((group) => (
+                <section key={`status-group-${group.key}`} className="space-y-2">
+                  <div className={['text-xs font-semibold leading-none', mutedClass].join(' ')}>
+                    {t(group.labelZh, group.labelEn)}
+                  </div>
+                  <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+                    {group.items.map((item) => {
+                      const isCritical = item.severity === 'critical';
+                      const isWarning = item.severity === 'warning';
+                      const lampClass = isCritical
+                        ? 'bg-rose-400 shadow-[0_0_16px_rgba(251,113,133,0.78)]'
+                        : isWarning
+                          ? 'bg-amber-300 shadow-[0_0_16px_rgba(252,211,77,0.72)]'
+                          : 'bg-emerald-400 shadow-[0_0_16px_rgba(52,211,153,0.68)]';
+                      const tileClass = isCritical
+                        ? isLight
+                          ? 'border-rose-200 bg-rose-50 text-rose-900'
+                          : 'border-rose-500/24 bg-rose-500/10 text-rose-100'
+                        : isWarning
+                          ? isLight
+                            ? 'border-amber-200 bg-amber-50 text-amber-900'
+                            : 'border-amber-500/24 bg-amber-500/10 text-amber-100'
+                          : isLight
+                            ? 'border-emerald-200 bg-emerald-50/70 text-slate-900'
+                            : 'border-emerald-500/16 bg-emerald-500/[0.07] text-slate-100';
+                      const statusLabel = isCritical ? t('紧急', 'Critical') : isWarning ? t('预警', 'Warning') : t('正常', 'Normal');
+                      const daysLeftText = formatDaysLeft(item.estimatedDaysLeft);
+                      const daysLeftLabel =
+                        daysLeftText === '-' ? t('可用天数 -', 'Days -') : t(`可用天数 ${daysLeftText} 天`, `Days ${daysLeftText}`);
+
+                      return (
+                        <div
+                          key={`status-lamp-${item.item_key}`}
+                          className={['flex h-12 items-center justify-between gap-3 rounded-2xl border px-3', tileClass].join(' ')}
+                          aria-label={`${item.item_label} ${statusLabel} ${daysLeftLabel}`}
+                          title={`${item.item_label} · ${statusLabel} · ${daysLeftLabel}`}
+                        >
+                          <div className="flex min-w-0 flex-1 items-center gap-2">
+                            <span className={['h-3 w-3 shrink-0 rounded-full', lampClass].join(' ')} />
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-semibold leading-tight">{item.item_label}</div>
+                              <div className="mt-0.5 text-[11px] font-semibold leading-none opacity-75">{statusLabel}</div>
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right leading-tight">
+                            <div className="text-[10px] font-semibold opacity-70">{t('可用天数', 'Days')}</div>
+                            <div className="mt-0.5 text-xs font-semibold tabular-nums">
+                              {daysLeftText}{daysLeftText === '-' ? '' : t(' 天', '')}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+          </div>
+        </section>
 
         <div className="space-y-4">
-          {groupedCardRows.map((group) => (
+          {groupedCardRows.filter((group) => group.items.length > 0).map((group) => (
             <section key={`cards-${group.key}`} className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-sm font-semibold">{t(group.labelZh, group.labelEn)}</div>
                 <div className={['text-xs tabular-nums', mutedClass].join(' ')}>{group.items.length}</div>
               </div>
-              {group.items.length === 0 ? (
-                <div className={[surfaceClass, 'rounded-[22px] px-4 py-5 text-sm', mutedClass].join(' ')}>
-                  {t('暂无耗材', 'No items')}
-                </div>
-              ) : (
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-                  {group.items.map((item) => {
-                    const toneClass =
-                      item.severity === 'critical'
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                {group.items.map((item) => {
+                  const toneClass =
+                    item.severity === 'critical'
+                      ? isLight
+                        ? 'border-rose-200 bg-rose-50/70'
+                        : 'border-rose-500/20 bg-rose-500/10'
+                      : item.severity === 'warning'
                         ? isLight
-                          ? 'border-rose-200 bg-rose-50/70'
-                          : 'border-rose-500/20 bg-rose-500/10'
-                        : item.severity === 'warning'
-                          ? isLight
-                            ? 'border-amber-200 bg-amber-50/70'
-                            : 'border-amber-500/20 bg-amber-500/10'
-                          : surfaceClass;
-                    return (
-                      <div key={item.item_key} className={['rounded-[22px] p-4', toneClass].join(' ')}>
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0 truncate text-sm font-semibold">{item.item_label}</div>
-                          <Boxes className={['h-4 w-4 shrink-0', mutedClass].join(' ')} />
-                        </div>
-                        <div className="mt-4 text-[28px] font-semibold leading-none">{formatNumber(item.latestRemainingQty)}</div>
-                        <div className={['mt-2 text-xs', mutedClass].join(' ')}>{t('剩余', 'Remaining')}</div>
-                        <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                          <div>
-                            <div className={mutedClass}>{t('可用天数', 'Days Left')}</div>
-                            <div className="mt-1 font-semibold">{formatDaysLeft(item.estimatedDaysLeft)}</div>
-                          </div>
-                          <div>
-                            <div className={mutedClass}>{t('日均用量', 'Daily Use')}</div>
-                            <div className="mt-1 font-semibold">{formatNumber(item.avgDailyUsage, 2)}</div>
-                          </div>
-                        </div>
-                        <div className={['mt-4 text-xs', mutedClass].join(' ')}>{t('上次盘点', 'Last Snapshot')}: {item.latestSnapshotDate ?? '-'}</div>
+                          ? 'border-amber-200 bg-amber-50/70'
+                          : 'border-amber-500/20 bg-amber-500/10'
+                        : surfaceClass;
+                  return (
+                    <div key={item.item_key} className={['rounded-[22px] p-4', toneClass].join(' ')}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 truncate text-sm font-semibold">{item.item_label}</div>
+                        <Boxes className={['h-4 w-4 shrink-0', mutedClass].join(' ')} />
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+                      <div className="mt-4 text-[28px] font-semibold leading-none">{formatNumber(item.latestRemainingQty)}</div>
+                      <div className={['mt-2 text-xs', mutedClass].join(' ')}>{t('剩余', 'Remaining')}</div>
+                      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <div className={mutedClass}>{t('可用天数', 'Days Left')}</div>
+                          <div className="mt-1 font-semibold">{formatDaysLeft(item.estimatedDaysLeft)}</div>
+                        </div>
+                        <div>
+                          <div className={mutedClass}>{t('日均用量', 'Daily Use')}</div>
+                          <div className="mt-1 font-semibold">{formatNumber(item.avgDailyUsage, 2)}</div>
+                        </div>
+                      </div>
+                      <div className={['mt-4 text-xs', mutedClass].join(' ')}>{t('上次盘点', 'Last Snapshot')}: {item.latestSnapshotDate ?? '-'}</div>
+                    </div>
+                  );
+                })}
+              </div>
             </section>
           ))}
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.85fr)]">
-          <div className={[surfaceClass, 'rounded-[24px] p-4'].join(' ')}>
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-base font-semibold">{t('盘点录入', 'Snapshot Entry')}</div>
-              <button
-                type="button"
-                disabled={!canSubmitSnapshot || savingSnapshot}
-                onClick={() => void saveSnapshotBatch()}
-                className={['inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition', buttonPrimaryClass].join(' ')}
-              >
-                <Save className="h-4 w-4" />
-                {savingSnapshot ? t('保存中...', 'Saving...') : t('保存盘点', 'Save Snapshot')}
-              </button>
-            </div>
-
-            <div className="mt-4 space-y-5">
-              {groupedCardRows.map((group) => (
-                <section key={`snapshot-${group.key}`} className="space-y-3">
-                  <div className={['text-xs font-semibold uppercase tracking-[0.16em]', mutedClass].join(' ')}>{t(group.labelZh, group.labelEn)}</div>
-                  {group.items.length === 0 ? (
-                    <div className={['rounded-2xl border px-4 py-3 text-sm', isLight ? 'border-slate-200 text-slate-400' : 'border-slate-800 text-slate-500'].join(' ')}>
-                      {t('暂无耗材', 'No items')}
+        <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.85fr)]">
+          <div className="flex h-full flex-col space-y-4">
+            <div className="flex h-9 items-center text-base font-semibold">{t('盘点录入', 'Snapshot Entry')}</div>
+            <div className="flex flex-1 flex-col p-4 xl:min-h-[1090px]">
+              <div className="grid flex-1 gap-4">
+                {groupedCardRows.filter((group) => group.items.length > 0).map((group) => (
+                  <section
+                    key={`snapshot-${group.key}`}
+                    className={[
+                      'min-h-[220px] rounded-[20px] border p-4',
+                      isLight ? 'border-slate-200 bg-slate-50/70' : 'border-slate-800 bg-slate-950/28'
+                    ].join(' ')}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className={['text-xs font-semibold uppercase tracking-[0.16em]', mutedClass].join(' ')}>
+                        {t(group.labelZh, group.labelEn)}
+                      </div>
+                      <button
+                        type="button"
+                        disabled={!canSubmitSnapshot || savingSnapshot}
+                        onClick={() => void saveSnapshotBatch(group.items)}
+                        className={['inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition', buttonPrimaryClass].join(' ')}
+                      >
+                        <Save className="h-4 w-4" />
+                        {savingSnapshot ? t('保存中...', 'Saving...') : t('保存盘点', 'Save Snapshot')}
+                      </button>
                     </div>
-                  ) : (
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                       {group.items.map((item) => (
                         <label key={item.item_key} className="block">
                           <div className={['mb-2 truncate text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{item.item_label}</div>
@@ -839,14 +880,14 @@ export default function ConsumablesWorkspace({
                         </label>
                       ))}
                     </div>
-                  )}
-                </section>
-              ))}
+                  </section>
+                ))}
+              </div>
             </div>
           </div>
 
-          <div className={[surfaceClass, 'flex min-h-[520px] flex-col rounded-[24px] p-4'].join(' ')}>
-            <div className="flex items-center justify-between gap-3">
+          <div className="flex h-full flex-col space-y-4">
+            <div className="flex h-9 items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <Plus className="h-4 w-4" />
                 <div className="text-base font-semibold">{t('补货调整', 'Adjustments')}</div>
@@ -861,77 +902,79 @@ export default function ConsumablesWorkspace({
                 {savingAdjustment ? t('保存中...', 'Saving...') : t('保存调整', 'Save Adjustment')}
               </button>
             </div>
-            <div className="mt-4 space-y-3">
-              <label className="block">
-                <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{t('耗材', 'Item')}</div>
-                <select
-                  value={adjustmentForm.itemKey}
-                  disabled={!canOperate || isLocked}
-                  onChange={(event) => setAdjustmentForm((prev) => ({ ...prev, itemKey: event.target.value as ConsumableItemKey }))}
-                  className={['w-full rounded-2xl border px-4 py-3 text-sm outline-none transition', inputClass].join(' ')}
-                >
-                  {items.map((item) => (
-                    <option key={item.item_key} value={item.item_key}>
-                      {item.item_label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block">
-                <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{t('补货数量', 'Restock Qty')}</div>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={adjustmentForm.deltaQty}
-                  disabled={!canOperate || isLocked}
-                  onChange={(event) => {
-                    const nextValue = event.target.value.replace(/[^\d]/g, '');
-                    setAdjustmentForm((prev) => ({ ...prev, deltaQty: nextValue }));
-                  }}
-                  className={['w-full rounded-2xl border px-4 py-3 text-sm outline-none transition', inputClass].join(' ')}
-                />
-              </label>
-            </div>
-            <div
-              className={[
-                'mt-5 rounded-2xl border',
-                isLight ? 'border-slate-200 bg-slate-950 text-slate-100' : 'border-slate-800 bg-slate-950/70'
-              ].join(' ')}
-            >
+            <div className={[surfaceClass, 'flex min-h-[300px] flex-1 flex-col rounded-[24px] p-4 xl:min-h-[1090px]'].join(' ')}>
+              <div className="space-y-2">
+                <label className="block">
+                  <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{t('耗材', 'Item')}</div>
+                  <select
+                    value={adjustmentForm.itemKey}
+                    disabled={!canOperate || isLocked}
+                    onChange={(event) => setAdjustmentForm((prev) => ({ ...prev, itemKey: event.target.value as ConsumableItemKey }))}
+                    className={['w-full rounded-2xl border px-4 py-2.5 text-sm outline-none transition', inputClass].join(' ')}
+                  >
+                    {items.map((item) => (
+                      <option key={item.item_key} value={item.item_key}>
+                        {item.item_label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{t('补货数量', 'Restock Qty')}</div>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={adjustmentForm.deltaQty}
+                    disabled={!canOperate || isLocked}
+                    onChange={(event) => {
+                      const nextValue = event.target.value.replace(/[^\d]/g, '');
+                      setAdjustmentForm((prev) => ({ ...prev, deltaQty: nextValue }));
+                    }}
+                    className={['w-full rounded-2xl border px-4 py-2.5 text-sm outline-none transition', inputClass].join(' ')}
+                  />
+                </label>
+              </div>
               <div
                 className={[
-                  'flex items-center justify-between border-b px-4 py-3',
-                  isLight ? 'border-slate-800' : 'border-slate-800'
+                  'mt-4 flex min-h-0 flex-1 flex-col rounded-2xl border',
+                  isLight ? 'border-slate-200 bg-slate-950 text-slate-100' : 'border-slate-800 bg-slate-950/70'
                 ].join(' ')}
               >
-                <div className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full bg-rose-400" />
-                  <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
-                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
+                <div
+                  className={[
+                    'flex items-center justify-between border-b px-4 py-2.5',
+                    isLight ? 'border-slate-800' : 'border-slate-800'
+                  ].join(' ')}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full bg-rose-400" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
+                  </div>
+                  <div className={['flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-300' : mutedClass].join(' ')}>
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    {t('调整记录', 'Adjustment Log')}
+                  </div>
                 </div>
-                <div className={['flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-300' : mutedClass].join(' ')}>
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  {t('调整记录', 'Adjustment Log')}
+                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2.5 font-mono text-xs">
+                  {adjustments.length === 0 ? (
+                    <div className={isLight ? 'text-slate-400' : mutedClass}>{t('暂无记录', 'No records')}</div>
+                  ) : (
+                    <table className="w-full table-fixed border-separate border-spacing-0">
+                      <tbody>
+                        {adjustments.slice(0, 30).map((row) => (
+                          <tr key={row.id ?? `${row.item_key}-${row.effective_at}`} className="text-slate-300">
+                            <td className="w-[92px] py-1.5 pr-3 tabular-nums text-slate-500">{formatLogDateTime(row.effective_at)}</td>
+                            <td className="truncate py-1.5 pr-3 font-semibold text-slate-100">{itemLabelByKey.get(row.item_key) ?? CONSUMABLE_ITEMS_BY_KEY[row.item_key]?.label ?? row.item_key}</td>
+                            <td className="w-[128px] truncate py-1.5 pr-3 text-slate-400">{String(row.created_by_display ?? '').trim() || '-'}</td>
+                            <td className="w-[64px] py-1.5 text-right font-semibold tabular-nums text-emerald-400">{formatNumber(row.delta_qty)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
-              </div>
-              <div className="max-h-[168px] overflow-y-auto px-4 py-3 font-mono text-xs">
-                {adjustments.length === 0 ? (
-                  <div className={isLight ? 'text-slate-400' : mutedClass}>{t('暂无记录', 'No records')}</div>
-                ) : (
-                  <table className="w-full table-fixed border-separate border-spacing-0">
-                    <tbody>
-                      {adjustments.slice(0, 12).map((row) => (
-                        <tr key={row.id ?? `${row.item_key}-${row.effective_at}`} className="text-slate-300">
-                          <td className="w-[92px] py-1.5 pr-3 tabular-nums text-slate-500">{formatLogDateTime(row.effective_at)}</td>
-                          <td className="truncate py-1.5 pr-3 font-semibold text-slate-100">{itemLabelByKey.get(row.item_key) ?? CONSUMABLE_ITEMS_BY_KEY[row.item_key]?.label ?? row.item_key}</td>
-                          <td className="w-[128px] truncate py-1.5 pr-3 text-slate-400">{String(row.created_by_display ?? '').trim() || '-'}</td>
-                          <td className="w-[64px] py-1.5 text-right font-semibold tabular-nums text-emerald-400">{formatNumber(row.delta_qty)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
               </div>
             </div>
           </div>
@@ -989,25 +1032,20 @@ export default function ConsumablesWorkspace({
           <div className={[surfaceClass, 'rounded-[24px] p-4'].join(' ')}>
             <div className="text-base font-semibold">{t('预测摘要', 'Projection')}</div>
             <div className="mt-4 space-y-5">
-              {groupedCardRows.map((group) => (
+              {groupedCardRows.filter((group) => group.items.length > 0).map((group) => (
                 <section key={`projection-${group.key}`} className="space-y-3">
                   <div className={['text-xs font-semibold uppercase tracking-[0.16em]', mutedClass].join(' ')}>{t(group.labelZh, group.labelEn)}</div>
-                  {group.items.length === 0 ? (
-                    <div className={['text-sm', mutedClass].join(' ')}>{t('暂无耗材', 'No items')}</div>
-                  ) : (
-                    group.items.map((item) => (
-                      <div key={`projection-${item.item_key}`} className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold">{item.item_label}</div>
-                          <div className={['text-xs', mutedClass].join(' ')}>{t('单量耗用', 'Usage / Order')}: {formatNumber(item.usagePerOrder, 4)}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-sm font-semibold">{formatDaysLeft(item.estimatedDaysLeft)}</div>
-                          <div className={['text-xs', mutedClass].join(' ')}>{t('天', 'days')}</div>
-                        </div>
+                  {group.items.map((item) => (
+                    <div key={`projection-${item.item_key}`} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3">
+                      <div className="min-w-0 truncate text-sm font-semibold">{item.item_label}</div>
+                      <div className={['text-xs tabular-nums', mutedClass].join(' ')}>
+                        {t('单量耗用', 'Usage / Order')}: {formatNumber(item.usagePerOrder, 4)}
                       </div>
-                    ))
-                  )}
+                      <div className="text-right text-sm font-semibold tabular-nums">
+                        {formatDaysLeft(item.estimatedDaysLeft)} {t('天', 'days')}
+                      </div>
+                    </div>
+                  ))}
                 </section>
               ))}
             </div>

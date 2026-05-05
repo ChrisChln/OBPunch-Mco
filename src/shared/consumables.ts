@@ -59,11 +59,13 @@ export type ConsumableIntervalUsage = {
   itemKey: ConsumableItemKey;
   startDate: string;
   endDate: string;
+  daysCovered?: number;
   remainingStart: number;
   remainingEnd: number;
   adjustmentQty: number;
   inboundOrders: number;
   usageQty: number;
+  dailyUsage?: number | null;
   usagePerOrder: number | null;
 };
 
@@ -143,6 +145,7 @@ export const buildConsumableIntervals = (options: {
       (new Date(`${current.snapshot_date}T00:00:00Z`).getTime() - new Date(`${previous.snapshot_date}T00:00:00Z`).getTime()) / 86400000
     );
     if (!Number.isFinite(daysBetween) || daysBetween <= 0 || daysBetween > maxLookbackDays) continue;
+    const daysCovered = daysBetween + 1;
 
     let adjustmentQty = 0;
     for (const adjustment of sortedAdjustments) {
@@ -160,19 +163,19 @@ export const buildConsumableIntervals = (options: {
       if (dateOnly > current.snapshot_date) break;
       inboundOrders += Math.max(0, Number(options.inboundOrdersByDate[dateOnly] ?? 0));
     }
-    if (inboundOrders <= 0) continue;
-
     const rawUsage = previous.remaining_qty + adjustmentQty - current.remaining_qty;
     const usageQty = Math.max(0, roundTo(rawUsage, 2));
     intervals.push({
       itemKey: options.itemKey,
       startDate: previous.snapshot_date,
       endDate: current.snapshot_date,
+      daysCovered,
       remainingStart: previous.remaining_qty,
       remainingEnd: current.remaining_qty,
       adjustmentQty: roundTo(adjustmentQty, 2),
       inboundOrders,
       usageQty,
+      dailyUsage: daysCovered > 0 ? roundTo(usageQty / daysCovered, 4) : null,
       usagePerOrder: inboundOrders > 0 ? roundTo(usageQty / inboundOrders, 6) : null
     });
   }
@@ -190,6 +193,19 @@ export const computeWeightedUsagePerOrder = (intervals: ConsumableIntervalUsage[
   }
   if (totalOrders <= 0) return null;
   return roundTo(totalUsage / totalOrders, 6);
+};
+
+export const computeAverageDailyUsageFromIntervals = (intervals: ConsumableIntervalUsage[]) => {
+  let totalUsage = 0;
+  let totalDays = 0;
+  for (const interval of intervals) {
+    const daysCovered = Math.max(0, Math.floor(Number(interval.daysCovered ?? 0)));
+    if (daysCovered <= 0) continue;
+    totalUsage += Math.max(0, interval.usageQty);
+    totalDays += daysCovered;
+  }
+  if (totalDays <= 0) return null;
+  return roundTo(totalUsage / totalDays, 4);
 };
 
 export const computeAverageDailyInboundOrders = (inboundOrdersByDate: Record<string, number>, maxDays = 28) => {
@@ -210,9 +226,11 @@ export const computeConsumableProjection = (options: {
 }): ConsumableProjection => {
   const latestRemainingQty = Math.max(0, toFiniteNumber(options.latestRemainingQty) ?? 0);
   const usagePerOrder = computeWeightedUsagePerOrder(options.intervals);
+  const snapshotDailyUsage = computeAverageDailyUsageFromIntervals(options.intervals);
   const averageDailyInboundOrders = computeAverageDailyInboundOrders(options.inboundOrdersByDate, 28);
-  const avgDailyUsage =
+  const orderBasedDailyUsage =
     usagePerOrder != null && averageDailyInboundOrders != null ? roundTo(usagePerOrder * averageDailyInboundOrders, 4) : null;
+  const avgDailyUsage = snapshotDailyUsage ?? orderBasedDailyUsage;
   const estimatedDaysLeft =
     avgDailyUsage != null && avgDailyUsage > 0 ? roundTo(latestRemainingQty / avgDailyUsage, 2) : null;
 
