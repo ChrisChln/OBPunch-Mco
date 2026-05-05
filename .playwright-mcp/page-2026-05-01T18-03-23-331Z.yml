@@ -1,0 +1,19 @@
+- main [ref=e5]:
+  - generic [ref=e7]:
+    - generic [ref=e9]:
+      - generic [ref=e10]: OBPUNCH SECURITY
+      - heading "Punch Screen Unlock" [level=1] [ref=e11]:
+        - text: Punch Screen
+        - text: Unlock
+    - generic [ref=e13]:
+      - generic [ref=e14]: SIGN IN
+      - generic [ref=e15]: Admin Login
+      - generic [ref=e16]:
+        - generic [ref=e17]:
+          - generic [ref=e18]: Email
+          - textbox "Email" [ref=e19]:
+            - /placeholder: Admin email
+        - generic [ref=e20]:
+          - generic [ref=e21]: Password
+          - textbox "Password" [ref=e22]
+        - button "Admin Login" [disabled] [ref=e23]

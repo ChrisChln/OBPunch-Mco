@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { ArrowUpRight, CheckSquare, ChevronDown, ChevronUp, Clock3, FileUp, Package2, Rows3, Save, Shuffle, X, XCircle } from 'lucide-react';
+import { ArrowUpRight, CheckSquare, ChevronDown, ChevronUp, Clock3, Download, FileUp, Package2, Rows3, Save, Shuffle, X, XCircle } from 'lucide-react';
 import { normalizeStaffId } from '../../lib/staffId';
 import {
   addDaysDateOnly,
@@ -61,6 +61,8 @@ type MetricColumn = {
   category: MetricColumnCategory;
   render: (row: PackageMetricsViewRow, totalHours: number | null, options?: { hideWholeDayInbound?: boolean }) => string;
 };
+
+type MetricRangeSummary = Record<string, { average: number | null; total: number | null }>;
 
 type MetricColumnCategory =
   | 'toc_order'
@@ -680,6 +682,64 @@ const getWeekdayLabel = (dateOnly: string) => {
 
 const isWholeDayInboundComplete = (row: PackageMetricsViewRow | null) => row?.calendar_inbound_final_hour_present === true;
 
+const isAverageOnlyMetricColumn = (key: string) =>
+  key.includes('ratio') || key.includes('efficiency') || key === 'sla_ratio' || key === 'transfer_avg_items_per_box';
+
+const getMetricColumnNumericValue = (
+  column: MetricColumn,
+  row: PackageMetricsViewRow,
+  totalHours: number | null
+) => {
+  if ((column.key === 'calendar_inbound_order_count' || column.key === 'calendar_inbound_item_qty') && !isWholeDayInboundComplete(row)) {
+    return null;
+  }
+  if (column.key === 'timecard_hours') return totalHours;
+  if (column.key === 'piece_efficiency') return computePackageDerivedMetrics(row, totalHours).pieceEfficiency;
+  if (column.key === 'order_efficiency') return computePackageDerivedMetrics(row, totalHours).orderEfficiency;
+  if (column.key === 'sla_ratio') return computePackageDerivedMetrics(row, totalHours).slaRatio;
+
+  const value = row[column.key as keyof PackageDailyMetrics];
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
+};
+
+const buildMetricRangeSummary = (
+  rows: PackageMetricsDisplayRow[],
+  columns: MetricColumn[],
+  laborSummaryByDate: PackageLaborSummaryByDate
+): MetricRangeSummary => {
+  const summary: MetricRangeSummary = {};
+
+  for (const column of columns) {
+    let total = 0;
+    let count = 0;
+
+    for (const row of rows) {
+      if (!row.data) continue;
+      const value = getMetricColumnNumericValue(column, row.data, laborSummaryByDate[row.metric_date]?.totalHours ?? null);
+      if (value == null || !Number.isFinite(value)) continue;
+      total += value;
+      count += 1;
+    }
+
+    summary[column.key] = {
+      average: count > 0 ? total / count : null,
+      total: count > 0 && !isAverageOnlyMetricColumn(column.key) ? total : null
+    };
+  }
+
+  return summary;
+};
+
+const formatMetricSummaryValue = (column: MetricColumn, value: number | null) => {
+  if (value == null || !Number.isFinite(value)) return '-';
+  if (column.key.includes('ratio') || column.key === 'sla_ratio') return `${(value * 100).toFixed(2)}%`;
+  if (column.key.includes('efficiency') || column.key === 'timecard_hours' || column.key === 'transfer_avg_items_per_box') {
+    return value.toFixed(2);
+  }
+  return Math.round(value).toLocaleString('en-US');
+};
+
 const applyForecastInventoryToMetricsRows = async (
   supabase: any,
   rows: PackageMetricsViewRow[],
@@ -1108,14 +1168,22 @@ export default function PackageMetricsPage({
     themeMode === 'light'
       ? 'rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50'
       : 'rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800';
-  const tableHeadClass = themeMode === 'light' ? 'bg-slate-100 text-slate-500' : 'bg-slate-900 text-slate-400';
-  const rowBaseClass = themeMode === 'light' ? 'border-t border-slate-200 bg-white' : 'border-t border-slate-800 bg-slate-950/35';
-  const rowSelectedClass = themeMode === 'light' ? 'bg-lime-50/70' : 'bg-lime-500/8';
+  const tableHeadClass = themeMode === 'light' ? 'bg-slate-50 text-slate-500' : 'bg-slate-950/80 text-sky-100/60';
+  const tableDividerClass = themeMode === 'light' ? 'border-slate-200/80' : 'border-slate-800/60';
+  const rowBaseClass =
+    themeMode === 'light'
+      ? 'border-b border-slate-200/70 bg-white hover:bg-slate-50/80'
+      : 'border-b border-slate-800/55 bg-slate-950/20 hover:bg-slate-900/45';
+  const rowSelectedClass = themeMode === 'light' ? 'bg-slate-50' : 'bg-slate-900/70';
   const cellClass = themeMode === 'light' ? 'text-slate-900' : 'text-slate-100';
+  const tableBodyRowClass = 'h-11';
+  const tableBodyCellClass = 'h-11 px-4 py-0 align-middle';
+  const tableSummaryRowClass = 'h-12';
+  const tableSummaryCellClass = 'h-12 px-4 py-0 align-middle';
   const frozenWrapClass =
     themeMode === 'light'
-      ? 'border-r border-slate-200 bg-white shadow-[10px_0_24px_rgba(15,23,42,0.06)]'
-      : 'border-r border-slate-800 bg-slate-950 shadow-[10px_0_28px_rgba(2,6,23,0.5)]';
+      ? 'border-r border-slate-200/80 bg-white'
+      : 'border-r border-slate-800/70 bg-slate-950/80';
 
   useEffect(() => {
     if (!status.message || status.tone === 'idle') return undefined;
@@ -1249,11 +1317,54 @@ export default function PackageMetricsPage({
     () => METRIC_COLUMNS.filter((column) => selectedMetricCategorySet.has(column.category)),
     [selectedMetricCategorySet]
   );
+  const metricRangeSummary = useMemo(
+    () => buildMetricRangeSummary(displayRows, visibleMetricColumns, laborSummaryByDate),
+    [displayRows, laborSummaryByDate, visibleMetricColumns]
+  );
   const metricTableMinWidth = `${Math.max(900, visibleMetricColumns.length * 156)}px`;
   const toggleMetricCategory = (category: MetricColumnCategory) => {
     setSelectedMetricCategories((current) =>
       current.includes(category) ? current.filter((item) => item !== category) : [...current, category]
     );
+  };
+
+  const handleExportRecords = () => {
+    if (displayRows.length === 0 || visibleMetricColumns.length === 0) {
+      setStatus({ tone: 'error', message: t('没有可导出的日报数据。', 'No records to export.') });
+      return;
+    }
+
+    const headers = ['Date', 'Week', ...visibleMetricColumns.map((column) => t(column.zh, column.en))];
+    const rows = displayRows.map((row) => {
+      const totalHours = row.data ? laborSummaryByDate[row.metric_date]?.totalHours ?? null : null;
+      const hideWholeDayInbound = !isWholeDayInboundComplete(row.data);
+      return [
+        row.metric_date.replace(/-/g, '/'),
+        row.weekLabel,
+        ...visibleMetricColumns.map((column) =>
+          row.data ? column.render(row.data, totalHours, { hideWholeDayInbound }) : '-'
+        )
+      ];
+    });
+    const summaryRows = [
+      [
+        t('平均', 'Average'),
+        `${rangeStart.replace(/-/g, '/')} - ${rangeEnd.replace(/-/g, '/')}`,
+        ...visibleMetricColumns.map((column) => formatMetricSummaryValue(column, metricRangeSummary[column.key]?.average ?? null))
+      ],
+      [
+        t('总合', 'Total'),
+        `${rangeStart.replace(/-/g, '/')} - ${rangeEnd.replace(/-/g, '/')}`,
+        ...visibleMetricColumns.map((column) => formatMetricSummaryValue(column, metricRangeSummary[column.key]?.total ?? null))
+      ]
+    ];
+    const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows, ...summaryRows]);
+    worksheet['!cols'] = headers.map((header, index) => ({
+      wch: index < 2 ? 16 : Math.max(14, String(header).length + 4)
+    }));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Outbound Records');
+    XLSX.writeFile(workbook, `outbound-records_${rangeStart}_to_${rangeEnd}.xlsx`);
   };
 
   const handleUpload = async () => {
@@ -1593,7 +1704,7 @@ export default function PackageMetricsPage({
   };
 
   return (
-    <section className="px-4 py-5 md:px-6 md:py-6">
+    <>
       <div className={[shellClass, 'rounded-[30px] p-4 md:p-5'].join(' ')}>
         <div className="flex flex-col gap-4">
           <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.55fr)_360px]">
@@ -1799,6 +1910,15 @@ export default function PackageMetricsPage({
                 </button>
                 <button
                   type="button"
+                  className={[secondaryButtonClass, 'inline-flex min-h-10 items-center gap-2 rounded-2xl px-4'].join(' ')}
+                  onClick={handleExportRecords}
+                  disabled={tableLoading || displayRows.length === 0 || visibleMetricColumns.length === 0}
+                >
+                  <Download className="h-4 w-4" />
+                  <span>{t('导出', 'Export')}</span>
+                </button>
+                <button
+                  type="button"
                   className={[secondaryButtonClass, 'min-h-10 rounded-2xl px-4'].join(' ')}
                   onClick={() => {
                     const nextEnd = getDateOnlyInTimeZone(serverTime);
@@ -1880,8 +2000,8 @@ export default function PackageMetricsPage({
               className={[
                 'overflow-hidden',
                 themeMode === 'light'
-                  ? 'bg-white/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_10px_30px_rgba(15,23,42,0.06)]'
-                  : 'bg-slate-950/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_18px_44px_rgba(2,6,23,0.26)]'
+                  ? 'bg-white'
+                  : 'bg-slate-950/45'
               ].join(' ')}
             >
               {displayRows.length === 0 ? (
@@ -1894,10 +2014,10 @@ export default function PackageMetricsPage({
                     <table className="w-[250px] border-separate border-spacing-0 text-left">
                       <thead className={tableHeadClass}>
                         <tr>
-                          <th className="w-[130px] border-b border-r border-slate-800 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.16em]">
+                          <th className={['w-[130px] border-b border-r px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.16em]', tableDividerClass].join(' ')}>
                             Date
                           </th>
-                          <th className="w-[120px] border-b border-slate-800 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.16em]">
+                          <th className={['w-[120px] border-b px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.16em]', tableDividerClass].join(' ')}>
                             Week
                           </th>
                         </tr>
@@ -1906,19 +2026,43 @@ export default function PackageMetricsPage({
                         {displayRows.map((row) => {
                           const isSelected = row.metric_date === metricDate;
                           return (
-                            <tr key={`frozen-${row.metric_date}`} className={[rowBaseClass, isSelected ? rowSelectedClass : ''].join(' ')}>
-                              <td className={['border-r border-slate-800 px-4 py-4 align-middle', cellClass].join(' ')}>
+                            <tr key={`frozen-${row.metric_date}`} className={[tableBodyRowClass, rowBaseClass, isSelected ? rowSelectedClass : ''].join(' ')}>
+                              <td className={[tableBodyCellClass, 'border-r', tableDividerClass, cellClass].join(' ')}>
                                 <button type="button" className="w-full text-left" onClick={() => setMetricDate(row.metric_date)}>
-                                  <div className="text-base font-semibold">{row.metric_date.replace(/-/g, '/')}</div>
+                                  <div className="text-[15px] font-semibold tabular-nums">{row.metric_date.replace(/-/g, '/')}</div>
                                 </button>
                               </td>
-                              <td className={['px-4 py-4 align-middle', cellClass].join(' ')}>
-                                <div className="text-base font-semibold">{row.weekLabel}</div>
+                              <td className={[tableBodyCellClass, cellClass].join(' ')}>
+                                <div className="text-[15px] font-semibold">{row.weekLabel}</div>
                               </td>
                             </tr>
                           );
                         })}
                       </tbody>
+                      <tfoot>
+                        {[
+                          { key: 'average', label: t('平均', 'Average') },
+                          { key: 'total', label: t('总合', 'Total') }
+                        ].map((item) => (
+                          <tr
+                            key={`frozen-summary-${item.key}`}
+                            className={[
+                              tableSummaryRowClass,
+                              'border-t',
+                              themeMode === 'light' ? 'border-slate-200 bg-slate-100/80' : 'border-slate-700/80 bg-slate-900/80'
+                            ].join(' ')}
+                          >
+                            <td className={[tableSummaryCellClass, 'border-r', tableDividerClass, cellClass].join(' ')}>
+                              <div className="text-[15px] font-semibold">{item.label}</div>
+                            </td>
+                            <td className={[tableSummaryCellClass, mutedClass].join(' ')}>
+                              <div className="whitespace-nowrap text-xs font-semibold">
+                                {rangeStart.replace(/-/g, '/')} - {rangeEnd.slice(5).replace(/-/g, '/')}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tfoot>
                     </table>
                   </div>
 
@@ -1934,7 +2078,7 @@ export default function PackageMetricsPage({
                             {visibleMetricColumns.map((column) => (
                               <th
                                 key={column.key}
-                                className={[column.width, 'border-b border-r border-slate-800 px-4 py-3 text-center text-[11px] font-semibold uppercase tracking-[0.12em] last:border-r-0'].join(' ')}
+                                className={[column.width, 'border-b border-r px-4 py-3 text-center text-[11px] font-semibold uppercase tracking-[0.12em] last:border-r-0', tableDividerClass].join(' ')}
                               >
                                 <div className="truncate">{t(column.zh, column.en)}</div>
                               </th>
@@ -1947,11 +2091,11 @@ export default function PackageMetricsPage({
                             const totalHours = row.data ? laborSummaryByDate[row.metric_date]?.totalHours ?? null : null;
                             const hideWholeDayInbound = !isWholeDayInboundComplete(row.data);
                             return (
-                              <tr key={`metrics-${row.metric_date}`} className={[rowBaseClass, isSelected ? rowSelectedClass : ''].join(' ')}>
+                              <tr key={`metrics-${row.metric_date}`} className={[tableBodyRowClass, rowBaseClass, isSelected ? rowSelectedClass : ''].join(' ')}>
                                 {visibleMetricColumns.map((column) => (
                                   <td
                                     key={`${row.metric_date}-${column.key}`}
-                                    className={['border-r border-slate-800 px-4 py-4 align-middle text-center text-base font-semibold last:border-r-0', cellClass].join(' ')}
+                                    className={[tableBodyCellClass, 'border-r text-center text-[15px] font-semibold tabular-nums last:border-r-0', tableDividerClass, cellClass].join(' ')}
                                   >
                                     {row.data ? column.render(row.data, totalHours, { hideWholeDayInbound }) : '-'}
                                   </td>
@@ -1960,6 +2104,30 @@ export default function PackageMetricsPage({
                             );
                           })}
                         </tbody>
+                        <tfoot>
+                          {[
+                            { key: 'average' as const },
+                            { key: 'total' as const }
+                          ].map((item) => (
+                            <tr
+                              key={`metrics-summary-${item.key}`}
+                              className={[
+                                tableSummaryRowClass,
+                                'border-t',
+                                themeMode === 'light' ? 'border-slate-200 bg-slate-100/80' : 'border-slate-700/80 bg-slate-900/80'
+                              ].join(' ')}
+                            >
+                              {visibleMetricColumns.map((column) => (
+                                <td
+                                  key={`summary-${item.key}-${column.key}`}
+                                  className={[tableSummaryCellClass, 'border-r text-center text-[15px] font-semibold tabular-nums last:border-r-0', tableDividerClass, cellClass].join(' ')}
+                                >
+                                  {formatMetricSummaryValue(column, metricRangeSummary[column.key]?.[item.key] ?? null)}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tfoot>
                       </table>
                     )}
                   </div>
@@ -2488,6 +2656,6 @@ export default function PackageMetricsPage({
           </div>
         </div>
       ) : null}
-    </section>
+    </>
   );
 }
