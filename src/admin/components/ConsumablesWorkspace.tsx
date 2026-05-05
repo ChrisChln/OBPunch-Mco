@@ -684,26 +684,9 @@ export default function ConsumablesWorkspace({
     <div id="consumables" className={flush ? 'w-full px-4 py-4 md:px-5' : [shellClass, 'rounded-[28px] p-4 md:p-5'].join(' ')}>
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-          <div className="space-y-1">
-            <div className={['text-[11px] font-semibold uppercase tracking-[0.22em]', mutedClass].join(' ')}>
-              {t('耗材工作区', 'Consumables')}
-            </div>
+          <div>
             <div className="flex items-center gap-3">
               <h3 className="font-display text-[26px] leading-none tracking-[0.04em]">{t('耗材', 'Consumables')}</h3>
-              <span
-                className={[
-                  'inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em]',
-                  canOperate
-                    ? isLight
-                      ? 'bg-emerald-50 text-emerald-700'
-                      : 'bg-emerald-500/12 text-emerald-200'
-                    : isLight
-                      ? 'bg-slate-100 text-slate-600'
-                      : 'bg-slate-800 text-slate-300'
-                ].join(' ')}
-              >
-                {canOperate ? t('可操作', 'Operate') : t('只读', 'Read Only')}
-              </span>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -726,7 +709,6 @@ export default function ConsumablesWorkspace({
               <RefreshCcw className="h-4 w-4" />
               {t('刷新', 'Refresh')}
             </button>
-            <div className={['text-xs', mutedClass].join(' ')}>{loading ? t('加载中...', 'Loading...') : t('最近 42 天', 'Last 42 days')}</div>
           </div>
         </div>
 

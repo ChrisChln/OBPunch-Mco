@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { IconType } from 'react-icons';
 import {
   HiBriefcase,
@@ -82,6 +82,8 @@ const NAV_ITEMS: NavItem[] = [
   { page: 'efficiency', label: (t) => t('人效', 'Efficiency') }
 ];
 
+const ALL_NAV_PAGES = NAV_ITEMS.map((item) => item.page);
+
 const NavIcon = ({ page }: { page: AdminPage }) => {
   const Icon = PAGE_ICONS[page] ?? HiHome;
   return <Icon className={NAV_ICON_STYLE} aria-hidden="true" />;
@@ -100,12 +102,14 @@ function AdminNav({
 }: AdminNavProps) {
   const [expanded, setExpanded] = useState(false);
   const collapseTimerRef = useRef<number | null>(null);
-  const visiblePageSet = new Set(visiblePages ?? NAV_ITEMS.map((item) => item.page));
-  const items = NAV_ITEMS.filter((item) => visiblePageSet.has(item.page));
+  const items = useMemo(() => {
+    const visiblePageSet = new Set(visiblePages ?? ALL_NAV_PAGES);
+    return NAV_ITEMS.filter((item) => visiblePageSet.has(item.page));
+  }, [visiblePages]);
   const shellClass =
     themeMode === 'light'
-      ? 'border-r border-slate-200 bg-white/90 text-slate-900 backdrop-blur-xl'
-      : 'border-r border-slate-800/90 bg-slate-950/96 text-slate-100 backdrop-blur-xl';
+      ? 'border-r border-slate-200 bg-white text-slate-900'
+      : 'border-r border-slate-800/90 bg-slate-950 text-slate-100';
   const activeClass =
     themeMode === 'light'
       ? 'border-indigo-200 bg-indigo-50 text-indigo-700 shadow-[0_10px_24px_rgba(79,70,229,0.08)]'
@@ -131,8 +135,7 @@ function AdminNav({
   return (
     <aside
       className={[
-        'relative h-full min-h-0 shrink-0 overflow-hidden transition-[width] duration-200 ease-out',
-        expanded ? 'w-[240px]' : 'w-[60px]'
+        'relative z-30 h-full min-h-0 w-[60px] shrink-0 overflow-visible'
       ].join(' ')}
       onMouseEnter={() => {
         clearCollapseTimer();
@@ -148,7 +151,7 @@ function AdminNav({
     >
       <div
         className={[
-          'flex h-full min-h-0 flex-col overflow-hidden transition-[width] duration-200 ease-out',
+          'absolute left-0 top-0 flex h-full min-h-0 flex-col overflow-hidden will-change-[width] transition-[width,box-shadow] duration-150 ease-out',
           expanded ? 'w-[240px] shadow-[0_10px_30px_rgba(2,6,23,0.24)]' : 'w-[60px]',
           shellClass
         ].join(' ')}
