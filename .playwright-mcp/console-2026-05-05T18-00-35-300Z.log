@@ -1,2 +1,3 @@
 [  902303ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://wkqsfxkdsvomrnghxmmh.supabase.co/rest/v1/rpc/now:0
 [ 1152785ms] [ERROR] Failed to load resource: net::ERR_NETWORK_CHANGED @ https://wkqsfxkdsvomrnghxmmh.supabase.co/rest/v1/rpc/now:0
+[ 6369388ms] [ERROR] Failed to load resource: net::ERR_INTERNET_DISCONNECTED @ https://wkqsfxkdsvomrnghxmmh.supabase.co/rest/v1/rpc/now:0

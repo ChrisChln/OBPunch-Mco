@@ -38,8 +38,9 @@ describe('consumables', () => {
       }
     });
 
-    expect(intervals).toHaveLength(1);
-    expect(intervals[0]).toMatchObject({
+    const interval = intervals.find((row) => row.endDate === '2026-04-16');
+
+    expect(interval).toMatchObject({
       usageQty: 240,
       inboundOrders: 150
     });
@@ -59,7 +60,9 @@ describe('consumables', () => {
       }
     });
 
-    expect(intervals[0]).toMatchObject({
+    const interval = intervals.find((row) => row.endDate === '2026-04-20');
+
+    expect(interval).toMatchObject({
       adjustmentQty: 200,
       usageQty: 460,
       inboundOrders: 100
@@ -127,6 +130,57 @@ describe('consumables', () => {
     expect(projection.avgDailyUsage).toBe(280);
     expect(projection.estimatedDaysLeft).toBeCloseTo(1.79, 2);
     expect(formatDaysLeft(projection.estimatedDaysLeft)).toBe('1.8');
+  });
+
+  test('projects days left from direct snapshot daily consumption', () => {
+    const intervals = buildConsumableIntervals({
+      itemKey: 'box_48',
+      snapshots: [
+        { item_key: 'box_48', snapshot_date: '2026-04-01', remaining_qty: 100 },
+        { item_key: 'box_48', snapshot_date: '2026-04-05', remaining_qty: 10 }
+      ],
+      adjustments: [],
+      inboundOrdersByDate: {}
+    });
+
+    const projection = computeConsumableProjection({
+      latestRemainingQty: 10,
+      intervals,
+      inboundOrdersByDate: {}
+    });
+
+    expect(intervals[0]).toMatchObject({
+      usageQty: 90,
+      dailyUsage: 18
+    });
+    expect(projection.avgDailyUsage).toBe(18);
+    expect(projection.estimatedDaysLeft).toBeCloseTo(10 / 18, 2);
+  });
+
+  test('includes restock in snapshot daily consumption projection', () => {
+    const intervals = buildConsumableIntervals({
+      itemKey: 'box_48',
+      snapshots: [
+        { item_key: 'box_48', snapshot_date: '2026-04-01', remaining_qty: 100 },
+        { item_key: 'box_48', snapshot_date: '2026-04-05', remaining_qty: 30 }
+      ],
+      adjustments: [{ item_key: 'box_48', effective_at: '2026-04-03T12:00:00Z', delta_qty: 20 }],
+      inboundOrdersByDate: {}
+    });
+
+    const projection = computeConsumableProjection({
+      latestRemainingQty: 30,
+      intervals,
+      inboundOrdersByDate: {}
+    });
+
+    expect(intervals[0]).toMatchObject({
+      adjustmentQty: 20,
+      usageQty: 90,
+      dailyUsage: 18
+    });
+    expect(projection.avgDailyUsage).toBe(18);
+    expect(projection.estimatedDaysLeft).toBeCloseTo(30 / 18, 2);
   });
 
   test('classifies warning and critical alerts', () => {
