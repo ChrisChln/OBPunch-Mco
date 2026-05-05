@@ -6,6 +6,7 @@ import {
   CONSUMABLE_ITEMS_BY_KEY,
   buildConsumableIntervals,
   classifyConsumableAlert,
+  computeConsumableCurrentRemaining,
   computeConsumableProjection,
   formatDaysLeft,
   groupConsumableRows,
@@ -391,6 +392,7 @@ export default function ConsumablesWorkspace({
         inboundOrdersByDate
       });
       const latestSnapshot = latestSnapshotByItem.get(item.item_key);
+      const totalAdjustmentQty = itemAdjustments.reduce((sum, adjustment) => sum + adjustment.delta_qty, 0);
       const latestSnapshotCutoffMs = latestSnapshot
         ? toEpochMs(latestSnapshot.created_at) ?? toEpochMs(`${latestSnapshot.snapshot_date}T00:00:00Z`)
         : null;
@@ -401,8 +403,11 @@ export default function ConsumablesWorkspace({
             return sum + adjustment.delta_qty;
           }, 0)
         : 0;
-      const currentRemainingQty =
-        latestSnapshot == null ? null : Math.max(0, latestSnapshot.remaining_qty + postSnapshotAdjustmentQty);
+      const currentRemainingQty = computeConsumableCurrentRemaining({
+        latestSnapshotQty: latestSnapshot?.remaining_qty ?? null,
+        totalAdjustmentQty,
+        postSnapshotAdjustmentQty
+      });
       const projection = computeConsumableProjection({
         latestRemainingQty: currentRemainingQty,
         intervals,

@@ -219,6 +219,16 @@ export const computeAverageDailyInboundOrders = (inboundOrdersByDate: Record<str
   return roundTo(total / values.length, 4);
 };
 
+export const computeConsumableCurrentRemaining = (options: {
+  latestSnapshotQty: number | null;
+  totalAdjustmentQty: number;
+  postSnapshotAdjustmentQty: number;
+}) => {
+  const latestSnapshotQty = toFiniteNumber(options.latestSnapshotQty);
+  const adjustmentQty = latestSnapshotQty == null ? options.totalAdjustmentQty : options.postSnapshotAdjustmentQty;
+  return Math.max(0, roundTo((latestSnapshotQty ?? 0) + Math.max(0, Number(adjustmentQty) || 0), 2));
+};
+
 export const computeConsumableProjection = (options: {
   latestRemainingQty: number | null;
   intervals: ConsumableIntervalUsage[];

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   buildConsumableIntervals,
   classifyConsumableAlert,
+  computeConsumableCurrentRemaining,
   computeConsumableProjection,
   computeWeightedUsagePerOrder,
   formatDaysLeft,
@@ -155,6 +156,16 @@ describe('consumables', () => {
     });
     expect(projection.avgDailyUsage).toBe(18);
     expect(projection.estimatedDaysLeft).toBeCloseTo(10 / 18, 2);
+  });
+
+  test('uses restock adjustments as current stock before the first snapshot', () => {
+    expect(
+      computeConsumableCurrentRemaining({
+        latestSnapshotQty: null,
+        totalAdjustmentQty: 196,
+        postSnapshotAdjustmentQty: 0
+      })
+    ).toBe(196);
   });
 
   test('includes restock in snapshot daily consumption projection', () => {
