@@ -26,7 +26,7 @@ export default function PunchesPage({
   employeeByStaffId
 }: PunchesPageProps) {
   return (
-    <section className="glass reveal rounded-3xl px-6 py-8">
+    <section className="px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-display text-2xl tracking-[0.08em]">{t('打卡流水', 'Punch Log')}</h2>
         <button
@@ -104,4 +104,3 @@ export default function PunchesPage({
     </section>
   );
 }
-

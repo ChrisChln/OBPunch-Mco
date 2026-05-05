@@ -4351,7 +4351,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
   return (
     <>
       {showFullscreenLoading ? <PredictionWorkbenchFullscreenLoading t={t} themeMode={themeMode} /> : null}
-      <section className="glass reveal rounded-3xl px-6 py-8">
+      <section className="px-6 py-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">

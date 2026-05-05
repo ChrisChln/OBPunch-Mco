@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { isValidStaffId, isValidStaffIdForUpdate, normalizeStaffId, STAFF_ID_PATTERN } from '../../src/lib/staffId';
+import {
+  isValidScheduleStaffId,
+  isValidStaffId,
+  isValidStaffIdForUpdate,
+  normalizeStaffId,
+  STAFF_ID_PATTERN
+} from '../../src/lib/staffId';
 
 describe('staffId', () => {
   test('normalizes to uppercase + trim', () => {
@@ -25,5 +31,12 @@ describe('staffId', () => {
   test('requires valid format when staff ID changes', () => {
     expect(isValidStaffIdForUpdate('SOFISUAZAT', 'US010454')).toBe(true);
     expect(isValidStaffIdForUpdate('SOFISUAZAT', 'SOFIA')).toBe(false);
+  });
+
+  test('allows schedule-only agency IDs for scheduling only', () => {
+    expect(isValidScheduleStaffId('JDLPICK001', 'JDL')).toBe(true);
+    expect(isValidScheduleStaffId('OWNTEAM001', '自顾')).toBe(true);
+    expect(isValidScheduleStaffId('JDLPICK001', 'Agency A')).toBe(false);
+    expect(isValidScheduleStaffId('', 'JDL')).toBe(false);
   });
 });

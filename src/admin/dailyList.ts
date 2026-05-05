@@ -20,3 +20,5 @@ export const filterDailyListCountedRows = (
 ) => rows.filter((row) => isDailyListCountedRow(row, normalizePosition));
 
 export const filterDailyListDisplayRows = (rows: DailyListRow[]) => rows.filter(isDailyListDisplayRow);
+
+export const selectDailyListCapacityRows = (countedRows: DailyListRow[]) => countedRows;

@@ -847,7 +847,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
   };
 
   return (
-    <section className="glass reveal rounded-3xl px-6 py-6">
+    <section className="px-6 py-6">
       <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
         <div className="grid h-full gap-4">
           <h2 className={['font-display text-3xl tracking-[0.06em]', isLight ? 'text-slate-900' : 'text-white'].join(' ')}>

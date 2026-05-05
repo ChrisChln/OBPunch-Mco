@@ -26,7 +26,7 @@ export default function EmployeeUploadPage({
   uploadError
 }: EmployeeUploadPageProps) {
   return (
-    <section className="glass reveal rounded-3xl px-6 py-8">
+    <section className="px-6 py-8">
       <h2 className="font-display text-2xl tracking-[0.08em]">{t('员工信息上传', 'Employee Upload')}</h2>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">

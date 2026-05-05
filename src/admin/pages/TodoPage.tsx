@@ -877,7 +877,7 @@ export default function TodoPage({
   const modalRoot = typeof document === 'undefined' ? null : document.body;
 
   return (
-    <section className="glass reveal rounded-3xl px-6 py-8">
+    <section className="px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><h2 className="font-display text-2xl tracking-[0.08em]">{t('待办', 'ToDo')}</h2></div>
         <div className="flex flex-wrap gap-2">

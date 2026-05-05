@@ -1413,7 +1413,7 @@ export default function WorkHourComparisonPage({
     : 'admin-btn admin-btn-primary h-10 px-4 text-sm font-semibold text-slate-950 disabled:opacity-60';
 
   return (
-    <section className="glass reveal rounded-3xl px-6 py-8">
+    <section className="px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-display text-2xl tracking-[0.08em]">{t('工时对比', 'Work Hour Comparison')}</h2>
