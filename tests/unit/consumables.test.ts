@@ -5,8 +5,11 @@ import {
   computeConsumableProjection,
   computeWeightedUsagePerOrder,
   formatDaysLeft,
+  groupConsumableRows,
   isConsumableSnapshotDay,
+  normalizeConsumableGroupKey,
   type ConsumableAdjustment,
+  type ConsumableDashboardItem,
   type ConsumableSnapshot
 } from '../../src/shared/consumables';
 
@@ -139,5 +142,52 @@ describe('consumables', () => {
       alertType: null,
       severity: null
     });
+  });
+
+  test('supports dynamic item keys in interval calculations', () => {
+    const dynamicSnapshots: ConsumableSnapshot[] = [
+      { item_key: 'custom_pack_bag', snapshot_date: '2026-04-13', remaining_qty: 120 },
+      { item_key: 'custom_pack_bag', snapshot_date: '2026-04-16', remaining_qty: 90 }
+    ];
+
+    const intervals = buildConsumableIntervals({
+      itemKey: 'custom_pack_bag',
+      snapshots: dynamicSnapshots,
+      adjustments: [],
+      inboundOrdersByDate: {
+        '2026-04-14': 10,
+        '2026-04-15': 10,
+        '2026-04-16': 10
+      }
+    });
+
+    expect(intervals).toHaveLength(1);
+    expect(intervals[0]).toMatchObject({
+      itemKey: 'custom_pack_bag',
+      usageQty: 30,
+      inboundOrders: 30
+    });
+  });
+
+  test('normalizes consumable group keys and falls back to uncategorized', () => {
+    expect(normalizeConsumableGroupKey('packing')).toBe('packing');
+    expect(normalizeConsumableGroupKey('last_mile')).toBe('last_mile');
+    expect(normalizeConsumableGroupKey('transfer')).toBe('transfer');
+    expect(normalizeConsumableGroupKey('standard')).toBe('uncategorized');
+    expect(normalizeConsumableGroupKey(null)).toBe('uncategorized');
+  });
+
+  test('groups active consumable rows by configured zone', () => {
+    const rows: ConsumableDashboardItem[] = [
+      { item_key: 'box_48', item_label: 'Box 48', group_key: null, warning_days: 7, critical_days: 3, sort_order: 10, is_active: true },
+      { item_key: 'mailer', item_label: 'Mailer', group_key: 'packing', warning_days: 7, critical_days: 3, sort_order: 20, is_active: true },
+      { item_key: 'inactive', item_label: 'Inactive', group_key: 'transfer', warning_days: 7, critical_days: 3, sort_order: 30, is_active: false }
+    ];
+
+    const groups = groupConsumableRows(rows);
+
+    expect(groups.find((group) => group.key === 'packing')?.items.map((item) => item.item_key)).toEqual(['mailer']);
+    expect(groups.find((group) => group.key === 'uncategorized')?.items.map((item) => item.item_key)).toEqual(['box_48']);
+    expect(groups.flatMap((group) => group.items.map((item) => item.item_key))).not.toContain('inactive');
   });
 });

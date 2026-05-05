@@ -205,6 +205,7 @@ const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefine
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'Water Spider', 'FLEX TEAM'] as const;
 const DAILY_LIST_VISIBLE_POSITIONS = DAILY_LIST_LIGHT_POSITIONS.filter((position) => position !== 'FLEX TEAM');
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
+const HIDDEN_AUDIT_ACTIONS = new Set(['admin_page_switch', 'schedule_open_daily_list']);
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
 const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
@@ -1094,6 +1095,7 @@ const getVisibleAdminPages = (accessContext: AdminAccessContext | null | undefin
 
   if (hasModuleAccess(moduleMap, 'home', 'view')) pages.push('home');
   if (hasModuleAccess(moduleMap, 'package_metrics', 'view')) pages.push('package_metrics');
+  if (hasModuleAccess(moduleMap, 'consumables', 'view')) pages.push('consumables');
   if (hasModuleAccess(moduleMap, 'employees', 'view')) pages.push('employees');
   if (hasModuleAccess(moduleMap, 'accounts', 'view')) pages.push('accounts');
   if (hasModuleAccess(moduleMap, 'permissions', 'view')) pages.push('permissions');
@@ -3679,21 +3681,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   };
 
-  const openScheduleDailyList = (source: string) => {
+  const openScheduleDailyList = (_source: string) => {
     const targetDate = toDateOnly(addDays(new Date(serverTime), 1));
     setDailyListDateInput(targetDate);
     setDailyListFilterPositions(createEmptyDailyListLightFlags());
     void loadDailyListSelectedPositionsGlobal({ targetDateOverride: targetDate });
     setDailyListOpen(true);
-    void writeAudit({
-      action: 'schedule_open_daily_list',
-      target: SCHEDULE_TABLE,
-      payload: {
-        source,
-        target_date: targetDate,
-        schedule_week_offset: scheduleWeekOffset
-      }
-    });
   };
 
   const refreshSchedulePanelWithAudit = async (source: string) => {
@@ -3791,6 +3784,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         .from(AUDIT_TABLE)
         .select('id, created_at, actor, action, staff_id, target, payload')
         .neq('action', 'admin_page_switch')
+        .neq('action', 'schedule_open_daily_list')
         .order('created_at', { ascending: false })
         .limit(searchValue ? 500 : 200);
       if (searchValue) {
@@ -3804,6 +3798,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               .from(AUDIT_TABLE)
               .select('id, created_at, actor, action, staff_id, target, payload')
               .in('staff_id', matchedStaffIds as any)
+              .neq('action', 'admin_page_switch')
+              .neq('action', 'schedule_open_daily_list')
               .order('created_at', { ascending: false })
               .limit(500)
           : Promise.resolve({ data: [], error: null } as any)
@@ -3829,6 +3825,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           actor_raw: (row as any).actor,
           actor: getAuditActorDisplay(row)
         }))
+        .filter((row) => !HIDDEN_AUDIT_ACTIONS.has(String(row.action ?? '').trim()))
         .filter((row) => {
           if (!searchValue) return true;
           const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
@@ -15258,9 +15255,25 @@ ${rowsToHtml(late)}
               <PackageMetricsPage
                 t={t}
                 isLocked={isLocked}
+                mode="metrics"
                 isReadOnly={!packageMetricsCanOperate}
+                canViewConsumables={false}
+                canOperateConsumables={false}
+                canManageConsumableItems={false}
+                supabase={supabase}
+                themeMode={themeMode}
+                serverTime={serverTime}
+              />
+            )}
+            {page === 'consumables' && (
+              <PackageMetricsPage
+                t={t}
+                isLocked={isLocked}
+                mode="consumables"
+                isReadOnly
                 canViewConsumables={hasModuleAccess(adminModuleMap, 'consumables', 'view')}
                 canOperateConsumables={consumablesCanOperate}
+                canManageConsumableItems={adminAccessContext?.role === 'level1'}
                 supabase={supabase}
                 themeMode={themeMode}
                 serverTime={serverTime}

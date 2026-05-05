@@ -1,6 +1,7 @@
 export type AdminPage =
   | 'home'
   | 'package_metrics'
+  | 'consumables'
   | 'employee_upload'
   | 'punches'
   | 'employees'

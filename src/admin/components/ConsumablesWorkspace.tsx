@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, BellRing, Boxes, CalendarDays, Plus, RefreshCcw, Save } from 'lucide-react';
+import { AlertTriangle, BellRing, Boxes, CalendarDays, Edit2, PackagePlus, Plus, RefreshCcw, Save, Trash2, X } from 'lucide-react';
 import AdminNoticeToast from './AdminNoticeToast';
 import {
-  CONSUMABLE_ITEM_DEFINITIONS,
+  CONSUMABLE_GROUP_DEFINITIONS,
   CONSUMABLE_ITEMS_BY_KEY,
   buildConsumableIntervals,
   classifyConsumableAlert,
   computeConsumableProjection,
   formatDaysLeft,
+  groupConsumableRows,
+  normalizeConsumableGroupKey,
   type ConsumableAdjustment,
+  type ConsumableDashboardItem,
+  type ConsumableGroupKey,
   type ConsumableItemKey,
   type ConsumableSnapshot
 } from '../../shared/consumables';
@@ -21,16 +25,22 @@ type ConsumablesWorkspaceProps = {
   isLocked: boolean;
   canView: boolean;
   canOperate: boolean;
+  canManageItems?: boolean;
   supabase: any;
   serverTime: Date;
   onStatus?: (status: StatusState) => void;
+  flush?: boolean;
 };
 
 type DashboardItemRow = {
   item_key: ConsumableItemKey;
   item_label?: string | null;
+  group_key?: string | null;
   warning_days?: number | null;
   critical_days?: number | null;
+  sort_order?: number | null;
+  is_active?: boolean | null;
+  is_custom?: boolean | null;
 };
 
 type DashboardSnapshotRow = {
@@ -83,6 +93,15 @@ type AdjustmentForm = {
   deltaQty: string;
 };
 
+type ItemForm = {
+  itemKey: string;
+  itemLabel: string;
+  groupKey: ConsumableGroupKey;
+  warningDays: string;
+  criticalDays: string;
+  sortOrder: string;
+};
+
 const HISTORY_LOOKBACK_DAYS = 42;
 
 const getDateOnlyInTimeZone = (value: Date, timeZone = 'America/New_York') =>
@@ -124,12 +143,21 @@ const formatLogDateTime = (value: string | null | undefined) => {
   }).replace(',', '');
 };
 
-const buildEmptySnapshotDraft = () =>
-  Object.fromEntries(CONSUMABLE_ITEM_DEFINITIONS.map((item) => [item.key, ''])) as SnapshotDraft;
+const buildEmptySnapshotDraft = (items: Array<{ item_key: ConsumableItemKey }> = []) =>
+  Object.fromEntries(items.map((item) => [item.item_key, ''])) as SnapshotDraft;
 
-const buildInitialAdjustmentForm = (): AdjustmentForm => ({
-  itemKey: CONSUMABLE_ITEM_DEFINITIONS[0].key,
+const buildInitialAdjustmentForm = (itemKey = ''): AdjustmentForm => ({
+  itemKey,
   deltaQty: ''
+});
+
+const buildInitialItemForm = (nextSortOrder = 10): ItemForm => ({
+  itemKey: '',
+  itemLabel: '',
+  groupKey: 'uncategorized',
+  warningDays: '7',
+  criticalDays: '3',
+  sortOrder: String(nextSortOrder)
 });
 
 const mergeSnapshotRows = (
@@ -157,9 +185,11 @@ export default function ConsumablesWorkspace({
   isLocked,
   canView,
   canOperate,
+  canManageItems = false,
   supabase,
   serverTime,
-  onStatus
+  onStatus,
+  flush = false
 }: ConsumablesWorkspaceProps) {
   const isLight = themeMode === 'light';
   const today = getDateOnlyInTimeZone(serverTime);
@@ -168,14 +198,20 @@ export default function ConsumablesWorkspace({
   const [loading, setLoading] = useState(false);
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const [savingAdjustment, setSavingAdjustment] = useState(false);
+  const [savingItem, setSavingItem] = useState(false);
   const [status, setStatus] = useState<StatusState>({ tone: 'idle', message: '' });
   const [snapshotDraft, setSnapshotDraft] = useState<SnapshotDraft>(buildEmptySnapshotDraft);
   const [snapshotDraftDirty, setSnapshotDraftDirty] = useState(false);
   const [adjustmentForm, setAdjustmentForm] = useState<AdjustmentForm>(buildInitialAdjustmentForm);
+  const [itemManagerOpen, setItemManagerOpen] = useState(false);
+  const [itemForm, setItemForm] = useState<ItemForm>(buildInitialItemForm);
+  const [snapshotDetailDate, setSnapshotDetailDate] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   const shellClass =
-    themeMode === 'light'
+    flush
+      ? ''
+      : themeMode === 'light'
       ? 'border border-slate-200 bg-white/90 shadow-[0_24px_60px_rgba(15,23,42,0.08)]'
       : 'border border-slate-800/80 bg-slate-950/72 shadow-[0_24px_60px_rgba(2,6,23,0.32)]';
   const mutedClass = themeMode === 'light' ? 'text-slate-500' : 'text-slate-400';
@@ -238,17 +274,27 @@ export default function ConsumablesWorkspace({
 
   const items = useMemo(() => {
     const fromApi = Array.isArray(dashboard.items) ? dashboard.items : [];
-    const byKey = new Map(fromApi.map((item) => [item.item_key, item] as const));
-    return CONSUMABLE_ITEM_DEFINITIONS.map((definition) => {
-      const apiRow = byKey.get(definition.key);
-      return {
-        item_key: definition.key,
-        item_label: apiRow?.item_label || definition.label,
-        warning_days: Number(apiRow?.warning_days ?? definition.warningDays),
-        critical_days: Number(apiRow?.critical_days ?? definition.criticalDays)
-      };
-    });
+    return fromApi
+      .filter((item) => item.item_key && item.is_active !== false)
+      .map((item) => {
+        const fallback = CONSUMABLE_ITEMS_BY_KEY[item.item_key];
+        return {
+          item_key: String(item.item_key),
+          item_label: String(item.item_label || fallback?.label || item.item_key),
+          group_key: normalizeConsumableGroupKey(item.group_key),
+          warning_days: Number(item.warning_days ?? fallback?.warningDays ?? 7),
+          critical_days: Number(item.critical_days ?? fallback?.criticalDays ?? 3),
+          sort_order: Number(item.sort_order ?? 0),
+          is_active: item.is_active !== false,
+          is_custom: item.is_custom !== false
+        } satisfies ConsumableDashboardItem;
+      });
   }, [dashboard.items]);
+
+  const itemLabelByKey = useMemo(
+    () => new Map(items.map((item) => [item.item_key, item.item_label] as const)),
+    [items]
+  );
 
   const snapshots = useMemo(
     () =>
@@ -298,16 +344,23 @@ export default function ConsumablesWorkspace({
   useEffect(() => {
     if (!canView) return;
     if (!snapshotDraftDirty) {
-      const nextDraft = buildEmptySnapshotDraft();
-      for (const item of CONSUMABLE_ITEM_DEFINITIONS) {
-        const currentSnapshot = existingSnapshotMap.get(`${snapshotDate}::${item.key}`);
-        const fallbackSnapshot = latestSnapshotByItem.get(item.key);
+      const nextDraft = buildEmptySnapshotDraft(items);
+      for (const item of items) {
+        const currentSnapshot = existingSnapshotMap.get(`${snapshotDate}::${item.item_key}`);
+        const fallbackSnapshot = latestSnapshotByItem.get(item.item_key);
         const value = currentSnapshot?.remaining_qty ?? fallbackSnapshot?.remaining_qty ?? null;
-        nextDraft[item.key] = value == null ? '' : String(value);
+        nextDraft[item.item_key] = value == null ? '' : String(value);
       }
       setSnapshotDraft(nextDraft);
     }
-  }, [canView, existingSnapshotMap, latestSnapshotByItem, snapshotDate, snapshotDraftDirty, snapshots]);
+  }, [canView, existingSnapshotMap, items, latestSnapshotByItem, snapshotDate, snapshotDraftDirty, snapshots]);
+
+  useEffect(() => {
+    if (items.length === 0) return;
+    if (!adjustmentForm.itemKey || !items.some((item) => item.item_key === adjustmentForm.itemKey)) {
+      setAdjustmentForm(buildInitialAdjustmentForm(items[0].item_key));
+    }
+  }, [adjustmentForm.itemKey, items]);
 
   const cardRows = useMemo(() => {
     return items.map((item) => {
@@ -396,10 +449,45 @@ export default function ConsumablesWorkspace({
       .slice(0, 10);
   }, [snapshots]);
 
+  const groupedCardRows = useMemo(() => groupConsumableRows(cardRows), [cardRows]);
+
+  const nextSortOrder = useMemo(
+    () => Math.max(0, ...items.map((item) => Number(item.sort_order ?? 0))) + 10,
+    [items]
+  );
+
+  const resetItemForm = () => setItemForm(buildInitialItemForm(nextSortOrder));
+
+  const selectedSnapshotDetail = useMemo(() => {
+    if (!snapshotDetailDate) return null;
+    const rows = snapshots.filter((row) => row.snapshot_date === snapshotDetailDate);
+    const previousDate = Array.from(new Set(snapshots.map((row) => row.snapshot_date)))
+      .filter((date) => date < snapshotDetailDate)
+      .sort((left, right) => right.localeCompare(left, 'en-US'))[0];
+    const previousRows = previousDate ? snapshots.filter((row) => row.snapshot_date === previousDate) : [];
+    const previousByItem = new Map(previousRows.map((row) => [row.item_key, row] as const));
+    return {
+      date: snapshotDetailDate,
+      previousDate: previousDate ?? null,
+      rows: rows
+        .map((row) => {
+          const previous = previousByItem.get(row.item_key);
+          return {
+            ...row,
+            item_label: itemLabelByKey.get(row.item_key) ?? CONSUMABLE_ITEMS_BY_KEY[row.item_key]?.label ?? row.item_key,
+            delta: previous ? Number(row.remaining_qty) - Number(previous.remaining_qty) : null
+          };
+        })
+        .sort((left, right) => left.item_label.localeCompare(right.item_label, 'en-US'))
+    };
+  }, [itemLabelByKey, snapshotDetailDate, snapshots]);
+
   const bookQtyByItem = useMemo(() => {
     const map = new Map<ConsumableItemKey, number>();
     for (const row of cardRows) {
-      map.set(row.item_key, Number(row.latestRemainingQty ?? 0) || 0);
+      if (row.latestSnapshotDate) {
+        map.set(row.item_key, Number(row.latestRemainingQty ?? 0) || 0);
+      }
     }
     return map;
   }, [cardRows]);
@@ -415,19 +503,19 @@ export default function ConsumablesWorkspace({
     if (!supabase || !canSubmitSnapshot || savingSnapshot) return;
     setSavingSnapshot(true);
     try {
-      const itemsPayload = CONSUMABLE_ITEM_DEFINITIONS.map((item) => {
-        const qty = Number(snapshotDraft[item.key]);
+      const itemsPayload = items.map((item) => {
+        const qty = Number(snapshotDraft[item.item_key]);
         if (!Number.isFinite(qty) || qty < 0) {
-          throw new Error(`${CONSUMABLE_ITEMS_BY_KEY[item.key].label}: ${t('请输入有效剩余数量。', 'Enter a valid remaining quantity.')}`);
+          throw new Error(`${item.item_label}: ${t('请输入有效剩余数量。', 'Enter a valid remaining quantity.')}`);
         }
-        const bookQty = bookQtyByItem.get(item.key);
+        const bookQty = bookQtyByItem.get(item.item_key);
         if (bookQty != null && qty > bookQty) {
           throw new Error(
-            `${CONSUMABLE_ITEMS_BY_KEY[item.key].label}: ${t('盘点数量不能高于账面数量，请通过补货调整增加库存。', 'Snapshot quantity cannot exceed book quantity. Use restock adjustment to add inventory.')}`
+            `${item.item_label}: ${t('盘点数量不能高于账面数量，请通过补货调整增加库存。', 'Snapshot quantity cannot exceed book quantity. Use restock adjustment to add inventory.')}`
           );
         }
         return {
-          item_key: item.key,
+          item_key: item.item_key,
           remaining_qty: qty
         };
       });
@@ -476,6 +564,9 @@ export default function ConsumablesWorkspace({
       if (!Number.isFinite(deltaQty) || deltaQty <= 0 || !Number.isInteger(deltaQty)) {
         throw new Error(t('请输入有效补货数量。', 'Enter a valid restock quantity.'));
       }
+      if (!items.some((item) => item.item_key === adjustmentForm.itemKey)) {
+        throw new Error(t('请选择耗材。', 'Select an item.'));
+      }
       const rpcRes = await supabase.rpc('save_consumable_adjustment', {
         p_item_key: adjustmentForm.itemKey,
         p_effective_at: new Date().toISOString(),
@@ -486,7 +577,7 @@ export default function ConsumablesWorkspace({
       if (rpcRes.error) {
         throw new Error(String(rpcRes.error.message ?? 'Failed to save adjustment.'));
       }
-      setAdjustmentForm(buildInitialAdjustmentForm());
+      setAdjustmentForm(buildInitialAdjustmentForm(items[0]?.item_key ?? ''));
       publishStatus({
         tone: 'success',
         message: t('耗材调整已保存。', 'Consumable adjustment saved.')
@@ -502,10 +593,95 @@ export default function ConsumablesWorkspace({
     }
   };
 
+  const openNewItemForm = () => {
+    setItemForm(buildInitialItemForm(nextSortOrder));
+    setItemManagerOpen(true);
+  };
+
+  const openEditItemForm = (item: ConsumableDashboardItem) => {
+    setItemForm({
+      itemKey: item.item_key,
+      itemLabel: item.item_label,
+      groupKey: normalizeConsumableGroupKey(item.group_key),
+      warningDays: String(item.warning_days ?? 7),
+      criticalDays: String(item.critical_days ?? 3),
+      sortOrder: String(item.sort_order ?? nextSortOrder)
+    });
+    setItemManagerOpen(true);
+  };
+
+  const saveItem = async () => {
+    if (!supabase || !canManageItems || savingItem) return;
+    setSavingItem(true);
+    try {
+      const itemLabel = itemForm.itemLabel.trim();
+      const warningDays = Number(itemForm.warningDays);
+      const criticalDays = Number(itemForm.criticalDays);
+      const sortOrder = Number(itemForm.sortOrder);
+      if (!itemLabel) throw new Error(t('请输入耗材名称。', 'Enter an item name.'));
+      if (!Number.isFinite(warningDays) || warningDays < 0) throw new Error(t('请输入有效预警天数。', 'Enter valid warning days.'));
+      if (!Number.isFinite(criticalDays) || criticalDays < 0 || criticalDays > warningDays) {
+        throw new Error(t('请输入有效紧急天数。', 'Enter valid critical days.'));
+      }
+      if (!Number.isFinite(sortOrder)) throw new Error(t('请输入有效排序。', 'Enter a valid sort order.'));
+
+      const rpcRes = await supabase.rpc('save_consumable_item', {
+        p_item_key: itemForm.itemKey || null,
+        p_item_label: itemLabel,
+        p_group_key: itemForm.groupKey === 'uncategorized' ? null : itemForm.groupKey,
+        p_warning_days: warningDays,
+        p_critical_days: criticalDays,
+        p_sort_order: Math.trunc(sortOrder)
+      });
+      if (rpcRes.error) {
+        throw new Error(String(rpcRes.error.message ?? 'Failed to save item.'));
+      }
+      publishStatus({
+        tone: 'success',
+        message: t('耗材已保存。', 'Consumable item saved.')
+      });
+      resetItemForm();
+      setReloadKey((value) => value + 1);
+    } catch (error: any) {
+      publishStatus({
+        tone: 'error',
+        message: String(error?.message ?? error ?? t('耗材保存失败。', 'Failed to save consumable item.'))
+      });
+    } finally {
+      setSavingItem(false);
+    }
+  };
+
+  const deleteItem = async (item: ConsumableDashboardItem) => {
+    if (!supabase || !canManageItems || savingItem) return;
+    setSavingItem(true);
+    try {
+      const rpcRes = await supabase.rpc('delete_consumable_item', {
+        p_item_key: item.item_key
+      });
+      if (rpcRes.error) {
+        throw new Error(String(rpcRes.error.message ?? 'Failed to delete item.'));
+      }
+      publishStatus({
+        tone: 'success',
+        message: t('耗材已停用。', 'Consumable item disabled.')
+      });
+      if (itemForm.itemKey === item.item_key) resetItemForm();
+      setReloadKey((value) => value + 1);
+    } catch (error: any) {
+      publishStatus({
+        tone: 'error',
+        message: String(error?.message ?? error ?? t('耗材停用失败。', 'Failed to disable consumable item.'))
+      });
+    } finally {
+      setSavingItem(false);
+    }
+  };
+
   if (!canView) return null;
 
   return (
-    <div id="consumables" className={[shellClass, 'rounded-[28px] p-4 md:p-5'].join(' ')}>
+    <div id="consumables" className={flush ? 'w-full px-4 py-4 md:px-5' : [shellClass, 'rounded-[28px] p-4 md:p-5'].join(' ')}>
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div className="space-y-1">
@@ -531,6 +707,16 @@ export default function ConsumablesWorkspace({
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {canManageItems ? (
+              <button
+                type="button"
+                onClick={openNewItemForm}
+                className={['inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition', buttonSecondaryClass].join(' ')}
+              >
+                <PackagePlus className="h-4 w-4" />
+                {t('耗材管理', 'Items')}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => setReloadKey((value) => value + 1)}
@@ -556,7 +742,7 @@ export default function ConsumablesWorkspace({
                 : isLight
                   ? 'border-amber-200 bg-amber-50 text-amber-800'
                   : 'border-amber-500/30 bg-amber-500/10 text-amber-100';
-              const itemLabel = alert.item_key ? CONSUMABLE_ITEMS_BY_KEY[alert.item_key]?.label ?? alert.item_key : t('本次盘点', 'Snapshot');
+              const itemLabel = alert.item_key ? itemLabelByKey.get(alert.item_key) ?? CONSUMABLE_ITEMS_BY_KEY[alert.item_key]?.label ?? alert.item_key : t('本次盘点', 'Snapshot');
               return (
                 <div key={alert.id ?? `${alert.alert_date}-${alert.alert_type}-${itemLabel}`} className={['rounded-2xl border px-4 py-3', toneClass].join(' ')}>
                   <div className="flex items-start gap-3">
@@ -580,40 +766,56 @@ export default function ConsumablesWorkspace({
           </div>
         ) : null}
 
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          {cardRows.map((item) => {
-            const toneClass =
-              item.severity === 'critical'
-                ? isLight
-                  ? 'border-rose-200 bg-rose-50/70'
-                  : 'border-rose-500/20 bg-rose-500/10'
-                : item.severity === 'warning'
-                  ? isLight
-                    ? 'border-amber-200 bg-amber-50/70'
-                    : 'border-amber-500/20 bg-amber-500/10'
-                  : surfaceClass;
-            return (
-              <div key={item.item_key} className={['rounded-[22px] p-4', toneClass].join(' ')}>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold">{item.item_label}</div>
-                  <Boxes className={['h-4 w-4 shrink-0', mutedClass].join(' ')} />
-                </div>
-                <div className="mt-4 text-[28px] font-semibold leading-none">{formatNumber(item.latestRemainingQty)}</div>
-                <div className={['mt-2 text-xs', mutedClass].join(' ')}>{t('剩余', 'Remaining')}</div>
-                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <div className={mutedClass}>{t('可用天数', 'Days Left')}</div>
-                    <div className="mt-1 font-semibold">{formatDaysLeft(item.estimatedDaysLeft)}</div>
-                  </div>
-                  <div>
-                    <div className={mutedClass}>{t('日均用量', 'Daily Use')}</div>
-                    <div className="mt-1 font-semibold">{formatNumber(item.avgDailyUsage, 2)}</div>
-                  </div>
-                </div>
-                <div className={['mt-4 text-xs', mutedClass].join(' ')}>{t('上次盘点', 'Last Snapshot')}: {item.latestSnapshotDate ?? '-'}</div>
+        <div className="space-y-4">
+          {groupedCardRows.map((group) => (
+            <section key={`cards-${group.key}`} className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold">{t(group.labelZh, group.labelEn)}</div>
+                <div className={['text-xs tabular-nums', mutedClass].join(' ')}>{group.items.length}</div>
               </div>
-            );
-          })}
+              {group.items.length === 0 ? (
+                <div className={[surfaceClass, 'rounded-[22px] px-4 py-5 text-sm', mutedClass].join(' ')}>
+                  {t('暂无耗材', 'No items')}
+                </div>
+              ) : (
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  {group.items.map((item) => {
+                    const toneClass =
+                      item.severity === 'critical'
+                        ? isLight
+                          ? 'border-rose-200 bg-rose-50/70'
+                          : 'border-rose-500/20 bg-rose-500/10'
+                        : item.severity === 'warning'
+                          ? isLight
+                            ? 'border-amber-200 bg-amber-50/70'
+                            : 'border-amber-500/20 bg-amber-500/10'
+                          : surfaceClass;
+                    return (
+                      <div key={item.item_key} className={['rounded-[22px] p-4', toneClass].join(' ')}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0 truncate text-sm font-semibold">{item.item_label}</div>
+                          <Boxes className={['h-4 w-4 shrink-0', mutedClass].join(' ')} />
+                        </div>
+                        <div className="mt-4 text-[28px] font-semibold leading-none">{formatNumber(item.latestRemainingQty)}</div>
+                        <div className={['mt-2 text-xs', mutedClass].join(' ')}>{t('剩余', 'Remaining')}</div>
+                        <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                          <div>
+                            <div className={mutedClass}>{t('可用天数', 'Days Left')}</div>
+                            <div className="mt-1 font-semibold">{formatDaysLeft(item.estimatedDaysLeft)}</div>
+                          </div>
+                          <div>
+                            <div className={mutedClass}>{t('日均用量', 'Daily Use')}</div>
+                            <div className="mt-1 font-semibold">{formatNumber(item.avgDailyUsage, 2)}</div>
+                          </div>
+                        </div>
+                        <div className={['mt-4 text-xs', mutedClass].join(' ')}>{t('上次盘点', 'Last Snapshot')}: {item.latestSnapshotDate ?? '-'}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          ))}
         </div>
 
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.85fr)]">
@@ -631,19 +833,32 @@ export default function ConsumablesWorkspace({
               </button>
             </div>
 
-            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {CONSUMABLE_ITEM_DEFINITIONS.map((item) => (
-                <label key={item.key} className="block">
-                  <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{item.label}</div>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={snapshotDraft[item.key]}
-                    disabled={!canOperate || isLocked}
-                    onChange={(event) => handleSnapshotValueChange(item.key, event.target.value)}
-                    className={['w-full rounded-2xl border px-4 py-3 text-sm outline-none transition', inputClass].join(' ')}
-                  />
-                </label>
+            <div className="mt-4 space-y-5">
+              {groupedCardRows.map((group) => (
+                <section key={`snapshot-${group.key}`} className="space-y-3">
+                  <div className={['text-xs font-semibold uppercase tracking-[0.16em]', mutedClass].join(' ')}>{t(group.labelZh, group.labelEn)}</div>
+                  {group.items.length === 0 ? (
+                    <div className={['rounded-2xl border px-4 py-3 text-sm', isLight ? 'border-slate-200 text-slate-400' : 'border-slate-800 text-slate-500'].join(' ')}>
+                      {t('暂无耗材', 'No items')}
+                    </div>
+                  ) : (
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {group.items.map((item) => (
+                        <label key={item.item_key} className="block">
+                          <div className={['mb-2 truncate text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{item.item_label}</div>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={snapshotDraft[item.item_key] ?? ''}
+                            disabled={!canOperate || isLocked}
+                            onChange={(event) => handleSnapshotValueChange(item.item_key, event.target.value)}
+                            className={['w-full rounded-2xl border px-4 py-3 text-sm outline-none transition', inputClass].join(' ')}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </section>
               ))}
             </div>
           </div>
@@ -673,9 +888,9 @@ export default function ConsumablesWorkspace({
                   onChange={(event) => setAdjustmentForm((prev) => ({ ...prev, itemKey: event.target.value as ConsumableItemKey }))}
                   className={['w-full rounded-2xl border px-4 py-3 text-sm outline-none transition', inputClass].join(' ')}
                 >
-                  {CONSUMABLE_ITEM_DEFINITIONS.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.label}
+                  {items.map((item) => (
+                    <option key={item.item_key} value={item.item_key}>
+                      {item.item_label}
                     </option>
                   ))}
                 </select>
@@ -727,7 +942,7 @@ export default function ConsumablesWorkspace({
                       {adjustments.slice(0, 12).map((row) => (
                         <tr key={row.id ?? `${row.item_key}-${row.effective_at}`} className="text-slate-300">
                           <td className="w-[92px] py-1.5 pr-3 tabular-nums text-slate-500">{formatLogDateTime(row.effective_at)}</td>
-                          <td className="truncate py-1.5 pr-3 font-semibold text-slate-100">{CONSUMABLE_ITEMS_BY_KEY[row.item_key]?.label ?? row.item_key}</td>
+                          <td className="truncate py-1.5 pr-3 font-semibold text-slate-100">{itemLabelByKey.get(row.item_key) ?? CONSUMABLE_ITEMS_BY_KEY[row.item_key]?.label ?? row.item_key}</td>
                           <td className="w-[128px] truncate py-1.5 pr-3 text-slate-400">{String(row.created_by_display ?? '').trim() || '-'}</td>
                           <td className="w-[64px] py-1.5 text-right font-semibold tabular-nums text-emerald-400">{formatNumber(row.delta_qty)}</td>
                         </tr>
@@ -766,7 +981,18 @@ export default function ConsumablesWorkspace({
                     groupedSnapshots.map(([date, rows]) => (
                       <tr key={date} className={isLight ? 'border-t border-slate-200' : 'border-t border-slate-800'}>
                         <td className="px-3 py-3 font-semibold">{date}</td>
-                        <td className="px-3 py-3">{rows.length}</td>
+                        <td className="px-3 py-3">
+                          <button
+                            type="button"
+                            onClick={() => setSnapshotDetailDate(date)}
+                            className={[
+                              'rounded-lg px-2 py-1 text-sm font-semibold tabular-nums transition',
+                              isLight ? 'text-sky-700 hover:bg-sky-50' : 'text-sky-200 hover:bg-sky-500/10'
+                            ].join(' ')}
+                          >
+                            {rows.length}
+                          </button>
+                        </td>
                         <td className="px-3 py-3">
                           {Array.from(new Set(rows.map((row) => String(row.created_by_display ?? '').trim()).filter(Boolean))).join(', ') || '-'}
                         </td>
@@ -780,22 +1006,214 @@ export default function ConsumablesWorkspace({
 
           <div className={[surfaceClass, 'rounded-[24px] p-4'].join(' ')}>
             <div className="text-base font-semibold">{t('预测摘要', 'Projection')}</div>
-            <div className="mt-4 space-y-3">
-              {cardRows.slice(0, 5).map((item) => (
-                <div key={`projection-${item.item_key}`} className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold">{item.item_label}</div>
-                    <div className={['text-xs', mutedClass].join(' ')}>{t('单量耗用', 'Usage / Order')}: {formatNumber(item.usagePerOrder, 4)}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm font-semibold">{formatDaysLeft(item.estimatedDaysLeft)}</div>
-                    <div className={['text-xs', mutedClass].join(' ')}>{t('天', 'days')}</div>
-                  </div>
-                </div>
+            <div className="mt-4 space-y-5">
+              {groupedCardRows.map((group) => (
+                <section key={`projection-${group.key}`} className="space-y-3">
+                  <div className={['text-xs font-semibold uppercase tracking-[0.16em]', mutedClass].join(' ')}>{t(group.labelZh, group.labelEn)}</div>
+                  {group.items.length === 0 ? (
+                    <div className={['text-sm', mutedClass].join(' ')}>{t('暂无耗材', 'No items')}</div>
+                  ) : (
+                    group.items.map((item) => (
+                      <div key={`projection-${item.item_key}`} className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold">{item.item_label}</div>
+                          <div className={['text-xs', mutedClass].join(' ')}>{t('单量耗用', 'Usage / Order')}: {formatNumber(item.usagePerOrder, 4)}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-semibold">{formatDaysLeft(item.estimatedDaysLeft)}</div>
+                          <div className={['text-xs', mutedClass].join(' ')}>{t('天', 'days')}</div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </section>
               ))}
             </div>
           </div>
         </div>
+
+        {itemManagerOpen && canManageItems ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm">
+            <div role="dialog" aria-modal="true" className={[surfaceClass, 'max-h-[86vh] w-full max-w-4xl overflow-hidden rounded-[24px] shadow-2xl'].join(' ')}>
+              <div className={['flex items-center justify-between border-b px-5 py-4', isLight ? 'border-slate-200' : 'border-slate-800'].join(' ')}>
+                <div className="text-base font-semibold">{t('耗材管理', 'Items')}</div>
+                <button
+                  type="button"
+                  onClick={() => setItemManagerOpen(false)}
+                  className={['rounded-xl p-2 transition', isLight ? 'hover:bg-slate-100' : 'hover:bg-slate-800'].join(' ')}
+                  aria-label={t('关闭', 'Close')}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="grid max-h-[calc(86vh-64px)] gap-4 overflow-y-auto p-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+                <div className="space-y-3">
+                  {items.length === 0 ? (
+                    <div className={['rounded-2xl border px-4 py-8 text-center text-sm', isLight ? 'border-slate-200 text-slate-400' : 'border-slate-800 text-slate-500'].join(' ')}>
+                      {t('暂无耗材', 'No items')}
+                    </div>
+                  ) : (
+                    items.map((item) => (
+                      <div key={`manager-${item.item_key}`} className={['flex items-center justify-between gap-3 rounded-2xl border px-4 py-3', isLight ? 'border-slate-200 bg-white' : 'border-slate-800 bg-slate-950/60'].join(' ')}>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold">{item.item_label}</div>
+                          <div className={['mt-1 text-xs', mutedClass].join(' ')}>
+                            {t(CONSUMABLE_GROUP_DEFINITIONS.find((group) => group.key === normalizeConsumableGroupKey(item.group_key))?.labelZh ?? '未分区', CONSUMABLE_GROUP_DEFINITIONS.find((group) => group.key === normalizeConsumableGroupKey(item.group_key))?.labelEn ?? 'Unassigned')}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => openEditItemForm(item)}
+                            className={['rounded-xl p-2 transition', isLight ? 'hover:bg-slate-100' : 'hover:bg-slate-800'].join(' ')}
+                            aria-label={t('编辑', 'Edit')}
+                          >
+                            <Edit2 className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void deleteItem(item)}
+                            disabled={savingItem}
+                            className={['rounded-xl p-2 transition', isLight ? 'text-rose-600 hover:bg-rose-50' : 'text-rose-300 hover:bg-rose-500/10'].join(' ')}
+                            aria-label={t('停用', 'Disable')}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className={['rounded-2xl border p-4', isLight ? 'border-slate-200 bg-slate-50' : 'border-slate-800 bg-slate-950/50'].join(' ')}>
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold">{itemForm.itemKey ? t('编辑耗材', 'Edit Item') : t('新增耗材', 'New Item')}</div>
+                    <button type="button" onClick={resetItemForm} className={['text-xs font-semibold', mutedClass].join(' ')}>
+                      {t('清空', 'Clear')}
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    <label className="block">
+                      <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{t('名称', 'Name')}</div>
+                      <input
+                        type="text"
+                        value={itemForm.itemLabel}
+                        onChange={(event) => setItemForm((prev) => ({ ...prev, itemLabel: event.target.value }))}
+                        className={['w-full rounded-2xl border px-4 py-3 text-sm outline-none transition', inputClass].join(' ')}
+                      />
+                    </label>
+                    <label className="block">
+                      <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{t('分区', 'Group')}</div>
+                      <select
+                        value={itemForm.groupKey}
+                        onChange={(event) => setItemForm((prev) => ({ ...prev, groupKey: normalizeConsumableGroupKey(event.target.value) }))}
+                        className={['w-full rounded-2xl border px-4 py-3 text-sm outline-none transition', inputClass].join(' ')}
+                      >
+                        {CONSUMABLE_GROUP_DEFINITIONS.map((group) => (
+                          <option key={`item-form-${group.key}`} value={group.key}>
+                            {t(group.labelZh, group.labelEn)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block">
+                        <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{t('预警', 'Warn')}</div>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={itemForm.warningDays}
+                          onChange={(event) => setItemForm((prev) => ({ ...prev, warningDays: event.target.value }))}
+                          className={['w-full rounded-2xl border px-4 py-3 text-sm outline-none transition', inputClass].join(' ')}
+                        />
+                      </label>
+                      <label className="block">
+                        <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{t('紧急', 'Critical')}</div>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={itemForm.criticalDays}
+                          onChange={(event) => setItemForm((prev) => ({ ...prev, criticalDays: event.target.value }))}
+                          className={['w-full rounded-2xl border px-4 py-3 text-sm outline-none transition', inputClass].join(' ')}
+                        />
+                      </label>
+                    </div>
+                    <label className="block">
+                      <div className={['mb-2 text-xs font-semibold uppercase tracking-[0.14em]', mutedClass].join(' ')}>{t('排序', 'Sort')}</div>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={itemForm.sortOrder}
+                        onChange={(event) => setItemForm((prev) => ({ ...prev, sortOrder: event.target.value.replace(/[^\d-]/g, '') }))}
+                        className={['w-full rounded-2xl border px-4 py-3 text-sm outline-none transition', inputClass].join(' ')}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      disabled={savingItem}
+                      onClick={() => void saveItem()}
+                      className={['mt-1 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition', buttonPrimaryClass].join(' ')}
+                    >
+                      <Save className="h-4 w-4" />
+                      {savingItem ? t('保存中...', 'Saving...') : t('保存', 'Save')}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {selectedSnapshotDetail ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm">
+            <div role="dialog" aria-modal="true" className={[surfaceClass, 'max-h-[82vh] w-full max-w-2xl overflow-hidden rounded-[24px] shadow-2xl'].join(' ')}>
+              <div className={['flex items-center justify-between border-b px-5 py-4', isLight ? 'border-slate-200' : 'border-slate-800'].join(' ')}>
+                <div>
+                  <div className="text-base font-semibold">{selectedSnapshotDetail.date}</div>
+                  <div className={['mt-1 text-xs', mutedClass].join(' ')}>{selectedSnapshotDetail.previousDate ?? t('无上次盘点', 'No previous snapshot')}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSnapshotDetailDate(null)}
+                  className={['rounded-xl p-2 transition', isLight ? 'hover:bg-slate-100' : 'hover:bg-slate-800'].join(' ')}
+                  aria-label={t('关闭', 'Close')}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="max-h-[calc(82vh-73px)] overflow-y-auto p-5">
+                <table className="min-w-full text-left text-sm">
+                  <thead className={mutedClass}>
+                    <tr>
+                      <th className="px-3 py-2">{t('耗材', 'Item')}</th>
+                      <th className="px-3 py-2 text-right">{t('数量', 'Qty')}</th>
+                      <th className="px-3 py-2 text-right">{t('变动', 'Change')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedSnapshotDetail.rows.map((row) => {
+                      const deltaClass =
+                        row.delta == null
+                          ? mutedClass
+                          : row.delta > 0
+                            ? 'text-emerald-400'
+                            : row.delta < 0
+                              ? 'text-rose-400'
+                              : mutedClass;
+                      const deltaLabel = row.delta == null ? '-' : row.delta > 0 ? `+${formatNumber(row.delta)}` : formatNumber(row.delta);
+                      return (
+                        <tr key={`snapshot-detail-${row.item_key}`} className={isLight ? 'border-t border-slate-200' : 'border-t border-slate-800'}>
+                          <td className="px-3 py-3 font-semibold">{row.item_label}</td>
+                          <td className="px-3 py-3 text-right tabular-nums">{formatNumber(row.remaining_qty)}</td>
+                          <td className={['px-3 py-3 text-right font-semibold tabular-nums', deltaClass].join(' ')}>{deltaLabel}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {!onStatus ? (
           <AdminNoticeToast

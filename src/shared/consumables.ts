@@ -1,27 +1,47 @@
 export const CONSUMABLE_TIMEZONE = 'America/New_York';
 
-export const CONSUMABLE_ITEM_DEFINITIONS = [
-  { key: 'box_48', label: 'Box 48', group: 'standard', warningDays: 7, criticalDays: 3 },
-  { key: 'pm2', label: 'PM2', group: 'standard', warningDays: 7, criticalDays: 3 },
-  { key: 'pm5', label: 'PM5', group: 'standard', warningDays: 7, criticalDays: 3 },
-  { key: 'pm7', label: 'PM7', group: 'standard', warningDays: 7, criticalDays: 3 },
-  { key: 'label_4x6', label: 'Label 4*6', group: 'standard', warningDays: 7, criticalDays: 3 },
-  { key: 'label_4x2', label: 'Label 4*2', group: 'standard', warningDays: 7, criticalDays: 3 },
-  { key: 'gaylord_48', label: 'Gaylord 48', group: 'standard', warningDays: 7, criticalDays: 3 },
-  { key: 'gaylord_72', label: 'Gaylord 72', group: 'standard', warningDays: 7, criticalDays: 3 },
-  { key: 'clear_tape', label: 'Clear Tape', group: 'standard', warningDays: 7, criticalDays: 3 },
-  { key: 'wrap', label: 'Wrap', group: 'standard', warningDays: 7, criticalDays: 3 },
-  { key: 'transfer_color_tape_yellow', label: 'Transfer Color Tape - Yellow', group: 'transfer', warningDays: 7, criticalDays: 3 },
-  { key: 'transfer_color_tape_green', label: 'Transfer Color Tape - Green', group: 'transfer', warningDays: 7, criticalDays: 3 },
-  { key: 'transfer_clear_film', label: 'Transfer Clear Film', group: 'transfer', warningDays: 7, criticalDays: 3 },
-  { key: 'transfer_label_4x2', label: 'Transfer Label 4*2', group: 'transfer', warningDays: 7, criticalDays: 3 },
-  { key: 'transfer_label_4x6', label: 'Transfer Label 4*6', group: 'transfer', warningDays: 7, criticalDays: 3 }
+export const CONSUMABLE_GROUP_DEFINITIONS = [
+  { key: 'packing', labelZh: '打包耗材', labelEn: 'Packing' },
+  { key: 'last_mile', labelZh: '尾程耗材', labelEn: 'Last Mile' },
+  { key: 'transfer', labelZh: '调拨耗材', labelEn: 'Transfer' },
+  { key: 'uncategorized', labelZh: '未分区', labelEn: 'Unassigned' }
 ] as const;
 
-export type ConsumableItemKey = (typeof CONSUMABLE_ITEM_DEFINITIONS)[number]['key'];
-export type ConsumableItemGroup = (typeof CONSUMABLE_ITEM_DEFINITIONS)[number]['group'];
+export type ConsumableGroupKey = (typeof CONSUMABLE_GROUP_DEFINITIONS)[number]['key'];
+
+export const CONSUMABLE_ITEM_DEFINITIONS = [
+  { key: 'box_48', label: 'Box 48', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'pm2', label: 'PM2', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'pm5', label: 'PM5', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'pm7', label: 'PM7', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'label_4x6', label: 'Label 4*6', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'label_4x2', label: 'Label 4*2', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'gaylord_48', label: 'Gaylord 48', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'gaylord_72', label: 'Gaylord 72', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'clear_tape', label: 'Clear Tape', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'wrap', label: 'Wrap', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'transfer_color_tape_yellow', label: 'Transfer Color Tape - Yellow', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'transfer_color_tape_green', label: 'Transfer Color Tape - Green', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'transfer_clear_film', label: 'Transfer Clear Film', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'transfer_label_4x2', label: 'Transfer Label 4*2', group_key: null, warningDays: 7, criticalDays: 3 },
+  { key: 'transfer_label_4x6', label: 'Transfer Label 4*6', group_key: null, warningDays: 7, criticalDays: 3 }
+] as const;
+
+export type ConsumableItemKey = string;
+export type ConsumableItemGroup = ConsumableGroupKey;
 export type ConsumableAlertType = 'missing_snapshot' | 'low_stock_warning' | 'low_stock_critical';
 export type ConsumableAlertSeverity = 'info' | 'warning' | 'critical';
+
+export type ConsumableDashboardItem = {
+  item_key: ConsumableItemKey;
+  item_label: string;
+  group_key?: string | null;
+  warning_days: number;
+  critical_days: number;
+  sort_order?: number | null;
+  is_active?: boolean | null;
+  is_custom?: boolean | null;
+};
 
 export type ConsumableSnapshot = {
   item_key: ConsumableItemKey;
@@ -56,7 +76,25 @@ export type ConsumableProjection = {
 
 export const CONSUMABLE_ITEMS_BY_KEY = Object.fromEntries(
   CONSUMABLE_ITEM_DEFINITIONS.map((item) => [item.key, item])
-) as Record<ConsumableItemKey, (typeof CONSUMABLE_ITEM_DEFINITIONS)[number]>;
+) as Record<string, (typeof CONSUMABLE_ITEM_DEFINITIONS)[number] | undefined>;
+
+const CONSUMABLE_GROUP_KEY_SET = new Set<string>(CONSUMABLE_GROUP_DEFINITIONS.map((group) => group.key));
+
+export const normalizeConsumableGroupKey = (value: unknown): ConsumableGroupKey => {
+  const key = String(value ?? '').trim().toLowerCase();
+  return CONSUMABLE_GROUP_KEY_SET.has(key) ? (key as ConsumableGroupKey) : 'uncategorized';
+};
+
+export const groupConsumableRows = <T extends ConsumableDashboardItem>(rows: T[]) => {
+  const activeRows = rows
+    .filter((row) => row.is_active !== false)
+    .sort((left, right) => Number(left.sort_order ?? 0) - Number(right.sort_order ?? 0) || left.item_label.localeCompare(right.item_label, 'en-US'));
+
+  return CONSUMABLE_GROUP_DEFINITIONS.map((group) => ({
+    ...group,
+    items: activeRows.filter((row) => normalizeConsumableGroupKey(row.group_key) === group.key)
+  }));
+};
 
 const toFiniteNumber = (value: unknown) => {
   if (value == null || value === '') return null;

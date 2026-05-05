@@ -299,6 +299,42 @@ export const calculateRequirement = (
   return roundRule(workload / (uph * ewh), mode) + lead;
 };
 
+export const calculateShiftForecastSplit = ({
+  fullDayForecast,
+  previousDayBacklog,
+  previousDayCapacity,
+  yesterdayInflow0014,
+  buffer
+}: {
+  fullDayForecast: number;
+  previousDayBacklog: number;
+  previousDayCapacity: number;
+  yesterdayInflow0014: number;
+  buffer: number;
+}) => {
+  const fullDay = Math.max(0, Math.round(Number(fullDayForecast) || 0));
+  const rawDayShiftForecast = Math.round(
+    (Number(previousDayBacklog) || 0) +
+    fullDay -
+    (Number(previousDayCapacity) || 0) +
+    (Number(yesterdayInflow0014) || 0) -
+    (Number(buffer) || 0)
+  );
+  const dayShiftForecast = Math.min(fullDay, Math.max(0, rawDayShiftForecast));
+  return {
+    dayShiftForecast,
+    nightShiftForecast: Math.max(0, fullDay - dayShiftForecast)
+  };
+};
+
+export const getThroughputCapacityTotals = (rows: Array<Pick<ReturnType<typeof buildLabor>[number], 'key'> & { dsCapacity: number; nsCapacity: number }>) => {
+  const pickRow = rows.find((row) => row.key === 'picking_group');
+  return {
+    totalDsCapacity: pickRow?.dsCapacity ?? 0,
+    totalNsCapacity: pickRow?.nsCapacity ?? 0
+  };
+};
+
 function SectionCard({
   title,
   subtitle,
@@ -548,18 +584,19 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
         actual_night_shift_plan: (row as any).actual_night_shift_plan == null ? null : Number((row as any).actual_night_shift_plan)
       }));
       const previousDayRow = inputRows.find((row) => row.input_date === previousDate) ?? null;
-      const nextDayShiftForecast =
+      const shiftForecast =
         previousDayRow && fullDayForecast !== null
-          ? Math.round(
-              Number(previousDayRow.previous_day_backlog ?? 0) +
-              Number(fullDayForecast ?? 0) -
-              Number(previousDayRow.full_day_capacity ?? 0) +
-              Number(previousDayRow.yesterday_inflow_00_14 ?? 0) -
-              2000
-            )
+          ? calculateShiftForecastSplit({
+              fullDayForecast,
+              previousDayBacklog: previousDayRow.previous_day_backlog,
+              previousDayCapacity: previousDayRow.full_day_capacity,
+              yesterdayInflow0014: previousDayRow.yesterday_inflow_00_14,
+              buffer: 2000
+            })
           : null;
-      const dsOiPieces = nextDayShiftForecast;
-      const nsOiPieces = fullDayForecast !== null && nextDayShiftForecast !== null ? Math.max(0, fullDayForecast - nextDayShiftForecast) : null;
+      const nextDayShiftForecast = shiftForecast?.dayShiftForecast ?? null;
+      const dsOiPieces = shiftForecast?.dayShiftForecast ?? null;
+      const nsOiPieces = shiftForecast?.nightShiftForecast ?? null;
 
       setForecastBridge({
         inputDate: planningDate,
@@ -686,8 +723,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       rows,
       totalDs: rows.reduce((sum, row) => sum + row.ds, 0),
       totalNs: rows.reduce((sum, row) => sum + row.ns, 0),
-      totalDsCapacity: rows.reduce((sum, row) => sum + row.dsCapacity, 0),
-      totalNsCapacity: rows.reduce((sum, row) => sum + row.nsCapacity, 0)
+      ...getThroughputCapacityTotals(rows)
     };
   }, [draftPayload, effectiveOrderInboundDs, effectiveOrderInboundNs]);
 
@@ -750,8 +786,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
       rows,
       totalDs: rows.reduce((sum, row) => sum + row.ds, 0),
       totalNs: rows.reduce((sum, row) => sum + row.ns, 0),
-      totalDsCapacity: rows.reduce((sum, row) => sum + row.dsCapacity, 0),
-      totalNsCapacity: rows.reduce((sum, row) => sum + row.nsCapacity, 0)
+      ...getThroughputCapacityTotals(rows)
     };
   }, [draftPayload, arrangedOrderInboundDs, arrangedOrderInboundNs]);
 

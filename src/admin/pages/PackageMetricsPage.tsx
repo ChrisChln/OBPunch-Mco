@@ -30,8 +30,10 @@ type PackageMetricsPageProps = {
   t: TranslateFn;
   isLocked: boolean;
   isReadOnly?: boolean;
+  mode?: 'metrics' | 'consumables' | 'combined';
   canViewConsumables?: boolean;
   canOperateConsumables?: boolean;
+  canManageConsumableItems?: boolean;
   supabase: any;
   themeMode: 'light' | 'dark';
   serverTime: Date;
@@ -1120,13 +1122,17 @@ export default function PackageMetricsPage({
   t,
   isLocked,
   isReadOnly = false,
+  mode = 'combined',
   canViewConsumables = false,
   canOperateConsumables = false,
+  canManageConsumableItems = false,
   supabase,
   themeMode,
   serverTime
 }: PackageMetricsPageProps) {
   const defaultMetricDate = getDateOnlyInTimeZone(serverTime);
+  const showMetrics = mode === 'metrics' || mode === 'combined';
+  const showConsumables = mode === 'consumables' || mode === 'combined';
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const redesignedFileInputRef = useRef<HTMLInputElement | null>(null);
   const [metricDate, setMetricDate] = useState(defaultMetricDate);
@@ -1152,9 +1158,13 @@ export default function PackageMetricsPage({
   const [selectedMetricCategories, setSelectedMetricCategories] = useState<MetricColumnCategory[]>(DEFAULT_METRIC_COLUMN_CATEGORIES);
 
   const shellClass =
-    themeMode === 'light'
+    mode === 'combined'
+      ? themeMode === 'light'
       ? 'border border-slate-200 bg-white/90 text-slate-900 shadow-[0_24px_60px_rgba(15,23,42,0.08)]'
-      : 'border border-slate-800/80 bg-slate-950/85 text-slate-100 shadow-[0_24px_60px_rgba(2,6,23,0.42)]';
+      : 'border border-slate-800/80 bg-slate-950/85 text-slate-100 shadow-[0_24px_60px_rgba(2,6,23,0.42)]'
+      : themeMode === 'light'
+        ? 'text-slate-900'
+        : 'text-slate-100';
   const mutedClass = themeMode === 'light' ? 'text-slate-500' : 'text-slate-400';
   const subtlePanelClass =
     themeMode === 'light'
@@ -1197,7 +1207,7 @@ export default function PackageMetricsPage({
     let cancelled = false;
 
     const loadMetricsRange = async () => {
-      if (!supabase || !rangeStart || !rangeEnd) return;
+      if (!showMetrics || !supabase || !rangeStart || !rangeEnd) return;
       setTableLoading(true);
 
       try {
@@ -1249,7 +1259,7 @@ export default function PackageMetricsPage({
     return () => {
       cancelled = true;
     };
-  }, [metricDate, rangeEnd, rangeStart, reloadKey, serverTime, supabase, t]);
+  }, [metricDate, rangeEnd, rangeStart, reloadKey, serverTime, showMetrics, supabase, t]);
 
   const selectedMetricsRow = useMemo(
     () => metricsRows.find((row) => row.metric_date === metricDate) ?? null,
@@ -1705,8 +1715,10 @@ export default function PackageMetricsPage({
 
   return (
     <>
-      <div className={[shellClass, 'rounded-[30px] p-4 md:p-5'].join(' ')}>
+      <div className={mode === 'consumables' ? shellClass : ['w-full px-4 py-4 md:px-5', shellClass].join(' ')}>
         <div className="flex flex-col gap-4">
+          {showMetrics ? (
+          <>
           <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.55fr)_360px]">
             <div
               className={[
@@ -2349,17 +2361,23 @@ export default function PackageMetricsPage({
           </div>
 
           </div>
+          </>
+          ) : null}
 
-          <ConsumablesWorkspace
-            t={t}
-            themeMode={themeMode}
-            isLocked={isLocked}
-            canView={canViewConsumables}
-            canOperate={canOperateConsumables}
-            supabase={supabase}
-            serverTime={serverTime}
-            onStatus={setStatus}
-          />
+          {showConsumables ? (
+            <ConsumablesWorkspace
+              t={t}
+              themeMode={themeMode}
+              isLocked={isLocked}
+              canView={canViewConsumables}
+              canOperate={canOperateConsumables}
+              canManageItems={canManageConsumableItems}
+              supabase={supabase}
+              serverTime={serverTime}
+              onStatus={setStatus}
+              flush={mode !== 'combined'}
+            />
+          ) : null}
 
         </div>
       </div>
