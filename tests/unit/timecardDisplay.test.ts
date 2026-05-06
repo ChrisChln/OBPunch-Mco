@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  buildTimecardExportDailyPeopleRow,
   formatRoundedHours,
   getTimecardCellHoursText,
   getTimecardExportDayCellText,
@@ -52,6 +53,26 @@ describe('timecardDisplay', () => {
         absent: true
       })
     ).toBe('8.2');
+  });
+
+  test('builds bottom daily people row for timecard export', () => {
+    expect(
+      buildTimecardExportDailyPeopleRow({
+        columnCount: 13,
+        dayColumnStartIndex: 5,
+        dailyCounts: [11, 12, 13, 14, 15, 16, 17]
+      })
+    ).toEqual(['总计人数', '', '', '', '', '11', '12', '13', '14', '15', '16', '17', '']);
+  });
+
+  test('keeps daily people export row valid for invalid counts', () => {
+    expect(
+      buildTimecardExportDailyPeopleRow({
+        columnCount: Number.NaN,
+        dayColumnStartIndex: Number.NaN,
+        dailyCounts: [Number.NaN]
+      })
+    ).toEqual(['总计人数', '0']);
   });
 
   test('shows 0 in weekly total when punches exist but rounded total is 0', () => {

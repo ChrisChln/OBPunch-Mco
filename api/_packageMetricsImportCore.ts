@@ -39,6 +39,8 @@ export type PackageImportProcessResult = {
 
 export type PackageMetricsImportPersistence = PackageImportPersistence;
 
+type PackageImportRun = { id: string };
+
 const REQUIRED_HEADERS = {
   quantity: '商品数量',
   inboundAt: '订单流入时间',
@@ -163,6 +165,20 @@ export const processPackageMetricsRowsImport = async (
     finished_at: null
   });
 
+  return processPackageMetricsRowsWithRun(input, persistence, run);
+};
+
+const processPackageMetricsRowsWithRun = async (
+  input: {
+    metricDate: string;
+    filename: string;
+    rows: PackageMetricsParsedRow[];
+    computedAt?: string;
+    inventoryQty?: number | null;
+  },
+  persistence: PackageImportPersistence,
+  run: PackageImportRun
+): Promise<PackageImportProcessResult> => {
   try {
     const metrics = computePackageDailyMetrics(input.rows, {
       metricDate: input.metricDate,
@@ -204,8 +220,30 @@ export const processPackageMetricsImport = async (
   },
   persistence: PackageImportPersistence
 ): Promise<PackageImportProcessResult> => {
-  const parsedRows = parsePackageMetricsRows(decodeBase64(input.fileBase64), input.filename);
-  return processPackageMetricsRowsImport(
+  const startedAt = new Date().toISOString();
+  const run = await persistence.insertRun({
+    metric_date: input.metricDate,
+    source_filename: input.filename,
+    source_row_count: 0,
+    status: 'running',
+    error_message: null,
+    started_at: startedAt,
+    finished_at: null
+  });
+
+  let parsedRows: PackageMetricsParsedRow[];
+  try {
+    parsedRows = parsePackageMetricsRows(decodeBase64(input.fileBase64), input.filename);
+  } catch (error: any) {
+    await persistence.updateRun(run.id, {
+      status: 'failed',
+      error_message: String(error?.message ?? error ?? 'Unknown import failure'),
+      finished_at: new Date().toISOString()
+    });
+    throw error;
+  }
+
+  return processPackageMetricsRowsWithRun(
     {
       metricDate: input.metricDate,
       filename: input.filename,
@@ -213,6 +251,7 @@ export const processPackageMetricsImport = async (
       computedAt: input.computedAt,
       inventoryQty: input.inventoryQty ?? null
     },
-    persistence
+    persistence,
+    run
   );
 };

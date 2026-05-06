@@ -95,6 +95,12 @@ const formatShiftLabel = (value: string) => {
   return value || '-';
 };
 
+const getHomeShiftBadgeClass = (value: '' | 'early' | 'late') => {
+  if (value === 'early') return 'badge-elevated-dark border-amber-300/30 bg-amber-400/[0.13] text-amber-100';
+  if (value === 'late') return 'badge-elevated-dark border-indigo-300/30 bg-indigo-400/[0.13] text-indigo-100';
+  return 'badge-elevated-dark border-white/12 bg-white/[0.05] text-slate-200';
+};
+
 const formatTimeOnly = (iso: string) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '--:--:--';
@@ -321,9 +327,6 @@ function HomeDashboardPage({
     <main className="h-full w-full text-paper">
       <section className="w-full px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
         <div className="space-y-3">
-          <div className={['inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em]', isLight ? 'border-slate-200 bg-white text-slate-500' : 'border-white/10 bg-white/[0.04] text-stone-300'].join(' ')}>
-            Operational Dashboard
-          </div>
           <div className="space-y-2">
             <h1 className={['font-display text-4xl leading-none tracking-[0.03em] sm:text-5xl', isLight ? 'text-slate-900' : 'text-stone-50'].join(' ')}>Dashboard</h1>
           </div>
@@ -332,7 +335,6 @@ function HomeDashboardPage({
         <div className={['mt-6 flex flex-col gap-4 rounded-[28px] border p-4 sm:p-5', isLight ? 'border-slate-200 bg-white/70' : 'border-white/10 bg-black/20'].join(' ')}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-1">
-              <div className={['text-[11px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>Schedule Date</div>
               <div className={['text-xl font-semibold tracking-[-0.02em]', isLight ? 'text-slate-900' : 'text-stone-50'].join(' ')}>{operationalDate || '-'}</div>
               <div className={['text-sm', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>Updated {lastUpdatedAt || '-'}</div>
             </div>
@@ -518,7 +520,7 @@ function HomeDashboardPage({
                         <span className={['inline-flex items-center rounded-full border px-2.5 py-1', isLight ? getScheduleTableLabelBadgeClass(row.label || '-') : getScheduleLabelToneClass(row.label || '-')].join(' ')}>{row.label || '-'}</span>
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-600' : 'text-stone-300'].join(' ')}>
-                        <span className={isLight ? getScheduleTableShiftBadgeClass(normalizeShiftValue(row.shift)) : 'badge-elevated-dark inline-flex items-center rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-slate-200'}>
+                        <span className={['inline-flex items-center rounded-full border px-2.5 py-1', isLight ? getScheduleTableShiftBadgeClass(normalizeShiftValue(row.shift)) : getHomeShiftBadgeClass(normalizeShiftValue(row.shift))].join(' ')}>
                           {formatShiftLabel(row.shift)}
                         </span>
                       </td>
