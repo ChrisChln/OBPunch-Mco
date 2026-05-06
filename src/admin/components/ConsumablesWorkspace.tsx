@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Boxes, CalendarDays, Edit2, PackagePlus, Plus, RefreshCcw, Save, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Boxes, CalendarDays, Edit2, PackagePlus, Plus, RefreshCcw, Save, Trash2, Undo2, X } from 'lucide-react';
 import AdminNoticeToast from './AdminNoticeToast';
 import {
   CONSUMABLE_GROUP_DEFINITIONS,
@@ -61,6 +61,7 @@ type DashboardAdjustmentRow = {
   reason: string;
   note?: string | null;
   created_at?: string | null;
+  created_by_user_id?: string | null;
   created_by_display?: string | null;
 };
 
@@ -205,8 +206,10 @@ export default function ConsumablesWorkspace({
   const [loading, setLoading] = useState(false);
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const [savingAdjustment, setSavingAdjustment] = useState(false);
+  const [undoingAdjustmentId, setUndoingAdjustmentId] = useState<string | null>(null);
   const [savingItem, setSavingItem] = useState(false);
   const [status, setStatus] = useState<StatusState>({ tone: 'idle', message: '' });
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [snapshotDraft, setSnapshotDraft] = useState<SnapshotDraft>(buildEmptySnapshotDraft);
   const [snapshotDraftDirty, setSnapshotDraftDirty] = useState(false);
   const [adjustmentForm, setAdjustmentForm] = useState<AdjustmentForm>(buildInitialAdjustmentForm);
@@ -242,6 +245,17 @@ export default function ConsumablesWorkspace({
     setStatus(nextStatus);
     onStatus?.(nextStatus);
   };
+
+  useEffect(() => {
+    if (!supabase) return;
+    let cancelled = false;
+    void supabase.auth?.getUser?.().then((res: any) => {
+      if (!cancelled) setCurrentUserId(String(res?.data?.user?.id ?? '') || null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
 
   useEffect(() => {
     if (!canView || !supabase) return;
@@ -359,9 +373,12 @@ export default function ConsumablesWorkspace({
       const itemAdjustments = adjustments
         .filter((adjustment) => adjustment.item_key === item.item_key)
         .map((adjustment) => ({
+          id: adjustment.id,
           item_key: adjustment.item_key,
           effective_at: adjustment.effective_at,
-          delta_qty: adjustment.delta_qty
+          delta_qty: adjustment.delta_qty,
+          reason: adjustment.reason,
+          note: adjustment.note
         })) as ConsumableAdjustment[];
       const intervals = buildConsumableIntervals({
         itemKey: item.item_key,
@@ -468,12 +485,19 @@ export default function ConsumablesWorkspace({
   const bookQtyByItem = useMemo(() => {
     const map = new Map<ConsumableItemKey, number>();
     for (const row of cardRows) {
-      if (row.latestSnapshotDate) {
-        map.set(row.item_key, Number(row.latestRemainingQty ?? 0) || 0);
-      }
+      map.set(row.item_key, Number(row.latestRemainingQty ?? 0) || 0);
     }
     return map;
   }, [cardRows]);
+
+  const undoneAdjustmentIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of adjustments) {
+      const match = String(row.note ?? '').match(/\bundo_consumable_adjustment:([0-9a-f-]{8,})\b/i);
+      if (match?.[1]) ids.add(match[1]);
+    }
+    return ids;
+  }, [adjustments]);
 
   const canSubmitSnapshot = canOperate && !isLocked;
 
@@ -574,6 +598,31 @@ export default function ConsumablesWorkspace({
       });
     } finally {
       setSavingAdjustment(false);
+    }
+  };
+
+  const undoAdjustment = async (row: DashboardAdjustmentRow) => {
+    if (!supabase || !canOperate || isLocked || !row.id || undoingAdjustmentId) return;
+    setUndoingAdjustmentId(row.id);
+    try {
+      const rpcRes = await supabase.rpc('undo_consumable_adjustment', {
+        p_adjustment_id: row.id
+      });
+      if (rpcRes.error) {
+        throw new Error(String(rpcRes.error.message ?? 'Failed to undo adjustment.'));
+      }
+      publishStatus({
+        tone: 'success',
+        message: t('补货已撤回。', 'Restock undone.')
+      });
+      setReloadKey((value) => value + 1);
+    } catch (error: any) {
+      publishStatus({
+        tone: 'error',
+        message: String(error?.message ?? error ?? t('补货撤回失败。', 'Failed to undo restock.'))
+      });
+    } finally {
+      setUndoingAdjustmentId(null);
     }
   };
 
@@ -955,14 +1004,38 @@ export default function ConsumablesWorkspace({
                   ) : (
                     <table className="w-full table-fixed border-separate border-spacing-0">
                       <tbody>
-                        {adjustments.slice(0, 30).map((row) => (
-                          <tr key={row.id ?? `${row.item_key}-${row.effective_at}`} className="text-slate-300">
-                            <td className="w-[92px] py-1.5 pr-3 tabular-nums text-slate-500">{formatLogDateTime(row.effective_at)}</td>
-                            <td className="truncate py-1.5 pr-3 font-semibold text-slate-100">{itemLabelByKey.get(row.item_key) ?? CONSUMABLE_ITEMS_BY_KEY[row.item_key]?.label ?? row.item_key}</td>
-                            <td className="w-[128px] truncate py-1.5 pr-3 text-slate-400">{String(row.created_by_display ?? '').trim() || '-'}</td>
-                            <td className="w-[64px] py-1.5 text-right font-semibold tabular-nums text-emerald-400">{formatNumber(row.delta_qty)}</td>
-                          </tr>
-                        ))}
+                        {adjustments.slice(0, 30).map((row) => {
+                          const canUndoRow =
+                            Boolean(row.id) &&
+                            row.delta_qty > 0 &&
+                            row.reason === 'restock' &&
+                            row.created_by_user_id === currentUserId &&
+                            !undoneAdjustmentIds.has(String(row.id));
+                          return (
+                            <tr key={row.id ?? `${row.item_key}-${row.effective_at}`} className="text-slate-300">
+                              <td className="w-[92px] py-1.5 pr-3 tabular-nums text-slate-500">{formatLogDateTime(row.effective_at)}</td>
+                              <td className="truncate py-1.5 pr-3 font-semibold text-slate-100">{itemLabelByKey.get(row.item_key) ?? CONSUMABLE_ITEMS_BY_KEY[row.item_key]?.label ?? row.item_key}</td>
+                              <td className="w-[128px] truncate py-1.5 pr-3 text-slate-400">{String(row.created_by_display ?? '').trim() || '-'}</td>
+                              <td className={['w-[64px] py-1.5 text-right font-semibold tabular-nums', row.delta_qty < 0 ? 'text-rose-300' : 'text-emerald-400'].join(' ')}>
+                                {formatNumber(row.delta_qty)}
+                              </td>
+                              <td className="w-[34px] py-1.5 text-right">
+                                {canUndoRow ? (
+                                  <button
+                                    type="button"
+                                    disabled={undoingAdjustmentId === row.id}
+                                    onClick={() => void undoAdjustment(row)}
+                                    className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-800 hover:text-slate-100 disabled:opacity-50"
+                                    title={t('撤回补货', 'Undo restock')}
+                                    aria-label={t('撤回补货', 'Undo restock')}
+                                  >
+                                    <Undo2 className="h-3.5 w-3.5" />
+                                  </button>
+                                ) : null}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}

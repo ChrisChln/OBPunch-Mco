@@ -50,9 +50,12 @@ export type ConsumableSnapshot = {
 };
 
 export type ConsumableAdjustment = {
+  id?: string;
   item_key: ConsumableItemKey;
   effective_at: string;
   delta_qty: number;
+  reason?: string | null;
+  note?: string | null;
 };
 
 export type ConsumableIntervalUsage = {
@@ -109,6 +112,24 @@ const roundTo = (value: number, digits: number) => {
   return Math.round(value * factor) / factor;
 };
 
+const getUndoAdjustmentId = (note: string | null | undefined) => {
+  const match = String(note ?? '').match(/\bundo_consumable_adjustment:([0-9a-f-]{8,}|[A-Za-z0-9_-]+)\b/i);
+  return match?.[1] ?? null;
+};
+
+const filterUndoneAdjustments = <T extends ConsumableAdjustment>(adjustments: T[]) => {
+  const undoneIds = new Set(
+    adjustments
+      .map((adjustment) => getUndoAdjustmentId(adjustment.note))
+      .filter((id): id is string => Boolean(id))
+  );
+  return adjustments.filter((adjustment) => {
+    if (getUndoAdjustmentId(adjustment.note)) return false;
+    if (adjustment.id && undoneIds.has(adjustment.id)) return false;
+    return true;
+  });
+};
+
 export const isConsumableSnapshotDay = (dateOnly: string) => {
   const date = new Date(`${dateOnly}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) return false;
@@ -133,7 +154,7 @@ export const buildConsumableIntervals = (options: {
   const sortedSnapshots = [...options.snapshots]
     .filter((snapshot) => snapshot.item_key === options.itemKey)
     .sort((left, right) => left.snapshot_date.localeCompare(right.snapshot_date, 'en-US'));
-  const sortedAdjustments = [...options.adjustments]
+  const sortedAdjustments = filterUndoneAdjustments([...options.adjustments])
     .filter((adjustment) => adjustment.item_key === options.itemKey)
     .sort((left, right) => left.effective_at.localeCompare(right.effective_at, 'en-US'));
 
@@ -219,6 +240,35 @@ export const computeAverageDailyInboundOrders = (inboundOrdersByDate: Record<str
   return roundTo(total / values.length, 4);
 };
 
+const medianOf = (values: number[]) => {
+  const sorted = values.filter((value) => Number.isFinite(value)).sort((left, right) => left - right);
+  if (!sorted.length) return null;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
+};
+
+export const filterConsumableProjectionIntervals = (intervals: ConsumableIntervalUsage[]) => {
+  const positiveIntervals = intervals.filter((interval) => Number(interval.usageQty) > 0);
+  if (positiveIntervals.length < 3) return positiveIntervals;
+
+  const dailyUsageValues = positiveIntervals
+    .map((interval) => toFiniteNumber(interval.dailyUsage))
+    .filter((value): value is number => value != null && value > 0);
+  const usagePerOrderValues = positiveIntervals
+    .map((interval) => toFiniteNumber(interval.usagePerOrder))
+    .filter((value): value is number => value != null && value > 0);
+  const medianDailyUsage = dailyUsageValues.length >= 3 ? medianOf(dailyUsageValues) : null;
+  const medianUsagePerOrder = usagePerOrderValues.length >= 3 ? medianOf(usagePerOrderValues) : null;
+
+  return positiveIntervals.filter((interval) => {
+    const dailyUsage = toFiniteNumber(interval.dailyUsage);
+    const usagePerOrder = toFiniteNumber(interval.usagePerOrder);
+    const dailyUsageOk = medianDailyUsage == null || dailyUsage == null || dailyUsage <= medianDailyUsage * 3;
+    const usagePerOrderOk = medianUsagePerOrder == null || usagePerOrder == null || usagePerOrder <= medianUsagePerOrder * 3;
+    return dailyUsageOk && usagePerOrderOk;
+  });
+};
+
 export const computeConsumableCurrentRemaining = (options: {
   latestSnapshotQty: number | null;
   totalAdjustmentQty: number;
@@ -235,8 +285,9 @@ export const computeConsumableProjection = (options: {
   inboundOrdersByDate: Record<string, number>;
 }): ConsumableProjection => {
   const latestRemainingQty = Math.max(0, toFiniteNumber(options.latestRemainingQty) ?? 0);
-  const usagePerOrder = computeWeightedUsagePerOrder(options.intervals);
-  const snapshotDailyUsage = computeAverageDailyUsageFromIntervals(options.intervals);
+  const projectionIntervals = filterConsumableProjectionIntervals(options.intervals);
+  const usagePerOrder = computeWeightedUsagePerOrder(projectionIntervals);
+  const snapshotDailyUsage = computeAverageDailyUsageFromIntervals(projectionIntervals);
   const averageDailyInboundOrders = computeAverageDailyInboundOrders(options.inboundOrdersByDate, 28);
   const orderBasedDailyUsage =
     usagePerOrder != null && averageDailyInboundOrders != null ? roundTo(usagePerOrder * averageDailyInboundOrders, 4) : null;

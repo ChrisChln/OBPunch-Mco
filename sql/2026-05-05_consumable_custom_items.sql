@@ -94,6 +94,7 @@ begin
               'reason', adjustment.reason,
               'note', adjustment.note,
               'created_at', adjustment.created_at,
+              'created_by_user_id', adjustment.created_by_user_id,
               'created_by_display', adjustment.created_by_display
             )
             order by adjustment.effective_at desc, adjustment.id desc
