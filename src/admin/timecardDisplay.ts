@@ -18,6 +18,21 @@ export const getTimecardCellHoursText = (options: {
   return '';
 };
 
+export const getTimecardExportDayCellText = (options: {
+  hours: number;
+  punchCount: number;
+  inProgress: boolean;
+  absent: boolean;
+}) => {
+  const hoursText = getTimecardCellHoursText({
+    hours: options.hours,
+    punchCount: options.punchCount,
+    inProgress: options.inProgress
+  });
+  if (hoursText) return hoursText;
+  return options.absent ? '缺勤' : '';
+};
+
 export const getTimecardTotalHoursText = (options: {
   totalHours: number;
   punchCounts: number[];
