@@ -330,14 +330,6 @@ export default function ConsumablesWorkspace({
     [dashboard.inbound_orders_by_date]
   );
 
-  const existingSnapshotMap = useMemo(() => {
-    const map = new Map<string, DashboardSnapshotRow>();
-    for (const row of snapshots) {
-      map.set(`${row.snapshot_date}::${row.item_key}`, row);
-    }
-    return map;
-  }, [snapshots]);
-
   const latestSnapshotByItem = useMemo(() => {
     const map = new Map<ConsumableItemKey, DashboardSnapshotRow>();
     for (const row of [...snapshots].sort((left, right) => right.snapshot_date.localeCompare(left.snapshot_date, 'en-US'))) {
@@ -347,20 +339,6 @@ export default function ConsumablesWorkspace({
     }
     return map;
   }, [snapshots]);
-
-  useEffect(() => {
-    if (!canView) return;
-    if (!snapshotDraftDirty) {
-      const nextDraft = buildEmptySnapshotDraft(items);
-      for (const item of items) {
-        const currentSnapshot = existingSnapshotMap.get(`${snapshotDate}::${item.item_key}`);
-        const fallbackSnapshot = latestSnapshotByItem.get(item.item_key);
-        const value = currentSnapshot?.remaining_qty ?? fallbackSnapshot?.remaining_qty ?? null;
-        nextDraft[item.item_key] = value == null ? '' : String(value);
-      }
-      setSnapshotDraft(nextDraft);
-    }
-  }, [canView, existingSnapshotMap, items, latestSnapshotByItem, snapshotDate, snapshotDraftDirty, snapshots]);
 
   useEffect(() => {
     if (items.length === 0) return;
@@ -432,6 +410,15 @@ export default function ConsumablesWorkspace({
       };
     });
   }, [adjustments, inboundOrdersByDate, items, latestSnapshotByItem, snapshots]);
+
+  useEffect(() => {
+    if (!canView || snapshotDraftDirty) return;
+    const nextDraft = buildEmptySnapshotDraft(items);
+    for (const row of cardRows) {
+      nextDraft[row.item_key] = Number.isFinite(row.latestRemainingQty) ? String(row.latestRemainingQty) : '';
+    }
+    setSnapshotDraft(nextDraft);
+  }, [canView, cardRows, items, snapshotDraftDirty]);
 
   const groupedSnapshots = useMemo(() => {
     const groups = new Map<string, DashboardSnapshotRow[]>();
