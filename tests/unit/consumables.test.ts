@@ -11,6 +11,7 @@ import {
   normalizeConsumableGroupKey,
   type ConsumableAdjustment,
   type ConsumableDashboardItem,
+  type ConsumableIntervalUsage,
   type ConsumableSnapshot
 } from '../../src/shared/consumables';
 
@@ -67,6 +68,84 @@ describe('consumables', () => {
       adjustmentQty: 200,
       usageQty: 460,
       inboundOrders: 100
+    });
+  });
+
+  test('excludes undone restock pairs from derived usage', () => {
+    const adjustments: ConsumableAdjustment[] = [
+      { id: 'restock-1', item_key: 'box_48', effective_at: '2026-04-18T12:00:00Z', delta_qty: 200, reason: 'restock' },
+      {
+        id: 'undo-1',
+        item_key: 'box_48',
+        effective_at: '2026-04-19T12:00:00Z',
+        delta_qty: -200,
+        reason: 'restock',
+        note: 'undo_consumable_adjustment:restock-1'
+      }
+    ];
+
+    const intervals = buildConsumableIntervals({
+      itemKey: 'box_48',
+      snapshots,
+      adjustments,
+      inboundOrdersByDate: {
+        '2026-04-17': 20,
+        '2026-04-18': 25,
+        '2026-04-19': 30,
+        '2026-04-20': 25
+      }
+    });
+
+    const interval = intervals.find((row) => row.endDate === '2026-04-20');
+
+    expect(interval).toMatchObject({
+      adjustmentQty: 0,
+      usageQty: 260,
+      inboundOrders: 100
+    });
+  });
+
+  test('excludes undone restock pairs across snapshot intervals', () => {
+    const intervalSnapshots: ConsumableSnapshot[] = [
+      { item_key: 'box_48', snapshot_date: '2026-04-16', remaining_qty: 760 },
+      { item_key: 'box_48', snapshot_date: '2026-04-20', remaining_qty: 500 },
+      { item_key: 'box_48', snapshot_date: '2026-04-24', remaining_qty: 300 }
+    ];
+    const adjustments: ConsumableAdjustment[] = [
+      { id: 'restock-1', item_key: 'box_48', effective_at: '2026-04-18T12:00:00Z', delta_qty: 200, reason: 'restock' },
+      {
+        id: 'undo-1',
+        item_key: 'box_48',
+        effective_at: '2026-04-22T12:00:00Z',
+        delta_qty: -200,
+        reason: 'restock',
+        note: 'undo_consumable_adjustment:restock-1'
+      }
+    ];
+
+    const intervals = buildConsumableIntervals({
+      itemKey: 'box_48',
+      snapshots: intervalSnapshots,
+      adjustments,
+      inboundOrdersByDate: {
+        '2026-04-17': 20,
+        '2026-04-18': 25,
+        '2026-04-19': 30,
+        '2026-04-20': 25,
+        '2026-04-21': 25,
+        '2026-04-22': 25,
+        '2026-04-23': 25,
+        '2026-04-24': 25
+      }
+    });
+
+    expect(intervals.find((row) => row.endDate === '2026-04-20')).toMatchObject({
+      adjustmentQty: 0,
+      usageQty: 260
+    });
+    expect(intervals.find((row) => row.endDate === '2026-04-24')).toMatchObject({
+      adjustmentQty: 0,
+      usageQty: 200
     });
   });
 
@@ -192,6 +271,99 @@ describe('consumables', () => {
     });
     expect(projection.avgDailyUsage).toBe(18);
     expect(projection.estimatedDaysLeft).toBeCloseTo(30 / 18, 2);
+  });
+
+  test('ignores zero-consumption correction intervals in projections', () => {
+    const intervals: ConsumableIntervalUsage[] = [
+      {
+        itemKey: 'box_48',
+        startDate: '2026-04-01',
+        endDate: '2026-04-02',
+        daysCovered: 2,
+        remainingStart: 100,
+        remainingEnd: 120,
+        adjustmentQty: 0,
+        inboundOrders: 100,
+        usageQty: 0,
+        dailyUsage: 0,
+        usagePerOrder: 0
+      },
+      {
+        itemKey: 'box_48',
+        startDate: '2026-04-02',
+        endDate: '2026-04-04',
+        daysCovered: 3,
+        remainingStart: 120,
+        remainingEnd: 90,
+        adjustmentQty: 0,
+        inboundOrders: 100,
+        usageQty: 30,
+        dailyUsage: 10,
+        usagePerOrder: 0.3
+      }
+    ];
+
+    const projection = computeConsumableProjection({
+      latestRemainingQty: 90,
+      intervals,
+      inboundOrdersByDate: {}
+    });
+
+    expect(projection.avgDailyUsage).toBe(10);
+    expect(projection.estimatedDaysLeft).toBe(9);
+  });
+
+  test('filters extreme usage-per-order outliers when enough intervals exist', () => {
+    const intervals: ConsumableIntervalUsage[] = [
+      {
+        itemKey: 'box_48',
+        startDate: '2026-04-01',
+        endDate: '2026-04-02',
+        daysCovered: 2,
+        remainingStart: 200,
+        remainingEnd: 180,
+        adjustmentQty: 0,
+        inboundOrders: 100,
+        usageQty: 20,
+        dailyUsage: 10,
+        usagePerOrder: 0.2
+      },
+      {
+        itemKey: 'box_48',
+        startDate: '2026-04-02',
+        endDate: '2026-04-03',
+        daysCovered: 2,
+        remainingStart: 180,
+        remainingEnd: 158,
+        adjustmentQty: 0,
+        inboundOrders: 100,
+        usageQty: 22,
+        dailyUsage: 11,
+        usagePerOrder: 0.22
+      },
+      {
+        itemKey: 'box_48',
+        startDate: '2026-04-03',
+        endDate: '2026-04-04',
+        daysCovered: 2,
+        remainingStart: 158,
+        remainingEnd: 0,
+        adjustmentQty: 0,
+        inboundOrders: 10,
+        usageQty: 158,
+        dailyUsage: 79,
+        usagePerOrder: 15.8
+      }
+    ];
+
+    const projection = computeConsumableProjection({
+      latestRemainingQty: 158,
+      intervals,
+      inboundOrdersByDate: {}
+    });
+
+    expect(projection.usagePerOrder).toBe(0.21);
+    expect(projection.avgDailyUsage).toBe(10.5);
   });
 
   test('classifies warning and critical alerts', () => {
