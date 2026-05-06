@@ -33,6 +33,29 @@ export const getTimecardExportDayCellText = (options: {
   return options.absent ? '缺勤' : '';
 };
 
+export const buildTimecardExportDailyPeopleRow = (options: {
+  columnCount: number;
+  dayColumnStartIndex: number;
+  dailyCounts: number[];
+}) => {
+  const normalizedColumnCount = Math.floor(Number(options.columnCount));
+  const normalizedDayColumnStartIndex = Math.floor(Number(options.dayColumnStartIndex));
+  const safeColumnCount = Number.isFinite(normalizedColumnCount) ? Math.max(2, normalizedColumnCount) : 2;
+  const safeDayColumnStartIndex = Number.isFinite(normalizedDayColumnStartIndex)
+    ? Math.min(Math.max(1, normalizedDayColumnStartIndex), safeColumnCount - 1)
+    : 1;
+  const row = Array.from({ length: safeColumnCount }, () => '');
+  row[0] = '总计人数';
+  options.dailyCounts.slice(0, 7).forEach((count, dayIndex) => {
+    const columnIndex = safeDayColumnStartIndex + dayIndex;
+    if (columnIndex >= safeColumnCount) return;
+    const normalizedCount = Math.floor(Number(count));
+    const safeCount = Number.isFinite(normalizedCount) ? Math.max(0, normalizedCount) : 0;
+    row[columnIndex] = String(safeCount);
+  });
+  return row;
+};
+
 export const getTimecardTotalHoursText = (options: {
   totalHours: number;
   punchCounts: number[];

@@ -233,14 +233,10 @@ export default function ConsumablesWorkspace({
     themeMode === 'light'
       ? 'border border-slate-200 bg-slate-50/90'
       : 'border border-slate-800 bg-slate-900/70';
-  const buttonPrimaryClass =
-    themeMode === 'light'
-      ? 'bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-300'
-      : 'bg-slate-100 text-slate-950 hover:bg-white disabled:bg-slate-700 disabled:text-slate-400';
-  const buttonSecondaryClass =
-    themeMode === 'light'
-      ? 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-      : 'border border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800';
+  const actionButtonClass =
+    'admin-btn admin-btn-toolbar inline-flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-60';
+  const buttonPrimaryClass = `${actionButtonClass} admin-btn-primary`;
+  const buttonSecondaryClass = `${actionButtonClass} admin-btn-secondary`;
   const publishStatus = (nextStatus: StatusState) => {
     setStatus(nextStatus);
     onStatus?.(nextStatus);
@@ -727,7 +723,7 @@ export default function ConsumablesWorkspace({
               <button
                 type="button"
                 onClick={openNewItemForm}
-                className={['inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition', buttonSecondaryClass].join(' ')}
+                className={buttonSecondaryClass}
               >
                 <PackagePlus className="h-4 w-4" />
                 {t('耗材管理', 'Items')}
@@ -736,7 +732,7 @@ export default function ConsumablesWorkspace({
             <button
               type="button"
               onClick={() => setReloadKey((value) => value + 1)}
-              className={['inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition', buttonSecondaryClass].join(' ')}
+              className={buttonSecondaryClass}
               disabled={loading}
             >
               <RefreshCcw className="h-4 w-4" />
@@ -900,7 +896,7 @@ export default function ConsumablesWorkspace({
                         type="button"
                         disabled={!canSubmitSnapshot || savingSnapshot}
                         onClick={() => void saveSnapshotBatch(group.items)}
-                        className={['inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition', buttonPrimaryClass].join(' ')}
+                        className={buttonPrimaryClass}
                       >
                         <Save className="h-4 w-4" />
                         {savingSnapshot ? t('保存中...', 'Saving...') : t('保存盘点', 'Save Snapshot')}
@@ -937,7 +933,7 @@ export default function ConsumablesWorkspace({
                 type="button"
                 disabled={!canOperate || isLocked || savingAdjustment}
                 onClick={() => void saveAdjustment()}
-                className={['inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition', buttonPrimaryClass].join(' ')}
+                className={buttonPrimaryClass}
               >
                 <Save className="h-4 w-4" />
                 {savingAdjustment ? t('保存中...', 'Saving...') : t('保存调整', 'Save Adjustment')}
@@ -1236,7 +1232,7 @@ export default function ConsumablesWorkspace({
                       type="button"
                       disabled={savingItem}
                       onClick={() => void saveItem()}
-                      className={['mt-1 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition', buttonPrimaryClass].join(' ')}
+                      className={['mt-1 w-full', buttonPrimaryClass].join(' ')}
                     >
                       <Save className="h-4 w-4" />
                       {savingItem ? t('保存中...', 'Saving...') : t('保存', 'Save')}

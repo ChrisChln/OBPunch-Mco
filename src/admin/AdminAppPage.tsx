@@ -91,7 +91,7 @@ import {
   shouldRunWeeklyScheduleReset,
   shouldRunWeeklyScheduleRollover
 } from './scheduleWeek';
-import { formatRoundedHours, getTimecardExportDayCellText, getTimecardTerminatedByDay } from './timecardDisplay';
+import { buildTimecardExportDailyPeopleRow, formatRoundedHours, getTimecardExportDayCellText, getTimecardTerminatedByDay } from './timecardDisplay';
 import {
   buildStaleLateAutoDeletePlan,
   evaluateLateDecision,
@@ -10507,10 +10507,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         ),
         formatHours(r.totalHours)
       ]);
+      const dailyPeopleCounts = Array.from({ length: 7 }, (_, dayIndex) =>
+        rows.reduce((count, row) => count + (Number(row.punchCountByDay?.[dayIndex] ?? 0) > 0 ? 1 : 0), 0)
+      );
+      const exportRows = [
+        headers,
+        ...body,
+        buildTimecardExportDailyPeopleRow({
+          columnCount: headers.length,
+          dayColumnStartIndex: 5,
+          dailyCounts: dailyPeopleCounts
+        })
+      ];
 
       try {
         const XLSX = await import('xlsx');
-        const ws = XLSX.utils.aoa_to_sheet([headers, ...body]);
+        const ws = XLSX.utils.aoa_to_sheet(exportRows);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'timecard');
         const filename = `ob_timecard_${toDateOnly(weekStart)}.xlsx`;
@@ -10518,7 +10530,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         setStatus({ tone: 'success', message: `已导出：${filename}` });
       } catch (err) {
         const filename = `ob_timecard_${toDateOnly(weekStart)}.csv`;
-        const csv = [headers, ...body]
+        const csv = exportRows
           .map((row) =>
             row
               .map((cell) => {
