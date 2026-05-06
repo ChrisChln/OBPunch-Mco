@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   formatRoundedHours,
   getTimecardCellHoursText,
+  getTimecardExportDayCellText,
   getTimecardTerminatedByDay,
   getTimecardTotalHoursText
 } from '../../src/admin/timecardDisplay';
@@ -31,6 +32,26 @@ describe('timecardDisplay', () => {
         inProgress: false
       })
     ).toBe('');
+  });
+
+  test('exports absent marker when a day has no hours and is absent', () => {
+    expect(
+      getTimecardExportDayCellText({
+        hours: 0,
+        punchCount: 0,
+        inProgress: false,
+        absent: true
+      })
+    ).toBe('缺勤');
+
+    expect(
+      getTimecardExportDayCellText({
+        hours: 8.2,
+        punchCount: 4,
+        inProgress: false,
+        absent: true
+      })
+    ).toBe('8.2');
   });
 
   test('shows 0 in weekly total when punches exist but rounded total is 0', () => {

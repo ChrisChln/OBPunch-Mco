@@ -91,7 +91,7 @@ import {
   shouldRunWeeklyScheduleReset,
   shouldRunWeeklyScheduleRollover
 } from './scheduleWeek';
-import { formatRoundedHours, getTimecardTerminatedByDay } from './timecardDisplay';
+import { formatRoundedHours, getTimecardExportDayCellText, getTimecardTerminatedByDay } from './timecardDisplay';
 import {
   buildStaleLateAutoDeletePlan,
   evaluateLateDecision,
@@ -10497,7 +10497,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         r.agency,
         r.position,
         r.shift,
-        ...r.hoursByDay.map((h) => formatHours(h)),
+        ...r.hoursByDay.map((hours, dayIndex) =>
+          getTimecardExportDayCellText({
+            hours,
+            punchCount: Number(r.punchCountByDay?.[dayIndex] ?? 0),
+            inProgress: Boolean(r.inProgressByDay?.[dayIndex]),
+            absent: Boolean(r.absentByDay?.[dayIndex])
+          })
+        ),
         formatHours(r.totalHours)
       ]);
 
