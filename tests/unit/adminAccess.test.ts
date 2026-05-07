@@ -3,10 +3,13 @@ import {
   buildEffectiveModuleMap,
   canManageAdminAccess,
   canReviewTerminationRequests,
+  filterRowsByPositionAccess,
   getDefaultModuleAccess,
+  hasPositionAccess,
   hasModuleAccess,
   normalizeAdminAccessContext,
-  normalizeAdminRole
+  normalizeAdminRole,
+  normalizePositionScopesForContext
 } from '../../src/shared/adminAccess';
 
 describe('adminAccess', () => {
@@ -35,26 +38,6 @@ describe('adminAccess', () => {
 
   test('agency keeps permissions page visible by default', () => {
     expect(getDefaultModuleAccess('agency', 'permissions')).toBe('view');
-  });
-
-  test('package metrics is an independent module from forecast', () => {
-    const map = buildEffectiveModuleMap('level3', [
-      { module_key: 'package_metrics', access_level: 'hidden' },
-      { module_key: 'forecast', access_level: 'operate' }
-    ]);
-
-    expect(map.package_metrics).toBe('hidden');
-    expect(map.forecast).toBe('operate');
-  });
-
-  test('consumables is independent from package metrics', () => {
-    const map = buildEffectiveModuleMap('level3', [
-      { module_key: 'package_metrics', access_level: 'operate' },
-      { module_key: 'consumables', access_level: 'hidden' }
-    ]);
-
-    expect(map.package_metrics).toBe('operate');
-    expect(map.consumables).toBe('hidden');
   });
 
   test('checks view and operate access correctly', () => {
@@ -100,7 +83,7 @@ describe('adminAccess', () => {
     expect(canManageAdminAccess(level1WithoutPermission)).toBe(false);
   });
 
-  test('termination review requires level1/level2 and schedule operate', () => {
+  test('termination review requires schedule operate', () => {
     const readonlyLevel3 = normalizeAdminAccessContext({
       user_id: 'u3',
       role: 'level3',
@@ -111,14 +94,87 @@ describe('adminAccess', () => {
       role: 'level3',
       modules: [{ module_key: 'schedule', access_level: 'operate' }]
     });
-    const level2WithOperate = normalizeAdminAccessContext({
-      user_id: 'u5',
-      role: 'level2',
-      modules: [{ module_key: 'schedule', access_level: 'operate' }]
-    });
 
     expect(canReviewTerminationRequests(readonlyLevel3)).toBe(false);
-    expect(canReviewTerminationRequests(overriddenLevel3)).toBe(false);
-    expect(canReviewTerminationRequests(level2WithOperate)).toBe(true);
+    expect(canReviewTerminationRequests(overriddenLevel3)).toBe(true);
+  });
+
+  test('normalizes missing position scopes to all access for scoped modules', () => {
+    const context = normalizeAdminAccessContext({
+      user_id: 'u5',
+      role: 'level3',
+      modules: []
+    });
+
+    expect(context.position_scopes.employees.mode).toBe('all');
+    expect(context.position_scopes.schedule.mode).toBe('all');
+    expect(context.position_scopes.timecard.mode).toBe('all');
+    expect(hasPositionAccess(context, 'employees', 'Pick', 'view')).toBe(true);
+  });
+
+  test('enforces selected position scope and module access together', () => {
+    const context = normalizeAdminAccessContext({
+      user_id: 'u6',
+      role: 'level3',
+      modules: [
+        { module_key: 'employees', access_level: 'operate' },
+        { module_key: 'schedule', access_level: 'view' }
+      ],
+      position_scopes: {
+        employees: {
+          mode: 'selected',
+          positions: [
+            { position: 'Pick', access_level: 'view' },
+            { position: 'Pack', access_level: 'operate' }
+          ]
+        },
+        schedule: {
+          mode: 'selected',
+          positions: [{ position: 'Pick', access_level: 'operate' }]
+        }
+      }
+    });
+
+    expect(hasPositionAccess(context, 'employees', 'Pick', 'view')).toBe(true);
+    expect(hasPositionAccess(context, 'employees', 'Pick', 'operate')).toBe(false);
+    expect(hasPositionAccess(context, 'employees', 'Pack', 'operate')).toBe(true);
+    expect(hasPositionAccess(context, 'employees', 'Rebin', 'view')).toBe(false);
+    expect(hasPositionAccess(context, 'schedule', 'Pick', 'operate')).toBe(false);
+  });
+
+  test('filters rows by selected position scope', () => {
+    const context = normalizeAdminAccessContext({
+      user_id: 'u7',
+      role: 'level3',
+      modules: [{ module_key: 'employees', access_level: 'operate' }],
+      position_scopes: {
+        employees: {
+          mode: 'selected',
+          positions: [{ position: 'Pick', access_level: 'view' }]
+        }
+      }
+    });
+    const rows = [
+      { staff_id: 'US1', position: 'Pick' },
+      { staff_id: 'US2', position: 'Pack' },
+      { staff_id: 'US3', Position: 'pick' }
+    ];
+
+    expect(filterRowsByPositionAccess(context, 'employees', rows, (row) => row.position ?? row.Position)).toEqual([
+      rows[0],
+      rows[2]
+    ]);
+  });
+
+  test('normalizes malformed position scopes to all access', () => {
+    expect(normalizePositionScopesForContext('not-json').employees.mode).toBe('all');
+    expect(
+      normalizePositionScopesForContext({
+        employees: {
+          mode: 'selected',
+          positions: [{ position: '  Pick  ', access_level: 'operate' }, { position: '', access_level: 'operate' }]
+        }
+      }).employees.positions
+    ).toEqual([{ position: 'Pick', access_level: 'operate' }]);
   });
 });

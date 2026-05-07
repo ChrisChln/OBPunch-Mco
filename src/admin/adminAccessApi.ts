@@ -5,12 +5,15 @@ import {
   normalizeAdminRole,
   normalizeAdminAccessContext,
   normalizeModuleAccessLevel,
+  normalizePositionScopesForContext,
   type AdminAccessContext,
   type AdminAccessModule,
   type AdminModuleAccessLevel,
   type AdminModuleKey,
+  type AdminPositionScopes,
   type AdminRole
 } from '../shared/adminAccess';
+import type { PositionRecord } from '../shared/positions';
 
 type RpcResult<T> = {
   data: T | null;
@@ -29,7 +32,6 @@ export type AdminAccessUserOption = {
   user_id: string;
   user_email: string;
   display_name: string;
-  avatar_url?: string;
 };
 
 export type AdminAccessAccountRecord = {
@@ -41,6 +43,7 @@ export type AdminAccessAccountRecord = {
   is_active: boolean;
   managed_agencies: string[];
   modules: AdminAccessModule[];
+  position_scopes: AdminPositionScopes;
 };
 
 export type AdminAccessSavePayload = {
@@ -49,6 +52,7 @@ export type AdminAccessSavePayload = {
   is_active: boolean;
   managed_agencies: string[];
   modules: Array<{ module_key: AdminModuleKey; access_level: AdminModuleAccessLevel }>;
+  position_scopes: AdminPositionScopes;
 };
 
 export type AdminAccessRequestRecord = {
@@ -96,6 +100,42 @@ export const fetchAdminAccessContext = async (
   const payload = await expectRpcSuccess(supabase.rpc('get_admin_access_context'));
   return normalizeAdminAccessContext(payload, fallbackEmail);
 };
+
+const normalizePositionRow = (row: Record<string, unknown>): PositionRecord => ({
+  id: typeof row.id === 'string' || typeof row.id === 'number' ? row.id : undefined,
+  name: String(row.name ?? '').trim(),
+  is_active: Boolean(row.is_active ?? true),
+  display_order: Number(row.display_order ?? 0),
+  created_at: row.created_at ? String(row.created_at) : null,
+  updated_at: row.updated_at ? String(row.updated_at) : null
+});
+
+export const listPositions = async (supabase: SupabaseClient): Promise<PositionRecord[]> => {
+  const rows = await expectRpcSuccess<Array<Record<string, unknown>>>(supabase.rpc('list_positions'));
+  return (Array.isArray(rows) ? rows : [])
+    .map(normalizePositionRow)
+    .filter((row) => row.name)
+    .sort((left, right) => {
+      const orderDiff = Number(left.display_order ?? 0) - Number(right.display_order ?? 0);
+      if (orderDiff !== 0) return orderDiff;
+      return left.name.localeCompare(right.name, 'en-US');
+    });
+};
+
+export const savePosition = async (
+  supabase: SupabaseClient,
+  payload: { name: string; display_order: number; is_active: boolean; original_name?: string | null }
+): Promise<PositionRecord> =>
+  normalizePositionRow(
+    await expectRpcSuccess<Record<string, unknown>>(
+      supabase.rpc('save_position', {
+        p_name: payload.name,
+        p_display_order: payload.display_order,
+        p_is_active: payload.is_active,
+        p_original_name: payload.original_name ?? null
+      })
+    )
+  );
 
 const parseStringArray = (value: unknown): string[] => {
   if (Array.isArray(value)) {
@@ -174,13 +214,15 @@ const normalizeAdminAccessAccount = (row: Record<string, unknown>): AdminAccessA
     user_id: String(row.user_id ?? '').trim(),
     user_email: String(row.user_email ?? '').trim(),
     display_name: String(row.display_name ?? '').trim(),
+    avatar_url: String(row.avatar_url ?? '').trim(),
     role,
     is_active: Boolean(row.is_active ?? true),
     managed_agencies: managedAgencies,
     modules: ADMIN_MODULE_KEYS.map((moduleKey) => ({
       module_key: moduleKey,
       access_level: moduleMap[moduleKey]
-    }))
+    })),
+    position_scopes: normalizePositionScopesForContext(row.position_scopes)
   };
 };
 
@@ -196,7 +238,8 @@ export const saveAdminAccessAccount = async (supabase: SupabaseClient, payload: 
       p_role: payload.role,
       p_is_active: payload.is_active,
       p_managed_agencies: payload.managed_agencies,
-      p_modules: payload.modules
+      p_modules: payload.modules,
+      p_position_scopes: payload.position_scopes
     })
   );
 
@@ -332,3 +375,4 @@ export const normalizeAdminAccessModulesForSave = (
     .filter((module): module is { module_key: AdminModuleKey; access_level: AdminModuleAccessLevel } =>
       ADMIN_MODULE_KEYS.includes(module.module_key)
     );
+

@@ -1,6 +1,4 @@
 ﻿import { createPortal } from 'react-dom';
-import type { AllowedPosition } from '../types';
-
 type TranslateFn = (zh: string, en: string) => string;
 
 type DailyListNewHireModalProps = {
@@ -8,9 +6,9 @@ type DailyListNewHireModalProps = {
   t: TranslateFn;
   themeMode: 'light' | 'dark';
   isLocked: boolean;
-  allowedPositions: readonly AllowedPosition[];
-  dailyListNewHirePosition: AllowedPosition | '';
-  setDailyListNewHirePosition: (value: AllowedPosition | '') => void;
+  allowedPositions: readonly string[];
+  dailyListNewHirePosition: string;
+  setDailyListNewHirePosition: (value: string) => void;
   dailyListNewHireShift: 'early' | 'late' | '';
   setDailyListNewHireShift: (value: 'early' | 'late' | '') => void;
   dailyListNewHireCount: number;
@@ -96,7 +94,7 @@ export default function DailyListNewHireModal({
             <label className={['text-xs uppercase tracking-[0.2em]', labelClass].join(' ')}>{t('岗位', 'Position')}</label>
             <select
               value={dailyListNewHirePosition}
-              onChange={(e) => setDailyListNewHirePosition((e.target.value as AllowedPosition | '') ?? '')}
+              onChange={(e) => setDailyListNewHirePosition(e.target.value ?? '')}
               disabled={isLocked}
               className={fieldClass}
             >

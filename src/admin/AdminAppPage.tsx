@@ -1,4 +1,4 @@
-﻿import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
@@ -50,7 +50,9 @@ import AppDialog from '../components/AppDialog';
 import {
   canManageAdminAccess,
   canReviewTerminationRequests,
+  filterRowsByPositionAccess,
   getModuleMapFromContext,
+  hasPositionAccess,
   hasModuleAccess,
   type AdminAccessContext
 } from '../shared/adminAccess';
@@ -68,11 +70,13 @@ import { isScheduleOnlyAgency } from '../shared/agencyRules';
 import {
   createAdminAccessRequest,
   fetchAdminAccessContext,
+  listPositions,
   listAdminAccessAccounts,
   listAdminAccessRequests,
   listEmployeeTerminationRequests,
   reviewAdminAccessRequest,
   reviewEmployeeTerminationRequest,
+  savePosition,
   saveAdminAccessAccount,
   type AdminAccessAccountRecord,
   type AdminAccessRequestCreatePayload,
@@ -81,6 +85,7 @@ import {
   type AdminAccessUserOption,
   type TerminationRequestRecord
 } from './adminAccessApi';
+import { buildActivePositionNames, normalizePositionName, type PositionRecord } from '../shared/positions';
 import { useScheduleRealtime } from './useScheduleRealtime';
 import {
   activatePlannedScheduleNote,
@@ -1298,6 +1303,7 @@ export default function AdminAppPage() {
   const [terminationRequests, setTerminationRequests] = useState<TerminationRequestRecord[]>([]);
   const [adminAccessAccounts, setAdminAccessAccounts] = useState<AdminAccessAccountRecord[]>([]);
   const [adminAccessUserOptions, setAdminAccessUserOptions] = useState<AdminAccessUserOption[]>([]);
+  const [positions, setPositions] = useState<PositionRecord[]>([]);
   const [leaveApprovalPendingCount, setLeaveApprovalPendingCount] = useState(0);
   const visibleAdminPages = useMemo(() => getVisibleAdminPages(adminAccessContext), [adminAccessContext]);
   const adminModuleMap = useMemo(() => getModuleMapFromContext(adminAccessContext), [adminAccessContext]);
@@ -1340,6 +1346,33 @@ export default function AdminAppPage() {
   const forecastReadOnly = isLocked || !forecastCanOperate;
   const predictionModelReadOnly = isLocked || !predictionModelCanOperate;
   const efficiencyReadOnly = isLocked || !efficiencyCanOperate;
+  const activePositionNames = useMemo(() => {
+    const active = buildActivePositionNames(positions);
+    return active.length ? active : [...ALLOWED_POSITIONS];
+  }, [positions]);
+  const allPositionNames = useMemo(() => {
+    const names = new Set<string>(activePositionNames);
+    for (const position of positions) {
+      const name = normalizePositionName(position.name);
+      if (name) names.add(name);
+    }
+    return Array.from(names).sort((a, b) => {
+      const rankA = activePositionNames.indexOf(a);
+      const rankB = activePositionNames.indexOf(b);
+      if (rankA !== -1 || rankB !== -1) return (rankA === -1 ? 9999 : rankA) - (rankB === -1 ? 9999 : rankB);
+      return a.localeCompare(b, 'en-US');
+    });
+  }, [activePositionNames, positions]);
+  const canViewPosition = useCallback(
+    (moduleKey: 'employees' | 'schedule' | 'timecard', position: unknown) =>
+      hasPositionAccess(adminAccessContext, moduleKey, position, 'view'),
+    [adminAccessContext]
+  );
+  const canOperatePosition = useCallback(
+    (moduleKey: 'employees' | 'schedule' | 'timecard', position: unknown) =>
+      hasPositionAccess(adminAccessContext, moduleKey, position, 'operate'),
+    [adminAccessContext]
+  );
   const scheduleCanReviewTermination = useMemo(
     () => canReviewTerminationRequests(adminAccessContext),
     [adminAccessContext]
@@ -1797,7 +1830,7 @@ export default function AdminAppPage() {
   const [employeeNewStaffId, setEmployeeNewStaffId] = useState('');
   const [employeeNewName, setEmployeeNewName] = useState('');
   const [employeeNewAgency, setEmployeeNewAgency] = useState('');
-  const [employeeNewPosition, setEmployeeNewPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [employeeNewPosition, setEmployeeNewPosition] = useState<string>('');
   const [employeeNewEmploymentType, setEmployeeNewEmploymentType] = useState<EmploymentType>('FT');
   const [employeeNewShift, setEmployeeNewShift] = useState<'' | 'early' | 'late'>('');
   const [employeeNewShiftTime, setEmployeeNewShiftTime] = useState('');
@@ -1810,7 +1843,7 @@ export default function AdminAppPage() {
   const [employeeEditStaffId, setEmployeeEditStaffId] = useState<string | null>(null);
   const [employeeEditName, setEmployeeEditName] = useState('');
   const [employeeEditAgency, setEmployeeEditAgency] = useState('');
-  const [employeeEditPosition, setEmployeeEditPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [employeeEditPosition, setEmployeeEditPosition] = useState<string>('');
   const [employeeEditEmploymentType, setEmployeeEditEmploymentType] = useState<EmploymentType>('FT');
   const [employeeEditShift, setEmployeeEditShift] = useState<'' | 'early' | 'late'>('');
   const [employeeEditShiftTime, setEmployeeEditShiftTime] = useState('');
@@ -1894,7 +1927,7 @@ export default function AdminAppPage() {
   const [_deviceLoansPage, setDeviceLoansPage] = useState(0);
   const [_deviceLoansHasMore, setDeviceLoansHasMore] = useState(true);
   const [deviceSearch, setDeviceSearch] = useState('');
-  const [deviceFilterPosition, setDeviceFilterPosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [deviceFilterPosition, setDeviceFilterPosition] = useState<string>('');
   const [deviceFilterType, setDeviceFilterType] = useState<DeviceType | ''>('');
   const [deviceBorrowedOnly, setDeviceBorrowedOnly] = useState(false);
 
@@ -1928,7 +1961,7 @@ export default function AdminAppPage() {
   const [schedulePrintDate, setSchedulePrintDate] = useState(() => toDateOnly(new Date()));
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [scheduleSearchInput, setScheduleSearchInput] = useState('');
-  const [schedulePosition, setSchedulePosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [schedulePosition, setSchedulePosition] = useState<string>('');
   const [scheduleEmploymentType, setScheduleEmploymentType] = useState<'' | EmploymentType>('');
   const [schedulePositionToneByPosition, setSchedulePositionToneByPosition] = useState<Record<AllowedPosition, LabelToneKey>>({
     Pick: 'sky',
@@ -1963,7 +1996,7 @@ export default function AdminAppPage() {
   const [dailyListOpen, setDailyListOpen] = useState(false);
   const [dailyListDateInput, setDailyListDateInput] = useState(() => toDateOnly(addDays(new Date(), 1)));
   const [dailyListNewHireOpen, setDailyListNewHireOpen] = useState(false);
-  const [dailyListNewHirePosition, setDailyListNewHirePosition] = useState<(typeof ALLOWED_POSITIONS)[number] | ''>('');
+  const [dailyListNewHirePosition, setDailyListNewHirePosition] = useState<string>('');
   const [dailyListNewHireCount, setDailyListNewHireCount] = useState(1);
   const [dailyListNewHireAgency, setDailyListNewHireAgency] = useState('');
   const [dailyListNewHireShift, setDailyListNewHireShift] = useState<'' | 'early' | 'late'>('');
@@ -2570,7 +2603,10 @@ export default function AdminAppPage() {
   };
 
   const normalizePositionKey = (value: string) => {
-    const v = value.trim().toLowerCase();
+    const trimmed = normalizePositionName(value);
+    const direct = allPositionNames.find((p) => p.toLowerCase() === trimmed.toLowerCase());
+    if (direct) return direct;
+    const v = trimmed.toLowerCase();
     if (v === 'pick') return 'Pick';
     if (v === 'pack') return 'Pack';
     if (v === 'rebin') return 'Rebin';
@@ -3278,10 +3314,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (page !== 'permissions') return;
     if (!hasModuleAccess(adminModuleMap, 'permissions', 'view')) return;
     void fetchAdminAccessRequests({ lockUi: false, status: 'all' });
+    void fetchPositions({ lockUi: false });
     if (accountsCanManageAdminAccess) {
       void fetchAdminAccessAccountsAndUsers({ lockUi: false });
     }
   }, [page, user?.id, accountsCanManageAdminAccess, adminModuleMap]);
+
+  useEffect(() => {
+    if (!supabase || !user) {
+      setPositions([]);
+      return;
+    }
+    void fetchPositions({ lockUi: false });
+  }, [supabase, user?.id, adminAccessContext?.user_id]);
 
   useEffect(() => {
     if (page !== 'employees' && page !== 'schedule') return;
@@ -3453,6 +3498,49 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return rows;
   };
 
+
+  const fetchPositions = async (options?: { lockUi?: boolean }) => {
+    if (!supabase || !user) {
+      setPositions([]);
+      return [] as PositionRecord[];
+    }
+
+    const exec = async () => {
+      const rows = await listPositions(supabase);
+      setPositions(rows);
+      return rows;
+    };
+
+    if (options?.lockUi === false) return exec();
+
+    let rows: PositionRecord[] = [];
+    await runLocked('positions', async () => {
+      rows = await exec();
+    });
+    return rows;
+  };
+
+  const savePositionConfig = async (payload: {
+    name: string;
+    display_order: number;
+    is_active: boolean;
+    original_name?: string | null;
+  }) => {
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
+      return;
+    }
+    if (!accountsCanManageAdminAccess) {
+      setStatus({ tone: 'error', message: t('当前账号不能管理权限。', 'This account cannot manage access.') });
+      return;
+    }
+
+    await runLocked('position_save', async () => {
+      await savePosition(supabase, payload);
+      await fetchPositions({ lockUi: false });
+      setStatus({ tone: 'success', message: t('Position 已保存。', 'Position saved.') });
+    });
+  };
   const reviewTerminationRequest = async (request: TerminationRequestRecord, action: 'approve' | 'reject') => {
     if (!supabase) {
       setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
@@ -4210,7 +4298,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
 
-    const invalidPositions = rows.filter((r) => r.position && !ALLOWED_POSITIONS.includes(r.position as any));
+    const invalidPositions = rows.filter((r) => r.position && !activePositionNames.includes(r.position as any));
     if (invalidPositions.length > 0) {
       setDeviceUploadError(
         t(
@@ -4508,7 +4596,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       const employeePosition = String(employee.position ?? employee.Position ?? '').trim();
       const normalizedPosition =
-        ALLOWED_POSITIONS.find((p) => p.toLowerCase() === employeePosition.toLowerCase()) ?? ALLOWED_POSITIONS[0];
+        activePositionNames.find((p) => p.toLowerCase() === employeePosition.toLowerCase()) ?? activePositionNames[0] ?? (activePositionNames[0] ?? ALLOWED_POSITIONS[0]);
       const payload = {
         staff_id: staff,
         date: templateDate,
@@ -6384,7 +6472,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     const normalizedPos = normalizePositionKey(position);
     if (!normalizedPos) {
-      setEmployeesError(`Position 只能是：${ALLOWED_POSITIONS.join(', ')}`);
+      setEmployeesError(`Position 只能是：${activePositionNames.join(', ')}`);
+      return;
+    }
+    if (!canOperatePosition('employees', normalizedPos)) {
+      setEmployeesError(t('当前账号不能操作该 Position。', 'This account cannot operate this position.'));
       return;
     }
     const resolvedShiftTime = resolveShiftStartTime(shift, normalizedPos, shiftTime);
@@ -7027,6 +7119,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }) => {
     const staff = normalizeStaffId(String(payload.staff ?? '').trim());
     if (!staff) return;
+    if (!canOperatePosition('employees', payload.position)) return;
     setEmployeeBadgeBatchSelectedStaffIds((prev) => {
       const selected = prev.includes(staff);
       const next = selected ? prev.filter((id) => id !== staff) : [...prev, staff];
@@ -7084,7 +7177,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           workPassword: String(e.work_password ?? e.WorkPassword ?? '').trim() || '-'
         };
       })
-      .filter(Boolean) as Array<{ staff: string; name: string; agency: string; position: string; workAccount?: string; workPassword?: string }>;
+      .filter((row): row is { staff: string; name: string; agency: string; position: string; workAccount?: string; workPassword?: string } => {
+        if (!row) return false;
+        return canOperatePosition('employees', row.position);
+      });
     if (selectedRows.length === 0) {
       setStatus({ tone: 'error', message: t('已选员工不在当前员工数据中，请先刷新。', 'Selected employees are not in current employee data. Please refresh.') });
       return;
@@ -7657,7 +7753,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setEmployeeEditName(payload.name);
     setEmployeeEditAgency(payload.agency);
     const normalized = normalizePositionKey(payload.position);
-    setEmployeeEditPosition((normalized ?? '') as (typeof ALLOWED_POSITIONS)[number] | '');
+    setEmployeeEditPosition((normalized ?? '') as string);
     setEmployeeEditEmploymentType(normalizeEmploymentTypeValue(payload.employmentType));
     setEmployeeEditShift(payload.shift);
     setEmployeeEditShiftTime(normalizeShiftTimeValue(payload.shiftTime));
@@ -7746,7 +7842,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const resolvedShiftTime =
       normalizedPos && employeeEditShift ? resolveShiftStartTime(employeeEditShift, normalizedPos, shiftTimeInput) : shiftTimeInput;
     if (positionRaw && !normalizedPos) {
-      setEmployeesError('Position must be one of: ' + ALLOWED_POSITIONS.join(', '));
+      setEmployeesError('Position must be one of: ' + activePositionNames.join(', '));
+      return;
+    }
+    if (normalizedPos && !canOperatePosition('employees', normalizedPos)) {
+      setEmployeesError(t('当前账号不能操作该 Position。', 'This account cannot operate this position.'));
+      return;
+    }
+
+    if (normalizedPos && !canOperatePosition('employees', normalizedPos)) {
+      setEmployeesError(t('当前账号不能操作该 Position。', 'This account cannot operate this position.'));
       return;
     }
 
@@ -8594,7 +8699,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               employees.find((e) => normalizeStaffId(String(e.staff_id ?? '').trim()) === staff)?.position ?? ''
             ).trim()
           ) ||
-          ALLOWED_POSITIONS[0];
+          (activePositionNames[0] ?? ALLOWED_POSITIONS[0]);
 
         const basePayload: Record<string, unknown> = {
           staff_id: staff,
@@ -12435,15 +12540,26 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
   };
 
+  const employeesAllowedByPositionScope = useMemo(
+    () =>
+      filterRowsByPositionAccess(
+        adminAccessContext,
+        'employees',
+        employees,
+        (employee) => String(employee.position ?? employee.Position ?? '').trim()
+      ),
+    [adminAccessContext, employees]
+  );
+
   const employeeAgencyOptions = useMemo(() => {
     const out = new Set<string>();
-    for (const e of employees) {
+    for (const e of employeesAllowedByPositionScope) {
       if (isInactiveJdlEmployee(e)) continue;
       const agency = String(e.agency ?? e.Agency ?? '').trim();
       if (agency) out.add(agency);
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
-  }, [employees, isInactiveJdlEmployee]);
+  }, [employeesAllowedByPositionScope, isInactiveJdlEmployee]);
   const employeeManualAgencyOptions = useMemo(
     () => employeeAgencyOptions.filter((agency) => !isScheduleOnlyAgency(agency)),
     [employeeAgencyOptions]
@@ -12455,17 +12571,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
   const employeePositionOptions = useMemo(() => {
     const out = new Set<string>();
-    for (const e of employees) {
+    for (const e of employeesAllowedByPositionScope) {
       const position = String(e.position ?? e.Position ?? '').trim();
       if (position) out.add(position);
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
-  }, [employees]);
+  }, [employeesAllowedByPositionScope]);
 
   const collectEmployeeLabelOptionsByPosition = (positionRaw: string) => {
     const targetPosition = normalizePositionKey(positionRaw);
     const out = new Set<string>();
-    for (const e of employees) {
+    for (const e of employeesAllowedByPositionScope) {
       const label = String(e.label ?? e.Label ?? '').trim();
       if (!label) continue;
       if (targetPosition) {
@@ -12479,17 +12595,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
   const employeeFilterLabelOptions = useMemo(
     () => collectEmployeeLabelOptionsByPosition(employeePosition),
-    [employees, employeePosition]
+    [employeesAllowedByPositionScope, employeePosition]
   );
 
   const employeeAddLabelOptions = useMemo(
     () => collectEmployeeLabelOptionsByPosition(employeeNewPosition),
-    [employees, employeeNewPosition]
+    [employeesAllowedByPositionScope, employeeNewPosition]
   );
 
   const employeeEditLabelOptions = useMemo(
     () => collectEmployeeLabelOptionsByPosition(employeeEditPosition),
-    [employees, employeeEditPosition]
+    [employeesAllowedByPositionScope, employeeEditPosition]
   );
   useEffect(() => {
     if (!employeeAddOpen) return;
@@ -12523,7 +12639,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const employeesAfterFilter = useMemo(() => {
     if (page !== 'employees') return [];
     const { search: searchNeedle, agency: agencyNeedle, position: positionNeedle, shift: shiftNeedle, labels: labelNeedles } = employeeFilterNeedles;
-    return employees.filter((e) => {
+    return employeesAllowedByPositionScope.filter((e) => {
       if (isInactiveJdlEmployee(e)) return false;
       const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
       const name = String(e.name ?? '').trim();
@@ -12545,7 +12661,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!searchNeedle) return true;
       return [staff, name, employmentType, label, workAccount].join(' ').toLowerCase().includes(searchNeedle);
     });
-  }, [page, employees, employeeFilterNeedles, employeeShiftByStaffId, isInactiveJdlEmployee]);
+  }, [page, employeesAllowedByPositionScope, employeeFilterNeedles, employeeShiftByStaffId, isInactiveJdlEmployee]);
 
   // Step 3: Apply hire date sorting (optional, depends on filtered rows + sort flag)
   const employeesAfterHireDateSort = useMemo(() => {
@@ -13011,7 +13127,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
   }, [timecardRows, timecardAgency]);
 
-  const timecardPositionOptions = ALLOWED_POSITIONS;
+  const timecardPositionOptions = activePositionNames;
 
   const timecardRowsFiltered = useMemo(() => {
     if (page !== 'timecard') return [];
@@ -13060,7 +13176,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (b.totalHours !== a.totalHours) return b.totalHours - a.totalHours;
       return String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US');
     });
-  }, [page, timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter, timecardAgencySort, timecardTotalSort]);
+  }, [page, timecardRows, timecardShift, timecardInProgressOnly, timecardPresentDayFilter, timecardAgencySort, timecardTotalSort, canViewPosition]);
   const timecardRowsRendered = useMemo(
     () => timecardRowsFiltered.slice(0, Math.max(0, timecardRenderCount)),
     [timecardRowsFiltered, timecardRenderCount]
@@ -13518,7 +13634,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (shift === 'late') countedLateRows.push(item);
       else countedEarlyRows.push(item);
     }
-    const positionRank = new Map(ALLOWED_POSITIONS.map((pos, idx) => [pos, idx] as const));
+    const positionRank = new Map(activePositionNames.map((pos, idx) => [pos, idx] as const));
     const dailyListSort = (a: DailyListRow, b: DailyListRow) => {
       const aIsNew = isNewHirePlaceholderStaffId(String(a.staff_id ?? '').trim()) || isNewHirePlaceholderName(String(a.name ?? '').trim());
       const bIsNew = isNewHirePlaceholderStaffId(String(b.staff_id ?? '').trim()) || isNewHirePlaceholderName(String(b.name ?? '').trim());
@@ -13676,6 +13792,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (isInactiveJdlEmployee(employee)) return false;
         const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
         const position = normalizeAllowedPosition(String(employee.position ?? employee.Position ?? '').trim());
+        if (!canViewPosition('schedule', position)) return false;
         const employmentType = normalizeEmploymentTypeValue((employee as any).employment_type ?? (employee as any).EmploymentType ?? '');
         const label = String(employee.label ?? employee.Label ?? '').trim();
         if (!staff) return false;
@@ -15326,7 +15443,7 @@ ${rowsToHtml(late)}
                 setDeviceBorrowedOnly={setDeviceBorrowedOnly}
                 devicesError={devicesError}
                 DEVICE_TYPES={availableDeviceTypes}
-                ALLOWED_POSITIONS={ALLOWED_POSITIONS}
+                ALLOWED_POSITIONS={activePositionNames}
                 normalizeDeviceType={normalizeDeviceType}
                 deviceCurrentBorrowBySn={deviceCurrentBorrowBySn}
                 selectedDeviceLabelSnSet={selectedDeviceLabelSnSet}
@@ -16826,7 +16943,7 @@ ${rowsToHtml(late)}
                   t={t}
                   themeMode={themeMode}
                   isLocked={scheduleReadOnly}
-                  allowedPositions={ALLOWED_POSITIONS}
+                  allowedPositions={activePositionNames}
                   dailyListNewHirePosition={dailyListNewHirePosition}
                   setDailyListNewHirePosition={setDailyListNewHirePosition}
                   dailyListNewHireShift={dailyListNewHireShift}
@@ -16912,7 +17029,7 @@ ${rowsToHtml(late)}
                   employeeNewWorkPassword={employeeNewWorkPassword}
                   setEmployeeNewWorkPassword={setEmployeeNewWorkPassword}
                   employeeAddLabelOptions={employeeAddLabelOptions}
-                  allowedPositions={ALLOWED_POSITIONS}
+                  allowedPositions={activePositionNames}
                   closeEmployeeAdd={closeEmployeeAdd}
                   addEmployeeRow={addEmployeeRow}
                 />
@@ -16951,6 +17068,7 @@ ${rowsToHtml(late)}
                   toggleEmployeeBadgeBatchSelectedStaffId={toggleEmployeeBadgeBatchSelectedStaffId}
                   openEmployeeAuditLog={openEmployeeAuditLog}
                   printEmployeeTempBadge={printEmployeeTempBadge}
+                  canOperateEmployeePosition={(position) => canOperatePosition('employees', position)}
                   openEmployeeEdit={openEmployeeEdit}
                   deleteEmployeeRow={deleteEmployeeRow}
                 />
@@ -17004,7 +17122,7 @@ ${rowsToHtml(late)}
                   employeeEditWorkPassword={employeeEditWorkPassword}
                   setEmployeeEditWorkPassword={setEmployeeEditWorkPassword}
                   employeeEditLabelOptions={employeeEditLabelOptions}
-                  allowedPositions={ALLOWED_POSITIONS}
+                  allowedPositions={activePositionNames}
                   closeEmployeeEdit={closeEmployeeEdit}
                   saveEmployeeEdit={saveEmployeeEdit}
                 />
@@ -17051,11 +17169,13 @@ ${rowsToHtml(late)}
                 userOptions={adminAccessUserOptions}
                 agencyOptions={employeeAgencyOptions}
                 requestRows={adminAccessRequests}
+                positions={positions.length ? positions : activePositionNames.map((name, index) => ({ name, is_active: true, display_order: index * 10 }))}
                 resolveAdminUserIdentity={resolveAdminUserIdentity}
                 onRefreshAccess={async () => {
-                  await fetchAdminAccessAccountsAndUsers({ lockUi: false });
+                  await Promise.all([fetchAdminAccessAccountsAndUsers({ lockUi: false }), fetchPositions({ lockUi: false })]);
                 }}
                 onSaveAccess={saveAdminAccessConfig}
+                onSavePosition={savePositionConfig}
                 onRefreshRequests={async () => {
                   await fetchAdminAccessRequests({ lockUi: false, status: 'all' });
                 }}
@@ -17784,3 +17904,17 @@ ${rowsToHtml(late)}
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
