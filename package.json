@@ -16,7 +16,8 @@
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:all": "npm run test:unit && npm run test:e2e",
-    "backfill:late:march": "node scripts/backfill-late-marks-march.mjs"
+    "backfill:late:march": "node scripts/backfill-late-marks-march.mjs",
+    "reset:consumables": "node scripts/reset-consumable-inventory.mjs"
   },
   "dependencies": {
     "@lottiefiles/dotlottie-react": "^0.19.0",

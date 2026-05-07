@@ -4,11 +4,13 @@ import {
   ADMIN_MODULE_KEYS,
   getDefaultModuleAccess,
   normalizeAdminRole,
+  normalizePositionScopesForContext,
   type AdminModuleAccessLevel,
   type AdminModuleKey,
+  type AdminPositionScopes,
+  type PositionScopedModuleKey,
   type AdminRole
 } from '../../shared/adminAccess';
-import AdminUserAvatar from '../components/AdminUserAvatar';
 import type {
   AdminAccessAccountRecord,
   AdminAccessSavePayload,
@@ -24,6 +26,7 @@ type AdminAccessManagementSectionProps = {
   rows: AdminAccessAccountRecord[];
   userOptions: AdminAccessUserOption[];
   agencyOptions: string[];
+  positionOptions: string[];
   onRefresh: () => void | Promise<void>;
   onSave: (payload: AdminAccessSavePayload) => void | Promise<void>;
 };
@@ -35,25 +38,32 @@ type EditingState = {
 
 const ROLE_OPTIONS: AdminRole[] = ['level1', 'level2', 'level3', 'agency'];
 const ACCESS_OPTIONS: AdminModuleAccessLevel[] = ['hidden', 'view', 'operate'];
+const POSITION_SCOPE_MODULES: PositionScopedModuleKey[] = ['employees', 'schedule', 'timecard'];
+const POSITION_SCOPE_LABELS: Record<PositionScopedModuleKey, { zh: string; en: string }> = {
+  employees: { zh: '员工', en: 'Employees' },
+  schedule: { zh: '排班', en: 'Schedule' },
+  timecard: { zh: '时间卡', en: 'Timecard' }
+};
 
 const MODULE_LABELS: Record<AdminModuleKey, { zh: string; en: string }> = {
-  package_metrics: { zh: '日报', en: 'Daily' },
-  consumables: { zh: '耗材', en: 'Consumables' },
   home: { zh: '首页', en: 'Home' },
+  package_metrics: { zh: '包裹', en: 'Packages' },
+  consumables: { zh: '耗材', en: 'Consumables' },
+  employee_upload: { zh: '导入', en: 'Import' },
   employees: { zh: '员工', en: 'Employees' },
   accounts: { zh: '账号', en: 'Accounts' },
-  permissions: { zh: '权限', en: 'Permissions' },
   timecard: { zh: '时间卡', en: 'Timecard' },
-  leave_approval: { zh: '请假审批', en: 'Leave Approval' },
-  work_hour_comparison: { zh: '工时对比', en: 'Work Hour Comparison' },
+  leave_approval: { zh: '请假审批', en: 'Leave' },
+  work_hour_comparison: { zh: '工时', en: 'Hours' },
   todo: { zh: '待办', en: 'Todo' },
   punches: { zh: '打卡流水', en: 'Punches' },
   audit: { zh: '日志', en: 'Audit' },
   schedule: { zh: '排班', en: 'Schedule' },
   devices: { zh: '设备', en: 'Devices' },
   forecast: { zh: '件量预测', en: 'Forecast' },
-  prediction_model: { zh: '预测模型', en: 'Prediction Model' },
+  prediction_model: { zh: '预测模型', en: 'Model' },
   efficiency: { zh: '人效', en: 'Efficiency' },
+  permissions: { zh: '权限', en: 'Permissions' },
   agency: { zh: 'Agency', en: 'Agency' }
 };
 
@@ -73,6 +83,7 @@ export default function AdminAccessManagementSection({
   rows,
   userOptions,
   agencyOptions,
+  positionOptions,
   onRefresh,
   onSave
 }: AdminAccessManagementSectionProps) {
@@ -85,6 +96,7 @@ export default function AdminAccessManagementSection({
   const [modules, setModules] = useState<Array<{ module_key: AdminModuleKey; access_level: AdminModuleAccessLevel }>>(
     buildDefaultModuleState('agency')
   );
+  const [positionScopes, setPositionScopes] = useState<AdminPositionScopes>(() => normalizePositionScopesForContext(null));
   const [searchKeyword, setSearchKeyword] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | AdminRole>('all');
   const [saving, setSaving] = useState(false);
@@ -93,24 +105,24 @@ export default function AdminAccessManagementSection({
     const explicitRowMap = new Map(rows.map((row) => [row.user_id, row] as const));
     const merged = userOptions.map((user) => {
       const explicitRow = explicitRowMap.get(user.user_id);
-      if (explicitRow) return { ...explicitRow, avatar_url: explicitRow.avatar_url || user.avatar_url || '' };
+      if (explicitRow) return explicitRow;
 
       const nextRole = normalizeAdminRole('', user.user_email);
       return {
         user_id: user.user_id,
         user_email: user.user_email,
         display_name: user.display_name,
-        avatar_url: user.avatar_url ?? '',
         role: nextRole,
         is_active: true,
         managed_agencies: [],
-        modules: buildDefaultModuleState(nextRole)
+        modules: buildDefaultModuleState(nextRole),
+        position_scopes: normalizePositionScopesForContext(null)
       } satisfies AdminAccessAccountRecord;
     });
 
     const knownUserIds = new Set(merged.map((row) => row.user_id));
     for (const row of rows) {
-      if (!knownUserIds.has(row.user_id)) merged.push({ ...row, avatar_url: row.avatar_url ?? '' });
+      if (!knownUserIds.has(row.user_id)) merged.push(row);
     }
 
     return merged.sort((left, right) => {
@@ -132,7 +144,13 @@ export default function AdminAccessManagementSection({
     return mergedRows.filter((row) => {
       if (roleFilter !== 'all' && row.role !== roleFilter) return false;
       if (!normalizedSearchKeyword) return true;
-      const searchable = [row.display_name, row.user_email, row.user_id, row.role, row.managed_agencies.join(' ')]
+      const searchable = [
+        row.display_name,
+        row.user_email,
+        row.user_id,
+        row.role,
+        row.managed_agencies.join(' ')
+      ]
         .join(' ')
         .toLowerCase();
       return searchable.includes(normalizedSearchKeyword);
@@ -154,6 +172,7 @@ export default function AdminAccessManagementSection({
           }))
         : buildDefaultModuleState(sourceRow?.role ?? 'agency')
     );
+    setPositionScopes(normalizePositionScopesForContext(sourceRow?.position_scopes));
   }, [editing]);
 
   const closeModal = () => {
@@ -173,6 +192,49 @@ export default function AdminAccessManagementSection({
     setModules((prev) =>
       prev.map((module) => (module.module_key === moduleKey ? { ...module, access_level: accessLevel } : module))
     );
+  };
+
+  const setPositionScopeMode = (moduleKey: PositionScopedModuleKey, mode: 'all' | 'selected') => {
+    setPositionScopes((prev) => ({
+      ...prev,
+      [moduleKey]: {
+        mode,
+        positions: mode === 'all' ? [] : prev[moduleKey].positions
+      }
+    }));
+  };
+
+  const togglePositionScope = (moduleKey: PositionScopedModuleKey, position: string) => {
+    setPositionScopes((prev) => {
+      const scope = prev[moduleKey];
+      const exists = scope.positions.some((item) => item.position.toLowerCase() === position.toLowerCase());
+      const positions = exists
+        ? scope.positions.filter((item) => item.position.toLowerCase() !== position.toLowerCase())
+        : [...scope.positions, { position, access_level: 'view' as const }].sort((a, b) => a.position.localeCompare(b.position, 'en-US'));
+      return {
+        ...prev,
+        [moduleKey]: {
+          mode: positions.length ? 'selected' : 'all',
+          positions
+        }
+      };
+    });
+  };
+
+  const setPositionScopeAccess = (
+    moduleKey: PositionScopedModuleKey,
+    position: string,
+    accessLevel: 'view' | 'operate'
+  ) => {
+    setPositionScopes((prev) => ({
+      ...prev,
+      [moduleKey]: {
+        mode: 'selected',
+        positions: prev[moduleKey].positions.map((item) =>
+          item.position.toLowerCase() === position.toLowerCase() ? { ...item, access_level: accessLevel } : item
+        )
+      }
+    }));
   };
 
   const applyRoleDefaults = (nextRole: AdminRole = role) => {
@@ -201,7 +263,8 @@ export default function AdminAccessManagementSection({
         role,
         is_active: isActive,
         managed_agencies: managedAgencies,
-        modules
+        modules,
+        position_scopes: normalizePositionScopesForContext(positionScopes)
       });
       setEditing(null);
     } finally {
@@ -214,22 +277,22 @@ export default function AdminAccessManagementSection({
       ? createPortal(
           <div
             className={[
-              'fixed inset-0 z-40 flex items-center justify-center overflow-y-auto px-4 py-6',
+              'fixed inset-0 z-40 flex items-center justify-center overflow-y-auto px-4 py-10',
               isLight ? 'bg-slate-900/35' : 'bg-black/60'
             ].join(' ')}
           >
             <div
               className={[
-                'flex h-[min(860px,calc(100vh-2rem))] w-full max-w-[1120px] flex-col overflow-hidden rounded-3xl border shadow-2xl',
+                'w-full max-w-5xl rounded-3xl border p-6 shadow-2xl',
                 isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950/90 backdrop-blur'
               ].join(' ')}
             >
-              <div className={['flex items-start justify-between gap-4 border-b px-6 py-5', isLight ? 'border-slate-200' : 'border-white/10'].join(' ')}>
-                <div className="min-w-0">
+              <div className="flex items-start justify-between gap-4">
+                <div>
                   <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                     {editing.mode === 'create' ? t('新增权限', 'New Access') : t('编辑权限', 'Edit Access')}
                   </div>
-                  <div className={['mt-2 truncate text-sm', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                  <div className={['mt-2 text-sm', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                     {editing.mode === 'edit'
                       ? normalizeDisplayName(userOptions.find((option) => option.user_id === selectedUserId) ?? null) || selectedUserId
                       : t('配置角色、模块和 Agency 范围', 'Set role, modules, and agency scope')}
@@ -248,15 +311,14 @@ export default function AdminAccessManagementSection({
                 </button>
               </div>
 
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 py-5">
-                <div className="shrink-0 grid gap-4 md:grid-cols-3">
-                  <div>
+              <div className="mt-6 grid gap-4 md:grid-cols-3">
+                <div>
                   <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
                     {t('账号', 'User')}
                   </label>
                   <select
                     value={selectedUserId}
-                    onChange={(event) => setSelectedUserId(event.target.value)}
+                    onChange={(e) => setSelectedUserId(e.target.value)}
                     disabled={saving || editing.mode === 'edit'}
                     className={[
                       'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
@@ -272,15 +334,15 @@ export default function AdminAccessManagementSection({
                       </option>
                     ))}
                   </select>
-                  </div>
+                </div>
 
-                  <div>
+                <div>
                   <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
                     {t('角色', 'Role')}
                   </label>
                   <select
                     value={role}
-                    onChange={(event) => setRole(event.target.value as AdminRole)}
+                    onChange={(e) => setRole(e.target.value as AdminRole)}
                     disabled={saving}
                     className={[
                       'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
@@ -295,9 +357,9 @@ export default function AdminAccessManagementSection({
                       </option>
                     ))}
                   </select>
-                  </div>
+                </div>
 
-                  <div className="flex items-end">
+                <div className="flex items-end">
                   <label
                     className={[
                       'flex h-11 w-full items-center justify-between rounded-2xl border px-4 text-sm',
@@ -308,196 +370,278 @@ export default function AdminAccessManagementSection({
                     <input
                       type="checkbox"
                       checked={isActive}
-                      onChange={(event) => setIsActive(event.target.checked)}
+                      onChange={(e) => setIsActive(e.target.checked)}
                       disabled={saving}
                       className="h-4 w-4 rounded border-slate-400 text-neon focus:ring-neon"
                     />
                   </label>
-                  </div>
-                </div>
-
-                <div className="mt-6 shrink-0">
-                  <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
-                  {t('Agency 范围', 'Agency Scope')}
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {agencyOptions.map((agency) => {
-                      const active = managedAgencies.includes(agency);
-                      return (
-                        <button
-                          key={agency}
-                          type="button"
-                          onClick={() => toggleAgency(agency)}
-                          disabled={saving}
-                          className={[
-                            'rounded-full border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                            active
-                              ? isLight
-                                ? 'border-neon/60 bg-neon/15 text-slate-900'
-                                : 'border-neon/60 bg-neon/20 text-neon'
-                              : isLight
-                                ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
-                                : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
-                          ].join(' ')}
-                        >
-                          {agency}
-                        </button>
-                      );
-                    })}
-                    {!agencyOptions.length && (
-                      <span className={isLight ? 'text-sm text-slate-500' : 'text-sm text-slate-400'}>
-                        {t('暂无 Agency', 'No agencies')}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-6 flex min-h-0 flex-1 flex-col">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
-                      {t('模块权限', 'Modules')}
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <span
-                          className={[
-                            'rounded-full border px-2.5 py-1 text-xs font-semibold',
-                            isLight
-                              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                              : 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200'
-                          ].join(' ')}
-                        >
-                          {t('可操作', 'Operate')} {moduleSummary.operate}
-                        </span>
-                        <span
-                          className={[
-                            'rounded-full border px-2.5 py-1 text-xs font-semibold',
-                            isLight ? 'border-sky-300 bg-sky-50 text-sky-700' : 'border-sky-400/40 bg-sky-500/10 text-sky-200'
-                          ].join(' ')}
-                        >
-                          {t('只读', 'View')} {moduleSummary.view}
-                        </span>
-                        <span
-                          className={[
-                            'rounded-full border px-2.5 py-1 text-xs font-semibold',
-                            isLight
-                              ? 'border-slate-300 bg-slate-100 text-slate-700'
-                              : 'border-slate-400/30 bg-slate-500/10 text-slate-300'
-                          ].join(' ')}
-                        >
-                          {t('隐藏', 'Hidden')} {moduleSummary.hidden}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => applyAllModuleAccess('hidden')}
-                        disabled={saving}
-                        className={[
-                          'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                          isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                        ].join(' ')}
-                      >
-                        {t('全部隐藏', 'All Hidden')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => applyAllModuleAccess('view')}
-                        disabled={saving}
-                        className={[
-                          'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                          isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                        ].join(' ')}
-                      >
-                        {t('全部只读', 'All View')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => applyAllModuleAccess('operate')}
-                        disabled={saving}
-                        className={[
-                          'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                          isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                        ].join(' ')}
-                      >
-                        {t('全部可操作', 'All Operate')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => applyRoleDefaults()}
-                        disabled={saving}
-                        className={[
-                          'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                          isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                        ].join(' ')}
-                      >
-                        {t('应用默认', 'Apply Defaults')}
-                      </button>
-                    </div>
-                  </div>
-                  <div
-                    className={[
-                      'mt-3 min-h-0 flex-1 overflow-y-auto rounded-2xl border p-1.5',
-                      isLight ? 'border-slate-200 bg-slate-100/70' : 'border-white/10 bg-black/20'
-                    ].join(' ')}
-                  >
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {modules.map((module) => (
-                        <div
-                          key={module.module_key}
-                          className={[
-                            'rounded-2xl border p-3',
-                            isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'
-                          ].join(' ')}
-                        >
-                          <div className={['text-sm font-semibold', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>
-                            {t(MODULE_LABELS[module.module_key].zh, MODULE_LABELS[module.module_key].en)}
-                          </div>
-                          <div
-                            className={[
-                              'mt-2 grid grid-cols-3 gap-1 rounded-xl p-1',
-                              isLight ? 'border border-slate-200 bg-white' : 'border border-white/10 bg-black/30'
-                            ].join(' ')}
-                          >
-                            {ACCESS_OPTIONS.map((option) => {
-                              const selected = module.access_level === option;
-                              return (
-                                <button
-                                  key={option}
-                                  type="button"
-                                  onClick={() => setModuleAccess(module.module_key, option)}
-                                  disabled={saving}
-                                  className={[
-                                    'rounded-lg px-2 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                                    selected
-                                      ? option === 'operate'
-                                        ? 'bg-emerald-500 text-white'
-                                        : option === 'view'
-                                          ? 'bg-sky-500 text-white'
-                                          : 'bg-slate-600 text-white'
-                                      : isLight
-                                        ? 'text-slate-600 hover:bg-slate-100'
-                                        : 'text-slate-300 hover:bg-white/10'
-                                  ].join(' ')}
-                                >
-                                  {option === 'operate'
-                                    ? t('可操作', 'Operate')
-                                    : option === 'view'
-                                      ? t('只读', 'View')
-                                      : t('隐藏', 'Hidden')}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
                 </div>
               </div>
 
-              <div className={['flex items-center justify-end gap-3 border-t px-6 py-4', isLight ? 'border-slate-200' : 'border-white/10'].join(' ')}>
+              <div className="mt-6">
+                <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
+                  {t('Agency 范围', 'Agency Scope')}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {agencyOptions.map((agency) => {
+                    const active = managedAgencies.includes(agency);
+                    return (
+                      <button
+                        key={agency}
+                        type="button"
+                        onClick={() => toggleAgency(agency)}
+                        disabled={saving}
+                        className={[
+                          'rounded-full border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                          active
+                            ? isLight
+                              ? 'border-neon/60 bg-neon/15 text-slate-900'
+                              : 'border-neon/60 bg-neon/20 text-neon'
+                            : isLight
+                              ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                              : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                        ].join(' ')}
+                      >
+                        {agency}
+                      </button>
+                    );
+                  })}
+                  {!agencyOptions.length && (
+                    <span className={isLight ? 'text-sm text-slate-500' : 'text-sm text-slate-400'}>
+                      {t('暂无 Agency', 'No agencies')}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-6">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
+                      {t('模块权限', 'Modules')}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <span
+                        className={[
+                          'rounded-full border px-2.5 py-1 text-xs font-semibold',
+                          isLight
+                            ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                            : 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200'
+                        ].join(' ')}
+                      >
+                        {t('可操作', 'Operate')} {moduleSummary.operate}
+                      </span>
+                      <span
+                        className={[
+                          'rounded-full border px-2.5 py-1 text-xs font-semibold',
+                          isLight ? 'border-sky-300 bg-sky-50 text-sky-700' : 'border-sky-400/40 bg-sky-500/10 text-sky-200'
+                        ].join(' ')}
+                      >
+                        {t('只读', 'View')} {moduleSummary.view}
+                      </span>
+                      <span
+                        className={[
+                          'rounded-full border px-2.5 py-1 text-xs font-semibold',
+                          isLight
+                            ? 'border-slate-300 bg-slate-100 text-slate-700'
+                            : 'border-slate-400/30 bg-slate-500/10 text-slate-300'
+                        ].join(' ')}
+                      >
+                        {t('隐藏', 'Hidden')} {moduleSummary.hidden}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => applyAllModuleAccess('hidden')}
+                      disabled={saving}
+                      className={[
+                        'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                        isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                      ].join(' ')}
+                    >
+                      {t('全部隐藏', 'All Hidden')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyAllModuleAccess('view')}
+                      disabled={saving}
+                      className={[
+                        'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                        isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                      ].join(' ')}
+                    >
+                      {t('全部只读', 'All View')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyAllModuleAccess('operate')}
+                      disabled={saving}
+                      className={[
+                        'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                        isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                      ].join(' ')}
+                    >
+                      {t('全部可操作', 'All Operate')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyRoleDefaults()}
+                      disabled={saving}
+                      className={[
+                        'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                        isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                      ].join(' ')}
+                    >
+                      {t('应用默认', 'Apply Defaults')}
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {modules.map((module) => (
+                    <div
+                      key={module.module_key}
+                      className={[
+                        'rounded-2xl border p-3',
+                        isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'
+                      ].join(' ')}
+                    >
+                      <div className={['text-sm font-semibold', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>
+                        {t(MODULE_LABELS[module.module_key].zh, MODULE_LABELS[module.module_key].en)}
+                      </div>
+                      <div
+                        className={[
+                          'mt-2 grid grid-cols-3 gap-1 rounded-xl p-1',
+                          isLight ? 'bg-white border border-slate-200' : 'bg-black/30 border border-white/10'
+                        ].join(' ')}
+                      >
+                        {ACCESS_OPTIONS.map((option) => {
+                          const selected = module.access_level === option;
+                          return (
+                            <button
+                              key={option}
+                              type="button"
+                              onClick={() => setModuleAccess(module.module_key, option)}
+                              disabled={saving}
+                              className={[
+                                'rounded-lg px-2 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                                selected
+                                  ? option === 'operate'
+                                    ? 'bg-emerald-500 text-white'
+                                    : option === 'view'
+                                      ? 'bg-sky-500 text-white'
+                                      : 'bg-slate-600 text-white'
+                                  : isLight
+                                    ? 'text-slate-600 hover:bg-slate-100'
+                                    : 'text-slate-300 hover:bg-white/10'
+                              ].join(' ')}
+                            >
+                              {option === 'operate'
+                                ? t('可操作', 'Operate')
+                                : option === 'view'
+                                  ? t('只读', 'View')
+                                  : t('隐藏', 'Hidden')}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-6">
+                <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
+                  Positions
+                </div>
+                <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                  {POSITION_SCOPE_MODULES.map((moduleKey) => {
+                    const scope = positionScopes[moduleKey];
+                    const selectedMap = new Map(scope.positions.map((item) => [item.position.toLowerCase(), item.access_level] as const));
+                    return (
+                      <div
+                        key={moduleKey}
+                        className={[
+                          'rounded-2xl border p-3',
+                          isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'
+                        ].join(' ')}
+                      >
+                        <div className={['text-sm font-semibold', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>
+                          {t(POSITION_SCOPE_LABELS[moduleKey].zh, POSITION_SCOPE_LABELS[moduleKey].en)}
+                        </div>
+                        <div
+                          className={[
+                            'mt-2 grid grid-cols-2 gap-1 rounded-xl border p-1',
+                            isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/30'
+                          ].join(' ')}
+                        >
+                          {(['all', 'selected'] as const).map((mode) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              disabled={saving}
+                              onClick={() => setPositionScopeMode(moduleKey, mode)}
+                              className={[
+                                'rounded-lg px-2 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                                scope.mode === mode
+                                  ? 'bg-slate-900 text-white'
+                                  : isLight
+                                    ? 'text-slate-600 hover:bg-slate-100'
+                                    : 'text-slate-300 hover:bg-white/10'
+                              ].join(' ')}
+                            >
+                              {mode === 'all' ? t('全部', 'All') : t('指定', 'Selected')}
+                            </button>
+                          ))}
+                        </div>
+                        {scope.mode === 'selected' ? (
+                          <div className="mt-3 max-h-48 space-y-2 overflow-auto pr-1">
+                            {positionOptions.map((position) => {
+                              const selectedAccess = selectedMap.get(position.toLowerCase()) ?? null;
+                              return (
+                                <div key={`${moduleKey}-${position}`} className="flex items-center justify-between gap-2">
+                                  <label className="flex min-w-0 items-center gap-2 text-xs">
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(selectedAccess)}
+                                      disabled={saving}
+                                      onChange={() => togglePositionScope(moduleKey, position)}
+                                      className="h-4 w-4 rounded border-slate-400 text-neon focus:ring-neon"
+                                    />
+                                    <span className={['truncate', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{position}</span>
+                                  </label>
+                                  {selectedAccess ? (
+                                    <button
+                                      type="button"
+                                      disabled={saving}
+                                      onClick={() =>
+                                        setPositionScopeAccess(moduleKey, position, selectedAccess === 'operate' ? 'view' : 'operate')
+                                      }
+                                      className={[
+                                        'rounded-lg px-2 py-1 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                                        selectedAccess === 'operate'
+                                          ? 'bg-emerald-500 text-white'
+                                          : isLight
+                                            ? 'bg-sky-100 text-sky-700'
+                                            : 'bg-sky-500/15 text-sky-200'
+                                      ].join(' ')}
+                                    >
+                                      {selectedAccess === 'operate' ? t('可操作', 'Operate') : t('只读', 'View')}
+                                    </button>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-6 flex items-center justify-end gap-3">
                 <button
                   type="button"
                   onClick={closeModal}
@@ -528,7 +672,7 @@ export default function AdminAccessManagementSection({
       : null;
 
   return (
-    <section className="px-6 py-8">
+    <section className="glass reveal rounded-3xl px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-display text-2xl tracking-[0.08em]">{t('权限分配', 'Access')}</h2>
         <div className="flex flex-1 flex-wrap items-center justify-end gap-3">
@@ -564,12 +708,18 @@ export default function AdminAccessManagementSection({
           <button
             type="button"
             disabled={isLocked}
+            onClick={() => setEditing({ mode: 'create', row: null })}
+            className="hidden rounded-2xl bg-neon px-4 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t('新增账号', 'New Access')}
+          </button>
+          <button
+            type="button"
+            disabled={isLocked}
             onClick={() => void onRefresh()}
             className={[
               'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-              isLight
-                ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                : 'bg-white/10 text-slate-200 hover:bg-white/15'
+              isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
             ].join(' ')}
           >
             {t('刷新', 'Refresh')}
@@ -606,20 +756,9 @@ export default function AdminAccessManagementSection({
               return (
                 <tr key={row.user_id} className="border-b border-white/5 transition-colors hover:bg-white/5 last:border-0">
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <AdminUserAvatar
-                        name={row.display_name || row.user_email || row.user_id}
-                        avatarUrl={row.avatar_url}
-                        fallbackInitial={(row.display_name || row.user_email || row.user_id).slice(0, 1).toUpperCase() || '?'}
-                        size={28}
-                        className={isLight ? 'border-slate-200 bg-slate-200 text-slate-700' : 'border-white/10 bg-slate-800 text-slate-100'}
-                      />
-                      <div className="min-w-0">
-                        <div className={['truncate', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>{row.display_name || '-'}</div>
-                        <div className={['truncate text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
-                          {row.user_email || row.user_id}
-                        </div>
-                      </div>
+                    <div className={isLight ? 'text-slate-900' : 'text-slate-100'}>{row.display_name || '-'}</div>
+                    <div className={['text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                      {row.user_email || row.user_id}
                     </div>
                   </td>
                   <td className="px-4 py-3">
@@ -702,3 +841,4 @@ export default function AdminAccessManagementSection({
     </section>
   );
 }
+

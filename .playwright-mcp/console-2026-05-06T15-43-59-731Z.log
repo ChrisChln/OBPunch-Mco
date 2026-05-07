@@ -1,0 +1,12 @@
+[ 2349555ms] [WARNING] GoTrueClient@sb-lwbeqnfqwxncgtemlolt-auth-token:2 (2.94.0) 2026-05-06T16:23:09.266Z Multiple GoTrueClient instances detected in the same browser context. It is not an error, but this should be avoided as it may produce undefined behavior when used concurrently under the same storage key. @ http://localhost:5173/node_modules/.vite/deps/@supabase_supabase-js.js?v=0958b1ed:8694
+[ 2358864ms] [WARNING] GoTrueClient@sb-lwbeqnfqwxncgtemlolt-auth-token:3 (2.94.0) 2026-05-06T16:23:18.573Z Multiple GoTrueClient instances detected in the same browser context. It is not an error, but this should be avoided as it may produce undefined behavior when used concurrently under the same storage key. @ http://localhost:5173/node_modules/.vite/deps/@supabase_supabase-js.js?v=0958b1ed:8694
+[ 3295092ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:5173/@vite/client:559
+[ 3297474ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:5173/:0
+[ 3300838ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:5173/:0
+[ 3304198ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:5173/:0
+[ 3307571ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:5173/:0
+[ 3310958ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:5173/:0
+[ 3314309ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:5173/:0
+[ 3317817ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:5173/:0
+[ 3321182ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:5173/:0
+[ 3324581ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:5173/:0

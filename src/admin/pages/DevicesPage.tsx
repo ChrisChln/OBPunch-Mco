@@ -1,5 +1,5 @@
 import type { Dispatch, RefObject, SetStateAction } from 'react';
-import type { AllowedPosition, DeviceType } from '../types';
+import type { DeviceType } from '../types';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -24,13 +24,13 @@ type DevicesPageProps = {
   setDeviceSearch: (value: string) => void;
   deviceFilterType: DeviceType | '';
   setDeviceFilterType: (value: DeviceType | '') => void;
-  deviceFilterPosition: AllowedPosition | '';
-  setDeviceFilterPosition: (value: AllowedPosition | '') => void;
+  deviceFilterPosition: string;
+  setDeviceFilterPosition: (value: string) => void;
   deviceBorrowedOnly: boolean;
   setDeviceBorrowedOnly: (value: boolean) => void;
   devicesError: string | null;
   DEVICE_TYPES: readonly string[]; // 现在是动态生成的可用类型列表
-  ALLOWED_POSITIONS: readonly AllowedPosition[];
+  ALLOWED_POSITIONS: readonly string[];
   normalizeDeviceType: (value: string) => DeviceType;
   deviceCurrentBorrowBySn: Map<string, any>;
   selectedDeviceLabelSnSet: Set<string>;
@@ -86,7 +86,7 @@ export default function DevicesPage({
 }: DevicesPageProps) {
   const writeLocked = isLocked || isReadOnly;
   return (
-    <section className="px-6 py-8">
+    <section className="glass reveal rounded-3xl px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-display text-2xl tracking-[0.08em]">{t('设备管理', 'Devices')}</h2>
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -193,7 +193,7 @@ export default function DevicesPage({
               </select>
               <select
                 value={deviceFilterPosition}
-                onChange={(e) => setDeviceFilterPosition((e.target.value as AllowedPosition | '') ?? '')}
+                onChange={(e) => setDeviceFilterPosition(e.target.value ?? '')}
                 disabled={isLocked}
                 className="h-10 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
               >

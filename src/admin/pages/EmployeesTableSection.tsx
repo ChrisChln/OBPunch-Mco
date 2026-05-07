@@ -51,6 +51,7 @@ type EmployeesTableSectionProps = {
     workAccount?: string;
     workPassword?: string;
   }) => void | Promise<void>;
+  canOperateEmployeePosition: (position: string) => boolean;
   openEmployeeEdit: (payload: {
     staff: string;
     name: string;
@@ -94,6 +95,7 @@ export default function EmployeesTableSection({
   toggleEmployeeBadgeBatchSelectedStaffId,
   openEmployeeAuditLog,
   printEmployeeTempBadge,
+  canOperateEmployeePosition,
   openEmployeeEdit,
   deleteEmployeeRow
 }: EmployeesTableSectionProps) {
@@ -271,6 +273,7 @@ export default function EmployeesTableSection({
                   : '';
               const displayEmployeeId = isProtectedAgencyEmployee ? '-' : displayStaffId(staff);
               const isSelected = employeeBadgeBatchSelectedStaffIds.includes(staff);
+              const rowIsLocked = isLocked || !canOperateEmployeePosition(position);
               const selectedRowStyle = isSelected
                 ? themeMode === 'light'
                   ? { backgroundColor: '#e2e8f0' }
@@ -280,7 +283,8 @@ export default function EmployeesTableSection({
               return (
                 <tr
                   key={String(e.id ?? staff)}
-                  onClick={() =>
+                  onClick={() => {
+                    if (rowIsLocked) return;
                     toggleEmployeeBadgeBatchSelectedStaffId({
                       staff,
                       name,
@@ -288,12 +292,13 @@ export default function EmployeesTableSection({
                       position,
                       workAccount,
                       workPassword
-                    })
-                  }
+                    });
+                  }}
                   style={selectedRowStyle}
                   className={[
-                    'cursor-pointer border-b border-white/5 transition-colors last:border-0',
-                    isSelected ? '' : 'hover:bg-white/5'
+                    'border-b border-white/5 transition-colors last:border-0',
+                    rowIsLocked ? 'cursor-default' : 'cursor-pointer',
+                    isSelected || rowIsLocked ? '' : 'hover:bg-white/5'
                   ].join(' ')}
                 >
                   <td className={['w-[118px] px-3 py-3 font-mono whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{displayEmployeeId}</td>
@@ -362,7 +367,7 @@ export default function EmployeesTableSection({
                     </button>
                     <button
                       type="button"
-                      disabled={isLocked || employeeBadgePrintingStaffId === staff}
+                      disabled={rowIsLocked || employeeBadgePrintingStaffId === staff}
                       onClick={(evt) => {
                         evt.stopPropagation();
                         void printEmployeeTempBadge({ staff, name, agency, position, workAccount, workPassword });
@@ -373,7 +378,7 @@ export default function EmployeesTableSection({
                     </button>
                     <button
                       type="button"
-                      disabled={isLocked}
+                      disabled={rowIsLocked}
                       onClick={(evt) => {
                         evt.stopPropagation();
                         openEmployeeEdit({
@@ -400,7 +405,7 @@ export default function EmployeesTableSection({
                     </button>
                     <button
                       type="button"
-                      disabled={isLocked || isProtectedAgencyEmployee}
+                      disabled={rowIsLocked || isProtectedAgencyEmployee}
                       onClick={(evt) => {
                         evt.stopPropagation();
                         void deleteEmployeeRow(staff);

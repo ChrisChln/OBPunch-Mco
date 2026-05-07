@@ -8,8 +8,6 @@ import {
   type AdminModuleKey,
   type AdminRole
 } from '../../shared/adminAccess';
-import AdminUserAvatar from '../components/AdminUserAvatar';
-import type { AdminUserIdentityView } from '../adminIdentity';
 import type {
   AdminAccessAccountRecord,
   AdminAccessRequestCreatePayload,
@@ -17,6 +15,7 @@ import type {
   AdminAccessSavePayload,
   AdminAccessUserOption
 } from '../adminAccessApi';
+import type { PositionRecord } from '../../shared/positions';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -29,15 +28,12 @@ type AdminPermissionsPageProps = {
   accessRows: AdminAccessAccountRecord[];
   userOptions: AdminAccessUserOption[];
   agencyOptions: string[];
+  positions: PositionRecord[];
   requestRows: AdminAccessRequestRecord[];
-  resolveAdminUserIdentity: (input: {
-    userId?: string | null;
-    userEmail?: string | null;
-    actor?: unknown;
-    displayName?: string | null;
-  }) => AdminUserIdentityView;
+  resolveAdminUserIdentity?: (input: { userId?: string | null; userEmail?: string | null; actor?: unknown; displayName?: string | null }) => unknown;
   onRefreshAccess: () => void | Promise<void>;
   onSaveAccess: (payload: AdminAccessSavePayload) => void | Promise<void>;
+  onSavePosition: (payload: { name: string; display_order: number; is_active: boolean; original_name?: string | null }) => void | Promise<void>;
   onRefreshRequests: () => void | Promise<void>;
   onCreateRequest: (payload: AdminAccessRequestCreatePayload) => void | Promise<void>;
   onReviewRequest: (request: AdminAccessRequestRecord, action: 'approve' | 'reject') => void | Promise<void>;
@@ -47,22 +43,23 @@ const ROLE_OPTIONS: AdminRole[] = ['level1', 'level2', 'level3', 'agency'];
 const ACCESS_OPTIONS: AdminModuleAccessLevel[] = ['hidden', 'view', 'operate'];
 
 const MODULE_LABELS: Record<AdminModuleKey, { zh: string; en: string }> = {
-  package_metrics: { zh: '日报', en: 'Daily' },
-  consumables: { zh: '耗材', en: 'Consumables' },
   home: { zh: '首页', en: 'Home' },
+  package_metrics: { zh: '包裹', en: 'Packages' },
+  consumables: { zh: '耗材', en: 'Consumables' },
+  employee_upload: { zh: '导入', en: 'Import' },
   employees: { zh: '员工', en: 'Employees' },
   accounts: { zh: '账号', en: 'Accounts' },
   permissions: { zh: '权限', en: 'Permissions' },
   timecard: { zh: '时间卡', en: 'Timecard' },
-  leave_approval: { zh: '请假审批', en: 'Leave Approval' },
-  work_hour_comparison: { zh: '工时对比', en: 'Work Hour Comparison' },
+  leave_approval: { zh: '请假审批', en: 'Leave' },
+  work_hour_comparison: { zh: '工时', en: 'Hours' },
   todo: { zh: '待办', en: 'Todo' },
   punches: { zh: '打卡流水', en: 'Punches' },
   audit: { zh: '日志', en: 'Audit' },
   schedule: { zh: '排班', en: 'Schedule' },
   devices: { zh: '设备', en: 'Devices' },
   forecast: { zh: '件量预测', en: 'Forecast' },
-  prediction_model: { zh: '预测模型', en: 'Prediction Model' },
+  prediction_model: { zh: '预测模型', en: 'Model' },
   efficiency: { zh: '人效', en: 'Efficiency' },
   agency: { zh: 'Agency', en: 'Agency' }
 };
@@ -123,10 +120,11 @@ export default function AdminPermissionsPage({
   accessRows,
   userOptions,
   agencyOptions,
+  positions,
   requestRows,
-  resolveAdminUserIdentity,
   onRefreshAccess,
   onSaveAccess,
+  onSavePosition,
   onRefreshRequests,
   onCreateRequest,
   onReviewRequest
@@ -139,6 +137,9 @@ export default function AdminPermissionsPage({
   >(buildDefaultModuleState('level3'));
   const [reason, setReason] = useState('');
   const [savingRequest, setSavingRequest] = useState(false);
+  const [positionDraftName, setPositionDraftName] = useState('');
+  const [positionDraftOrder, setPositionDraftOrder] = useState('');
+  const [positionSavingKey, setPositionSavingKey] = useState<string | null>(null);
 
   useEffect(() => {
     const nextState = buildFormStateFromContext(accessContext);
@@ -169,12 +170,6 @@ export default function AdminPermissionsPage({
   const refreshAll = async () => {
     await Promise.all([onRefreshRequests(), canManage ? onRefreshAccess() : Promise.resolve()]);
   };
-  const resolveRequestIdentity = (row: AdminAccessRequestRecord) =>
-    resolveAdminUserIdentity({
-      userId: row.requester_user_id,
-      userEmail: row.requester_user_email,
-      displayName: row.requester_display_name
-    });
 
   const toggleAgency = (agency: string) => {
     setRequestedManagedAgencies((prev) =>
@@ -184,14 +179,14 @@ export default function AdminPermissionsPage({
     );
   };
 
+  const applyRequestedRoleDefaults = (nextRole: AdminRole = requestedRole) => {
+    setRequestedModules(buildDefaultModuleState(nextRole));
+  };
+
   const setModuleAccess = (moduleKey: AdminModuleKey, accessLevel: AdminModuleAccessLevel) => {
     setRequestedModules((prev) =>
       prev.map((module) => (module.module_key === moduleKey ? { ...module, access_level: accessLevel } : module))
     );
-  };
-
-  const applyRequestedRoleDefaults = (nextRole: AdminRole = requestedRole) => {
-    setRequestedModules(buildDefaultModuleState(nextRole));
   };
 
   const submitRequest = async () => {
@@ -207,6 +202,25 @@ export default function AdminPermissionsPage({
       setReason('');
     } finally {
       setSavingRequest(false);
+    }
+  };
+
+  const submitPosition = async (payload: {
+    name: string;
+    display_order: number;
+    is_active: boolean;
+    original_name?: string | null;
+  }) => {
+    const key = payload.original_name ?? payload.name;
+    setPositionSavingKey(key);
+    try {
+      await onSavePosition(payload);
+      if (!payload.original_name) {
+        setPositionDraftName('');
+        setPositionDraftOrder('');
+      }
+    } finally {
+      setPositionSavingKey(null);
     }
   };
 
@@ -246,11 +260,12 @@ export default function AdminPermissionsPage({
           rows={accessRows}
           userOptions={userOptions}
           agencyOptions={agencyOptions}
+          positionOptions={positions.filter((position) => position.is_active).map((position) => position.name)}
           onRefresh={onRefreshAccess}
           onSave={onSaveAccess}
         />
       ) : (
-        <section className="px-6 py-8">
+        <section className="glass reveal rounded-3xl px-6 py-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-display text-2xl tracking-[0.08em]">{t('当前权限', 'Current Access')}</h2>
             <button
@@ -259,9 +274,7 @@ export default function AdminPermissionsPage({
               onClick={() => void onRefreshRequests()}
               className={[
                 'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-                isLight
-                  ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                  : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
               ].join(' ')}
             >
               {t('刷新', 'Refresh')}
@@ -305,8 +318,168 @@ export default function AdminPermissionsPage({
         </section>
       )}
 
+      {canManage ? (
+        <section className="glass reveal rounded-3xl px-6 py-8">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="font-display text-2xl tracking-[0.08em]">Positions</h2>
+            <button
+              type="button"
+              disabled={isLocked}
+              onClick={() => void onRefreshAccess()}
+              className={[
+                'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+              ].join(' ')}
+            >
+              {t('刷新', 'Refresh')}
+            </button>
+          </div>
+
+          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_140px_auto]">
+            <input
+              type="text"
+              value={positionDraftName}
+              onChange={(event) => setPositionDraftName(event.target.value)}
+              disabled={isLocked || Boolean(positionSavingKey)}
+              placeholder="Position"
+              className={[
+                'h-11 rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                isLight
+                  ? 'border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:border-neon/60 focus:shadow-[0_0_0_2px_rgba(132,204,22,0.15)]'
+                  : 'border border-white/10 bg-black/30 text-white placeholder:text-slate-500 focus:border-neon focus:shadow-glow'
+              ].join(' ')}
+            />
+            <input
+              type="number"
+              value={positionDraftOrder}
+              onChange={(event) => setPositionDraftOrder(event.target.value)}
+              disabled={isLocked || Boolean(positionSavingKey)}
+              placeholder="Order"
+              className={[
+                'h-11 rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                isLight
+                  ? 'border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:border-neon/60 focus:shadow-[0_0_0_2px_rgba(132,204,22,0.15)]'
+                  : 'border border-white/10 bg-black/30 text-white placeholder:text-slate-500 focus:border-neon focus:shadow-glow'
+              ].join(' ')}
+            />
+            <button
+              type="button"
+              disabled={isLocked || Boolean(positionSavingKey) || !positionDraftName.trim()}
+              onClick={() =>
+                void submitPosition({
+                  name: positionDraftName,
+                  display_order: Number(positionDraftOrder || positions.length * 10 + 10),
+                  is_active: true
+                })
+              }
+              className="rounded-2xl bg-neon px-5 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t('新增', 'Add')}
+            </button>
+          </div>
+
+          <div className="mt-5 overflow-auto rounded-2xl border border-white/10 bg-black/30">
+            <table className="min-w-[760px] w-full text-left text-sm">
+              <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-xs uppercase tracking-[0.2em] text-slate-400 backdrop-blur">
+                <tr>
+                  <th className="px-4 py-3">Position</th>
+                  <th className="px-4 py-3">Order</th>
+                  <th className="px-4 py-3">{t('状态', 'Status')}</th>
+                  <th className="px-4 py-3 text-right">{t('操作', 'Actions')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {positions.map((position) => (
+                  <tr key={position.name} className="border-b border-white/5 transition-colors hover:bg-white/5 last:border-0">
+                    <td className="px-4 py-3">
+                      <input
+                        defaultValue={position.name}
+                        disabled={isLocked || Boolean(positionSavingKey)}
+                        onBlur={(event) => {
+                          const nextName = event.currentTarget.value.trim();
+                          if (nextName && nextName !== position.name) {
+                            void submitPosition({
+                              name: nextName,
+                              display_order: position.display_order,
+                              is_active: position.is_active,
+                              original_name: position.name
+                            });
+                          }
+                        }}
+                        className={[
+                          'h-9 w-full rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                          isLight
+                            ? 'border border-slate-200 bg-white text-slate-900 focus:border-neon/60'
+                            : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                        ].join(' ')}
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <input
+                        type="number"
+                        defaultValue={position.display_order}
+                        disabled={isLocked || Boolean(positionSavingKey)}
+                        onBlur={(event) => {
+                          const nextOrder = Number(event.currentTarget.value || 0);
+                          if (nextOrder !== position.display_order) {
+                            void submitPosition({
+                              name: position.name,
+                              display_order: nextOrder,
+                              is_active: position.is_active,
+                              original_name: position.name
+                            });
+                          }
+                        }}
+                        className={[
+                          'h-9 w-28 rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                          isLight
+                            ? 'border border-slate-200 bg-white text-slate-900 focus:border-neon/60'
+                            : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                        ].join(' ')}
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={[
+                          'inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold',
+                          position.is_active
+                            ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200'
+                            : 'border-slate-400/30 bg-slate-500/10 text-slate-300'
+                        ].join(' ')}
+                      >
+                        {position.is_active ? t('启用', 'Active') : t('停用', 'Inactive')}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        disabled={isLocked || Boolean(positionSavingKey)}
+                        onClick={() =>
+                          void submitPosition({
+                            name: position.name,
+                            display_order: position.display_order,
+                            is_active: !position.is_active,
+                            original_name: position.name
+                          })
+                        }
+                        className={[
+                          'rounded-2xl px-4 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                          isLight ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                        ].join(' ')}
+                      >
+                        {position.is_active ? t('停用', 'Disable') : t('启用', 'Enable')}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
       {!canManage ? (
-        <section className="px-6 py-8">
+        <section className="glass reveal rounded-3xl px-6 py-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-display text-2xl tracking-[0.08em]">{t('权限申请', 'Request Access')}</h2>
             {pendingOwnRequest ? renderStatusPill('pending') : null}
@@ -457,7 +630,7 @@ export default function AdminPermissionsPage({
         </section>
       ) : null}
 
-      <section className="px-6 py-8">
+      <section className="glass reveal rounded-3xl px-6 py-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-display text-2xl tracking-[0.08em]">
             {canManage ? t('权限审批', 'Approvals') : t('申请记录', 'Requests')}
@@ -468,9 +641,7 @@ export default function AdminPermissionsPage({
             onClick={() => void refreshAll()}
             className={[
               'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-              isLight
-                ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                : 'bg-white/10 text-slate-200 hover:bg-white/15'
+              isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
             ].join(' ')}
           >
             {t('刷新', 'Refresh')}
@@ -501,26 +672,14 @@ export default function AdminPermissionsPage({
               {requestRows.map((row) => {
                 const summary = buildModuleSummary(row.requested_modules);
                 const canReview = canManage && row.status === 'pending';
-                const requesterIdentity = resolveRequestIdentity(row);
                 return (
                   <tr key={row.id} className="border-b border-white/5 transition-colors hover:bg-white/5 last:border-0">
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <AdminUserAvatar
-                          name={requesterIdentity.displayName}
-                          avatarUrl={requesterIdentity.avatarUrl}
-                          fallbackInitial={requesterIdentity.fallbackInitial}
-                          size={28}
-                          className={isLight ? 'border-slate-200 bg-slate-200 text-slate-700' : 'border-white/10 bg-slate-800 text-slate-100'}
-                        />
-                        <div className="min-w-0">
-                          <div className={['truncate', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>
-                            {requesterIdentity.displayName}
-                          </div>
-                          <div className={['truncate text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
-                            {row.requester_user_email || row.requester_user_id}
-                          </div>
-                        </div>
+                      <div className={isLight ? 'text-slate-900' : 'text-slate-100'}>
+                        {row.requester_display_name || '-'}
+                      </div>
+                      <div className={['text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                        {row.requester_user_email || row.requester_user_id}
                       </div>
                     </td>
                     <td className="px-4 py-3">
@@ -580,9 +739,7 @@ export default function AdminPermissionsPage({
                             onClick={() => void onReviewRequest(row, 'reject')}
                             className={[
                               'rounded-2xl px-4 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                              isLight
-                                ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                                : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                              isLight ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100' : 'bg-white/10 text-slate-200 hover:bg-white/15'
                             ].join(' ')}
                           >
                             {t('拒绝', 'Reject')}
@@ -602,3 +759,5 @@ export default function AdminPermissionsPage({
     </section>
   );
 }
+
+

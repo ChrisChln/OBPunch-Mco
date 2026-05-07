@@ -2,6 +2,7 @@ export const ADMIN_MODULE_KEYS = [
   'home',
   'package_metrics',
   'consumables',
+  'employee_upload',
   'employees',
   'accounts',
   'permissions',
@@ -22,11 +23,25 @@ export const ADMIN_MODULE_KEYS = [
 export type AdminModuleKey = (typeof ADMIN_MODULE_KEYS)[number];
 export type AdminRole = 'level1' | 'level2' | 'level3' | 'agency';
 export type AdminModuleAccessLevel = 'hidden' | 'view' | 'operate';
+export type PositionScopedModuleKey = 'employees' | 'schedule' | 'timecard';
+export type PositionScopeMode = 'all' | 'selected';
 
 export type AdminAccessModule = {
   module_key: AdminModuleKey;
   access_level: AdminModuleAccessLevel;
 };
+
+export type AdminPositionScopeEntry = {
+  position: string;
+  access_level: Exclude<AdminModuleAccessLevel, 'hidden'>;
+};
+
+export type AdminPositionScope = {
+  mode: PositionScopeMode;
+  positions: AdminPositionScopeEntry[];
+};
+
+export type AdminPositionScopes = Record<PositionScopedModuleKey, AdminPositionScope>;
 
 export type AdminAccessContext = {
   user_id: string;
@@ -34,12 +49,14 @@ export type AdminAccessContext = {
   is_active: boolean;
   managed_agencies: string[];
   modules: AdminAccessModule[];
+  position_scopes: AdminPositionScopes;
 };
 
 export const DEFAULT_LEVEL1_EMAIL = 'lnchen4201@gmail.com';
 
 const ADMIN_ROLE_VALUES: AdminRole[] = ['level1', 'level2', 'level3', 'agency'];
 const ADMIN_ACCESS_LEVEL_VALUES: AdminModuleAccessLevel[] = ['hidden', 'view', 'operate'];
+export const POSITION_SCOPED_MODULE_KEYS: PositionScopedModuleKey[] = ['employees', 'schedule', 'timecard'];
 
 export const normalizeAdminRole = (value: unknown, fallbackEmail?: string | null): AdminRole => {
   const role = String(value ?? '').trim().toLowerCase() as AdminRole;
@@ -52,6 +69,9 @@ export const normalizeModuleAccessLevel = (value: unknown): AdminModuleAccessLev
   const level = String(value ?? '').trim().toLowerCase() as AdminModuleAccessLevel;
   return ADMIN_ACCESS_LEVEL_VALUES.includes(level) ? level : 'hidden';
 };
+
+const normalizePositionScopeAccessLevel = (value: unknown): Exclude<AdminModuleAccessLevel, 'hidden'> =>
+  normalizeModuleAccessLevel(value) === 'operate' ? 'operate' : 'view';
 
 export const getDefaultModuleAccess = (role: AdminRole, moduleKey: AdminModuleKey): AdminModuleAccessLevel => {
   if (role === 'level1' || role === 'level2') return 'operate';
@@ -76,6 +96,12 @@ const parseJsonArray = (value: unknown): unknown[] => {
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const emptyAllPositionScopes = (): AdminPositionScopes => ({
+  employees: { mode: 'all', positions: [] },
+  schedule: { mode: 'all', positions: [] },
+  timecard: { mode: 'all', positions: [] }
+});
 
 const normalizeModuleEntries = (
   value: unknown
@@ -152,6 +178,50 @@ export const buildEffectiveModuleMap = (
   return next;
 };
 
+export const normalizePositionScopesForContext = (value: unknown): AdminPositionScopes => {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return emptyAllPositionScopes();
+    try {
+      return normalizePositionScopesForContext(JSON.parse(trimmed));
+    } catch {
+      return emptyAllPositionScopes();
+    }
+  }
+
+  const source = isPlainObject(value) ? value : {};
+  const normalized = emptyAllPositionScopes();
+
+  for (const moduleKey of POSITION_SCOPED_MODULE_KEYS) {
+    const rawScope = source[moduleKey];
+    if (!isPlainObject(rawScope)) continue;
+
+    const mode = String(rawScope.mode ?? '').trim().toLowerCase() === 'selected' ? 'selected' : 'all';
+    const seen = new Set<string>();
+    const positions = (Array.isArray(rawScope.positions) ? rawScope.positions : [])
+      .map((entry) => {
+        if (!isPlainObject(entry)) return null;
+        const position = String(entry.position ?? entry.name ?? '').trim().replace(/\s+/g, ' ');
+        if (!position) return null;
+        const dedupeKey = position.toLowerCase();
+        if (seen.has(dedupeKey)) return null;
+        seen.add(dedupeKey);
+        return {
+          position,
+          access_level: normalizePositionScopeAccessLevel(entry.access_level)
+        };
+      })
+      .filter((entry): entry is AdminPositionScopeEntry => Boolean(entry));
+
+    normalized[moduleKey] = {
+      mode: mode === 'selected' && positions.length > 0 ? 'selected' : 'all',
+      positions: mode === 'selected' ? positions : []
+    };
+  }
+
+  return normalized;
+};
+
 export const hasModuleAccess = (
   moduleMap: Record<AdminModuleKey, AdminModuleAccessLevel>,
   moduleKey: AdminModuleKey,
@@ -162,6 +232,34 @@ export const hasModuleAccess = (
   if (required === 'view') return actual === 'view' || actual === 'operate';
   return actual !== 'hidden';
 };
+
+export const hasPositionAccess = (
+  context: AdminAccessContext | null | undefined,
+  moduleKey: PositionScopedModuleKey,
+  position: unknown,
+  required: Exclude<AdminModuleAccessLevel, 'hidden'> = 'view'
+) => {
+  if (!context || !context.is_active) return false;
+  if (!hasModuleAccess(getModuleMapFromContext(context), moduleKey, required)) return false;
+
+  const scope = context.position_scopes?.[moduleKey] ?? { mode: 'all', positions: [] };
+  if (scope.mode === 'all') return true;
+
+  const normalizedPosition = String(position ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  if (!normalizedPosition) return false;
+  const entry = scope.positions.find((item) => item.position.trim().toLowerCase() === normalizedPosition);
+  if (!entry) return false;
+  if (required === 'operate') return entry.access_level === 'operate';
+  return entry.access_level === 'view' || entry.access_level === 'operate';
+};
+
+export const filterRowsByPositionAccess = <T>(
+  context: AdminAccessContext | null | undefined,
+  moduleKey: PositionScopedModuleKey,
+  rows: T[],
+  getPosition: (row: T) => unknown,
+  required: Exclude<AdminModuleAccessLevel, 'hidden'> = 'view'
+) => rows.filter((row) => hasPositionAccess(context, moduleKey, getPosition(row), required));
 
 export const normalizeAdminAccessContext = (
   payload: unknown,
@@ -188,7 +286,8 @@ export const normalizeAdminAccessContext = (
     modules: ADMIN_MODULE_KEYS.map((moduleKey) => ({
       module_key: moduleKey,
       access_level: moduleMap[moduleKey]
-    }))
+    })),
+    position_scopes: normalizePositionScopesForContext(raw.position_scopes)
   };
 };
 
@@ -212,10 +311,12 @@ export const canManageAdminAccess = (context: AdminAccessContext | null | undefi
 export const canReviewTerminationRequests = (context: AdminAccessContext | null | undefined) => {
   if (!context) return false;
   if (!hasModuleAccess(getModuleMapFromContext(context), 'schedule', 'operate')) return false;
-  return context.role === 'level1' || context.role === 'level2';
+  return context.role === 'level1' || context.role === 'level2' || context.role === 'level3';
 };
 
 export const canUnlockPunchScreen = (context: AdminAccessContext | null | undefined) => {
   if (!context) return false;
   return context.role === 'level1' || context.role === 'level2';
 };
+
+
