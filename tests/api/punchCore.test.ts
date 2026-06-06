@@ -64,6 +64,21 @@ describe('submitPunchWithServiceRole', () => {
     expect(result).toEqual({ ok: false, status: 400, error: 'Invalid staff ID format.' });
   });
 
+  test('accepts registered temporary staff IDs', async () => {
+    const { supabase, inserts } = createSupabaseMock({
+      employees: { data: [{ staff_id: '0606PICK001', agency: null, terminated_at: null }], error: null }
+    });
+
+    const result = await submitPunchWithServiceRole(supabase, {
+      staffId: '0606pick001',
+      action: 'IN',
+      userAgent: 'test-agent'
+    });
+
+    expect(result).toEqual({ ok: true, status: 200, staffId: '0606PICK001', action: 'IN' });
+    expect(inserts[0]?.[0]).toMatchObject({ staff_id: '0606PICK001', action: 'IN' });
+  });
+
   test('rejects unregistered employees', async () => {
     const { supabase } = createSupabaseMock({ employees: { data: [], error: null } });
 

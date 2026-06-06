@@ -1,4 +1,4 @@
-import { isValidStaffId, normalizeStaffId } from '../src/lib/staffId.js';
+import { isValidPunchStaffId, normalizeStaffId } from '../src/lib/staffId.js';
 import { isScheduleOnlyAgency } from '../src/shared/agencyRules.js';
 import { isEmployeeTerminated } from '../src/shared/employeeStatus.js';
 
@@ -103,7 +103,7 @@ export const submitPunchWithServiceRole = async (
   request: PunchRequest
 ): Promise<PunchResult> => {
   const staffId = normalizeStaffId(String(request.staffId ?? ''));
-  if (!isValidStaffId(staffId)) {
+  if (!isValidPunchStaffId(staffId)) {
     return { ok: false, status: 400, error: 'Invalid staff ID format.' };
   }
   if (request.action !== 'IN' && request.action !== 'OUT') {

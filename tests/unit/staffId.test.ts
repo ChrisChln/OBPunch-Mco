@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  isValidPunchStaffId,
   isValidScheduleStaffId,
   isValidStaffId,
   isValidStaffIdForUpdate,
@@ -38,5 +39,21 @@ describe('staffId', () => {
     expect(isValidScheduleStaffId('OWNTEAM001', '自顾')).toBe(true);
     expect(isValidScheduleStaffId('JDLPICK001', 'Agency A')).toBe(false);
     expect(isValidScheduleStaffId('', 'JDL')).toBe(false);
+  });
+
+  test('allows schedule placeholder IDs without an agency', () => {
+    expect(isValidScheduleStaffId('0606PICK001', '')).toBe(true);
+    expect(isValidScheduleStaffId('NEWREQ-20260606-PICK-001', '')).toBe(true);
+    expect(isValidScheduleStaffId('TEMP-USID-PICK-0001', '')).toBe(true);
+    expect(isValidScheduleStaffId('TMPACC-60100001', '')).toBe(true);
+  });
+
+  test('allows official and temporary IDs for punch', () => {
+    expect(isValidPunchStaffId('US010454')).toBe(true);
+    expect(isValidPunchStaffId('0606PICK001')).toBe(true);
+    expect(isValidPunchStaffId('NEWREQ-20260606-PICK-001')).toBe(true);
+    expect(isValidPunchStaffId('TEMP-USID-PICK-0001')).toBe(true);
+    expect(isValidPunchStaffId('TMPACC-60100001')).toBe(true);
+    expect(isValidPunchStaffId('YANI')).toBe(false);
   });
 });
