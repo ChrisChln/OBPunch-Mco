@@ -52,6 +52,11 @@ const getErrorMessage = (value: unknown, fallback: string) => {
   return message.trim() || fallback;
 };
 
+const isMissingMetadataColumnError = (value: unknown) => {
+  const message = getErrorMessage(value, '').toLowerCase();
+  return message.includes('metadata') && message.includes('ob_punches') && message.includes('schema cache');
+};
+
 const loadEmployee = async (supabase: SupabaseLike, staffId: string): Promise<QueryResponse<EmployeeRow>> => {
   const query = supabase.from('ob_employees').select?.('staff_id, agency, terminated_at') as
     | undefined
@@ -135,17 +140,29 @@ export const submitPunchWithServiceRole = async (
     return { ok: false, status: 500, error: 'Punch insert is not available.' };
   }
 
-  const insertRes = await insert([
-    {
-      staff_id: staffId,
-      action: request.action,
-      metadata: {
-        device: 'web_browser',
-        source: 'api_punch',
-        user_agent: String(request.userAgent ?? '')
-      }
+  const rowWithMetadata = {
+    staff_id: staffId,
+    action: request.action,
+    metadata: {
+      device: 'web_browser',
+      source: 'api_punch',
+      user_agent: String(request.userAgent ?? '')
     }
-  ]);
+  };
+  const insertRes = await insert([rowWithMetadata]);
+  if (insertRes.error && isMissingMetadataColumnError(insertRes.error)) {
+    const fallbackRes = await insert([
+      {
+        staff_id: staffId,
+        action: request.action
+      }
+    ]);
+    if (fallbackRes.error) {
+      return { ok: false, status: 500, error: getErrorMessage(fallbackRes.error, 'Punch failed.') };
+    }
+    return { ok: true, status: 200, staffId, action: request.action };
+  }
+
   if (insertRes.error) {
     return { ok: false, status: 500, error: getErrorMessage(insertRes.error, 'Punch failed.') };
   }

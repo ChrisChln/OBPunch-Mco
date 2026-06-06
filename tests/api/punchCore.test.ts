@@ -8,6 +8,7 @@ type MockOptions = {
   employees?: QueryResult;
   latestPunches?: QueryResult;
   insertError?: string | null;
+  firstInsertError?: string | null;
 };
 
 const createSupabaseMock = (options: MockOptions) => {
@@ -35,6 +36,9 @@ const createSupabaseMock = (options: MockOptions) => {
           }),
           insert: async (rows: any[]) => {
             inserts.push(rows);
+            if (options.firstInsertError && inserts.length === 1) {
+              return { error: { message: options.firstInsertError } };
+            }
             return options.insertError ? { error: { message: options.insertError } } : { error: null };
           }
         };
@@ -136,6 +140,39 @@ describe('submitPunchWithServiceRole', () => {
             source: 'api_punch',
             user_agent: 'test-agent'
           }
+        }
+      ]
+    ]);
+  });
+
+  test('falls back when the deployed punches table has no metadata column', async () => {
+    const { supabase, inserts } = createSupabaseMock({
+      firstInsertError: "Could not find the 'metadata' column of 'ob_punches' in the schema cache"
+    });
+
+    const result = await submitPunchWithServiceRole(supabase, {
+      staffId: 'US010454',
+      action: 'IN',
+      userAgent: 'test-agent'
+    });
+
+    expect(result).toEqual({ ok: true, status: 200, staffId: 'US010454', action: 'IN' });
+    expect(inserts).toEqual([
+      [
+        {
+          staff_id: 'US010454',
+          action: 'IN',
+          metadata: {
+            device: 'web_browser',
+            source: 'api_punch',
+            user_agent: 'test-agent'
+          }
+        }
+      ],
+      [
+        {
+          staff_id: 'US010454',
+          action: 'IN'
         }
       ]
     ]);
