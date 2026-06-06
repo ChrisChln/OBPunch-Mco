@@ -112,6 +112,7 @@ import {
 import { fetchTodoNavPendingCount, fetchTodoProfiles } from './todoData';
 import { TODO_UPDATED_EVENT } from './todoShared';
 import { buildAdminUserIdentityView, type AdminUserIdentityView } from './adminIdentity';
+import { findInvalidEmployeeUploadPositions, normalizeEmployeeUploadPosition } from './employeeUploadPositions';
 import { shouldAutofillShiftTime } from './shiftTimeAutofill';
 import {
   loadDailyCapacityStaffStats,
@@ -4256,7 +4257,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     const uniqueBySn = new Map<
       string,
-      { device_name: string | null; device_sn: string; device_type: DeviceType; position: AllowedPosition | null; note: string | null; active: boolean }
+      { device_name: string | null; device_sn: string; device_type: DeviceType; position: string | null; note: string | null; active: boolean }
     >();
     let duplicateInFileCount = 0;
     for (const r of parsedRows) {
@@ -4279,7 +4280,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const deviceName = String(canonical.device_name ?? '').trim() || null;
       const type = normalizeDeviceType(String(canonical.device_type ?? 'PDA'));
       const positionRaw = String(canonical.position ?? '').trim();
-      const position = positionRaw ? normalizeAllowedPosition(positionRaw) : '';
+      const position = positionRaw ? normalizeEmployeeUploadPosition(positionRaw, activePositionNames) : '';
       const note = String(canonical.note ?? '').trim() || null;
       const active = parseActiveFlag(canonical.active ?? '');
       uniqueBySn.set(sn, {
@@ -4298,12 +4299,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
 
-    const invalidPositions = rows.filter((r) => r.position && !activePositionNames.includes(r.position as any));
+    const invalidPositions = findInvalidEmployeeUploadPositions(rows, activePositionNames);
     if (invalidPositions.length > 0) {
       setDeviceUploadError(
         t(
-          '岗位仅支持 Pick/Pack/Rebin/Preship/Transfer/FLEX TEAM。',
-          'Position must be Pick/Pack/Rebin/Preship/Transfer/FLEX TEAM.'
+          `岗位仅支持当前自定义岗位范围：${activePositionNames.join(' / ')}。`,
+          `Position must be one of: ${activePositionNames.join(' / ')}.`
         )
       );
       return;
@@ -11976,29 +11977,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
     }
 
-    // Normalize rows, accept UID as alias for staff_id
-    const allowedPositions = ['Pack', 'Pick', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
-    const normalizePosition = (positionRaw: string) => {
-      const v = positionRaw.trim().toLowerCase();
-      const map: Record<string, (typeof allowedPositions)[number]> = {
-        pack: 'Pack',
-        pick: 'Pick',
-        rebin: 'Rebin',
-        preship: 'Preship',
-        transfer: 'Transfer',
-        '兜底组': 'FLEX TEAM',
-        '兜底': 'FLEX TEAM',
-        'flex team（机动组）': 'FLEX TEAM',
-        'flex team': 'FLEX TEAM',
-        flexteam: 'FLEX TEAM',
-        'wrap-up team': 'FLEX TEAM',
-        'wrap up team': 'FLEX TEAM',
-        wrapupteam: 'FLEX TEAM',
-        fallback: 'FLEX TEAM',
-        backup: 'FLEX TEAM'
-      };
-      return map[v] ?? null;
-    };
+    // Normalize rows, accept UID as alias for staff_id.
 
     const uniqueByStaff = new Map<
       string,
@@ -12037,7 +12016,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const name = canonical.name?.trim();
       const agency = canonical.agency?.trim();
       const positionRaw = canonical.position?.trim();
-      const position = positionRaw ? normalizePosition(positionRaw) : null;
+      const position = positionRaw ? normalizeEmployeeUploadPosition(positionRaw, activePositionNames) : '';
       const employmentType = normalizeEmploymentTypeValue(canonical.employment_type ?? '');
       const label = canonical.label?.trim();
       const shiftTime = normalizeShiftTimeValue(canonical.shift_time ?? '');
@@ -12074,12 +12053,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
 
-    const invalidPositions = rows
-      .map((r) => ({
-        staff_id: String((r as any).staff_id ?? '').trim(),
-        position: String((r as any).position ?? '').trim()
-      }))
-      .filter(({ position }) => position && !allowedPositions.includes(position as any));
+    const invalidPositions = findInvalidEmployeeUploadPositions(rows, activePositionNames);
 
     if (invalidPositions.length > 0) {
       const sample = invalidPositions
@@ -12087,7 +12061,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         .map((x) => `${x.staff_id || '(no staff_id)'}=${x.position}`)
         .join('，');
       setUploadError(
-        `Position 只允许 Pack / Pick / Rebin / Preship / Transfer / FLEX TEAM。发现不合法值：${sample}${
+        `Position 只允许当前自定义岗位范围：${activePositionNames.join(' / ')}。发现不合法值：${sample}${
           invalidPositions.length > 8 ? ` …（共 ${invalidPositions.length} 条）` : ''
         }`
       );
@@ -17904,8 +17878,6 @@ ${rowsToHtml(late)}
     </div>
   );
 }
-
-
 
 
 
