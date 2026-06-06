@@ -7,6 +7,13 @@ import { normalizeStaffId } from './lib/staffId';
 import { getLabelToneClass, loadLabelToneMap } from './lib/labelTone';
 import { isExactOperationalCutoffOut } from './shared/operationalPunches';
 import AppDialog from './components/AppDialog';
+import {
+  DEFAULT_DASHBOARD_CARD_POSITIONS,
+  buildDashboardCardPositions,
+  buildDashboardPositionOptions,
+  resolveDashboardPositionName
+} from './shared/dashboardPositions';
+import { DEFAULT_POSITION_NAMES, buildActivePositionNames, normalizePositionName, type PositionRecord } from './shared/positions';
 
 type EmployeeRow = {
   staff_id: string;
@@ -153,6 +160,7 @@ type TempAssignmentPayload = {
 };
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
+const POSITIONS_TABLE = (import.meta.env.VITE_POSITIONS_TABLE as string | undefined) ?? 'ob_positions';
 const PUNCHES_TABLE = 'ob_punches';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 
@@ -253,30 +261,8 @@ const normalizeShiftValue = (value: unknown): '' | 'early' | 'late' => {
   if (v === 'late' || v === 'night' || v === 'pm') return 'late';
   return '';
 };
-const normalizePositionKey = (value: string): '' | 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer' | 'FLEX TEAM' => {
-  const v = String(value ?? '').trim().toLowerCase();
-  if (!v) return '';
-  if (v === 'pick' || v.includes('pick')) return 'Pick';
-  if (v === 'pack' || v.includes('pack')) return 'Pack';
-  if (v === 'rebin' || v.includes('rebin')) return 'Rebin';
-  if (v === 'preship' || v.includes('preship')) return 'Preship';
-  if (v === 'transfer' || v.includes('transfer')) return 'Transfer';
-  if (
-    v === '兜底组' ||
-    v === '兜底' ||
-    v === 'flex team（机动组）' ||
-    v === 'flex team' ||
-    v === 'flexteam' ||
-    v.includes('wrap-up') ||
-    v.includes('wrap up') ||
-    v.includes('wrapup') ||
-    v.includes('fallback') ||
-    v.includes('backup')
-  ) {
-    return 'FLEX TEAM';
-  }
-  return '';
-};
+const normalizePositionKey = (value: string, positionNames: readonly string[] = DEFAULT_POSITION_NAMES): string =>
+  resolveDashboardPositionName(value, positionNames);
 const getPositionBadgeClass = (value: string) => {
   const pos = normalizePositionKey(value);
   if (pos === 'Pick') return 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]';
@@ -293,7 +279,6 @@ const getShiftBadgeClass = (value: string) => {
   if (v === 'late') return 'badge-elevated-dark border-indigo-300/24 text-indigo-100 bg-indigo-400/[0.10]';
   return 'badge-elevated-dark border-white/12 text-stone-100 bg-white/[0.05]';
 };
-const DEFAULT_CARD_POSITIONS: string[] = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'];
 const getAttendanceCardClass = (position: string) => {
   const pos = normalizePositionKey(position);
   if (pos === 'Pick') return 'border-sky-300/20 bg-gradient-to-br from-sky-400/[0.14] via-sky-300/[0.06] to-transparent';
@@ -533,7 +518,8 @@ export default function DashboardPage() {
   }, []);
   const [rows, setRows] = useState<DashboardRow[]>([]);
   const [cardStatsByKey, setCardStatsByKey] = useState<Record<string, { expected: number; present: number; onClock: number; offWorked: number }>>({});
-  const [cardPositions, setCardPositions] = useState<string[]>(DEFAULT_CARD_POSITIONS);
+  const [dashboardPositionNames, setDashboardPositionNames] = useState<string[]>([...DEFAULT_POSITION_NAMES]);
+  const [cardPositions, setCardPositions] = useState<string[]>([...DEFAULT_DASHBOARD_CARD_POSITIONS]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -608,6 +594,25 @@ export default function DashboardPage() {
       const operationalDateObj = new Date(`${currentOperationalDate}T00:00:00`);
       const operationalDayIndex = Number.isNaN(operationalDateObj.getTime()) ? 0 : (operationalDateObj.getDay() + 6) % 7;
       const templateDate = getTemplateDateByDayIndex(operationalDayIndex);
+      let activePositionNames = dashboardPositionNames.length ? dashboardPositionNames : [...DEFAULT_POSITION_NAMES];
+      const positionsRes = await supabase
+        .from(POSITIONS_TABLE)
+        .select('id, name, is_active, display_order, created_at, updated_at')
+        .order('display_order', { ascending: true })
+        .order('name', { ascending: true })
+        .limit(500);
+      if (!positionsRes.error) {
+        const active = buildActivePositionNames(((positionsRes.data as PositionRecord[] | null) ?? []));
+        if (active.length > 0) {
+          activePositionNames = active;
+          setDashboardPositionNames((current) =>
+            current.join('\u0001') === active.join('\u0001') ? current : active
+          );
+        }
+      } else if (!isMissingTableError(positionsRes.error.message, POSITIONS_TABLE)) {
+        console.warn('[dashboard] load positions failed:', positionsRes.error.message);
+      }
+
       let scheduleRowsRaw: any[] = [];
       const scheduleByDateRes = await supabase
         .from(SCHEDULE_TABLE)
@@ -728,6 +733,8 @@ export default function DashboardPage() {
       if (displayStaffIds.length === 0) {
         if (fetchSeqRef.current === currentSeq) {
           setRows([]);
+          setCardPositions(buildDashboardCardPositions(activePositionNames));
+          setCardStatsByKey({});
           setOperationalDate(currentOperationalDate);
           setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
         }
@@ -792,7 +799,7 @@ export default function DashboardPage() {
       for (const staffId of activeScheduledStaffIds) {
         const schedule = scheduledByStaff.get(staffId);
         if (!schedule) continue;
-        const employeePosition = normalizePositionKey(String(employeeCacheRef.current.get(staffId)?.position ?? ''));
+        const employeePosition = normalizePositionKey(String(employeeCacheRef.current.get(staffId)?.position ?? ''), activePositionNames);
         const position = employeePosition;
         const shift = normalizeShiftValue(String(employeeCacheRef.current.get(staffId)?.shift ?? ''));
         if (!position || !shift) continue;
@@ -817,7 +824,7 @@ export default function DashboardPage() {
       for (const staffId of activePunchedStaffIds) {
         if (keysByStaff.has(staffId) || hasWorkScheduleStaff.has(staffId) || hasRestScheduleStaff.has(staffId)) continue;
         const employee = employeeCacheRef.current.get(staffId);
-        const position = normalizePositionKey(String(employee?.position ?? ''));
+        const position = normalizePositionKey(String(employee?.position ?? ''), activePositionNames);
         const shift = normalizeShiftValue(String(employee?.shift ?? ''));
         if (!position || !shift) continue;
         keysByStaff.set(staffId, [`${shift}:${position}`]);
@@ -858,22 +865,10 @@ export default function DashboardPage() {
         }
       }
       const nextCardStatsByKey: Record<string, { expected: number; present: number; onClock: number; offWorked: number }> = {};
-      const positionOrder = new Map(DEFAULT_CARD_POSITIONS.map((position, index) => [position, index] as const));
-      const positionUniverse = new Set<string>(DEFAULT_CARD_POSITIONS);
-      for (const key of [...staffByKey.keys(), ...restByKey.keys(), ...arrivedByKey.keys(), ...onClockByKey.keys(), ...restWorkedByKey.keys()]) {
-        const position = String(key.split(':')[1] ?? '').trim();
-        if (position) positionUniverse.add(position);
-      }
-      // Remove FLEX TEAM if present
-      positionUniverse.delete('FLEX TEAM');
-      const orderedCardPositions = Array.from(positionUniverse).sort((a, b) => {
-        const rankA = positionOrder.get(a);
-        const rankB = positionOrder.get(b);
-        if (rankA !== undefined && rankB !== undefined) return rankA - rankB;
-        if (rankA !== undefined) return -1;
-        if (rankB !== undefined) return 1;
-        return a.localeCompare(b);
-      });
+      const observedCardPositions = [...staffByKey.keys(), ...restByKey.keys(), ...arrivedByKey.keys(), ...onClockByKey.keys(), ...restWorkedByKey.keys()]
+        .map((key) => String(key.split(':')[1] ?? '').trim())
+        .filter(Boolean);
+      const orderedCardPositions = buildDashboardCardPositions(activePositionNames, observedCardPositions);
       for (const shift of ['early', 'late'] as const) {
         for (const position of orderedCardPositions) {
           const key = `${shift}:${position}`;
@@ -909,7 +904,9 @@ export default function DashboardPage() {
               : !isPlannedWork && workHoursToday > 0
                 ? 'Off Worked'
                 : 'Normal';
-          const currentPosition = normalizePositionKey(String(employee?.position ?? '').trim()) || String(employee?.position ?? '').trim();
+          const currentPosition =
+            normalizePositionKey(String(employee?.position ?? '').trim(), activePositionNames) ||
+            normalizePositionName(employee?.position ?? '');
           return {
             staff_id: staffId,
             name: employee?.name ?? '',
@@ -980,7 +977,7 @@ export default function DashboardPage() {
 
       // Rehydrate temporary account assignments created in current operational window.
       const needsAccountRows = nextRows.filter(
-        (row) => !normalizeWorkAccountValue(row.work_account) && Boolean(normalizePositionKey(String(row.position ?? '')))
+        (row) => !normalizeWorkAccountValue(row.work_account) && Boolean(normalizePositionKey(String(row.position ?? ''), activePositionNames))
       );
       if (needsAccountRows.length > 0) {
         const needStaffIds = needsAccountRows.map((row) => row.staff_id);
@@ -1244,11 +1241,8 @@ export default function DashboardPage() {
   }, []);
 
   const positionOptions = useMemo(
-    () =>
-      Array.from(
-        new Set(rows.map((row) => normalizePositionKey(String(row.position ?? '').trim()) || String(row.position ?? '').trim()).filter(Boolean))
-      ).sort((a, b) => a.localeCompare(b)),
-    [rows]
+    () => buildDashboardPositionOptions(dashboardPositionNames, rows.map((row) => normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim())),
+    [dashboardPositionNames, rows]
   );
   const shiftOptions = useMemo(
     () =>
@@ -1262,7 +1256,7 @@ export default function DashboardPage() {
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((row) => {
-      if (positionFilter && (normalizePositionKey(String(row.position ?? '').trim()) || String(row.position ?? '').trim()) !== positionFilter) return false;
+      if (positionFilter && (normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim()) !== positionFilter) return false;
       if (shiftFilter && String(row.display_shift ?? row.shift ?? '').trim().toLowerCase() !== shiftFilter) return false;
       if (absentOnly && row.attendance !== 'Absent') return false;
       if (onClockOnly) {
@@ -1289,7 +1283,7 @@ export default function DashboardPage() {
     const q = accountUsageSearch.trim().toLowerCase();
     const rowsByPosition = accountUsagePositionFilter
       ? accountUsageRows.filter(
-          (row) => (normalizePositionKey(String(row.position ?? '').trim()) || String(row.position ?? '').trim()) === accountUsagePositionFilter
+          (row) => (normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim()) === accountUsagePositionFilter
         )
       : accountUsageRows;
     if (!q) return rowsByPosition;
@@ -1308,12 +1302,11 @@ export default function DashboardPage() {
   }, [accountUsageRows, accountUsageSearch, accountUsagePositionFilter]);
   const accountUsagePositionOptions = useMemo(
     () =>
-      Array.from(
-        new Set(
-          accountUsageRows.map((row) => normalizePositionKey(String(row.position ?? '').trim()) || String(row.position ?? '').trim()).filter(Boolean)
-        )
-      ).sort((a, b) => a.localeCompare(b)),
-    [accountUsageRows]
+      buildDashboardPositionOptions(
+        dashboardPositionNames,
+        accountUsageRows.map((row) => normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim())
+      ),
+    [accountUsageRows, dashboardPositionNames]
   );
   const attendanceCards = useMemo(() => {
     const cards: Array<{
@@ -1328,7 +1321,7 @@ export default function DashboardPage() {
       for (const position of cardPositions) {
         const positionShiftScope = rows.filter(
           (row) =>
-            normalizePositionKey(row.position) === position &&
+            normalizePositionKey(row.position, dashboardPositionNames) === position &&
             String(row.shift ?? '').trim().toLowerCase() === shift
         );
         const offWorkedScope = positionShiftScope.filter((row) => row.attendance === 'Off Worked');
@@ -1337,7 +1330,7 @@ export default function DashboardPage() {
       }
     }
     return cards;
-  }, [rows, cardPositions, cardStatsByKey]);
+  }, [rows, cardPositions, cardStatsByKey, dashboardPositionNames]);
   const attendanceCardGroups = useMemo(
     () =>
       (['early', 'late'] as const).map((shift) => ({
@@ -1348,7 +1341,7 @@ export default function DashboardPage() {
   );
   const outboundShiftCards = useMemo(() => {
     const shifts: Array<'early' | 'late'> = ['early', 'late'];
-    const summaryPositions = cardPositions.filter((position) => normalizePositionKey(position) !== 'Transfer');
+    const summaryPositions = cardPositions.filter((position) => normalizePositionKey(position, dashboardPositionNames) !== 'Transfer');
     return shifts.map((shift) => {
       let expected = 0;
       let present = 0;
@@ -1359,35 +1352,32 @@ export default function DashboardPage() {
       }
       return { shift, expected, present };
     });
-  }, [cardPositions, cardStatsByKey]);
+  }, [cardPositions, cardStatsByKey, dashboardPositionNames]);
   const presentRows = useMemo(
     () => rows.filter((row) => row.attendance !== 'Absent' && !isNewHirePlaceholderStaffId(String(row.staff_id ?? '').trim())),
     [rows]
   );
   const mistakeReportPositionOptions = useMemo(
     () =>
-      Array.from(
-        new Set(
-          presentRows
-            .map((row) => normalizePositionKey(String(row.position ?? '').trim()) || String(row.position ?? '').trim())
-            .filter(Boolean)
-        )
-      ).sort((a, b) => a.localeCompare(b, 'en-US')),
-    [presentRows]
+      buildDashboardPositionOptions(
+        dashboardPositionNames,
+        presentRows.map((row) => normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim())
+      ),
+    [presentRows, dashboardPositionNames]
   );
   const mistakeReportEmployeeOptions = useMemo(() => {
     const byStaff = new Map<string, DashboardRow>();
     for (const row of presentRows) {
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       if (!staff) continue;
-      const position = normalizePositionKey(String(row.position ?? '').trim()) || String(row.position ?? '').trim();
+      const position = normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim();
       if (mistakeReportPosition && position !== mistakeReportPosition) continue;
       if (!byStaff.has(staff)) byStaff.set(staff, row);
     }
     return Array.from(byStaff.values()).sort((a, b) =>
       String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US')
     );
-  }, [presentRows, mistakeReportPosition]);
+  }, [presentRows, mistakeReportPosition, dashboardPositionNames]);
   const mistakeReportEmployeeFilteredOptions = useMemo(() => {
     const q = String(mistakeReportEmployeeQuery ?? '').trim().toLowerCase();
     if (!q) return mistakeReportEmployeeOptions;
@@ -1539,7 +1529,7 @@ export default function DashboardPage() {
   const assignTempAccountToRow = async (row: DashboardRow) => {
     if (!supabase) return false;
     const staff = String(row.staff_id ?? '').trim();
-    const position = normalizePositionKey(String(row.position ?? '').trim());
+    const position = normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames);
     if (!staff || !position) return false;
     const nowIso = new Date().toISOString();
     const range = getOperationalRange();
@@ -1627,7 +1617,7 @@ export default function DashboardPage() {
         }))
         .filter((item) => item.work_account && !occupied.has(item.work_account));
 
-      const positionCandidates = allPoolCandidates.filter((item) => normalizePositionKey(item.position) === position);
+      const positionCandidates = allPoolCandidates.filter((item) => normalizePositionKey(item.position, dashboardPositionNames) === position);
       const picked = positionCandidates[0];
       if (!picked) {
         openNoticeDialog(`No available temp account for ${position}.`, 'No account available');
@@ -2229,7 +2219,7 @@ export default function DashboardPage() {
                         ) : (
                           <button
                             type="button"
-                            disabled={accountAssigningStaffId === row.staff_id || !normalizePositionKey(String(row.position ?? '').trim())}
+                            disabled={accountAssigningStaffId === row.staff_id || !normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames)}
                             onClick={async () => {
                               const ok = await assignTempAccountToRow(row);
                               if (!ok) return;

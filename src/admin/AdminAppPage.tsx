@@ -85,7 +85,7 @@ import {
   type AdminAccessUserOption,
   type TerminationRequestRecord
 } from './adminAccessApi';
-import { buildActivePositionNames, normalizePositionName, type PositionRecord } from '../shared/positions';
+import { buildActivePositionNames, normalizePositionName, resolvePositionName, type PositionRecord } from '../shared/positions';
 import { useScheduleRealtime } from './useScheduleRealtime';
 import {
   activatePlannedScheduleNote,
@@ -2577,7 +2577,7 @@ export default function AdminAppPage() {
   >({});
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
   const [homeOnClockShiftByStaffId, setHomeOnClockShiftByStaffId] = useState<Record<string, 'early' | 'late'>>({});
-  const [homeRosterPositionFilter, setHomeRosterPositionFilter] = useState<'ALL' | AllowedPosition>('ALL');
+  const [homeRosterPositionFilter, setHomeRosterPositionFilter] = useState<string>('ALL');
 
   const resolveEmployeeColumnMode = async (): Promise<EmployeeColumnMode> => {
     const cached = employeeColumnModeRef.current;
@@ -2604,9 +2604,9 @@ export default function AdminAppPage() {
   };
 
   const normalizePositionKey = (value: string) => {
+    const resolved = resolvePositionName(value, allPositionNames);
+    if (resolved) return resolved;
     const trimmed = normalizePositionName(value);
-    const direct = allPositionNames.find((p) => p.toLowerCase() === trimmed.toLowerCase());
-    if (direct) return direct;
     const v = trimmed.toLowerCase();
     if (v === 'pick') return 'Pick';
     if (v === 'pack') return 'Pack';
@@ -13765,7 +13765,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       .filter((employee) => {
         if (isInactiveJdlEmployee(employee)) return false;
         const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-        const position = normalizeAllowedPosition(String(employee.position ?? employee.Position ?? '').trim());
+        const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim()) ?? '';
         if (!canViewPosition('schedule', position)) return false;
         const employmentType = normalizeEmploymentTypeValue((employee as any).employment_type ?? (employee as any).EmploymentType ?? '');
         const label = String(employee.label ?? employee.Label ?? '').trim();
@@ -13806,7 +13806,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const out = new Set<string>();
     for (const employee of employees) {
       if (isInactiveJdlEmployee(employee)) continue;
-      const position = normalizeAllowedPosition(String(employee.position ?? employee.Position ?? '').trim());
+      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim()) ?? '';
       if (deferredSchedulePosition && position !== deferredSchedulePosition) continue;
       const label = String(employee.label ?? employee.Label ?? '').trim();
       if (label) out.add(label);
@@ -14058,7 +14058,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const homeExpectedCards = useMemo(() => {
     if (page !== 'home') {
       return (['early', 'late'] as const).flatMap((shift) =>
-        ALLOWED_POSITIONS.map((position) => ({
+        activePositionNames.map((position) => ({
           key: `${shift}:${position}`,
           shift,
           position,
@@ -14083,7 +14083,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       countByKey[key] = (countByKey[key] ?? 0) + 1;
     }
     return (['early', 'late'] as const).flatMap((shift) =>
-      ALLOWED_POSITIONS.map((position) => ({
+      activePositionNames.map((position) => ({
         key: `${shift}:${position}`,
         shift,
         position,
@@ -14097,17 +14097,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     homeOperationalDayIndex,
     employeeProfileByStaffId,
     employeeShiftByStaffId,
+    activePositionNames,
   ]);
   const homeExpectedPositionSummaryCards = useMemo(
     () => {
-      if (page !== 'home') return ALLOWED_POSITIONS.map((position) => ({ position, early: 0, late: 0, total: 0 }));
-      return ALLOWED_POSITIONS.map((position) => {
+      if (page !== 'home') return activePositionNames.map((position) => ({ position, early: 0, late: 0, total: 0 }));
+      return activePositionNames.map((position) => {
         const early = homeExpectedCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
         const late = homeExpectedCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
         return { position, early, late, total: early + late };
       });
     },
-    [page, homeExpectedCards]
+    [page, homeExpectedCards, activePositionNames]
   );
   const homeCardStats = useMemo(() => {
     if (page !== 'home') return {};
@@ -14370,7 +14371,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       completed: filterRows(homeRosterRows.completed),
       onClock: filterRows(homeRosterRows.onClock)
     };
-  }, [page, homeRosterRows, homeRosterPositionFilter]);
+  }, [page, homeRosterRows, homeRosterPositionFilter, activePositionNames]);
   const homeRosterRowsCurrent = useMemo(() => {
     if (page !== 'home') return [];
     return [
@@ -15355,6 +15356,7 @@ ${rowsToHtml(late)}
                 getScheduleTablePositionBadgeClass={getScheduleTablePositionBadgeClass}
                 getScheduleTableShiftBadgeClass={getScheduleTableShiftBadgeClass}
                 schedulePositionToneByPosition={schedulePositionToneByPosition}
+                homeDashboardPositionNames={activePositionNames}
                 homeRosterPositionFilter={homeRosterPositionFilter}
                 setHomeRosterPositionFilter={setHomeRosterPositionFilter}
                 onOpenTimecardCalibration={openTimecardPunchModalForDate}
@@ -15634,7 +15636,9 @@ ${rowsToHtml(late)}
                               {t('全部岗位', 'All positions')}
                             </span>
                           </div>
-                          {ALLOWED_POSITIONS.map((p) => (
+                          {activePositionNames.map((p) => {
+                            const allowedPosition = normalizeAllowedPosition(p);
+                            return (
                             <div
                               key={`pos-tone-${p}`}
                               role="button"
@@ -15668,26 +15672,29 @@ ${rowsToHtml(late)}
                                 {p}
                               </span>
                               <div className="ml-2 flex items-center">
-                                <button
-                                  type="button"
-                                  disabled={isLocked}
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    cycleSchedulePositionTone(p);
-                                  }}
-                                  title={t('点击切换岗位颜色', 'Click to cycle position color')}
-                                  className={[
-                                    'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition',
-                                    getSchedulePositionBadgeClass(p),
-                                    isLocked ? 'cursor-not-allowed opacity-60' : 'hover:brightness-110'
-                                  ].join(' ')}
-                                >
-                                  {t('颜色', 'Color')}
-                                </button>
+                                {allowedPosition ? (
+                                  <button
+                                    type="button"
+                                    disabled={isLocked}
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      cycleSchedulePositionTone(allowedPosition);
+                                    }}
+                                    title={t('点击切换岗位颜色', 'Click to cycle position color')}
+                                    className={[
+                                      'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition',
+                                      getSchedulePositionBadgeClass(p),
+                                      isLocked ? 'cursor-not-allowed opacity-60' : 'hover:brightness-110'
+                                    ].join(' ')}
+                                  >
+                                    {t('颜色', 'Color')}
+                                  </button>
+                                ) : null}
                               </div>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     </details>
@@ -17878,8 +17885,6 @@ ${rowsToHtml(late)}
     </div>
   );
 }
-
-
 
 
 
