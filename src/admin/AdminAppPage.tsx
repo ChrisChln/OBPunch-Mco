@@ -115,6 +115,7 @@ import { TODO_UPDATED_EVENT } from './todoShared';
 import { buildAdminUserIdentityView, type AdminUserIdentityView } from './adminIdentity';
 import {
   buildEmployeeUploadRows,
+  detectEmployeeImportIdentityConflicts,
   findInvalidEmployeeUploadPositions,
   normalizeEmployeeUploadPosition
 } from './employeeUploadPositions';
@@ -11984,9 +11985,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
 
-    // Guard rail: reject import when staff_id appears to be modified.
-    // Rule: if incoming staff_id does not exist, but another existing row matches same
-    // work_account OR (name + agency), treat as USID-change attempt and reject whole import.
+    // Guard rail: reject imports that look like an existing employee's USID was changed.
+    // Generated new-hire IDs are reported separately when their work account is already occupied.
     const detectModifiedStaffIds = async () => {
       const mode = await resolveEmployeeColumnMode();
       const run = async (m: EmployeeColumnMode) => {
@@ -12003,48 +12003,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         employeeColumnModeRef.current = flipped;
         res = await run(flipped);
       }
-      if (res.error) return { error: res.error.message, suspicious: [] as string[] };
-
-      const existing = ((res.data as any[]) ?? []) as any[];
-      const existingByStaff = new Set<string>();
-      const existingByAccount = new Map<string, string>();
-      const existingByNameAgency = new Map<string, string>();
-      for (const row of existing) {
-        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-        if (!staff) continue;
-        existingByStaff.add(staff);
-        const account = String(row.work_account ?? '').trim().toLowerCase();
-        if (account && !existingByAccount.has(account)) existingByAccount.set(account, staff);
-        const name = String(row.name ?? '').trim().toLowerCase();
-        const agency = String(row.agency ?? row.Agency ?? '').trim().toLowerCase();
-        if (name && agency) {
-          const key = `${name}__${agency}`;
-          if (!existingByNameAgency.has(key)) existingByNameAgency.set(key, staff);
-        }
+      if (res.error) {
+        return {
+          error: res.error.message,
+          modifiedStaffIds: [] as string[],
+          duplicateWorkAccounts: [] as string[]
+        };
       }
 
-      const suspicious: string[] = [];
-      for (const row of rows) {
-        const incomingStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
-        if (!incomingStaff || existingByStaff.has(incomingStaff)) continue;
-
-        const account = String(row.work_account ?? '').trim().toLowerCase();
-        const accountOwner = account ? existingByAccount.get(account) ?? '' : '';
-        if (accountOwner && accountOwner !== incomingStaff) {
-          suspicious.push(`${incomingStaff} -> ${accountOwner} (work_account)`);
-          continue;
-        }
-
-        const name = String(row.name ?? '').trim().toLowerCase();
-        const agency = String(row.agency ?? '').trim().toLowerCase();
-        const key = name && agency ? `${name}__${agency}` : '';
-        const matchedStaff = key ? existingByNameAgency.get(key) ?? '' : '';
-        if (matchedStaff && matchedStaff !== incomingStaff) {
-          suspicious.push(`${incomingStaff} -> ${matchedStaff} (${name}/${agency})`);
-        }
-      }
-
-      return { error: null as string | null, suspicious };
+      return {
+        error: null as string | null,
+        ...detectEmployeeImportIdentityConflicts(rows, ((res.data as any[]) ?? []) as any[])
+      };
     };
 
     const detectResult = await detectModifiedStaffIds();
@@ -12052,11 +12022,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setUploadError(`导入前校验失败：${detectResult.error}`);
       return;
     }
-    if (detectResult.suspicious.length > 0) {
-      const sample = detectResult.suspicious.slice(0, 6).join('；');
+    if (detectResult.modifiedStaffIds.length > 0) {
+      const sample = detectResult.modifiedStaffIds.slice(0, 6).join('；');
       setUploadError(
         `检测到疑似修改USID，已拒绝导入。请不要修改导出模板中的 EMPLOYEE ID。命中：${sample}${
-          detectResult.suspicious.length > 6 ? ` …（共 ${detectResult.suspicious.length} 条）` : ''
+          detectResult.modifiedStaffIds.length > 6 ? ` …（共 ${detectResult.modifiedStaffIds.length} 条）` : ''
+        }`
+      );
+      return;
+    }
+    if (detectResult.duplicateWorkAccounts.length > 0) {
+      const sample = detectResult.duplicateWorkAccounts.slice(0, 6).join('；');
+      setUploadError(
+        `检测到工作账号已被其他员工使用，已拒绝导入。请清空新人工作账号或填写未占用账号。命中：${sample}${
+          detectResult.duplicateWorkAccounts.length > 6 ? ` …（共 ${detectResult.duplicateWorkAccounts.length} 条）` : ''
         }`
       );
       return;
