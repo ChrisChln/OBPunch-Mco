@@ -1,6 +1,12 @@
 import { memo, useMemo, useState } from 'react';
 import type { LabelToneKey } from '../../lib/labelTone';
 import type { AllowedPosition } from '../types';
+import {
+  buildDashboardCardPositions,
+  buildDashboardPositionOptions,
+  resolveDashboardPositionName
+} from '../../shared/dashboardPositions';
+import { DEFAULT_DASHBOARD_CARD_POSITIONS } from '../../shared/dashboardPositions';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -32,8 +38,9 @@ type HomeDashboardPageProps = {
   getScheduleTablePositionBadgeClass: (position: string) => string;
   getScheduleTableShiftBadgeClass: (value: '' | 'early' | 'late') => string;
   schedulePositionToneByPosition: Partial<Record<AllowedPosition, LabelToneKey>>;
-  homeRosterPositionFilter: 'ALL' | AllowedPosition;
-  setHomeRosterPositionFilter: (value: 'ALL' | AllowedPosition) => void;
+  homeDashboardPositionNames: string[];
+  homeRosterPositionFilter: string;
+  setHomeRosterPositionFilter: (value: string) => void;
   onOpenTimecardCalibration?: (staffId: string, workDate: string) => void | Promise<void>;
   homeRosterRowsCurrent: HomeRosterRow[];
 };
@@ -49,10 +56,7 @@ type TableRow = HomeRosterRow & {
   punches: Array<{ action: 'IN' | 'OUT'; created_at: string }>;
 };
 
-export const HOME_DASHBOARD_CARD_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer'] as const;
-type NormalizedPosition = (typeof HOME_DASHBOARD_CARD_POSITIONS)[number] | 'FLEX TEAM';
-const POSITIONS = HOME_DASHBOARD_CARD_POSITIONS;
-const OUTBOUND_SUMMARY_POSITIONS = POSITIONS.filter((position) => position !== 'Transfer');
+export const HOME_DASHBOARD_CARD_POSITIONS = DEFAULT_DASHBOARD_CARD_POSITIONS;
 const iconStrokeClass = 'h-4 w-4 shrink-0';
 
 const SearchIcon = ({ className = iconStrokeClass }: IconProps) => (
@@ -68,17 +72,8 @@ const ChevronDownIcon = ({ className = iconStrokeClass }: IconProps) => (
   </svg>
 );
 
-const normalizePositionKey = (value: string): '' | NormalizedPosition => {
-  const v = String(value ?? '').trim().toLowerCase();
-  if (!v) return '';
-  if (v.includes('pick')) return 'Pick';
-  if (v.includes('pack')) return 'Pack';
-  if (v.includes('rebin')) return 'Rebin';
-  if (v.includes('preship')) return 'Preship';
-  if (v.includes('transfer')) return 'Transfer';
-  if (v.includes('flex') || v.includes('兜底') || v.includes('wrap')) return 'FLEX TEAM';
-  return '';
-};
+const normalizePositionKey = (value: string, positionNames: readonly string[] = HOME_DASHBOARD_CARD_POSITIONS): string =>
+  resolveDashboardPositionName(value, positionNames);
 
 const normalizeShiftValue = (value: unknown): '' | 'early' | 'late' => {
   const v = String(value ?? '').trim().toLowerCase();
@@ -183,6 +178,7 @@ function HomeDashboardPage({
   getScheduleTablePositionBadgeClass,
   getScheduleTableShiftBadgeClass,
   schedulePositionToneByPosition: _schedulePositionToneByPosition,
+  homeDashboardPositionNames,
   homeRosterPositionFilter: _homeRosterPositionFilter,
   setHomeRosterPositionFilter,
   onOpenTimecardCalibration,
@@ -199,29 +195,40 @@ function HomeDashboardPage({
   const summaryByPosition = useMemo(() => {
     const map = new Map<string, { early: number; late: number; total: number }>();
     for (const item of homeExpectedPositionSummaryCards) {
-      const key = normalizePositionKey(item.position) || item.position;
+      const key = normalizePositionKey(item.position, homeDashboardPositionNames) || item.position;
       map.set(key, { early: item.early, late: item.late, total: item.total });
     }
     return map;
-  }, [homeExpectedPositionSummaryCards]);
+  }, [homeExpectedPositionSummaryCards, homeDashboardPositionNames]);
+
+  const cardPositions = useMemo(
+    () =>
+      buildDashboardCardPositions(homeDashboardPositionNames, [
+        ...homeExpectedPositionSummaryCards.map((item) => item.position),
+        ...Object.keys(homeCardStats),
+        ...homeRosterRowsCurrent.map((row) => row.position)
+      ]),
+    [homeDashboardPositionNames, homeExpectedPositionSummaryCards, homeCardStats, homeRosterRowsCurrent]
+  );
 
   const outboundShiftCards = useMemo(() => {
-    const morningPresent = OUTBOUND_SUMMARY_POSITIONS.reduce((sum, position) => sum + (homeCardStats[position]?.early ?? 0), 0);
-    const morningExpected = OUTBOUND_SUMMARY_POSITIONS.reduce((sum, position) => sum + (summaryByPosition.get(position)?.early ?? 0), 0);
-    const nightPresent = OUTBOUND_SUMMARY_POSITIONS.reduce((sum, position) => sum + (homeCardStats[position]?.late ?? 0), 0);
-    const nightExpected = OUTBOUND_SUMMARY_POSITIONS.reduce((sum, position) => sum + (summaryByPosition.get(position)?.late ?? 0), 0);
+    const summaryPositions = cardPositions.filter((position) => normalizePositionKey(position, homeDashboardPositionNames) !== 'Transfer');
+    const morningPresent = summaryPositions.reduce((sum, position) => sum + (homeCardStats[position]?.early ?? 0), 0);
+    const morningExpected = summaryPositions.reduce((sum, position) => sum + (summaryByPosition.get(position)?.early ?? 0), 0);
+    const nightPresent = summaryPositions.reduce((sum, position) => sum + (homeCardStats[position]?.late ?? 0), 0);
+    const nightExpected = summaryPositions.reduce((sum, position) => sum + (summaryByPosition.get(position)?.late ?? 0), 0);
     return [
       { shift: 'early' as const, present: morningPresent, expected: morningExpected },
       { shift: 'late' as const, present: nightPresent, expected: nightExpected }
     ];
-  }, [homeCardStats, summaryByPosition]);
+  }, [cardPositions, homeCardStats, homeDashboardPositionNames, summaryByPosition]);
 
   const attendanceCardGroups = useMemo(
     () => {
       const onClockCountByKey = new Map<string, number>();
       const offWorkedCountByKey = new Map<string, number>();
       for (const row of homeRosterRowsCurrent) {
-        const position = normalizePositionKey(row.position);
+        const position = normalizePositionKey(row.position, homeDashboardPositionNames);
         const shift = normalizeShiftValue(row.shift);
         if (!position || !shift) continue;
         const key = `${position}:${shift}`;
@@ -235,7 +242,7 @@ function HomeDashboardPage({
 
       return (['early', 'late'] as const).map((shift) => ({
         shift,
-        cards: POSITIONS.map((position) => {
+        cards: cardPositions.map((position) => {
           const stats = homeCardStats[position] ?? { early: 0, late: 0, active: 0 };
           const plan = summaryByPosition.get(position) ?? { early: 0, late: 0, total: 0 };
           const key = `${position}:${shift}`;
@@ -250,17 +257,17 @@ function HomeDashboardPage({
         })
       }));
     },
-    [homeCardStats, summaryByPosition, homeRosterRowsCurrent]
+    [cardPositions, homeCardStats, homeDashboardPositionNames, summaryByPosition, homeRosterRowsCurrent]
   );
 
-  const positionOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const row of homeRosterRowsCurrent) {
-      const key = normalizePositionKey(row.position) || row.position;
-      if (key) set.add(key);
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [homeRosterRowsCurrent]);
+  const positionOptions = useMemo(
+    () =>
+      buildDashboardPositionOptions(
+        homeDashboardPositionNames,
+        homeRosterRowsCurrent.map((row) => normalizePositionKey(row.position, homeDashboardPositionNames) || row.position)
+      ),
+    [homeDashboardPositionNames, homeRosterRowsCurrent]
+  );
 
   const shiftOptions = useMemo(() => {
     const set = new Set<string>();
@@ -299,7 +306,7 @@ function HomeDashboardPage({
         return false;
       }
       if (positionFilter) {
-        const key = normalizePositionKey(row.position) || row.position;
+        const key = normalizePositionKey(row.position, homeDashboardPositionNames) || row.position;
         if (key !== positionFilter) return false;
       }
       if (shiftFilter) {
@@ -309,7 +316,7 @@ function HomeDashboardPage({
       if (attendanceFilters.length > 0 && !attendanceFilters.includes(row.attendance)) return false;
       return true;
     });
-  }, [tableRows, search, positionFilter, shiftFilter, absentOnly, onClockOnly, offWorkOnly]);
+  }, [tableRows, search, positionFilter, shiftFilter, absentOnly, onClockOnly, offWorkOnly, homeDashboardPositionNames]);
 
   const operationalDate = useMemo(() => {
     const now = new Date();
@@ -434,11 +441,10 @@ function HomeDashboardPage({
                 value={positionFilter}
                 onChange={(e) => {
                   setPositionFilter(e.target.value);
-                  if (e.target.value === 'ALL') {
+                  if (!e.target.value) {
                     setHomeRosterPositionFilter('ALL');
                   } else {
-                    const casted = normalizePositionKey(e.target.value);
-                    if (casted) setHomeRosterPositionFilter(casted);
+                    setHomeRosterPositionFilter(e.target.value);
                   }
                 }}
                 className={['h-12 w-full appearance-none rounded-[20px] border px-4 pr-10 text-sm outline-none transition', isLight ? 'border-slate-200 bg-white text-slate-800 focus:border-slate-300' : 'border-white/10 bg-white/[0.04] text-stone-100 focus:border-white/20'].join(' ')}

@@ -85,7 +85,7 @@ import {
   type AdminAccessUserOption,
   type TerminationRequestRecord
 } from './adminAccessApi';
-import { buildActivePositionNames, normalizePositionName, type PositionRecord } from '../shared/positions';
+import { buildActivePositionNames, normalizePositionName, resolvePositionName, type PositionRecord } from '../shared/positions';
 import { useScheduleRealtime } from './useScheduleRealtime';
 import {
   activatePlannedScheduleNote,
@@ -112,7 +112,11 @@ import {
 import { fetchTodoNavPendingCount, fetchTodoProfiles } from './todoData';
 import { TODO_UPDATED_EVENT } from './todoShared';
 import { buildAdminUserIdentityView, type AdminUserIdentityView } from './adminIdentity';
-import { findInvalidEmployeeUploadPositions, normalizeEmployeeUploadPosition } from './employeeUploadPositions';
+import {
+  buildEmployeeUploadRows,
+  findInvalidEmployeeUploadPositions,
+  normalizeEmployeeUploadPosition
+} from './employeeUploadPositions';
 import { shouldAutofillShiftTime } from './shiftTimeAutofill';
 import {
   loadDailyCapacityStaffStats,
@@ -879,6 +883,7 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
 const isNewHirePlaceholderStaffId = (value: string) => {
   const staff = String(value ?? '').trim().toUpperCase();
   if (!staff) return false;
+  if (/^TEMP-USID-[A-Z0-9]+-\d{4,}$/i.test(staff)) return true;
   if (/^NEWREQ-\d{8}(?:-[A-Z]+)?-\d{3,}$/i.test(staff)) return true; // legacy format
   return /^\d{4}[A-Z]+\d{3,}$/i.test(staff); // MMDD + POSITION + SEQ
 };
@@ -1118,48 +1123,6 @@ const getVisibleAdminPages = (accessContext: AdminAccessContext | null | undefin
   if (hasModuleAccess(moduleMap, 'efficiency', 'view')) pages.push('efficiency');
 
   return pages.length > 0 ? pages : ['home'];
-};
-
-const EMPLOYEE_KEY_ALIASES: Record<string, string> = {
-  employee_id: 'staff_id',
-  employeeid: 'staff_id',
-  uid: 'staff_id',
-  staffid: 'staff_id',
-  staff_id: 'staff_id',
-  '工号': 'staff_id',
-  '员工号': 'staff_id',
-  name: 'name',
-  agency: 'agency',
-  'agency ': 'agency',
-  position: 'position',
-  '岗位': 'position',
-  '职位': 'position',
-  employment_type: 'employment_type',
-  employmenttype: 'employment_type',
-  ft_pt: 'employment_type',
-  ftpt: 'employment_type',
-  full_part_time: 'employment_type',
-  fullparttime: 'employment_type',
-  'ft/pt': 'employment_type',
-  '全职兼职': 'employment_type',
-  '用工类型': 'employment_type',
-  label: 'label',
-  '标签': 'label',
-  work_account: 'work_account',
-  workaccount: 'work_account',
-  '工作账号': 'work_account',
-  '账号': 'work_account',
-  work_password: 'work_password',
-  workpassword: 'work_password',
-  '工作密码': 'work_password',
-  '密码': 'work_password',
-  shift_time: 'shift_time',
-  shifttime: 'shift_time',
-  start_time: 'shift_time',
-  starttime: 'shift_time',
-  '班次时间': 'shift_time',
-  '上班时间': 'shift_time',
-  '开始时间': 'shift_time'
 };
 
 const DEVICE_KEY_ALIASES: Record<string, string> = {
@@ -2577,7 +2540,7 @@ export default function AdminAppPage() {
   >({});
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
   const [homeOnClockShiftByStaffId, setHomeOnClockShiftByStaffId] = useState<Record<string, 'early' | 'late'>>({});
-  const [homeRosterPositionFilter, setHomeRosterPositionFilter] = useState<'ALL' | AllowedPosition>('ALL');
+  const [homeRosterPositionFilter, setHomeRosterPositionFilter] = useState<string>('ALL');
 
   const resolveEmployeeColumnMode = async (): Promise<EmployeeColumnMode> => {
     const cached = employeeColumnModeRef.current;
@@ -2604,9 +2567,9 @@ export default function AdminAppPage() {
   };
 
   const normalizePositionKey = (value: string) => {
+    const resolved = resolvePositionName(value, allPositionNames);
+    if (resolved) return resolved;
     const trimmed = normalizePositionName(value);
-    const direct = allPositionNames.find((p) => p.toLowerCase() === trimmed.toLowerCase());
-    if (direct) return direct;
     const v = trimmed.toLowerCase();
     if (v === 'pick') return 'Pick';
     if (v === 'pack') return 'Pack';
@@ -11979,77 +11942,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     // Normalize rows, accept UID as alias for staff_id.
 
-    const uniqueByStaff = new Map<
-      string,
-      {
-        staff_id: string;
-        name?: string;
-        agency?: string;
-        position?: string;
-        employment_type?: EmploymentType;
-        shift_time?: string;
-        label?: string;
-        work_account?: string;
-        work_password?: string;
-      }
-    >();
-    let duplicateInFileCount = 0;
-
-    for (const r of parsedRows) {
-      const canonical: Record<string, string> = {};
-      for (const [rawKey, rawValue] of Object.entries(r)) {
-        if (!rawKey) continue;
-        const value = String(rawValue ?? '').trim();
-        if (!value) continue;
-        const normalized = normalizeHeaderKey(rawKey);
-        const mapped = EMPLOYEE_KEY_ALIASES[normalized] ?? normalized;
-        if (!canonical[mapped]) canonical[mapped] = value;
-      }
-
-      const staff = (canonical.staff_id ?? '').trim().toUpperCase();
-      if (!staff) continue;
-      if (uniqueByStaff.has(staff)) {
-        duplicateInFileCount += 1;
-        continue;
-      }
-
-      const name = canonical.name?.trim();
-      const agency = canonical.agency?.trim();
-      const positionRaw = canonical.position?.trim();
-      const position = positionRaw ? normalizeEmployeeUploadPosition(positionRaw, activePositionNames) : '';
-      const employmentType = normalizeEmploymentTypeValue(canonical.employment_type ?? '');
-      const label = canonical.label?.trim();
-      const shiftTime = normalizeShiftTimeValue(canonical.shift_time ?? '');
-      const workAccount = canonical.work_account?.trim();
-      const workPassword = canonical.work_password?.trim();
-
-      const record: {
-        staff_id: string;
-        name?: string;
-        agency?: string;
-        position?: string;
-        employment_type?: EmploymentType;
-        shift_time?: string;
-        label?: string;
-        work_account?: string;
-        work_password?: string;
-      } = { staff_id: staff };
-      if (name) record.name = name;
-      if (agency) record.agency = agency;
-      if (position) record.position = position;
-      if (positionRaw && !position) record.position = positionRaw;
-      record.employment_type = employmentType;
-      if (shiftTime) record.shift_time = shiftTime;
-      if (label) record.label = label;
-      if (workAccount) record.work_account = workAccount;
-      if (workPassword) record.work_password = workPassword;
-      uniqueByStaff.set(staff, record);
-    }
-
-    const rows = Array.from(uniqueByStaff.values());
+    const { rows, duplicateInFileCount } = buildEmployeeUploadRows(parsedRows, activePositionNames);
 
     if (rows.length === 0) {
-      setUploadError('CSV 没有可用数据行（staff_id 为空）。');
+      setUploadError('CSV 没有可用数据行。');
       return;
     }
 
@@ -13765,7 +13661,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       .filter((employee) => {
         if (isInactiveJdlEmployee(employee)) return false;
         const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-        const position = normalizeAllowedPosition(String(employee.position ?? employee.Position ?? '').trim());
+        const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim()) ?? '';
         if (!canViewPosition('schedule', position)) return false;
         const employmentType = normalizeEmploymentTypeValue((employee as any).employment_type ?? (employee as any).EmploymentType ?? '');
         const label = String(employee.label ?? employee.Label ?? '').trim();
@@ -13806,7 +13702,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const out = new Set<string>();
     for (const employee of employees) {
       if (isInactiveJdlEmployee(employee)) continue;
-      const position = normalizeAllowedPosition(String(employee.position ?? employee.Position ?? '').trim());
+      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim()) ?? '';
       if (deferredSchedulePosition && position !== deferredSchedulePosition) continue;
       const label = String(employee.label ?? employee.Label ?? '').trim();
       if (label) out.add(label);
@@ -14058,7 +13954,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const homeExpectedCards = useMemo(() => {
     if (page !== 'home') {
       return (['early', 'late'] as const).flatMap((shift) =>
-        ALLOWED_POSITIONS.map((position) => ({
+        activePositionNames.map((position) => ({
           key: `${shift}:${position}`,
           shift,
           position,
@@ -14083,7 +13979,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       countByKey[key] = (countByKey[key] ?? 0) + 1;
     }
     return (['early', 'late'] as const).flatMap((shift) =>
-      ALLOWED_POSITIONS.map((position) => ({
+      activePositionNames.map((position) => ({
         key: `${shift}:${position}`,
         shift,
         position,
@@ -14097,17 +13993,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     homeOperationalDayIndex,
     employeeProfileByStaffId,
     employeeShiftByStaffId,
+    activePositionNames,
   ]);
   const homeExpectedPositionSummaryCards = useMemo(
     () => {
-      if (page !== 'home') return ALLOWED_POSITIONS.map((position) => ({ position, early: 0, late: 0, total: 0 }));
-      return ALLOWED_POSITIONS.map((position) => {
+      if (page !== 'home') return activePositionNames.map((position) => ({ position, early: 0, late: 0, total: 0 }));
+      return activePositionNames.map((position) => {
         const early = homeExpectedCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
         const late = homeExpectedCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
         return { position, early, late, total: early + late };
       });
     },
-    [page, homeExpectedCards]
+    [page, homeExpectedCards, activePositionNames]
   );
   const homeCardStats = useMemo(() => {
     if (page !== 'home') return {};
@@ -14370,7 +14267,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       completed: filterRows(homeRosterRows.completed),
       onClock: filterRows(homeRosterRows.onClock)
     };
-  }, [page, homeRosterRows, homeRosterPositionFilter]);
+  }, [page, homeRosterRows, homeRosterPositionFilter, activePositionNames]);
   const homeRosterRowsCurrent = useMemo(() => {
     if (page !== 'home') return [];
     return [
@@ -15355,6 +15252,7 @@ ${rowsToHtml(late)}
                 getScheduleTablePositionBadgeClass={getScheduleTablePositionBadgeClass}
                 getScheduleTableShiftBadgeClass={getScheduleTableShiftBadgeClass}
                 schedulePositionToneByPosition={schedulePositionToneByPosition}
+                homeDashboardPositionNames={activePositionNames}
                 homeRosterPositionFilter={homeRosterPositionFilter}
                 setHomeRosterPositionFilter={setHomeRosterPositionFilter}
                 onOpenTimecardCalibration={openTimecardPunchModalForDate}
@@ -15634,7 +15532,9 @@ ${rowsToHtml(late)}
                               {t('全部岗位', 'All positions')}
                             </span>
                           </div>
-                          {ALLOWED_POSITIONS.map((p) => (
+                          {activePositionNames.map((p) => {
+                            const allowedPosition = normalizeAllowedPosition(p);
+                            return (
                             <div
                               key={`pos-tone-${p}`}
                               role="button"
@@ -15668,26 +15568,29 @@ ${rowsToHtml(late)}
                                 {p}
                               </span>
                               <div className="ml-2 flex items-center">
-                                <button
-                                  type="button"
-                                  disabled={isLocked}
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    cycleSchedulePositionTone(p);
-                                  }}
-                                  title={t('点击切换岗位颜色', 'Click to cycle position color')}
-                                  className={[
-                                    'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition',
-                                    getSchedulePositionBadgeClass(p),
-                                    isLocked ? 'cursor-not-allowed opacity-60' : 'hover:brightness-110'
-                                  ].join(' ')}
-                                >
-                                  {t('颜色', 'Color')}
-                                </button>
+                                {allowedPosition ? (
+                                  <button
+                                    type="button"
+                                    disabled={isLocked}
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      cycleSchedulePositionTone(allowedPosition);
+                                    }}
+                                    title={t('点击切换岗位颜色', 'Click to cycle position color')}
+                                    className={[
+                                      'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition',
+                                      getSchedulePositionBadgeClass(p),
+                                      isLocked ? 'cursor-not-allowed opacity-60' : 'hover:brightness-110'
+                                    ].join(' ')}
+                                  >
+                                    {t('颜色', 'Color')}
+                                  </button>
+                                ) : null}
                               </div>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     </details>
@@ -17878,12 +17781,6 @@ ${rowsToHtml(late)}
     </div>
   );
 }
-
-
-
-
-
-
 
 
 
