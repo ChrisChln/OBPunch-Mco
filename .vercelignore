@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+blob-report/
+.playwright-mcp/
+.vite-check-dist/
+backups/
+*.log
+*.tsbuildinfo
+.env
+.env.*
