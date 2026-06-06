@@ -112,7 +112,11 @@ import {
 import { fetchTodoNavPendingCount, fetchTodoProfiles } from './todoData';
 import { TODO_UPDATED_EVENT } from './todoShared';
 import { buildAdminUserIdentityView, type AdminUserIdentityView } from './adminIdentity';
-import { findInvalidEmployeeUploadPositions, normalizeEmployeeUploadPosition } from './employeeUploadPositions';
+import {
+  buildEmployeeUploadRows,
+  findInvalidEmployeeUploadPositions,
+  normalizeEmployeeUploadPosition
+} from './employeeUploadPositions';
 import { shouldAutofillShiftTime } from './shiftTimeAutofill';
 import {
   loadDailyCapacityStaffStats,
@@ -879,6 +883,7 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
 const isNewHirePlaceholderStaffId = (value: string) => {
   const staff = String(value ?? '').trim().toUpperCase();
   if (!staff) return false;
+  if (/^TEMP-USID-[A-Z0-9]+-\d{4,}$/i.test(staff)) return true;
   if (/^NEWREQ-\d{8}(?:-[A-Z]+)?-\d{3,}$/i.test(staff)) return true; // legacy format
   return /^\d{4}[A-Z]+\d{3,}$/i.test(staff); // MMDD + POSITION + SEQ
 };
@@ -1118,48 +1123,6 @@ const getVisibleAdminPages = (accessContext: AdminAccessContext | null | undefin
   if (hasModuleAccess(moduleMap, 'efficiency', 'view')) pages.push('efficiency');
 
   return pages.length > 0 ? pages : ['home'];
-};
-
-const EMPLOYEE_KEY_ALIASES: Record<string, string> = {
-  employee_id: 'staff_id',
-  employeeid: 'staff_id',
-  uid: 'staff_id',
-  staffid: 'staff_id',
-  staff_id: 'staff_id',
-  '工号': 'staff_id',
-  '员工号': 'staff_id',
-  name: 'name',
-  agency: 'agency',
-  'agency ': 'agency',
-  position: 'position',
-  '岗位': 'position',
-  '职位': 'position',
-  employment_type: 'employment_type',
-  employmenttype: 'employment_type',
-  ft_pt: 'employment_type',
-  ftpt: 'employment_type',
-  full_part_time: 'employment_type',
-  fullparttime: 'employment_type',
-  'ft/pt': 'employment_type',
-  '全职兼职': 'employment_type',
-  '用工类型': 'employment_type',
-  label: 'label',
-  '标签': 'label',
-  work_account: 'work_account',
-  workaccount: 'work_account',
-  '工作账号': 'work_account',
-  '账号': 'work_account',
-  work_password: 'work_password',
-  workpassword: 'work_password',
-  '工作密码': 'work_password',
-  '密码': 'work_password',
-  shift_time: 'shift_time',
-  shifttime: 'shift_time',
-  start_time: 'shift_time',
-  starttime: 'shift_time',
-  '班次时间': 'shift_time',
-  '上班时间': 'shift_time',
-  '开始时间': 'shift_time'
 };
 
 const DEVICE_KEY_ALIASES: Record<string, string> = {
@@ -11979,77 +11942,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     // Normalize rows, accept UID as alias for staff_id.
 
-    const uniqueByStaff = new Map<
-      string,
-      {
-        staff_id: string;
-        name?: string;
-        agency?: string;
-        position?: string;
-        employment_type?: EmploymentType;
-        shift_time?: string;
-        label?: string;
-        work_account?: string;
-        work_password?: string;
-      }
-    >();
-    let duplicateInFileCount = 0;
-
-    for (const r of parsedRows) {
-      const canonical: Record<string, string> = {};
-      for (const [rawKey, rawValue] of Object.entries(r)) {
-        if (!rawKey) continue;
-        const value = String(rawValue ?? '').trim();
-        if (!value) continue;
-        const normalized = normalizeHeaderKey(rawKey);
-        const mapped = EMPLOYEE_KEY_ALIASES[normalized] ?? normalized;
-        if (!canonical[mapped]) canonical[mapped] = value;
-      }
-
-      const staff = (canonical.staff_id ?? '').trim().toUpperCase();
-      if (!staff) continue;
-      if (uniqueByStaff.has(staff)) {
-        duplicateInFileCount += 1;
-        continue;
-      }
-
-      const name = canonical.name?.trim();
-      const agency = canonical.agency?.trim();
-      const positionRaw = canonical.position?.trim();
-      const position = positionRaw ? normalizeEmployeeUploadPosition(positionRaw, activePositionNames) : '';
-      const employmentType = normalizeEmploymentTypeValue(canonical.employment_type ?? '');
-      const label = canonical.label?.trim();
-      const shiftTime = normalizeShiftTimeValue(canonical.shift_time ?? '');
-      const workAccount = canonical.work_account?.trim();
-      const workPassword = canonical.work_password?.trim();
-
-      const record: {
-        staff_id: string;
-        name?: string;
-        agency?: string;
-        position?: string;
-        employment_type?: EmploymentType;
-        shift_time?: string;
-        label?: string;
-        work_account?: string;
-        work_password?: string;
-      } = { staff_id: staff };
-      if (name) record.name = name;
-      if (agency) record.agency = agency;
-      if (position) record.position = position;
-      if (positionRaw && !position) record.position = positionRaw;
-      record.employment_type = employmentType;
-      if (shiftTime) record.shift_time = shiftTime;
-      if (label) record.label = label;
-      if (workAccount) record.work_account = workAccount;
-      if (workPassword) record.work_password = workPassword;
-      uniqueByStaff.set(staff, record);
-    }
-
-    const rows = Array.from(uniqueByStaff.values());
+    const { rows, duplicateInFileCount } = buildEmployeeUploadRows(parsedRows, activePositionNames);
 
     if (rows.length === 0) {
-      setUploadError('CSV 没有可用数据行（staff_id 为空）。');
+      setUploadError('CSV 没有可用数据行。');
       return;
     }
 
@@ -17885,10 +17781,6 @@ ${rowsToHtml(late)}
     </div>
   );
 }
-
-
-
-
 
 
 
