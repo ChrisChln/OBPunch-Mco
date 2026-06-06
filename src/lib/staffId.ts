@@ -1,5 +1,5 @@
 // Only allow "US" prefix + 3-12 digits, e.g. "US010454".
-import { isScheduleOnlyAgency } from '../shared/agencyRules';
+import { isScheduleOnlyAgency } from '../shared/agencyRules.js';
 
 export const STAFF_ID_PATTERN = /^US\d{3,12}$/;
 const SCHEDULE_ONLY_STAFF_ID_PATTERN = /^[A-Z0-9_-]{1,64}$/;
