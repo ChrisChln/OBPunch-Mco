@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import {
   buildEmployeeUploadRows,
+  detectEmployeeImportIdentityConflicts,
   findInvalidEmployeeUploadPositions,
+  isGeneratedEmployeeUploadStaffId,
   normalizeEmployeeUploadPosition
 } from '../../src/admin/employeeUploadPositions';
 
@@ -61,5 +63,44 @@ describe('employee upload position validation', () => {
         work_password: 'pw'
       }
     ]);
+  });
+
+  test('does not flag generated temporary new-hire IDs as modified USIDs', () => {
+    const result = detectEmployeeImportIdentityConflicts(
+      [
+        {
+          staff_id: 'TEMP-USID-TEST-0001',
+          name: 'Alex Chen',
+          agency: 'OB',
+          position: 'Pick',
+          employment_type: 'FT',
+          work_account: ''
+        }
+      ],
+      [{ staff_id: 'US018949', name: 'Alex Chen', agency: 'OB', work_account: 'alex.c' }]
+    );
+
+    expect(isGeneratedEmployeeUploadStaffId('TEMP-USID-TEST-0001')).toBe(true);
+    expect(result.modifiedStaffIds).toEqual([]);
+    expect(result.duplicateWorkAccounts).toEqual([]);
+  });
+
+  test('reports duplicate work accounts for generated temporary new-hire IDs without calling them USID edits', () => {
+    const result = detectEmployeeImportIdentityConflicts(
+      [
+        {
+          staff_id: 'TEMP-USID-TEST-0001',
+          name: 'New Hire',
+          agency: 'OB',
+          position: 'Pick',
+          employment_type: 'FT',
+          work_account: 'alex.c'
+        }
+      ],
+      [{ staff_id: 'US018949', name: 'Alex Chen', agency: 'OB', work_account: 'alex.c' }]
+    );
+
+    expect(result.modifiedStaffIds).toEqual([]);
+    expect(result.duplicateWorkAccounts).toEqual(['TEMP-USID-TEST-0001 -> US018949 (work_account)']);
   });
 });
