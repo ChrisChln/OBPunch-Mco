@@ -64,6 +64,21 @@ describe('submitPunchWithServiceRole', () => {
     expect(result).toEqual({ ok: false, status: 400, error: 'Invalid staff ID format.' });
   });
 
+  test('accepts registered temporary staff IDs', async () => {
+    const { supabase, inserts } = createSupabaseMock({
+      employees: { data: [{ staff_id: '0606PICK001', agency: null, terminated_at: null }], error: null }
+    });
+
+    const result = await submitPunchWithServiceRole(supabase, {
+      staffId: '0606pick001',
+      action: 'IN',
+      userAgent: 'test-agent'
+    });
+
+    expect(result).toEqual({ ok: true, status: 200, staffId: '0606PICK001', action: 'IN' });
+    expect(inserts[0]?.[0]).toMatchObject({ staff_id: '0606PICK001', action: 'IN' });
+  });
+
   test('rejects unregistered employees', async () => {
     const { supabase } = createSupabaseMock({ employees: { data: [], error: null } });
 
@@ -143,6 +158,50 @@ describe('submitPunchWithServiceRole', () => {
         }
       ]
     ]);
+  });
+
+  test('keeps the Supabase insert builder context when writing punches', async () => {
+    const inserts: any[][] = [];
+    const punchBuilder = {
+      select: () => ({
+        eq: () => ({
+          order: () => ({
+            limit: async () => ({ data: [], error: null })
+          })
+        })
+      }),
+      async insert(rows: any[]) {
+        if (this !== punchBuilder) {
+          throw new Error('insert lost builder context');
+        }
+        inserts.push(rows);
+        return { error: null };
+      }
+    };
+    const supabase = {
+      from(table: string) {
+        if (table === 'ob_employees') {
+          return {
+            select: () => ({
+              eq: () => ({
+                limit: async () => ({ data: [{ staff_id: 'US010454', agency: null, terminated_at: null }], error: null })
+              })
+            })
+          };
+        }
+        if (table === 'ob_punches') return punchBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      }
+    };
+
+    const result = await submitPunchWithServiceRole(supabase, {
+      staffId: 'US010454',
+      action: 'IN',
+      userAgent: 'test-agent'
+    });
+
+    expect(result).toEqual({ ok: true, status: 200, staffId: 'US010454', action: 'IN' });
+    expect(inserts).toHaveLength(1);
   });
 
   test('falls back when the deployed punches table has no metadata column', async () => {

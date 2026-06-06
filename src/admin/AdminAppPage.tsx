@@ -4,6 +4,7 @@ import type { User as SupabaseUser } from '@supabase/supabase-js';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
 import {
   isValidScheduleStaffId,
+  isValidPunchStaffId,
   isValidStaffId as isValidStaffIdValue,
   isValidStaffIdForUpdate,
   normalizeStaffId
@@ -213,7 +214,7 @@ type DailyListCapacityView = {
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'Water Spider', 'FLEX TEAM'] as const;
-const DAILY_LIST_VISIBLE_POSITIONS = DAILY_LIST_LIGHT_POSITIONS.filter((position) => position !== 'FLEX TEAM');
+const FALLBACK_DAILY_LIST_VISIBLE_POSITIONS = DAILY_LIST_LIGHT_POSITIONS.filter((position) => position !== 'FLEX TEAM');
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const HIDDEN_AUDIT_ACTIONS = new Set(['admin_page_switch', 'schedule_open_daily_list']);
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
@@ -505,6 +506,12 @@ const isEmployeeActive = (employee: EmployeeRow | null | undefined) => {
   if (!text) return true;
   if (text === 'false' || text === '0' || text === 'f' || text === 'no') return false;
   return true;
+};
+const isAttendanceQueryableStaffId = (value: unknown) => isValidPunchStaffId(normalizeStaffId(String(value ?? '').trim()));
+const isAttendanceQueryableEmployee = (employee: EmployeeRow | null | undefined) => {
+  if (!employee) return false;
+  const agency = String(employee.agency ?? employee.Agency ?? '').trim();
+  return isAttendanceQueryableStaffId(employee.staff_id) && !isScheduleOnlyAgency(agency);
 };
 
 const formatTime = (value: Date, locale: string = 'zh-CN') =>
@@ -2529,6 +2536,13 @@ export default function AdminAppPage() {
     return () => window.clearTimeout(timer);
   }, [scheduleSearchInput]);
 
+  useEffect(() => {
+    if (page !== 'schedule') return;
+    if (scheduleError === 'Invalid staff id.') {
+      setScheduleError(null);
+    }
+  }, [page, scheduleSearchInput, schedulePosition, scheduleEmploymentType, scheduleLabels]);
+
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFillDuplicates, setUploadFillDuplicates] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -2595,6 +2609,8 @@ export default function AdminAppPage() {
   };
 
   const normalizeDailyListPositionKey = (value: string) => {
+    const resolved = normalizePositionKey(value);
+    if (resolved) return resolved;
     const normalized = normalizeDailyListLightPosition(value);
     return normalized || null;
   };
@@ -5299,6 +5315,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const sourceEmployees = options?.employeesOverride ?? employees;
     const staffSet = new Set(
       sourceEmployees
+        .filter(isAttendanceQueryableEmployee)
         .map((e) => normalizeStaffId(String(e.staff_id ?? '').trim()))
         .filter((staff): staff is string => Boolean(staff))
     );
@@ -5476,6 +5493,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return Number.isFinite(n) ? n : 0;
     };
     for (const employee of employeesForUph) {
+      if (!isAttendanceQueryableEmployee(employee)) continue;
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff) continue;
       const prev = latestEmployeeByStaff.get(staff);
@@ -5701,6 +5719,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const staffIds = Array.from(
       new Set(
         employeesForMistake
+          .filter(isAttendanceQueryableEmployee)
           .map((employee) => normalizeStaffId(String(employee.staff_id ?? '').trim()))
           .filter(Boolean)
       )
@@ -5785,7 +5804,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const staffIds = Array.from(
       new Set(
         employeesForMonthlyAbsent
-          .filter((employee) => !isScheduleOnlyAgency(String(employee.agency ?? employee.Agency ?? '').trim()))
+          .filter(isAttendanceQueryableEmployee)
           .map((employee) => normalizeStaffId(String(employee.staff_id ?? '').trim()))
           .filter(Boolean)
       )
@@ -5854,7 +5873,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const staffIds = Array.from(
         new Set(
           (employeesForLate ?? [])
-            .filter((employee) => !isScheduleOnlyAgency(String(employee.agency ?? employee.Agency ?? '').trim()))
+            .filter(isAttendanceQueryableEmployee)
             .map((employee) => normalizeStaffId(String(employee.staff_id ?? '').trim()))
             .filter(Boolean)
         )
@@ -6036,7 +6055,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       const extraFromTypedStaffId = () => {
         const normalized = normalizeStaffId(searchValue);
-        return isValidStaffIdValue(normalized) ? normalized : null;
+        return isValidPunchStaffId(normalized) ? normalized : null;
       };
 
       const runQuery = async () => {
@@ -6287,6 +6306,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               if (!trimmed) return [] as string[];
               return [trimmed, trimmed.toUpperCase(), trimmed.toLowerCase(), normalizeStaffId(trimmed)];
             })
+            .filter((id) => isAttendanceQueryableStaffId(id))
             .filter(Boolean)
         )
       );
@@ -13533,7 +13553,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       earlyRows: filterDailyListDisplayRows(validCountedEarlyRows),
       lateRows: filterDailyListDisplayRows(validCountedLateRows)
     };
-  }, [serverTime, dailyListDateInput, employees, scheduleRowsByStaffDayIndex, employeeProfileByStaffId, employeeShiftByStaffId]);
+  }, [
+    serverTime,
+    dailyListDateInput,
+    employees,
+    scheduleRowsByStaffDayIndex,
+    employeeProfileByStaffId,
+    employeeShiftByStaffId,
+    activePositionNames,
+    allPositionNames
+  ]);
+  const dailyListVisiblePositions = useMemo(() => {
+    const sourcePositions = activePositionNames.length > 0 ? activePositionNames : FALLBACK_DAILY_LIST_VISIBLE_POSITIONS;
+    return sourcePositions.filter((position) => normalizeDailyListPositionKey(position) !== 'FLEX TEAM');
+  }, [activePositionNames, allPositionNames]);
   const dailyListCapacityByRowKey = useMemo(() => {
     const map = new Map<string, DailyListCapacityView>();
     const addRow = (row: DailyListRow) => {
@@ -13571,17 +13604,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     addRows(tomorrowDailyList.countedEarlyRows, 'early');
     addRows(tomorrowDailyList.countedLateRows, 'late');
     return (['early', 'late'] as const).flatMap((shift) =>
-      DAILY_LIST_LIGHT_POSITIONS.map((position) => ({
+      dailyListVisiblePositions.map((position) => ({
         key: `${shift}:${position}`,
         shift,
         position,
         count: countByKey[`${shift}:${position}`] ?? 0
       }))
     );
-  }, [tomorrowDailyList]);
+  }, [tomorrowDailyList, dailyListVisiblePositions]);
   const tomorrowPositionSummaryCards = useMemo(
     () =>
-      DAILY_LIST_VISIBLE_POSITIONS.map((position) => {
+      dailyListVisiblePositions.map((position) => {
         const early = tomorrowAttendanceCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
         const late = tomorrowAttendanceCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
         const recommendedRows = scheduleRecommendedAdjustedByDate[tomorrowDailyList.targetDate] ?? [];
@@ -13615,17 +13648,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           total: early + late
         };
     }),
-    [tomorrowAttendanceCards, scheduleRecommendedAdjustedByDate, tomorrowDailyList, dailyListCapacityByRowKey]
+    [dailyListVisiblePositions, tomorrowAttendanceCards, scheduleRecommendedAdjustedByDate, tomorrowDailyList, dailyListCapacityByRowKey]
   );
   const selectedDailyFilterPositions = useMemo(
-    () => DAILY_LIST_VISIBLE_POSITIONS.filter((position) => Boolean(dailyListFilterPositions[position])),
-    [dailyListFilterPositions]
+    () => dailyListVisiblePositions.filter((position) => Boolean(dailyListFilterPositions[position])),
+    [dailyListVisiblePositions, dailyListFilterPositions]
   );
   const tomorrowDailyRowsDisplayed = useMemo(() => {
     if (selectedDailyFilterPositions.length === 0) {
       return { earlyRows: tomorrowDailyList.earlyRows, lateRows: tomorrowDailyList.lateRows };
     }
-    const allowed = new Set<DailyListLightPosition>(selectedDailyFilterPositions);
+    const allowed = new Set<string>(selectedDailyFilterPositions);
     const match = (row: DailyListRow) => {
       const pos = normalizeDailyListPositionKey(String(row.position ?? '').trim());
       return Boolean(pos && allowed.has(pos));
@@ -16563,7 +16596,7 @@ ${rowsToHtml(late)}
                               <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                                 {t('筛选', 'Filter')}
                               </span>
-                              {DAILY_LIST_VISIBLE_POSITIONS.map((position) => (
+                              {dailyListVisiblePositions.map((position) => (
                                 <button
                                   key={`filter-${position}`}
                                   type="button"
@@ -17781,9 +17814,3 @@ ${rowsToHtml(late)}
     </div>
   );
 }
-
-
-
-
-
-

@@ -2,7 +2,7 @@ export const DAILY_LIST_LIGHTS_KEY = 'daily_list_position_lights';
 
 export const DAILY_LIST_LIGHT_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
 
-export type DailyListLightPosition = (typeof DAILY_LIST_LIGHT_POSITIONS)[number];
+export type DailyListLightPosition = string;
 
 export type DailyListLightFlags = Record<DailyListLightPosition, boolean>;
 
@@ -15,8 +15,11 @@ export const createEmptyDailyListLightFlags = (): DailyListLightFlags => ({
   'FLEX TEAM': false
 });
 
+const normalizePositionName = (value: unknown) => String(value ?? '').trim().replace(/\s+/g, ' ');
+
 export const normalizeDailyListLightPosition = (value: unknown): DailyListLightPosition | '' => {
-  const normalized = String(value ?? '').trim().toLowerCase();
+  const trimmed = normalizePositionName(value);
+  const normalized = trimmed.toLowerCase();
   if (!normalized) return '';
   if (normalized === 'pick') return 'Pick';
   if (normalized === 'pack') return 'Pack';
@@ -38,7 +41,7 @@ export const normalizeDailyListLightPosition = (value: unknown): DailyListLightP
   ) {
     return 'FLEX TEAM';
   }
-  return '';
+  return trimmed;
 };
 
 const isDateOnlyValue = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);

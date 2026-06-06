@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronDown, Clock3, LayoutDashboard, LogIn, LogOut, Shield, UserRound, Waypoints } from 'lucide-react';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib/supabase';
-import { isValidStaffId, normalizeStaffId } from './lib/staffId';
+import { isValidPunchStaffId, normalizeStaffId } from './lib/staffId';
 import { submitPunchToApi } from './lib/punchApi';
 import { formatPunchFailureSummary } from './lib/punchDisplay';
 import { LABEL_TONE_KEYS, type LabelToneKey, loadLabelToneMap } from './lib/labelTone';
@@ -554,7 +554,7 @@ export default function App() {
 
   const [staffId, setStaffId] = useState('');
   const normalizedId = useMemo(() => normalizeStaffId(staffId), [staffId]);
-  const isValidId = useMemo(() => isValidStaffId(normalizedId), [normalizedId]);
+  const isValidId = useMemo(() => isValidPunchStaffId(normalizedId), [normalizedId]);
 
   const defaultUiStatusMessage = 'Enter US ID to start punch';
   const [uiStatus, setUiStatus] = useState<Status>({ tone: 'idle', message: defaultUiStatusMessage });
@@ -1362,8 +1362,8 @@ export default function App() {
     }
     if (mode === 'borrow') {
       staffId = normalizeStaffId(deviceBorrowStaffId);
-      if (!isValidStaffId(staffId)) {
-        reportDeviceFailure('Invalid USID.');
+      if (!isValidPunchStaffId(staffId)) {
+        reportDeviceFailure('Invalid staff ID.');
         return;
       }
       const lastPunch = await fetchLastPunch(staffId);
@@ -2766,7 +2766,7 @@ const fetchPunchBoardUph = async (
       return;
     }
     if (!isValidId) {
-      setUiStatus({ tone: 'error', message: 'Invalid staff ID format (example: US010454).' });
+      setUiStatus({ tone: 'error', message: 'Invalid staff ID format.' });
       playError();
       return;
     }
@@ -2885,7 +2885,7 @@ const fetchPunchBoardUph = async (
       return;
     }
     if (!isValidId) {
-      setUiStatus({ tone: 'error', message: 'Invalid staff ID format (example: US010454).' });
+      setUiStatus({ tone: 'error', message: 'Invalid staff ID format.' });
       setLastPunchSummary({ status: 'error', message: 'Invalid staff ID', at: new Date().toISOString() });
       playError();
       return;
@@ -3055,7 +3055,7 @@ const fetchPunchBoardUph = async (
       return;
     }
     if (!isValidId) {
-      setUiStatus({ tone: 'error', message: 'Invalid staff ID format (example: US010454).' });
+      setUiStatus({ tone: 'error', message: 'Invalid staff ID format.' });
       return;
     }
 
