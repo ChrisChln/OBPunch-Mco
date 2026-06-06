@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronDown, Clock3, LayoutDashboard, LogIn, LogOut, Shield, UserRound, Waypoints } from 'lucide-react';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib/supabase';
 import { isValidStaffId, normalizeStaffId } from './lib/staffId';
+import { submitPunchToApi } from './lib/punchApi';
 import { LABEL_TONE_KEYS, type LabelToneKey, loadLabelToneMap } from './lib/labelTone';
 import { getBarcodePromptGroupKey, getBarcodePrompts, getRandomBarcodePromptIndex } from './lib/barcodePrompt';
 import { isScheduleOnlyAgency } from './shared/agencyRules';
@@ -2827,19 +2828,10 @@ const fetchPunchBoardUph = async (
         return;
       }
 
-      const { error } = await supabase.from('ob_punches').insert([
-        {
-          staff_id: normalizedId,
-          action,
-          metadata: {
-            device: 'web_browser',
-            user_agent: navigator.userAgent
-          }
-        }
-      ]);
+      const punchRes = await submitPunchToApi({ staffId: normalizedId, action });
 
-      if (error) {
-        setUiStatus({ tone: 'error', message: `Punch failed: ${error.message}` });
+      if (!punchRes.ok) {
+        setUiStatus({ tone: 'error', message: `Punch failed: ${punchRes.error}` });
         setLastPunchSummary({ status: 'error', message: 'Punch failed', at: new Date().toISOString() });
         playError();
         return;
