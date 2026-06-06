@@ -1,6 +1,6 @@
-import { isValidStaffId, normalizeStaffId } from '../src/lib/staffId';
-import { isScheduleOnlyAgency } from '../src/shared/agencyRules';
-import { isEmployeeTerminated } from '../src/shared/employeeStatus';
+import { isValidStaffId, normalizeStaffId } from '../src/lib/staffId.js';
+import { isScheduleOnlyAgency } from '../src/shared/agencyRules.js';
+import { isEmployeeTerminated } from '../src/shared/employeeStatus.js';
 
 export type PunchAction = 'IN' | 'OUT';
 
@@ -39,10 +39,12 @@ type QueryResponse<T> = {
   error?: { message?: string } | null;
 };
 
+type MutationResponse = PromiseLike<{ error?: { message?: string } | null }>;
+
 type SupabaseLike = {
   from: (table: string) => {
     select?: (columns: string) => unknown;
-    insert?: (rows: unknown[]) => Promise<{ error?: { message?: string } | null }>;
+    insert?: (rows: unknown[]) => MutationResponse;
   };
 };
 

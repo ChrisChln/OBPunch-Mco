@@ -3,6 +3,7 @@ import { AlertCircle, ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronDown, Cl
 import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib/supabase';
 import { isValidStaffId, normalizeStaffId } from './lib/staffId';
 import { submitPunchToApi } from './lib/punchApi';
+import { formatPunchFailureSummary } from './lib/punchDisplay';
 import { LABEL_TONE_KEYS, type LabelToneKey, loadLabelToneMap } from './lib/labelTone';
 import { getBarcodePromptGroupKey, getBarcodePrompts, getRandomBarcodePromptIndex } from './lib/barcodePrompt';
 import { isScheduleOnlyAgency } from './shared/agencyRules';
@@ -2832,7 +2833,7 @@ const fetchPunchBoardUph = async (
 
       if (!punchRes.ok) {
         setUiStatus({ tone: 'error', message: `Punch failed: ${punchRes.error}` });
-        setLastPunchSummary({ status: 'error', message: 'Punch failed', at: new Date().toISOString() });
+        setLastPunchSummary({ status: 'error', message: formatPunchFailureSummary(punchRes.error), at: new Date().toISOString() });
         playError();
         return;
       }
