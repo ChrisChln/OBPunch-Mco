@@ -137,8 +137,8 @@ export const submitPunchWithServiceRole = async (
     return { ok: false, status: 409, error: getNextActionError(latestAction) };
   }
 
-  const insert = supabase.from('ob_punches').insert;
-  if (!insert) {
+  const punchInsertBuilder = supabase.from('ob_punches');
+  if (!punchInsertBuilder.insert) {
     return { ok: false, status: 500, error: 'Punch insert is not available.' };
   }
 
@@ -151,9 +151,9 @@ export const submitPunchWithServiceRole = async (
       user_agent: String(request.userAgent ?? '')
     }
   };
-  const insertRes = await insert([rowWithMetadata]);
+  const insertRes = await punchInsertBuilder.insert([rowWithMetadata]);
   if (insertRes.error && isMissingMetadataColumnError(insertRes.error)) {
-    const fallbackRes = await insert([
+    const fallbackRes = await punchInsertBuilder.insert([
       {
         staff_id: staffId,
         action: request.action
