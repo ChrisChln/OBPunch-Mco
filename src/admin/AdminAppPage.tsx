@@ -941,65 +941,99 @@ const getDefaultPositionToneKey = (value: string): LabelToneKey => {
 
 const POSITION_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
   sky: 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]',
+  cyan: 'badge-elevated-dark border-cyan-300/30 text-cyan-100 bg-cyan-400/[0.13]',
+  teal: 'badge-elevated-dark border-teal-300/30 text-teal-100 bg-teal-400/[0.13]',
   emerald: 'badge-elevated-dark border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]',
+  lime: 'badge-elevated-dark border-lime-300/30 text-lime-100 bg-lime-400/[0.13]',
   amber: 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]',
-  violet: 'badge-elevated-dark border-violet-300/30 text-violet-100 bg-violet-400/[0.13]',
+  orange: 'badge-elevated-dark border-orange-300/30 text-orange-100 bg-orange-400/[0.13]',
   rose: 'badge-elevated-dark border-rose-300/30 text-rose-100 bg-rose-400/[0.13]',
+  fuchsia: 'badge-elevated-dark border-fuchsia-300/30 text-fuchsia-100 bg-fuchsia-400/[0.13]',
+  violet: 'badge-elevated-dark border-violet-300/30 text-violet-100 bg-violet-400/[0.13]',
+  indigo: 'badge-elevated-dark border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]',
   slate: 'badge-elevated-dark border-white/12 text-slate-200 bg-white/[0.05]'
 };
 
 const POSITION_TONE_CLASS_LIGHT: Record<LabelToneKey, string> = {
   sky: 'badge-elevated-light border-sky-300 bg-sky-50 text-sky-700',
+  cyan: 'badge-elevated-light border-cyan-300 bg-cyan-50 text-cyan-700',
+  teal: 'badge-elevated-light border-teal-300 bg-teal-50 text-teal-700',
   emerald: 'badge-elevated-light border-emerald-300 bg-emerald-50 text-emerald-700',
+  lime: 'badge-elevated-light border-lime-300 bg-lime-50 text-lime-700',
   amber: 'badge-elevated-light border-amber-300 bg-amber-50 text-amber-700',
-  violet: 'badge-elevated-light border-violet-300 bg-violet-50 text-violet-700',
+  orange: 'badge-elevated-light border-orange-300 bg-orange-50 text-orange-700',
   rose: 'badge-elevated-light border-rose-300 bg-rose-50 text-rose-700',
+  fuchsia: 'badge-elevated-light border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700',
+  violet: 'badge-elevated-light border-violet-300 bg-violet-50 text-violet-700',
+  indigo: 'badge-elevated-light border-indigo-300 bg-indigo-50 text-indigo-700',
   slate: 'badge-elevated-light border-slate-300 bg-slate-100 text-slate-700'
 };
 
-const getPositionBadgeClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
-  const pos = normalizeAllowedPosition(value);
-  const tone = (pos ? toneMap?.[pos] : undefined) ?? getDefaultPositionToneKey(value);
+type PositionToneMap = Record<string, LabelToneKey>;
+
+const normalizePositionToneKey = (value: string) => normalizeAllowedPosition(value) || String(value ?? '').trim().replace(/\s+/g, ' ');
+
+const getPositionToneFromMap = (value: string, toneMap?: Partial<PositionToneMap>) => {
+  const key = normalizePositionToneKey(value);
+  return (key ? toneMap?.[key] : undefined) ?? getDefaultPositionToneKey(value);
+};
+
+const getPositionBadgeClass = (value: string, toneMap?: Partial<PositionToneMap>) => {
+  const tone = getPositionToneFromMap(value, toneMap);
   return POSITION_TONE_CLASS_DARK[tone] ?? POSITION_TONE_CLASS_DARK.slate;
 };
-const getPositionBadgeClassLight = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
-  const pos = normalizeAllowedPosition(value);
-  const tone = (pos ? toneMap?.[pos] : undefined) ?? getDefaultPositionToneKey(value);
+const getPositionBadgeClassLight = (value: string, toneMap?: Partial<PositionToneMap>) => {
+  const tone = getPositionToneFromMap(value, toneMap);
   return POSITION_TONE_CLASS_LIGHT[tone] ?? POSITION_TONE_CLASS_LIGHT.slate;
 };
 const HOME_CARD_TONE_CLASS: Record<LabelToneKey, string> = {
   sky: 'border-sky-400/35 bg-sky-500/[0.05]',
+  cyan: 'border-cyan-400/35 bg-cyan-500/[0.05]',
+  teal: 'border-teal-400/35 bg-teal-500/[0.05]',
   emerald: 'border-emerald-400/35 bg-emerald-500/[0.05]',
+  lime: 'border-lime-400/35 bg-lime-500/[0.05]',
   amber: 'border-amber-400/35 bg-amber-500/[0.05]',
-  violet: 'border-violet-400/35 bg-violet-500/[0.05]',
+  orange: 'border-orange-400/35 bg-orange-500/[0.05]',
   rose: 'border-rose-400/35 bg-rose-500/[0.05]',
+  fuchsia: 'border-fuchsia-400/35 bg-fuchsia-500/[0.05]',
+  violet: 'border-violet-400/35 bg-violet-500/[0.05]',
+  indigo: 'border-indigo-400/35 bg-indigo-500/[0.05]',
   slate: 'border-white/15 bg-white/5'
 };
 const HOME_CHIP_TONE_CLASS: Record<LabelToneKey, string> = {
   sky: 'border border-sky-400/40 bg-sky-500/15 text-sky-100',
+  cyan: 'border border-cyan-400/40 bg-cyan-500/15 text-cyan-100',
+  teal: 'border border-teal-400/40 bg-teal-500/15 text-teal-100',
   emerald: 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-100',
+  lime: 'border border-lime-400/40 bg-lime-500/15 text-lime-100',
   amber: 'border border-amber-400/40 bg-amber-500/15 text-amber-100',
-  violet: 'border border-violet-400/40 bg-violet-500/15 text-violet-100',
+  orange: 'border border-orange-400/40 bg-orange-500/15 text-orange-100',
   rose: 'border border-rose-400/40 bg-rose-500/15 text-rose-100',
+  fuchsia: 'border border-fuchsia-400/40 bg-fuchsia-500/15 text-fuchsia-100',
+  violet: 'border border-violet-400/40 bg-violet-500/15 text-violet-100',
+  indigo: 'border border-indigo-400/40 bg-indigo-500/15 text-indigo-100',
   slate: 'bg-white/10 text-slate-300'
 };
 const HOME_PANEL_TONE_CLASS: Record<LabelToneKey, string> = {
   sky: 'border border-sky-400/20 bg-sky-950/35',
+  cyan: 'border border-cyan-400/20 bg-cyan-950/35',
+  teal: 'border border-teal-400/20 bg-teal-950/35',
   emerald: 'border border-emerald-400/20 bg-emerald-950/35',
+  lime: 'border border-lime-400/20 bg-lime-950/35',
   amber: 'border border-amber-400/20 bg-amber-950/35',
-  violet: 'border border-violet-400/20 bg-violet-950/35',
+  orange: 'border border-orange-400/20 bg-orange-950/35',
   rose: 'border border-rose-400/20 bg-rose-950/35',
+  fuchsia: 'border border-fuchsia-400/20 bg-fuchsia-950/35',
+  violet: 'border border-violet-400/20 bg-violet-950/35',
+  indigo: 'border border-indigo-400/20 bg-indigo-950/35',
   slate: 'bg-black/30'
 };
-const getHomeToneKey = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => {
-  const pos = normalizeAllowedPosition(value);
-  return (pos ? toneMap?.[pos] : undefined) ?? getDefaultPositionToneKey(value);
-};
-const getHomeCardToneClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) =>
+const getHomeToneKey = (value: string, toneMap?: Partial<PositionToneMap>) => getPositionToneFromMap(value, toneMap);
+const getHomeCardToneClass = (value: string, toneMap?: Partial<PositionToneMap>) =>
   HOME_CARD_TONE_CLASS[getHomeToneKey(value, toneMap)] ?? HOME_CARD_TONE_CLASS.slate;
-const getHomeChipToneClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) =>
+const getHomeChipToneClass = (value: string, toneMap?: Partial<PositionToneMap>) =>
   HOME_CHIP_TONE_CLASS[getHomeToneKey(value, toneMap)] ?? HOME_CHIP_TONE_CLASS.slate;
-const getHomePanelToneClass = (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) =>
+const getHomePanelToneClass = (value: string, toneMap?: Partial<PositionToneMap>) =>
   HOME_PANEL_TONE_CLASS[getHomeToneKey(value, toneMap)] ?? HOME_PANEL_TONE_CLASS.slate;
 
 const ORDINAL_CN = ['第一次', '第二次', '第三次', '第四次', '第五次', '第六次', '第七次', '第八次', '第九次', '第十次'];
@@ -1935,7 +1969,7 @@ export default function AdminAppPage() {
   const [scheduleSearchInput, setScheduleSearchInput] = useState('');
   const [schedulePosition, setSchedulePosition] = useState<string>('');
   const [scheduleEmploymentType, setScheduleEmploymentType] = useState<'' | EmploymentType>('');
-  const [schedulePositionToneByPosition, setSchedulePositionToneByPosition] = useState<Record<AllowedPosition, LabelToneKey>>({
+  const [schedulePositionToneByPosition, setSchedulePositionToneByPosition] = useState<PositionToneMap>({
     Pick: 'sky',
     Pack: 'emerald',
     Rebin: 'amber',
@@ -1948,6 +1982,7 @@ export default function AdminAppPage() {
   const [scheduleLabelToneByName, setScheduleLabelToneByName] = useState<Record<string, LabelToneKey>>(() =>
     loadLabelToneMap()
   );
+  const [schedulePositionTonePicker, setSchedulePositionTonePicker] = useState<string | null>(null);
   const [scheduleShift, setScheduleShift] = useState<'' | 'early' | 'late'>('');
   const [schedulePickerShowMore, setSchedulePickerShowMore] = useState(false);
   const [scheduleSortByUphDesc, setScheduleSortByUphDesc] = useState(false);
@@ -2367,9 +2402,9 @@ export default function AdminAppPage() {
     return next;
   };
 
-  const normalizePositionToneMap = (value: unknown): Record<AllowedPosition, LabelToneKey> => {
+  const normalizePositionToneMap = (value: unknown): PositionToneMap => {
     const raw = (value ?? {}) as Record<string, unknown>;
-    const next: Record<AllowedPosition, LabelToneKey> = {
+    const next: PositionToneMap = {
       Pick: 'sky',
       Pack: 'emerald',
       Rebin: 'amber',
@@ -2378,8 +2413,10 @@ export default function AdminAppPage() {
       'Water Spider': 'sky',
       'FLEX TEAM': 'slate'
     };
-    for (const pos of ALLOWED_POSITIONS) {
-      const tone = String(raw[pos] ?? '').trim() as LabelToneKey;
+    for (const [rawPosition, rawTone] of Object.entries(raw)) {
+      const pos = normalizePositionToneKey(rawPosition);
+      const tone = String(rawTone ?? '').trim() as LabelToneKey;
+      if (!pos) continue;
       if (!LABEL_TONE_KEYS.includes(tone)) continue;
       next[pos] = tone;
     }
@@ -2433,7 +2470,7 @@ export default function AdminAppPage() {
     }
   };
 
-  const saveSchedulePositionToneGlobal = async (next: Record<AllowedPosition, LabelToneKey>) => {
+  const saveSchedulePositionToneGlobal = async (next: PositionToneMap) => {
     if (!supabase) return;
     const nowIso = new Date(serverTime).toISOString();
     const payload = {
@@ -11508,46 +11545,21 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       let addedCount = 0;
       let deletedCount = 0;
       if (changed.length > 0) {
-        const changedIds = changed.map((item) => item.rowId);
-        const prevRowsRes = await supabase.from('ob_punches').select('id, metadata').in('id', changedIds as any[]);
-        if (prevRowsRes.error) {
-          saveFailed = true;
-          setTimecardPunchError(prevRowsRes.error.message);
-          return;
-        }
-        const prevMetaById = new Map<string, any>();
-        for (const rec of ((prevRowsRes.data as any[]) ?? [])) {
-          const id = String(rec?.id ?? '').trim();
-          if (!id) continue;
-          prevMetaById.set(id, rec?.metadata ?? null);
-        }
-
         const editedAtIso = new Date(serverTime).toISOString();
         for (const batch of chunk(changed, 20)) {
           const updateJobs = batch.map(async (item) => {
             const createdAt = parseLocalDateTimeInputValue(item.edit.atLocal);
             if (!createdAt) return { ok: false as const, error: '时间格式不正确。', item };
-            const prevMeta = prevMetaById.get(item.rowId);
-            const nextMeta =
-              prevMeta && typeof prevMeta === 'object'
-                ? {
-                    ...prevMeta,
-                    device: 'admin_console',
-                    kind: 'manual_edit',
-                    manual: true,
-                    operator: user?.email ?? null,
-                    edited_at: editedAtIso
-                  }
-                : {
-                    device: 'admin_console',
-                    kind: 'manual_edit',
-                    manual: true,
-                    operator: user?.email ?? null,
-                    edited_at: editedAtIso
-                  };
             const { error } = await supabase
               .from('ob_punches')
-              .update({ action: item.edit.action, created_at: createdAt, metadata: nextMeta })
+              .update({
+                action: item.edit.action,
+                created_at: createdAt,
+                device: 'admin_console',
+                source: 'manual_edit',
+                operator: user?.email ?? null,
+                note: `manual_edit:${editedAtIso}`
+              })
               .eq('id', item.rowId);
             if (error) return { ok: false as const, error: error.message, item };
             return { ok: true as const, item, createdAt };
@@ -11584,12 +11596,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               staff_id: staff,
               action: edit.action,
               created_at: createdAt,
-              metadata: {
-                device: 'admin_console',
-                kind: 'manual_add',
-                manual: true,
-                operator: user?.email ?? null
-              }
+              device: 'admin_console',
+              source: 'manual_add',
+              operator: user?.email ?? null,
+              note: 'manual_add'
             };
           })
           .filter(Boolean) as Array<Record<string, unknown>>;
@@ -13753,10 +13763,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const getSchedulePositionBadgeClassLight = (position: string) =>
     getPositionBadgeClassLight(position, schedulePositionToneByPosition);
   const scheduleLabelDefaultToneByName = useMemo(() => {
-    const positionCountByLabel: Record<string, Partial<Record<AllowedPosition, number>>> = {};
+    const positionCountByLabel: Record<string, Record<string, number>> = {};
     for (const employee of employees) {
       const label = String(employee.label ?? employee.Label ?? '').trim();
-      const position = normalizeAllowedPosition(String(employee.position ?? employee.Position ?? '').trim());
+      const position = normalizePositionToneKey(String(employee.position ?? employee.Position ?? '').trim());
       if (!label || !position) continue;
       const key = label.toLowerCase();
       const next = positionCountByLabel[key] ?? {};
@@ -13765,9 +13775,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     const toneByLabel: Record<string, LabelToneKey> = {};
     for (const [labelKey, counts] of Object.entries(positionCountByLabel)) {
-      let topPosition: AllowedPosition | '' = '';
+      let topPosition = '';
       let topCount = -1;
-      for (const pos of ALLOWED_POSITIONS) {
+      for (const pos of Object.keys(counts)) {
         const count = Number(counts[pos] ?? 0);
         if (count > topCount) {
           topCount = count;
@@ -13784,13 +13794,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (!key) return 'slate';
     return scheduleLabelToneByName[key] ?? scheduleLabelDefaultToneByName[key] ?? 'slate';
   };
-  const cycleSchedulePositionTone = (position: AllowedPosition) => {
-    setSchedulePositionToneByPosition((prev) => {
-      const current = prev[position] ?? getDefaultPositionToneKey(position);
-      const idx = LABEL_TONE_KEYS.indexOf(current);
-      const next = LABEL_TONE_KEYS[(idx + 1) % LABEL_TONE_KEYS.length];
-      return { ...prev, [position]: next };
-    });
+  const setSchedulePositionTone = (position: string, tone: LabelToneKey) => {
+    const key = normalizePositionToneKey(position);
+    if (!key) return;
+    setSchedulePositionToneByPosition((prev) => ({ ...prev, [key]: tone }));
   };
   const getScheduleLabelToneClass = (label: string) => POSITION_TONE_CLASS_DARK[getScheduleLabelTone(label)] ?? POSITION_TONE_CLASS_DARK.slate;
   const cycleScheduleLabelTone = (label: string) => {
@@ -14733,10 +14740,16 @@ ${rowsToHtml(late)}
         .replace(/'/g, '&#39;');
     const PRINT_LABEL_TINT_BY_TONE: Record<LabelToneKey, string> = {
       sky: '#eaf5ff',
+      cyan: '#e6fbff',
+      teal: '#e8fbf7',
       emerald: '#ecfbf5',
+      lime: '#f1fbdc',
       amber: '#fff6db',
-      violet: '#f4efff',
+      orange: '#fff1df',
       rose: '#ffeef4',
+      fuchsia: '#fdf0ff',
+      violet: '#f4efff',
+      indigo: '#eef2ff',
       slate: '#f1f5f9'
     };
     const getLabelTint = (label: string) => {
@@ -15545,7 +15558,8 @@ ${rowsToHtml(late)}
                             </span>
                           </div>
                           {activePositionNames.map((p) => {
-                            const allowedPosition = normalizeAllowedPosition(p);
+                            const currentTone = getPositionToneFromMap(p, schedulePositionToneByPosition);
+                            const tonePickerOpen = schedulePositionTonePicker === p;
                             return (
                             <div
                               key={`pos-tone-${p}`}
@@ -15563,7 +15577,7 @@ ${rowsToHtml(late)}
                                 }
                               }}
                               className={[
-                                'flex cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-sm transition',
+                                'relative flex cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-sm transition',
                                 schedulePosition === p
                                   ? themeMode === 'light'
                                     ? 'border-emerald-700/50 bg-emerald-100 text-emerald-900'
@@ -15580,26 +15594,66 @@ ${rowsToHtml(late)}
                                 {p}
                               </span>
                               <div className="ml-2 flex items-center">
-                                {allowedPosition ? (
-                                  <button
-                                    type="button"
-                                    disabled={isLocked}
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      cycleSchedulePositionTone(allowedPosition);
-                                    }}
-                                    title={t('点击切换岗位颜色', 'Click to cycle position color')}
-                                    className={[
-                                      'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition',
-                                      getSchedulePositionBadgeClass(p),
-                                      isLocked ? 'cursor-not-allowed opacity-60' : 'hover:brightness-110'
-                                    ].join(' ')}
-                                  >
-                                    {t('颜色', 'Color')}
-                                  </button>
-                                ) : null}
+                                <button
+                                  type="button"
+                                  disabled={isLocked}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setSchedulePositionTonePicker((current) => (current === p ? null : p));
+                                  }}
+                                  title={t('选择岗位颜色', 'Choose position color')}
+                                  className={[
+                                    'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition',
+                                    getSchedulePositionBadgeClass(p),
+                                    isLocked ? 'cursor-not-allowed opacity-60' : 'hover:brightness-110'
+                                  ].join(' ')}
+                                >
+                                  {t('颜色', 'Color')}
+                                </button>
                               </div>
+                              {tonePickerOpen && (
+                                <div
+                                  role="dialog"
+                                  aria-label={t('选择岗位颜色', 'Choose position color')}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                  }}
+                                  className={[
+                                    'absolute right-2 top-[calc(100%+6px)] z-30 w-[236px] rounded-xl border p-2 shadow-2xl backdrop-blur',
+                                    themeMode === 'light'
+                                      ? 'border-slate-200 bg-white/95 text-slate-900'
+                                      : 'border-white/12 bg-slate-950/95 text-slate-100'
+                                  ].join(' ')}
+                                >
+                                  <div className="grid grid-cols-4 gap-1.5">
+                                    {LABEL_TONE_KEYS.map((tone) => {
+                                      const selected = tone === currentTone;
+                                      return (
+                                        <button
+                                          key={`${p}-${tone}`}
+                                          type="button"
+                                          disabled={isLocked}
+                                          onClick={() => {
+                                            setSchedulePositionTone(p, tone);
+                                            setSchedulePositionTonePicker(null);
+                                          }}
+                                          className={[
+                                            'inline-flex h-8 items-center justify-center rounded-lg border px-1 text-[10px] font-semibold uppercase transition',
+                                            POSITION_TONE_CLASS_DARK[tone] ?? POSITION_TONE_CLASS_DARK.slate,
+                                            selected ? 'ring-2 ring-white/70' : 'hover:brightness-110',
+                                            isLocked ? 'cursor-not-allowed opacity-60' : ''
+                                          ].join(' ')}
+                                          title={tone}
+                                        >
+                                          {tone}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                             );
                           })}

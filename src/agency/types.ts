@@ -22,6 +22,10 @@ export type AgencyEmployeeRow = {
   has_absent: boolean;
   has_late: boolean;
   termination_status: string | null;
+  driver_group_code: string;
+  driver_group_role: 'driver' | 'member' | '';
+  driver_group_label: string;
+  agency_note: string;
 };
 
 export type AgencyScheduleState =
@@ -67,6 +71,10 @@ export type AgencyWeekScheduleRow = {
   label: string;
   fixed_work_count: number;
   termination_status: string | null;
+  driver_group_code: string;
+  driver_group_role: 'driver' | 'member' | '';
+  driver_group_label: string;
+  agency_note: string;
   days: AgencyWeekScheduleCell[];
 };
 
@@ -74,6 +82,23 @@ export type AgencyWeekSchedule = {
   week_dates: string[];
   employees: AgencyWeekScheduleRow[];
   new_hire_requests: AgencyWeekNewHireRequest[];
+  driver_groups: AgencyDriverGroupSummary[];
+};
+
+export type AgencyDriverGroupRole = 'driver' | 'member';
+
+export type AgencyDriverGroupAssignment = {
+  code: string;
+  role: AgencyDriverGroupRole;
+  label: string;
+};
+
+export type AgencyDriverGroupSummary = {
+  code: string;
+  activeMemberCount: number;
+  memberCount: number;
+  driverCount: number;
+  labels: string[];
 };
 
 export type AgencyNewHireRequestRow = {
