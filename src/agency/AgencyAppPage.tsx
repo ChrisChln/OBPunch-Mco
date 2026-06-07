@@ -22,6 +22,7 @@ import {
   fetchAgencyPunchPresenceStaffIds,
   fetchAgencyScheduleWeek,
   fetchAgencyUserDisplayName,
+  setAgencyDriverGroupIndividual,
   setAgencyScheduleState,
   upsertAgencyEmployeeNote,
   upsertAgencyDriverGroup,
@@ -39,7 +40,7 @@ import type {
   AgencyWeekSchedule
 } from './types';
 
-type ModalState = 'new_hire' | 'termination' | 'driver_group' | null;
+type ModalState = 'new_hire' | 'termination' | 'driver_group' | 'employee_note' | null;
 type NoticeTone = 'error' | 'info';
 
 type NoticeState = {
@@ -66,6 +67,7 @@ type DriverGroupFormState = {
   code: string;
   driverStaffId: string;
   memberStaffIds: string[];
+  sourceStaffId: string;
 };
 
 type SchedulePickerState = {
@@ -623,10 +625,12 @@ export default function AgencyAppPage() {
   const [modal, setModal] = useState<ModalState>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<AgencyEmployeeRow | null>(null);
   const [selectedNewHire, setSelectedNewHire] = useState<AgencyNewHireRequestRow | null>(null);
+  const [selectedNoteEmployee, setSelectedNoteEmployee] = useState<AgencyEmployeeRow | null>(null);
   const [driverGroupForm, setDriverGroupForm] = useState<DriverGroupFormState>({
     code: '1',
     driverStaffId: '',
-    memberStaffIds: []
+    memberStaffIds: [],
+    sourceStaffId: ''
   });
   const [terminationReason, setTerminationReason] = useState('');
   const [newHireForm, setNewHireForm] = useState<AgencyUpsertNewHireInput>({
@@ -1046,6 +1050,7 @@ export default function AgencyAppPage() {
     setModal(null);
     setSelectedEmployee(null);
     setSelectedNewHire(null);
+    setSelectedNoteEmployee(null);
     setTerminationReason('');
   };
 
@@ -1061,14 +1066,17 @@ export default function AgencyAppPage() {
     setDeleteDriverGroupConfirm(null);
   };
 
-  const openDriverGroupModal = (code?: string) => {
+  const openDriverGroupModal = (code?: string, seedEmployee?: AgencyEmployeeRow) => {
     const normalizedCode = String(code ?? nextDriverGroupCode).trim() || nextDriverGroupCode;
     const groupRows = employeeRows.filter((employee) => employee.driver_group_code === normalizedCode);
-    const driver = groupRows.find((employee) => employee.driver_group_role === 'driver') ?? groupRows[0] ?? null;
+    const seedStaffId = String(seedEmployee?.staff_id ?? '').trim();
+    const driver = groupRows.find((employee) => employee.driver_group_role === 'driver') ?? groupRows[0] ?? seedEmployee ?? null;
+    const memberStaffIds = Array.from(new Set([...groupRows.map((employee) => employee.staff_id), seedStaffId].filter(Boolean)));
     setDriverGroupForm({
       code: normalizedCode,
       driverStaffId: driver?.staff_id ?? '',
-      memberStaffIds: groupRows.map((employee) => employee.staff_id)
+      memberStaffIds,
+      sourceStaffId: seedStaffId
     });
     setModal('driver_group');
   };
@@ -1083,6 +1091,15 @@ export default function AgencyAppPage() {
     setSelectedEmployee(employee);
     setTerminationReason('');
     setModal('termination');
+  };
+
+  const openNoteModal = (employee: AgencyEmployeeRow) => {
+    setSelectedNoteEmployee(employee);
+    setNoteDrafts((previous) => ({
+      ...previous,
+      [employee.staff_id]: previous[employee.staff_id] ?? employee.agency_note ?? ''
+    }));
+    setModal('employee_note');
   };
 
   const requestCancelTermination = (employee: AgencyEmployeeRow) => {
@@ -1132,6 +1149,22 @@ export default function AgencyAppPage() {
     }
   };
 
+  const submitDriverGroupIndividual = async () => {
+    if (!supabase || !canOperateAgency) return;
+    const staffId = String(driverGroupForm.sourceStaffId ?? '').trim();
+    if (!staffId) return;
+    beginBusy('Saving group');
+    try {
+      await setAgencyDriverGroupIndividual(supabase, staffId);
+      closeModal();
+      await refreshBoard();
+    } catch (nextError) {
+      openNotice('error', nextError instanceof Error ? nextError.message : 'Driver group save failed.');
+    } finally {
+      endBusy();
+    }
+  };
+
   const submitEmployeeNote = async (employee: AgencyEmployeeRow) => {
     if (!supabase || !canOperateAgency) return;
     const nextNote = normalizeAgencyNote(noteDrafts[employee.staff_id] ?? '');
@@ -1150,6 +1183,9 @@ export default function AgencyAppPage() {
           employees: previous.employees.map((row) => (row.staff_id === employee.staff_id ? { ...row, agency_note: nextNote } : row))
         };
       });
+      setSelectedNoteEmployee((previous) =>
+        previous?.staff_id === employee.staff_id ? { ...previous, agency_note: nextNote } : previous
+      );
       setNoteDrafts((previous) => ({ ...previous, [employee.staff_id]: nextNote }));
     } catch (nextError) {
       openNotice('error', nextError instanceof Error ? nextError.message : 'Note save failed.');
@@ -1801,6 +1837,15 @@ export default function AgencyAppPage() {
   }, [summaryCards]);
 
   const useCompactNewSection = gapsByGroupOnSelectedDate.length > 0 && filteredNewHireRequests.length === 0;
+  const selectedNoteStaffId = selectedNoteEmployee?.staff_id ?? '';
+  const selectedNoteDraft = selectedNoteStaffId ? (noteDrafts[selectedNoteStaffId] ?? selectedNoteEmployee?.agency_note ?? '') : '';
+  const selectedNoteDirty =
+    Boolean(selectedNoteEmployee) && normalizeAgencyNote(selectedNoteDraft) !== normalizeAgencyNote(selectedNoteEmployee?.agency_note);
+  const selectedNoteSaving = selectedNoteStaffId ? savingNoteStaffIds.has(selectedNoteStaffId) : false;
+  const selectedDriverGroupEmployee = driverGroupForm.sourceStaffId
+    ? employeeRows.find((employee) => employee.staff_id === driverGroupForm.sourceStaffId) ?? null
+    : null;
+  const canSetSelectedDriverGroupIndividual = Boolean(selectedDriverGroupEmployee?.driver_group_code);
 
   if (!supabase) {
     return <div className="min-h-screen px-6 py-10 text-white">Missing Supabase configuration.</div>;
@@ -2137,9 +2182,6 @@ export default function AgencyAppPage() {
                     {visibleFilteredEmployees.map((employee, employeeIndex) => {
                       const weekEmployee = weekEmployeeByStaffId.get(employee.staff_id);
                       const isPendingTermination = employee.termination_status === 'pending' || weekEmployee?.termination_status === 'pending';
-                      const noteDraft = noteDrafts[employee.staff_id] ?? employee.agency_note ?? '';
-                      const normalizedNoteDraft = normalizeAgencyNote(noteDraft);
-                      const isNoteDirty = normalizedNoteDraft !== normalizeAgencyNote(employee.agency_note);
                       const isSavingNote = savingNoteStaffIds.has(employee.staff_id);
                       const isLastEmployeeRow = employeeIndex === visibleFilteredEmployees.length - 1;
                       const rowClass = isPendingTermination
@@ -2180,52 +2222,40 @@ export default function AgencyAppPage() {
                         {showAgencyColumn ? <td className="truncate px-1 py-2 text-slate-300">{employee.agency || '-'}</td> : null}
                         {showDriverGroupColumn ? (
                           <td className="px-1 py-2 text-center">
-                            {employee.driver_group_label ? (
-                              <span
-                                className={[
-                                  'inline-flex items-center justify-center rounded-full border px-2 py-1 text-[10px] font-semibold',
-                                  employee.driver_group_role === 'driver'
-                                    ? 'border-cyan-300/40 bg-cyan-500/15 text-cyan-100'
-                                    : 'border-white/12 bg-white/[0.05] text-slate-200'
-                                ].join(' ')}
-                              >
-                                {employee.driver_group_label}
-                              </span>
-                            ) : (
-                              <span className="text-slate-600">-</span>
-                            )}
+                            <button
+                              type="button"
+                              className={[
+                                'inline-flex min-w-10 items-center justify-center rounded-full border px-2 py-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-50',
+                                employee.driver_group_role === 'driver'
+                                  ? 'border-cyan-300/40 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/20'
+                                  : employee.driver_group_label
+                                    ? 'border-white/12 bg-white/[0.05] text-slate-200 hover:bg-white/10'
+                                    : 'border-emerald-300/25 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15'
+                              ].join(' ')}
+                              disabled={!canOperateAgency}
+                              onClick={() => openDriverGroupModal(employee.driver_group_code || undefined, employee)}
+                              title={employee.driver_group_label ? `Group ${employee.driver_group_label}` : 'Individual'}
+                            >
+                              {employee.driver_group_label || 'Individual'}
+                            </button>
                           </td>
                         ) : null}
                         {showNoteColumn ? (
                           <td className="px-1 py-2">
-                            <div className="flex items-center gap-1.5">
-                              <input
-                                type="text"
-                                value={noteDraft}
-                                maxLength={500}
-                                disabled={isPendingTermination || !canOperateAgency || isSavingNote}
-                                onChange={(event) => {
-                                  const value = event.target.value;
-                                  setNoteDrafts((previous) => ({ ...previous, [employee.staff_id]: value }));
-                                }}
-                                onBlur={() => {
-                                  if (isNoteDirty) void submitEmployeeNote(employee);
-                                }}
-                                className="h-8 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/25 px-2 text-xs text-slate-100 outline-none transition focus:border-cyan-300/60 disabled:cursor-not-allowed disabled:opacity-60"
-                                title={employee.agency_note || ''}
-                              />
                               <button
                                 type="button"
-                                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-45"
-                                disabled={!canOperateAgency || isPendingTermination || isSavingNote || !isNoteDirty}
-                                onMouseDown={(event) => event.preventDefault()}
-                                onClick={() => void submitEmployeeNote(employee)}
-                                aria-label={`Save note for ${employee.name || employee.staff_id}`}
-                                title={isSavingNote ? 'Saving' : 'Save'}
+                                className={[
+                                  'inline-flex h-8 max-w-full items-center justify-center rounded-lg border px-2 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
+                                  employee.agency_note
+                                    ? 'border-cyan-300/30 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/15'
+                                    : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+                                ].join(' ')}
+                                disabled={isSavingNote}
+                                onClick={() => openNoteModal(employee)}
+                                title={employee.agency_note || 'Note'}
                               >
-                                <Save className="h-3.5 w-3.5" />
+                                <span className="truncate">{employee.agency_note ? 'View' : 'Add'}</span>
                               </button>
-                            </div>
                           </td>
                         ) : null}
                         <td className="px-1 py-2">
@@ -2468,6 +2498,42 @@ export default function AgencyAppPage() {
         </div>
       </Modal>
 
+      <Modal open={modal === 'employee_note'} title="Note">
+        <div className="space-y-4">
+          <div className="text-sm font-semibold text-white">
+            {selectedNoteEmployee ? `${selectedNoteEmployee.name || selectedNoteEmployee.staff_id} (${selectedNoteEmployee.staff_id})` : '-'}
+          </div>
+          <textarea
+            value={selectedNoteDraft}
+            maxLength={500}
+            rows={7}
+            disabled={!canOperateAgency || selectedNoteSaving}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (!selectedNoteStaffId) return;
+              setNoteDrafts((previous) => ({ ...previous, [selectedNoteStaffId]: value }));
+            }}
+            className={[inputClass, 'h-auto resize-none py-3 leading-6'].join(' ')}
+          />
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={closeModal} className={buttonClass} disabled={selectedNoteSaving}>
+              Close
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedNoteEmployee) void submitEmployeeNote(selectedNoteEmployee);
+              }}
+              className={neonButtonClass}
+              disabled={!canOperateAgency || selectedNoteSaving || !selectedNoteDirty}
+            >
+              <Save className="mr-2 h-4 w-4" />
+              Save
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       <Modal open={modal === 'driver_group'} title="Driver Group">
         <div className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
@@ -2517,7 +2583,17 @@ export default function AgencyAppPage() {
             ))}
           </select>
         </div>
-        <div className="mt-4 flex justify-end gap-2">
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          {canSetSelectedDriverGroupIndividual ? (
+            <button
+              type="button"
+              onClick={() => void submitDriverGroupIndividual()}
+              className={buttonClass}
+              disabled={busy || !canOperateAgency}
+            >
+              Individual
+            </button>
+          ) : null}
           <button type="button" onClick={closeModal} className={buttonClass}>Close</button>
           <button
             type="button"

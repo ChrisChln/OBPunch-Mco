@@ -282,6 +282,13 @@ export const deleteAgencyDriverGroup = async (supabase: SupabaseClient, code: st
     })
   );
 
+export const setAgencyDriverGroupIndividual = async (supabase: SupabaseClient, staffId: string) =>
+  expectRpcSuccess(
+    supabase.rpc('agency_set_driver_group_individual', {
+      p_staff_id: staffId
+    })
+  );
+
 export const upsertAgencyEmployeeNote = async (supabase: SupabaseClient, staffId: string, note: string) =>
   expectRpcSuccess(
     supabase.rpc('agency_upsert_employee_note', {
