@@ -31,7 +31,7 @@ describe('dailyList', () => {
     expect(isDailyListCountedRow(row, normalizePosition)).toBe(true);
   });
 
-  test('excludes schedule-only rows from displayed shift tables', () => {
+  test('shows schedule-only rows in displayed shift tables', () => {
     const rows: DailyListRow[] = [
       {
         staff_id: 'CENTRAL',
@@ -53,11 +53,11 @@ describe('dailyList', () => {
     ];
 
     expect(filterDailyListCountedRows(rows, normalizePosition).map((row) => row.staff_id)).toEqual(['CENTRAL', 'US010454']);
-    expect(filterDailyListDisplayRows(rows).map((row) => row.staff_id)).toEqual(['US010454']);
-    expect(isDailyListDisplayRow(rows[0])).toBe(false);
+    expect(filterDailyListDisplayRows(rows, normalizePosition).map((row) => row.staff_id)).toEqual(['CENTRAL', 'US010454']);
+    expect(isDailyListDisplayRow(rows[0], normalizePosition)).toBe(true);
   });
 
-  test('uses counted rows for capacity while keeping schedule-only rows hidden', () => {
+  test('uses counted rows for capacity and display', () => {
     const rows: DailyListRow[] = [
       {
         staff_id: 'JDL-PICK',
@@ -80,7 +80,7 @@ describe('dailyList', () => {
     const countedRows = filterDailyListCountedRows(rows, normalizePosition);
 
     expect(selectDailyListCapacityRows(countedRows).map((row) => row.staff_id)).toEqual(['JDL-PICK', 'US010454']);
-    expect(filterDailyListDisplayRows(countedRows).map((row) => row.staff_id)).toEqual(['US010454']);
+    expect(filterDailyListDisplayRows(countedRows, normalizePosition).map((row) => row.staff_id)).toEqual(['JDL-PICK', 'US010454']);
   });
 
   test('does not count rows without a valid position or shift', () => {

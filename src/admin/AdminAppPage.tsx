@@ -168,6 +168,12 @@ type ScheduleMistakeDraft = {
   reason: string;
   saving: boolean;
 };
+
+type ScheduleDriverGroupInfo = {
+  code: string;
+  role: 'driver' | 'member';
+  label: string;
+};
 type LateMarkView = {
   minutesLate: number;
   source: LateBaselineSource;
@@ -1954,6 +1960,8 @@ export default function AdminAppPage() {
   const [scheduleMistakeDetailsByStaffId, setScheduleMistakeDetailsByStaffId] = useState<Record<string, ScheduleMistakeDetail[]>>({});
   const [scheduleMonthlyAbsentDatesByStaffId, setScheduleMonthlyAbsentDatesByStaffId] = useState<Record<string, string[]>>({});
   const [scheduleLateByStaffDayKey, setScheduleLateByStaffDayKey] = useState<Record<string, LateMarkView>>({});
+  const [scheduleDriverGroupByStaffId, setScheduleDriverGroupByStaffId] = useState<Record<string, ScheduleDriverGroupInfo>>({});
+  const [scheduleAgencyNoteByStaffId, setScheduleAgencyNoteByStaffId] = useState<Record<string, string>>({});
   const [scheduleMistakeDraft, setScheduleMistakeDraft] = useState<ScheduleMistakeDraft>({
     open: false,
     staff_id: '',
@@ -2644,6 +2652,11 @@ export default function AdminAppPage() {
       return 'FLEX TEAM';
     }
     return null;
+  };
+
+  const resolveEmployeeOperatePosition = (position: unknown) => {
+    const normalized = normalizePositionKey(String(position ?? ''));
+    return normalized ?? normalizePositionName(position);
   };
 
   const normalizeDailyListPositionKey = (value: string) => {
@@ -4444,6 +4457,64 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   // Save fetchSchedule reference for use in realtime callbacks
   fetchScheduleRef.current = fetchSchedule;
 
+  const fetchScheduleAgencyInfo = async () => {
+    if (!supabase) {
+      setScheduleDriverGroupByStaffId({});
+      setScheduleAgencyNoteByStaffId({});
+      return;
+    }
+
+    try {
+      const [driverRes, noteRes] = await Promise.all([
+        supabase.rpc('agency_get_driver_groups'),
+        supabase.rpc('agency_get_employee_notes')
+      ]);
+
+      if (driverRes.error) {
+        console.warn('[Schedule] Failed to load driver groups:', driverRes.error.message);
+        setScheduleDriverGroupByStaffId({});
+      } else {
+        const assignments = Array.isArray((driverRes.data as { assignments?: unknown[] } | null)?.assignments)
+          ? ((driverRes.data as { assignments?: unknown[] }).assignments ?? [])
+          : [];
+        const nextDriverMap: Record<string, ScheduleDriverGroupInfo> = {};
+        for (const raw of assignments) {
+          const row = raw as { staff_id?: unknown; code?: unknown; role?: unknown; label?: unknown };
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          const code = String(row.code ?? '').trim();
+          if (!staff || !code) continue;
+          const role = String(row.role ?? '').trim() === 'driver' ? 'driver' : 'member';
+          nextDriverMap[staff] = {
+            code,
+            role,
+            label: String(row.label ?? '').trim() || (role === 'driver' ? `Driver${code}` : code)
+          };
+        }
+        setScheduleDriverGroupByStaffId(nextDriverMap);
+      }
+
+      if (noteRes.error) {
+        console.warn('[Schedule] Failed to load agency notes:', noteRes.error.message);
+        setScheduleAgencyNoteByStaffId({});
+      } else {
+        const rows = Array.isArray(noteRes.data) ? noteRes.data : [];
+        const nextNoteMap: Record<string, string> = {};
+        for (const raw of rows) {
+          const row = raw as { staff_id?: unknown; note?: unknown };
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          const note = String(row.note ?? '').trim();
+          if (!staff || !note) continue;
+          nextNoteMap[staff] = note;
+        }
+        setScheduleAgencyNoteByStaffId(nextNoteMap);
+      }
+    } catch (error) {
+      console.warn('[Schedule] Failed to load agency info:', error);
+      setScheduleDriverGroupByStaffId({});
+      setScheduleAgencyNoteByStaffId({});
+    }
+  };
+
   const setScheduleCellState = async (
     employee: EmployeeRow,
     dayIndex: number,
@@ -5069,6 +5140,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         streamPartialState: false
       });
       await Promise.all([
+        fetchScheduleAgencyInfo(),
         fetchSchedulePunchPresence({ employeesOverride: latestEmployees }),
         fetchScheduleUph({ employeesOverride: latestEmployees }),
         fetchScheduleMistakeCounts({ employeesOverride: latestEmployees }),
@@ -7141,7 +7213,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }) => {
     const staff = normalizeStaffId(String(payload.staff ?? '').trim());
     if (!staff) return;
-    if (!canOperatePosition('employees', payload.position)) return;
+    if (!canOperatePosition('employees', resolveEmployeeOperatePosition(payload.position))) return;
     setEmployeeBadgeBatchSelectedStaffIds((prev) => {
       const selected = prev.includes(staff);
       const next = selected ? prev.filter((id) => id !== staff) : [...prev, staff];
@@ -7201,7 +7273,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       })
       .filter((row): row is { staff: string; name: string; agency: string; position: string; workAccount?: string; workPassword?: string } => {
         if (!row) return false;
-        return canOperatePosition('employees', row.position);
+        return canOperatePosition('employees', resolveEmployeeOperatePosition(row.position));
       });
     if (selectedRows.length === 0) {
       setStatus({ tone: 'error', message: t('已选员工不在当前员工数据中，请先刷新。', 'Selected employees are not in current employee data. Please refresh.') });
@@ -13539,8 +13611,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       weekday: targetDay.toLocaleDateString('en-US', { weekday: 'short' }),
       countedEarlyRows: validCountedEarlyRows,
       countedLateRows: validCountedLateRows,
-      earlyRows: filterDailyListDisplayRows(validCountedEarlyRows),
-      lateRows: filterDailyListDisplayRows(validCountedLateRows)
+      earlyRows: filterDailyListDisplayRows(validCountedEarlyRows, normalizeDailyListPositionKey),
+      lateRows: filterDailyListDisplayRows(validCountedLateRows, normalizeDailyListPositionKey)
     };
   }, [
     serverTime,
@@ -13554,7 +13626,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   ]);
   const dailyListVisiblePositions = useMemo(() => {
     const sourcePositions = activePositionNames.length > 0 ? activePositionNames : FALLBACK_DAILY_LIST_VISIBLE_POSITIONS;
-    return sourcePositions.filter((position) => normalizeDailyListPositionKey(position) !== 'FLEX TEAM');
+    const seen = new Set<string>();
+    const next: string[] = [];
+    for (const position of sourcePositions) {
+      const key = normalizeDailyListPositionKey(position);
+      if (!key || key === 'FLEX TEAM' || seen.has(key)) continue;
+      seen.add(key);
+      next.push(key);
+    }
+    return next;
   }, [activePositionNames, allPositionNames]);
   const dailyListCapacityByRowKey = useMemo(() => {
     const map = new Map<string, DailyListCapacityView>();
@@ -13640,14 +13720,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     [dailyListVisiblePositions, tomorrowAttendanceCards, scheduleRecommendedAdjustedByDate, tomorrowDailyList, dailyListCapacityByRowKey]
   );
   const selectedDailyFilterPositions = useMemo(
-    () => dailyListVisiblePositions.filter((position) => Boolean(dailyListFilterPositions[position])),
+    () =>
+      dailyListVisiblePositions.filter((position) => {
+        const key = normalizeDailyListPositionKey(position);
+        return Boolean((key && dailyListFilterPositions[key]) || dailyListFilterPositions[position]);
+      }),
     [dailyListVisiblePositions, dailyListFilterPositions]
   );
   const tomorrowDailyRowsDisplayed = useMemo(() => {
     if (selectedDailyFilterPositions.length === 0) {
       return { earlyRows: tomorrowDailyList.earlyRows, lateRows: tomorrowDailyList.lateRows };
     }
-    const allowed = new Set<string>(selectedDailyFilterPositions);
+    const allowed = new Set<string>(
+      selectedDailyFilterPositions
+        .map((position) => normalizeDailyListPositionKey(position))
+        .filter((position): position is string => Boolean(position))
+    );
     const match = (row: DailyListRow) => {
       const pos = normalizeDailyListPositionKey(String(row.position ?? '').trim());
       return Boolean(pos && allowed.has(pos));
@@ -15942,6 +16030,8 @@ ${rowsToHtml(late)}
                           const label = String(employee.label ?? employee.Label ?? '').trim();
                           const pendingTerminationRequest = pendingTerminationRequestsByStaffId.get(staff) ?? null;
                           const hasPendingTermination = Boolean(pendingTerminationRequest);
+                          const scheduleDriverInfo = scheduleDriverGroupByStaffId[staff] ?? null;
+                          const scheduleAgencyNote = String(scheduleAgencyNoteByStaffId[staff] ?? '').trim();
                           if (!staff) return null;
 
                           let workDays = 0;
@@ -16009,6 +16099,31 @@ ${rowsToHtml(late)}
                               <td className={['pl-4 pr-1 py-2 font-mono', scheduleBodyTextClass].join(' ')}>{staff}</td>
                               <td className={['px-1 py-2 truncate', scheduleBodyTextClass].join(' ')}>
                                 <div>{name || '-'}</div>
+                                {(scheduleDriverInfo || scheduleAgencyNote) && (
+                                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
+                                    {scheduleDriverInfo ? (
+                                      <span
+                                        className={[
+                                          'inline-flex max-w-full items-center truncate rounded-full border px-1.5 py-0.5 text-[9px] font-semibold leading-none',
+                                          scheduleDriverInfo.role === 'driver'
+                                            ? 'border-cyan-300/40 bg-cyan-500/15 text-cyan-100'
+                                            : 'border-white/12 bg-white/[0.05] text-slate-200'
+                                        ].join(' ')}
+                                        title={`Driver group ${scheduleDriverInfo.code}`}
+                                      >
+                                        {scheduleDriverInfo.label}
+                                      </span>
+                                    ) : null}
+                                    {scheduleAgencyNote ? (
+                                      <span
+                                        className="inline-flex max-w-full items-center truncate rounded-full border border-amber-300/35 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold leading-none text-amber-100"
+                                        title={scheduleAgencyNote}
+                                      >
+                                        Note
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                )}
                                 {hasPendingTermination && (
                                   <div
                                     className={[
@@ -16634,14 +16749,17 @@ ${rowsToHtml(late)}
                                   key={`filter-${position}`}
                                   type="button"
                                   onClick={() =>
-                                    setDailyListFilterPositions((prev) => ({
-                                      ...prev,
-                                      [position]: !prev[position]
-                                    }))
+                                    setDailyListFilterPositions((prev) => {
+                                      const key = normalizeDailyListPositionKey(position) || position;
+                                      return {
+                                        ...prev,
+                                        [key]: !prev[key]
+                                      };
+                                    })
                                   }
                                   className={[
                                     'rounded-lg border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] transition',
-                                    dailyListFilterPositions[position]
+                                    dailyListFilterPositions[normalizeDailyListPositionKey(position) || position]
                                       ? themeMode === 'light'
                                         ? getSchedulePositionBadgeClassLight(position)
                                         : getSchedulePositionBadgeClass(position)
@@ -17011,7 +17129,7 @@ ${rowsToHtml(late)}
                   toggleEmployeeBadgeBatchSelectedStaffId={toggleEmployeeBadgeBatchSelectedStaffId}
                   openEmployeeAuditLog={openEmployeeAuditLog}
                   printEmployeeTempBadge={printEmployeeTempBadge}
-                  canOperateEmployeePosition={(position) => canOperatePosition('employees', position)}
+                  canOperateEmployeePosition={(position) => canOperatePosition('employees', resolveEmployeeOperatePosition(position))}
                   openEmployeeEdit={openEmployeeEdit}
                   deleteEmployeeRow={deleteEmployeeRow}
                 />
