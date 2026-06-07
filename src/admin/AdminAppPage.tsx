@@ -13571,7 +13571,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       // New-hire demand rows may not have punch logs yet, so prefer employee.shift first.
       const shift = assignedShift || inferredShift;
       if (shift !== 'early' && shift !== 'late') continue;
-      const position = profile?.position || String(row.position ?? '').trim() || '';
+      const position = String(row.position ?? '').trim() || profile?.position || '';
       if (!normalizeDailyListPositionKey(position)) continue;
       const item: DailyListRow = {
         staff_id: staff,
