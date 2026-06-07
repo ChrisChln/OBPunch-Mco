@@ -27,6 +27,7 @@ describe('api/corrections', () => {
     insertErrorMessage?: string;
     terminatedAt?: string | null;
     employeeLookupErrorMessage?: string;
+    onInsert?: (rows: unknown[]) => void;
   }) => {
     vi.doMock('@supabase/supabase-js', () => ({
       createClient: () => ({
@@ -45,8 +46,10 @@ describe('api/corrections', () => {
           }
 
           return {
-            insert: async () =>
-              options?.insertErrorMessage ? { error: { message: options.insertErrorMessage } } : { error: null }
+            insert: async (rows: unknown[]) => {
+              options?.onInsert?.(rows);
+              return options?.insertErrorMessage ? { error: { message: options.insertErrorMessage } } : { error: null };
+            }
           };
         }
       })
@@ -178,6 +181,38 @@ describe('api/corrections', () => {
     await handler(req, res);
     expect(res.code).toBe(200);
     expect(res.body).toEqual({ status: 'ok' });
+  });
+
+  test('uses deployed ob_punches columns without metadata for correction insert', async () => {
+    process.env.ADMIN_TOKEN = 'secret';
+    process.env.SUPABASE_URL = 'https://example.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role';
+    let insertedRows: unknown[] = [];
+    mockSupabaseModule({
+      onInsert: (rows) => {
+        insertedRows = rows;
+      }
+    });
+    const { default: handler } = await import('../../api/corrections');
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer secret' },
+      body: { staff_id: 'US010454', action: 'OUT', effective_at: '2026-02-20T08:00:00Z', note: 'manual fix' }
+    };
+    const res = createRes();
+    await handler(req, res);
+    expect(res.code).toBe(200);
+    expect(insertedRows).toEqual([
+      {
+        staff_id: 'US010454',
+        action: 'OUT',
+        created_at: '2026-02-20T08:00:00Z',
+        device: 'admin_api',
+        source: 'correction',
+        operator: 'admin_api',
+        note: 'manual fix'
+      }
+    ]);
   });
 
   test('returns 409 for terminated employee', async () => {

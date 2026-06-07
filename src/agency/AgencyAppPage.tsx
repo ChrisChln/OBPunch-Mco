@@ -1,6 +1,6 @@
 ﻿import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
-import { Check, Hourglass } from 'lucide-react';
+import { Check, Hourglass, Plus, Save, Trash2, Users } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { createSupabaseClient } from '../lib/supabase';
 import { hasModuleAccess, getModuleMapFromContext, type AdminAccessContext } from '../shared/adminAccess';
@@ -15,6 +15,7 @@ import {
 import {
   cancelAgencyTerminationRequest,
   createAgencyTerminationRequest,
+  deleteAgencyDriverGroup,
   deleteAgencyNewHireDemand,
   fetchAdminAccessContext,
   fetchAgencyAbsentMarkKeys,
@@ -22,9 +23,13 @@ import {
   fetchAgencyScheduleWeek,
   fetchAgencyUserDisplayName,
   setAgencyScheduleState,
+  upsertAgencyEmployeeNote,
+  upsertAgencyDriverGroup,
   upsertAgencyNewHireDemand
 } from './api';
 import { computeAgencySummaryCards, isAgencyWorklikeState } from './boardMetrics';
+import { buildDriverGroupWarnings, getNextDriverGroupCode } from './driverGroups';
+import { normalizeAgencyNote } from './notes';
 import type {
   AgencyBoard,
   AgencyEmployeeRow,
@@ -34,7 +39,7 @@ import type {
   AgencyWeekSchedule
 } from './types';
 
-type ModalState = 'new_hire' | 'termination' | null;
+type ModalState = 'new_hire' | 'termination' | 'driver_group' | null;
 type NoticeTone = 'error' | 'info';
 
 type NoticeState = {
@@ -52,6 +57,16 @@ type CancelTerminationConfirmState = {
   staffId: string;
   displayName: string;
 } | null;
+
+type DeleteDriverGroupConfirmState = {
+  code: string;
+} | null;
+
+type DriverGroupFormState = {
+  code: string;
+  driverStaffId: string;
+  memberStaffIds: string[];
+};
 
 type SchedulePickerState = {
   open: boolean;
@@ -589,11 +604,14 @@ export default function AgencyAppPage() {
   const [currentOperationalPunchStaffIds, setCurrentOperationalPunchStaffIds] = useState<Set<string>>(() => new Set());
   const [dailyListLightFlags, setDailyListLightFlags] = useState<DailyListLightFlags>(createEmptyDailyListLightFlags);
   const [scheduleStateOverrides, setScheduleStateOverrides] = useState(() => new Map<string, AgencyScheduleState>());
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
+  const [savingNoteStaffIds, setSavingNoteStaffIds] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState('Syncing board');
   const [notice, setNotice] = useState<NoticeState>(null);
   const [deleteNewHireConfirm, setDeleteNewHireConfirm] = useState<DeleteNewHireConfirmState>(null);
   const [cancelTerminationConfirm, setCancelTerminationConfirm] = useState<CancelTerminationConfirmState>(null);
+  const [deleteDriverGroupConfirm, setDeleteDriverGroupConfirm] = useState<DeleteDriverGroupConfirmState>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [selectedDate, setSelectedDate] = useState(getDefaultSelectedDate);
@@ -605,6 +623,11 @@ export default function AgencyAppPage() {
   const [modal, setModal] = useState<ModalState>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<AgencyEmployeeRow | null>(null);
   const [selectedNewHire, setSelectedNewHire] = useState<AgencyNewHireRequestRow | null>(null);
+  const [driverGroupForm, setDriverGroupForm] = useState<DriverGroupFormState>({
+    code: '1',
+    driverStaffId: '',
+    memberStaffIds: []
+  });
   const [terminationReason, setTerminationReason] = useState('');
   const [newHireForm, setNewHireForm] = useState<AgencyUpsertNewHireInput>({
     staffId: null,
@@ -757,6 +780,14 @@ export default function AgencyAppPage() {
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [schedulePicker.open]);
+
+  useEffect(() => {
+    const nextDrafts: Record<string, string> = {};
+    for (const row of weekSchedule?.employees ?? []) {
+      nextDrafts[row.staff_id] = row.agency_note ?? '';
+    }
+    setNoteDrafts(nextDrafts);
+  }, [weekSchedule]);
 
   const refreshBoard = useCallback(async () => {
     if (!supabase || !user || !canViewAgency) return;
@@ -1026,6 +1057,28 @@ export default function AgencyAppPage() {
     setCancelTerminationConfirm(null);
   };
 
+  const closeDeleteDriverGroupConfirm = () => {
+    setDeleteDriverGroupConfirm(null);
+  };
+
+  const openDriverGroupModal = (code?: string) => {
+    const normalizedCode = String(code ?? nextDriverGroupCode).trim() || nextDriverGroupCode;
+    const groupRows = employeeRows.filter((employee) => employee.driver_group_code === normalizedCode);
+    const driver = groupRows.find((employee) => employee.driver_group_role === 'driver') ?? groupRows[0] ?? null;
+    setDriverGroupForm({
+      code: normalizedCode,
+      driverStaffId: driver?.staff_id ?? '',
+      memberStaffIds: groupRows.map((employee) => employee.staff_id)
+    });
+    setModal('driver_group');
+  };
+
+  const requestDeleteDriverGroup = (code: string) => {
+    const normalizedCode = String(code ?? '').trim();
+    if (!normalizedCode) return;
+    setDeleteDriverGroupConfirm({ code: normalizedCode });
+  };
+
   const openTerminationModal = (employee: AgencyEmployeeRow) => {
     setSelectedEmployee(employee);
     setTerminationReason('');
@@ -1053,6 +1106,71 @@ export default function AgencyAppPage() {
       await refreshBoard();
     } catch (nextError) {
       openNotice('error', nextError instanceof Error ? nextError.message : 'New request save failed.');
+    } finally {
+      endBusy();
+    }
+  };
+
+  const submitDriverGroup = async () => {
+    if (!supabase || !canOperateAgency) return;
+    const code = String(driverGroupForm.code ?? '').trim();
+    const driverStaffId = String(driverGroupForm.driverStaffId ?? '').trim();
+    const memberStaffIds = Array.from(new Set([...driverGroupForm.memberStaffIds, driverStaffId].map((item) => String(item ?? '').trim()).filter(Boolean)));
+    if (!code || !driverStaffId || memberStaffIds.length < 2) {
+      openNotice('error', 'Select one driver and at least one member.');
+      return;
+    }
+    beginBusy('Saving group');
+    try {
+      await upsertAgencyDriverGroup(supabase, code, driverStaffId, memberStaffIds);
+      closeModal();
+      await refreshBoard();
+    } catch (nextError) {
+      openNotice('error', nextError instanceof Error ? nextError.message : 'Driver group save failed.');
+    } finally {
+      endBusy();
+    }
+  };
+
+  const submitEmployeeNote = async (employee: AgencyEmployeeRow) => {
+    if (!supabase || !canOperateAgency) return;
+    const nextNote = normalizeAgencyNote(noteDrafts[employee.staff_id] ?? '');
+    if (nextNote === normalizeAgencyNote(employee.agency_note)) return;
+    setSavingNoteStaffIds((previous) => {
+      const next = new Set(previous);
+      next.add(employee.staff_id);
+      return next;
+    });
+    try {
+      await upsertAgencyEmployeeNote(supabase, employee.staff_id, nextNote);
+      setWeekSchedule((previous) => {
+        if (!previous) return previous;
+        return {
+          ...previous,
+          employees: previous.employees.map((row) => (row.staff_id === employee.staff_id ? { ...row, agency_note: nextNote } : row))
+        };
+      });
+      setNoteDrafts((previous) => ({ ...previous, [employee.staff_id]: nextNote }));
+    } catch (nextError) {
+      openNotice('error', nextError instanceof Error ? nextError.message : 'Note save failed.');
+    } finally {
+      setSavingNoteStaffIds((previous) => {
+        const next = new Set(previous);
+        next.delete(employee.staff_id);
+        return next;
+      });
+    }
+  };
+
+  const confirmDeleteDriverGroup = async () => {
+    if (!supabase || !canOperateAgency || !deleteDriverGroupConfirm) return;
+    beginBusy('Removing group');
+    try {
+      await deleteAgencyDriverGroup(supabase, deleteDriverGroupConfirm.code);
+      closeDeleteDriverGroupConfirm();
+      await refreshBoard();
+    } catch (nextError) {
+      openNotice('error', nextError instanceof Error ? nextError.message : 'Driver group delete failed.');
     } finally {
       endBusy();
     }
@@ -1233,6 +1351,8 @@ export default function AgencyAppPage() {
 
   const showIdColumn = !compactScheduleView;
   const showAgencyColumn = !compactScheduleView;
+  const showDriverGroupColumn = !compactScheduleView;
+  const showNoteColumn = !compactScheduleView;
   const showStartTimeColumn = !compactScheduleView;
   const selectedDateColumnToneClass = compactScheduleView ? selectedDateColumnClassMobile : selectedDateColumnClass;
   const selectedDateHeaderColumnClass = compactScheduleView
@@ -1245,6 +1365,8 @@ export default function AgencyAppPage() {
     (showIdColumn ? 1 : 0) +
     1 +
     (showAgencyColumn ? 1 : 0) +
+    (showDriverGroupColumn ? 1 : 0) +
+    (showNoteColumn ? 1 : 0) +
     1 +
     1 +
     1 +
@@ -1308,9 +1430,34 @@ export default function AgencyAppPage() {
         fixed_work_count: weeklyWorkCountByStaffId.get(row.staff_id) ?? row.fixed_work_count,
         has_absent: absentMarkKeys.has(`${row.staff_id}__${selectedDate}`),
         has_late: false,
-        termination_status: row.termination_status
+        termination_status: row.termination_status,
+        driver_group_code: row.driver_group_code,
+        driver_group_role: row.driver_group_role,
+        driver_group_label: row.driver_group_label,
+        agency_note: row.agency_note
       })),
     [absentMarkKeys, dailyListLightFlags, selectedDate, weekSchedule, weeklyWorkCountByStaffId]
+  );
+
+  const driverGroupSummaries = useMemo(() => weekSchedule?.driver_groups ?? [], [weekSchedule]);
+
+  const nextDriverGroupCode = useMemo(() => getNextDriverGroupCode(driverGroupSummaries), [driverGroupSummaries]);
+
+  const driverGroupWarnings = useMemo(
+    () => buildDriverGroupWarnings(weekSchedule?.employees ?? []),
+    [weekSchedule]
+  );
+
+  const driverGroupEmployeeOptions = useMemo(
+    () =>
+      employeeRows
+        .filter((employee) => employee.termination_status !== 'pending')
+        .map((employee) => ({
+          staffId: employee.staff_id,
+          label: `${employee.name || employee.staff_id} (${employee.staff_id})`,
+          groupCode: employee.driver_group_code
+        })),
+    [employeeRows]
   );
 
   const selectedDateNewHireRequests = useMemo<AgencyNewHireRequestRow[]>(
@@ -1891,16 +2038,70 @@ export default function AgencyAppPage() {
                   <option value="late">Night</option>
                 </select>
               </div>
+              <div className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                    <Users className="h-4 w-4 text-cyan-200" />
+                    <span>Driver Groups</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={neonButtonClass}
+                    disabled={busy || !canOperateAgency || driverGroupEmployeeOptions.length < 2}
+                    onClick={() => openDriverGroupModal()}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    New
+                  </button>
+                </div>
+                {driverGroupWarnings.length > 0 ? (
+                  <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                    {driverGroupWarnings.map((warning) => (
+                      <div key={warning.code}>{warning.message} {warning.staffIds.join(', ')}</div>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {driverGroupSummaries.length > 0 ? (
+                    driverGroupSummaries.map((group) => (
+                      <div key={group.code} className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2">
+                        <button
+                          type="button"
+                          className="text-sm font-semibold text-white transition hover:text-cyan-100"
+                          disabled={!canOperateAgency}
+                          onClick={() => openDriverGroupModal(group.code)}
+                        >
+                          Group {group.code}
+                        </button>
+                        <span className="text-xs text-slate-400">{group.activeMemberCount}</span>
+                        <button
+                          type="button"
+                          className="rounded-lg p-1 text-slate-400 transition hover:bg-white/10 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={busy || !canOperateAgency}
+                          onClick={() => requestDeleteDriverGroup(group.code)}
+                          aria-label={`Delete driver group ${group.code}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-sm text-slate-400">No groups.</div>
+                  )}
+                </div>
+              </div>
               <div className={[
                 'overflow-x-auto rounded-2xl border border-white/10 bg-black/30 py-1',
                 compactScheduleView ? 'px-2' : ''
               ].join(' ')}>
-                <table className={[compactScheduleView ? 'min-w-full' : 'min-w-[1350px]', 'w-full table-fixed text-left text-xs leading-tight'].join(' ')}>
+                <table className={[compactScheduleView ? 'min-w-full' : 'min-w-[1600px]', 'w-full table-fixed text-left text-xs leading-tight'].join(' ')}>
                   <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                     <tr>
                       {showIdColumn ? <th className="w-[104px] py-2 pl-4 pr-1">ID</th> : null}
                       <th className={[compactScheduleView ? 'w-[206px]' : 'w-[184px]', 'px-1 py-2'].join(' ')}>Name</th>
                       {showAgencyColumn ? <th className="w-[92px] px-1 py-2">Agency</th> : null}
+                      {showDriverGroupColumn ? <th className="w-[80px] px-1 py-2 text-center">Group</th> : null}
+                      {showNoteColumn ? <th className="w-[180px] px-1 py-2">Note</th> : null}
                       <th className={[compactScheduleView ? 'w-[88px]' : 'w-[96px]', 'px-1 py-2'].join(' ')}>Position</th>
                       <th className={[compactScheduleView ? 'w-[66px]' : 'w-[72px]', 'px-1 py-2 text-center'].join(' ')}>Shift</th>
                       <th className={[compactScheduleView ? 'w-[128px]' : 'w-[152px]', 'px-1 py-2 text-center'].join(' ')}>Status</th>
@@ -1936,6 +2137,10 @@ export default function AgencyAppPage() {
                     {visibleFilteredEmployees.map((employee, employeeIndex) => {
                       const weekEmployee = weekEmployeeByStaffId.get(employee.staff_id);
                       const isPendingTermination = employee.termination_status === 'pending' || weekEmployee?.termination_status === 'pending';
+                      const noteDraft = noteDrafts[employee.staff_id] ?? employee.agency_note ?? '';
+                      const normalizedNoteDraft = normalizeAgencyNote(noteDraft);
+                      const isNoteDirty = normalizedNoteDraft !== normalizeAgencyNote(employee.agency_note);
+                      const isSavingNote = savingNoteStaffIds.has(employee.staff_id);
                       const isLastEmployeeRow = employeeIndex === visibleFilteredEmployees.length - 1;
                       const rowClass = isPendingTermination
                         ? 'border-b border-white/5 bg-slate-800/60 transition-colors hover:bg-slate-800/70 last:border-b-0'
@@ -1944,7 +2149,9 @@ export default function AgencyAppPage() {
                       <tr key={employee.staff_id} className={rowClass}>
                         {showIdColumn ? <td className="py-2 pl-4 pr-1 font-mono text-slate-200">{employee.staff_id}</td> : null}
                         <td className="px-1 py-2 text-slate-200">
-                          <div className="truncate font-medium">{employee.name || '-'}</div>
+                          <div className="truncate font-medium" title={employee.agency_note ? `${employee.name || '-'}\n${employee.agency_note}` : employee.name || '-'}>
+                            {employee.name || '-'}
+                          </div>
                           <div className="mt-1 flex min-h-[38px] flex-col items-start justify-center gap-1">
                             {isPendingTermination ? (
                               <>
@@ -1971,6 +2178,56 @@ export default function AgencyAppPage() {
                           </div>
                         </td>
                         {showAgencyColumn ? <td className="truncate px-1 py-2 text-slate-300">{employee.agency || '-'}</td> : null}
+                        {showDriverGroupColumn ? (
+                          <td className="px-1 py-2 text-center">
+                            {employee.driver_group_label ? (
+                              <span
+                                className={[
+                                  'inline-flex items-center justify-center rounded-full border px-2 py-1 text-[10px] font-semibold',
+                                  employee.driver_group_role === 'driver'
+                                    ? 'border-cyan-300/40 bg-cyan-500/15 text-cyan-100'
+                                    : 'border-white/12 bg-white/[0.05] text-slate-200'
+                                ].join(' ')}
+                              >
+                                {employee.driver_group_label}
+                              </span>
+                            ) : (
+                              <span className="text-slate-600">-</span>
+                            )}
+                          </td>
+                        ) : null}
+                        {showNoteColumn ? (
+                          <td className="px-1 py-2">
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={noteDraft}
+                                maxLength={500}
+                                disabled={isPendingTermination || !canOperateAgency || isSavingNote}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  setNoteDrafts((previous) => ({ ...previous, [employee.staff_id]: value }));
+                                }}
+                                onBlur={() => {
+                                  if (isNoteDirty) void submitEmployeeNote(employee);
+                                }}
+                                className="h-8 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/25 px-2 text-xs text-slate-100 outline-none transition focus:border-cyan-300/60 disabled:cursor-not-allowed disabled:opacity-60"
+                                title={employee.agency_note || ''}
+                              />
+                              <button
+                                type="button"
+                                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-45"
+                                disabled={!canOperateAgency || isPendingTermination || isSavingNote || !isNoteDirty}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => void submitEmployeeNote(employee)}
+                                aria-label={`Save note for ${employee.name || employee.staff_id}`}
+                                title={isSavingNote ? 'Saving' : 'Save'}
+                              >
+                                <Save className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        ) : null}
                         <td className="px-1 py-2">
                           <span className={['inline-flex max-w-full items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]', positionChipClass(employee.position)].join(' ')}>
                             <span className="truncate">{employee.position || '-'}</span>
@@ -2211,6 +2468,68 @@ export default function AgencyAppPage() {
         </div>
       </Modal>
 
+      <Modal open={modal === 'driver_group'} title="Driver Group">
+        <div className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <input
+              type="text"
+              value={driverGroupForm.code}
+              onChange={(event) => setDriverGroupForm((prev) => ({ ...prev, code: event.target.value.trim() }))}
+              placeholder="Group"
+              className={inputClass}
+            />
+            <select
+              value={driverGroupForm.driverStaffId}
+              onChange={(event) => {
+                const driverStaffId = event.target.value;
+                setDriverGroupForm((prev) => ({
+                  ...prev,
+                  driverStaffId,
+                  memberStaffIds: Array.from(new Set([...prev.memberStaffIds, driverStaffId].filter(Boolean)))
+                }));
+              }}
+              className={inputClass}
+            >
+              <option value="">Driver</option>
+              {driverGroupEmployeeOptions.map((employee) => (
+                <option key={employee.staffId} value={employee.staffId}>
+                  {employee.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <select
+            multiple
+            value={driverGroupForm.memberStaffIds}
+            onChange={(event) => {
+              const selected = Array.from(event.currentTarget.selectedOptions).map((option) => option.value);
+              setDriverGroupForm((prev) => ({
+                ...prev,
+                memberStaffIds: Array.from(new Set([...selected, prev.driverStaffId].filter(Boolean)))
+              }));
+            }}
+            className={[inputClass, 'h-56 py-3'].join(' ')}
+          >
+            {driverGroupEmployeeOptions.map((employee) => (
+              <option key={employee.staffId} value={employee.staffId}>
+                {employee.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={closeModal} className={buttonClass}>Close</button>
+          <button
+            type="button"
+            onClick={() => void submitDriverGroup()}
+            className={neonButtonClass}
+            disabled={busy || !driverGroupForm.code.trim() || !driverGroupForm.driverStaffId || driverGroupForm.memberStaffIds.length < 2}
+          >
+            Save
+          </button>
+        </div>
+      </Modal>
+
       <Modal open={deleteNewHireConfirm !== null} title="Delete NEW">
         <div className="space-y-5">
           <p className="text-sm text-slate-300">
@@ -2225,6 +2544,24 @@ export default function AgencyAppPage() {
               Close
             </button>
             <button type="button" onClick={() => void confirmDeleteNewHire()} className={neonButtonClass} disabled={busy}>
+              Delete
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={deleteDriverGroupConfirm !== null} title="Delete Group">
+        <div className="space-y-5">
+          <p className="text-sm text-slate-300">
+            Delete driver group{' '}
+            <span className="font-semibold text-white">{deleteDriverGroupConfirm?.code ?? ''}</span>
+            ?
+          </p>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={closeDeleteDriverGroupConfirm} className={buttonClass} disabled={busy}>
+              Close
+            </button>
+            <button type="button" onClick={() => void confirmDeleteDriverGroup()} className={neonButtonClass} disabled={busy}>
               Delete
             </button>
           </div>

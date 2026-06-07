@@ -1,6 +1,5 @@
 import { memo, useMemo, useState } from 'react';
 import type { LabelToneKey } from '../../lib/labelTone';
-import type { AllowedPosition } from '../types';
 import {
   buildDashboardCardPositions,
   buildDashboardPositionOptions,
@@ -29,15 +28,15 @@ type HomeDashboardPageProps = {
   themeMode: 'light' | 'dark';
   homeCardStats: Record<string, { early: number; late: number; active: number }>;
   homeExpectedPositionSummaryCards: Array<{ position: string; early: number; late: number; total: number }>;
-  getHomeCardToneClass: (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => string;
-  getHomeChipToneClass: (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => string;
+  getHomeCardToneClass: (value: string, toneMap?: Partial<Record<string, LabelToneKey>>) => string;
+  getHomeChipToneClass: (value: string, toneMap?: Partial<Record<string, LabelToneKey>>) => string;
   getScheduleLabelToneClass: (label: string) => string;
   getScheduleTableLabelBadgeClass: (label: string) => string;
-  getHomePanelToneClass: (value: string, toneMap?: Partial<Record<AllowedPosition, LabelToneKey>>) => string;
+  getHomePanelToneClass: (value: string, toneMap?: Partial<Record<string, LabelToneKey>>) => string;
   getSchedulePositionBadgeClass: (position: string) => string;
   getScheduleTablePositionBadgeClass: (position: string) => string;
   getScheduleTableShiftBadgeClass: (value: '' | 'early' | 'late') => string;
-  schedulePositionToneByPosition: Partial<Record<AllowedPosition, LabelToneKey>>;
+  schedulePositionToneByPosition: Partial<Record<string, LabelToneKey>>;
   homeDashboardPositionNames: string[];
   homeRosterPositionFilter: string;
   setHomeRosterPositionFilter: (value: string) => void;

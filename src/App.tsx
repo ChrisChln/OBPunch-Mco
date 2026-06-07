@@ -745,7 +745,7 @@ export default function App() {
   const [, setPunchBoardDeviceStatusByStaffId] = useState<Record<string, PunchBoardDeviceStatus>>({});
   const [, setPunchBoardUphByStaffId] = useState<Record<string, number | null>>({});
   const [, setLabelToneByName] = useState<Record<string, LabelToneKey>>(() => loadLabelToneMap());
-  const [, setSchedulePositionToneByPosition] = useState<Record<AllowedPosition, LabelToneKey>>({
+  const [, setSchedulePositionToneByPosition] = useState<Record<string, LabelToneKey>>({
     Pick: 'sky',
     Pack: 'emerald',
     Rebin: 'amber',
@@ -2386,9 +2386,9 @@ const fetchPunchBoardUph = async (
     }
     return next;
   };
-  const normalizePositionToneMap = (value: unknown): Record<AllowedPosition, LabelToneKey> => {
+  const normalizePositionToneMap = (value: unknown): Record<string, LabelToneKey> => {
     const raw = (value ?? {}) as Record<string, unknown>;
-    const next: Record<AllowedPosition, LabelToneKey> = {
+    const next: Record<string, LabelToneKey> = {
       Pick: 'sky',
       Pack: 'emerald',
       Rebin: 'amber',
@@ -2396,10 +2396,12 @@ const fetchPunchBoardUph = async (
       Transfer: 'violet',
       'FLEX TEAM': 'slate'
     };
-    for (const pos of ALLOWED_POSITIONS) {
-      const tone = String(raw[pos] ?? '').trim() as LabelToneKey;
+    for (const [pos, rawTone] of Object.entries(raw)) {
+      const key = String(pos ?? '').trim();
+      const tone = String(rawTone ?? '').trim() as LabelToneKey;
+      if (!key) continue;
       if (!LABEL_TONE_KEYS.includes(tone)) continue;
-      next[pos] = tone;
+      next[key] = tone;
     }
     return next;
   };
