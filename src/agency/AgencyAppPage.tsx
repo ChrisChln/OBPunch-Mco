@@ -1703,7 +1703,7 @@ export default function AgencyAppPage() {
     selectedDate
   ]);
 
-  const exportSelectedDateWorkList = useCallback(() => {
+  const exportSelectedDateWorkList = useCallback(async () => {
     const header = ['Date', 'USID', 'Name', 'Agency', 'Position', 'Shift', 'Start Time', 'State'];
     const rows = selectedDateWorkExportRows.map((row) => [
       selectedDate,
@@ -1715,16 +1715,25 @@ export default function AgencyAppPage() {
       row.startTime,
       row.state
     ]);
-    const csv = [header, ...rows].map((line) => line.map(toCsvCell).join(',')).join('\r\n');
-    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `agency-worklist-${selectedDate}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(url);
+    try {
+      const XLSX = await import('xlsx');
+      const worksheet = XLSX.utils.aoa_to_sheet([header, ...rows]);
+      worksheet['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Work List');
+      XLSX.writeFile(workbook, `agency-worklist-${selectedDate}.xlsx`);
+    } catch {
+      const csv = [header, ...rows].map((line) => line.map(toCsvCell).join(',')).join('\r\n');
+      const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `agency-worklist-${selectedDate}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    }
     openNotice('info', `Exported ${rows.length} work records for ${selectedDate}.`, 'Export complete');
   }, [openNotice, selectedDate, selectedDateWorkExportRows]);
 
@@ -2068,7 +2077,7 @@ export default function AgencyAppPage() {
                     />
                     <button
                       type="button"
-                      onClick={exportSelectedDateWorkList}
+                      onClick={() => void exportSelectedDateWorkList()}
                       className={buttonClass}
                       disabled={busy || !canViewAgency || selectedDateWorkExportRows.length === 0}
                     >
