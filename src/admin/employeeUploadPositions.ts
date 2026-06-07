@@ -31,6 +31,7 @@ export type EmployeeUploadRow = {
   agency?: string;
   position?: string;
   employment_type: EmploymentType;
+  shift?: '' | 'early' | 'late';
   shift_time?: string;
   label?: string;
   work_account?: string;
@@ -70,6 +71,9 @@ const EMPLOYEE_KEY_ALIASES: Record<string, keyof EmployeeUploadRow | 'staff_id'>
   ftpt: 'employment_type',
   full_part_time: 'employment_type',
   fullparttime: 'employment_type',
+  shift: 'shift',
+  shift_name: 'shift',
+  shiftname: 'shift',
   'ft/pt': 'employment_type',
   '全职兼职': 'employment_type',
   '用工类型': 'employment_type',
@@ -98,6 +102,7 @@ const EMPLOYEE_UPLOAD_KEYS = new Set<keyof EmployeeUploadRow>([
   'agency',
   'position',
   'employment_type',
+  'shift',
   'shift_time',
   'label',
   'work_account',
@@ -114,6 +119,13 @@ const normalizeHeaderKey = (value: string) =>
 const normalizeEmploymentTypeValue = (value: unknown): EmploymentType => {
   const text = String(value ?? '').trim().toUpperCase();
   return text === 'PT' ? 'PT' : 'FT';
+};
+
+const normalizeShiftValue = (value: unknown): '' | 'early' | 'late' => {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (text === 'early' || text === 'day' || text === 'morning') return 'early';
+  if (text === 'late' || text === 'night' || text === 'evening') return 'late';
+  return '';
 };
 
 const normalizeShiftTimeValue = (value: unknown) => {
@@ -247,6 +259,7 @@ export const buildEmployeeUploadRows = (
     const positionRaw = canonical.position?.trim();
     const position = positionRaw ? normalizeEmployeeUploadPosition(positionRaw, activePositionNames) : '';
     const employmentType = normalizeEmploymentTypeValue(canonical.employment_type ?? '');
+    const shift = normalizeShiftValue(canonical.shift ?? '');
     const label = canonical.label?.trim();
     const shiftTime = normalizeShiftTimeValue(canonical.shift_time ?? '');
     const workAccount = canonical.work_account?.trim();
@@ -257,6 +270,7 @@ export const buildEmployeeUploadRows = (
     if (agency) record.agency = agency;
     if (position) record.position = position;
     if (positionRaw && !position) record.position = positionRaw;
+    if (shift) record.shift = shift;
     if (shiftTime) record.shift_time = shiftTime;
     if (label) record.label = label;
     if (workAccount) record.work_account = workAccount;

@@ -39,6 +39,7 @@ describe('employee upload position validation', () => {
           agency: 'OB',
           position: 'pick',
           employment_type: 'PT',
+          Shift: 'Day',
           shift_time: '09:00',
           label: 'New',
           work_account: 'alex.c',
@@ -57,11 +58,27 @@ describe('employee upload position validation', () => {
         agency: 'OB',
         position: 'Pick',
         employment_type: 'PT',
+        shift: 'early',
         shift_time: '09:00',
         label: 'New',
         work_account: 'alex.c',
         work_password: 'pw'
       }
+    ]);
+  });
+
+  test('normalizes uploaded shift labels', () => {
+    const result = buildEmployeeUploadRows(
+      [
+        { staff_id: 'US000001', position: 'Shipping', Shift: 'Day', employment_type: 'FT' },
+        { staff_id: 'US000002', position: 'Shipping', Shift: 'Night', employment_type: 'FT' }
+      ],
+      positions
+    );
+
+    expect(result.rows.map((row) => ({ staff_id: row.staff_id, shift: row.shift }))).toEqual([
+      { staff_id: 'US000001', shift: 'early' },
+      { staff_id: 'US000002', shift: 'late' }
     ]);
   });
 

@@ -2659,6 +2659,33 @@ export default function AdminAppPage() {
     return normalized ?? normalizePositionName(position);
   };
 
+  const splitSchedulePositionFilter = (value: string) =>
+    String(value ?? '')
+      .split('\u001F')
+      .map((item) => normalizePositionKey(item) ?? normalizePositionName(item))
+      .filter(Boolean);
+  const joinSchedulePositionFilter = (values: string[]) => Array.from(new Set(values)).join('\u001F');
+  const selectedSchedulePositions = useMemo(
+    () => splitSchedulePositionFilter(deferredSchedulePosition),
+    [deferredSchedulePosition, activePositionNames, allPositionNames]
+  );
+  const selectedSchedulePositionSet = useMemo(() => new Set(selectedSchedulePositions), [selectedSchedulePositions]);
+  const schedulePositionFilterLabel =
+    selectedSchedulePositions.length === 0
+      ? t('全部岗位', 'All positions')
+      : selectedSchedulePositions.length === 1
+        ? selectedSchedulePositions[0]
+        : `${selectedSchedulePositions.length} selected`;
+  const toggleSchedulePositionFilter = (position: string) => {
+    const key = normalizePositionKey(position) ?? normalizePositionName(position);
+    if (!key) return;
+    setScheduleWorkDayFilter(null);
+    setSchedulePosition((current) => {
+      const next = splitSchedulePositionFilter(current);
+      return joinSchedulePositionFilter(next.includes(key) ? next.filter((item) => item !== key) : [...next, key]);
+    });
+  };
+
   const normalizeDailyListPositionKey = (value: string) => {
     const resolved = normalizePositionKey(value);
     if (resolved) return resolved;
@@ -4690,6 +4717,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         staff_id: staff,
         date: templateDate,
         position: normalizedPosition,
+        shift: resolvedScheduleShift,
         note: getScheduleNoteFromBaseState(nextState),
         operator: user?.email ?? null,
         updated_at: new Date(serverTime).toISOString()
@@ -4715,6 +4743,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           staff_id: staff,
           date: nextWeekTemplateDate,
           position: payload.position,
+          shift: payload.shift,
           note: payload.note,
           operator: payload.operator,
           updated_at: payload.updated_at
@@ -12135,8 +12164,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const run = async (m: EmployeeColumnMode) => {
           const select =
             m === 'cased'
-              ? 'staff_id, name, "Agency", "Position", employment_type, shift_time, label, work_account, work_password'
-              : 'staff_id, name, agency, position, employment_type, shift_time, label, work_account, work_password';
+              ? 'staff_id, name, "Agency", "Position", employment_type, shift, shift_time, label, work_account, work_password'
+              : 'staff_id, name, agency, position, employment_type, shift, shift_time, label, work_account, work_password';
           const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batchStaffIds);
           return { mode: m, res };
         };
@@ -12181,6 +12210,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
                 Agency: row.agency ?? null,
                 Position: row.position ?? null,
                 employment_type: normalizeEmploymentTypeValue(row.employment_type),
+                shift: normalizeShiftValue(String(row.shift ?? '')) || null,
                 shift_time: row.shift_time ?? null,
                 label: row.label ?? null,
                 work_account: row.work_account ?? null,
@@ -12192,6 +12222,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
                 agency: row.agency ?? null,
                 position: row.position ?? null,
                 employment_type: normalizeEmploymentTypeValue(row.employment_type),
+                shift: normalizeShiftValue(String(row.shift ?? '')) || null,
                 shift_time: row.shift_time ?? null,
                 label: row.label ?? null,
                 work_account: row.work_account ?? null,
@@ -12228,6 +12259,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               agency: row.agency ?? '',
               position: row.position ?? '',
               employment_type: normalizeEmploymentTypeValue(row.employment_type),
+              shift: normalizeShiftValue(String(row.shift ?? '')),
               shift_time: row.shift_time ?? '',
               label: row.label ?? '',
               work_account: row.work_account ?? '',
@@ -12245,6 +12277,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           agency: string;
           position: string;
           employment_type: EmploymentType;
+          shift: '' | 'early' | 'late';
           shift_time: string;
           label: string;
           work_account: string;
@@ -12259,6 +12292,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           agency: String(r.agency ?? r.Agency ?? '').trim(),
           position: String(r.position ?? r.Position ?? '').trim(),
           employment_type: normalizeEmploymentTypeValue(r.employment_type),
+          shift: normalizeShiftValue(String(r.shift ?? '').trim()),
           shift_time: normalizeShiftTimeValue(r.shift_time),
           label: String(r.label ?? r.Label ?? '').trim(),
           work_account: String(r.work_account ?? r.WorkAccount ?? '').trim(),
@@ -12284,6 +12318,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           agency: '',
           position: '',
           employment_type: 'FT' as EmploymentType,
+          shift: '' as '' | 'early' | 'late',
           shift_time: '',
           label: '',
           work_account: '',
@@ -12304,6 +12339,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (nextEmploymentType !== existing.employment_type) {
           payload.employment_type = nextEmploymentType;
         }
+        const nextShift = normalizeShiftValue(String(row.shift ?? ''));
+        if (nextShift && nextShift !== existing.shift) {
+          payload.shift = nextShift;
+        }
         if (row.shift_time && normalizeShiftTimeValue(row.shift_time) && normalizeShiftTimeValue(row.shift_time) !== existing.shift_time) {
           payload.shift_time = normalizeShiftTimeValue(row.shift_time);
         }
@@ -12322,6 +12361,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             agency: existing.agency,
             position: existing.position,
             employment_type: existing.employment_type,
+            shift: existing.shift,
             shift_time: existing.shift_time,
             label: existing.label,
             work_account: existing.work_account,
@@ -12333,6 +12373,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             agency: payload.agency ?? payload.Agency ?? existing.agency,
             position: payload.position ?? payload.Position ?? existing.position,
             employment_type: payload.employment_type ?? existing.employment_type,
+            shift: payload.shift ?? existing.shift,
             shift_time: payload.shift_time ?? existing.shift_time,
             label: payload.label ?? existing.label,
             work_account: payload.work_account ?? existing.work_account,
@@ -12362,6 +12403,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             agency: u.after.agency,
             position: u.after.position,
             employment_type: u.after.employment_type,
+            shift: u.after.shift,
             shift_time: u.after.shift_time,
             label: u.after.label,
             work_account: u.after.work_account,
@@ -13503,12 +13545,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const next: Record<string, number | null> = {};
     for (const [date, rows] of Object.entries(scheduleRecommendedAdjustedByDate)) {
       let filteredRows = rows;
-      if (deferredSchedulePosition === 'Pick') filteredRows = rows.filter((item) => item.key === 'Pick');
-      else if (deferredSchedulePosition === 'Rebin') filteredRows = rows.filter((item) => item.key === 'Rebin');
-      else if (deferredSchedulePosition === 'Pack') filteredRows = rows.filter((item) => item.key === 'Pack');
-      else if (deferredSchedulePosition === 'Preship') filteredRows = rows.filter((item) => item.key === 'Preship');
-      else if (deferredSchedulePosition === 'Water Spider') filteredRows = rows.filter((item) => item.key === 'Water Spider');
-      else if (deferredSchedulePosition === 'Transfer') {
+      if (selectedSchedulePositionSet.size > 0) {
+        filteredRows = rows.filter((item) => selectedSchedulePositionSet.has(normalizeDailyListPositionKey(item.key) || item.key));
+      }
+      if (selectedSchedulePositionSet.size === 1 && selectedSchedulePositionSet.has('Transfer')) {
         next[date] = null;
         continue;
       }
@@ -13525,7 +13565,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }, 0);
     }
     return next;
-  }, [scheduleRecommendedAdjustedByDate, deferredSchedulePosition, deferredScheduleShift]);
+  }, [scheduleRecommendedAdjustedByDate, selectedSchedulePositionSet, deferredScheduleShift]);
   const employeeProfileByStaffId = useMemo(() => {
     const map = new Map<string, { name: string; agency: string; position: string; shiftTime: string }>();
     for (const employee of employees) {
@@ -13566,10 +13606,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!row || !isWorkingScheduleRow(row)) continue;
       const profile = employeeProfileByStaffId.get(staff);
       if (!profile) continue;
+      const rowShift = normalizeShiftValue(String(row.shift ?? '').trim());
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
       const assignedShift = normalizeShiftValue(String((employee as any).shift ?? (employee as any).Shift ?? '').trim());
-      // New-hire demand rows may not have punch logs yet, so prefer employee.shift first.
-      const shift = assignedShift || inferredShift;
+      // Schedule rows can come from legacy records without shift; default working rows to morning.
+      const shift = rowShift || assignedShift || inferredShift || 'early';
       if (shift !== 'early' && shift !== 'late') continue;
       const position = String(row.position ?? '').trim() || profile?.position || '';
       if (!normalizeDailyListPositionKey(position)) continue;
@@ -13781,7 +13822,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           const isWork = isWorkingScheduleRow(row);
           if (!isWork) return false;
         }
-        if (deferredSchedulePosition && position !== deferredSchedulePosition) return false;
+        if (selectedSchedulePositionSet.size > 0 && !selectedSchedulePositionSet.has(position)) return false;
         if (deferredScheduleEmploymentType && employmentType !== deferredScheduleEmploymentType) return false;
         if (deferredScheduleLabels.length > 0) {
           const normalizedLabel = label.toLowerCase();
@@ -13798,7 +13839,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }, [
     page,
     employees,
-    deferredSchedulePosition,
+    selectedSchedulePositionSet,
     deferredScheduleEmploymentType,
     deferredScheduleLabels,
     deferredScheduleShift,
@@ -13813,12 +13854,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     for (const employee of employees) {
       if (isInactiveJdlEmployee(employee)) continue;
       const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim()) ?? '';
-      if (deferredSchedulePosition && position !== deferredSchedulePosition) continue;
+      if (selectedSchedulePositionSet.size > 0 && !selectedSchedulePositionSet.has(position)) continue;
       const label = String(employee.label ?? employee.Label ?? '').trim();
       if (label) out.add(label);
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
-  }, [employees, deferredSchedulePosition, isInactiveJdlEmployee]);
+  }, [employees, selectedSchedulePositionSet, isInactiveJdlEmployee]);
   const dailyListNewHireLabelOptions = useMemo(() => {
     const targetPosition = normalizePositionKey(dailyListNewHirePosition);
     if (!targetPosition) return [];
@@ -13972,7 +14013,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const total = scheduleEmployeesFiltered.length;
     const filterKey = JSON.stringify({
       search: deferredScheduleSearch.trim().toLowerCase(),
-      position: deferredSchedulePosition || '',
+      position: selectedSchedulePositions.join(', '),
       shift: deferredScheduleShift || '',
       labels: deferredScheduleLabels.map((item) => String(item ?? '').trim().toLowerCase()),
       day: scheduleWorkDayFilter ?? null
@@ -13988,7 +14029,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     page,
     scheduleEmployeesFiltered.length,
     deferredScheduleSearch,
-    deferredSchedulePosition,
+    selectedSchedulePositions,
     deferredScheduleShift,
     deferredScheduleLabels,
     scheduleWorkDayFilter
@@ -14818,7 +14859,7 @@ ${rowsToHtml(late)}
 
     const dayIndex = (dt.getDay() + 6) % 7;
     const weekLabel = dt.toLocaleDateString('en-US', { weekday: 'short' });
-    const roleLabel = schedulePosition ? schedulePosition.toUpperCase() : 'ALL POSITIONS';
+    const roleLabel = selectedSchedulePositions.length > 0 ? selectedSchedulePositions.join(', ').toUpperCase() : 'ALL POSITIONS';
     const escapeHtml = (value: string) =>
       String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -15586,8 +15627,8 @@ ${rowsToHtml(late)}
                           isLocked ? 'pointer-events-none cursor-not-allowed opacity-60' : ''
                         ].join(' ')}
                       >
-                        <span className="truncate">{schedulePosition || t('全部岗位', 'All positions')}</span>
-                        <span className="ml-3 text-xs text-slate-400">{schedulePosition ? 1 : 0}</span>
+                        <span className="truncate">{schedulePositionFilterLabel}</span>
+                        <span className="ml-3 text-xs text-slate-400">{selectedSchedulePositions.length}</span>
                       </summary>
                       <div
                         className={[
@@ -15598,7 +15639,7 @@ ${rowsToHtml(late)}
                         ].join(' ')}
                       >
                         <div className={['mb-2 flex items-center justify-between text-[11px]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-300'].join(' ')}>
-                          <span>{t('单选', 'Single-select')}</span>
+                          <span>{t('多选', 'Multi-select')}</span>
                           <button
                             type="button"
                             disabled={isLocked || !schedulePosition}
@@ -15648,25 +15689,24 @@ ${rowsToHtml(late)}
                           {activePositionNames.map((p) => {
                             const currentTone = getPositionToneFromMap(p, schedulePositionToneByPosition);
                             const tonePickerOpen = schedulePositionTonePicker === p;
+                            const positionSelected = selectedSchedulePositionSet.has(normalizePositionKey(p) ?? normalizePositionName(p));
                             return (
                             <div
                               key={`pos-tone-${p}`}
                               role="button"
                               tabIndex={0}
                               onClick={() => {
-                                setScheduleWorkDayFilter(null);
-                                setSchedulePosition(p);
+                                toggleSchedulePositionFilter(p);
                               }}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter' || e.key === ' ') {
                                   e.preventDefault();
-                                  setScheduleWorkDayFilter(null);
-                                  setSchedulePosition(p);
+                                  toggleSchedulePositionFilter(p);
                                 }
                               }}
                               className={[
                                 'relative flex cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-sm transition',
-                                schedulePosition === p
+                                positionSelected
                                   ? themeMode === 'light'
                                     ? 'border-emerald-700/50 bg-emerald-100 text-emerald-900'
                                     : 'border-neon/50 bg-neon/10 text-neon'
