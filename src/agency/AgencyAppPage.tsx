@@ -1176,10 +1176,11 @@ export default function AgencyAppPage() {
       if (value === 'individual') {
         await setAgencyDriverGroupIndividual(supabase, staffId);
       } else {
-        const code = value === 'new' ? nextDriverGroupCode : value.replace(/^group:/, '').trim();
+        const isDriverChange = value.startsWith('driver:');
+        const code = value === 'new' ? nextDriverGroupCode : value.replace(/^(group|driver):/, '').trim();
         if (!code) throw new Error('Driver group is required.');
         const groupRows = employeeRows.filter((row) => row.driver_group_code === code);
-        const driver = groupRows.find((row) => row.driver_group_role === 'driver') ?? groupRows[0] ?? employee;
+        const driver = isDriverChange ? employee : groupRows.find((row) => row.driver_group_role === 'driver') ?? groupRows[0] ?? employee;
         const memberStaffIds = Array.from(
           new Set([...groupRows.map((row) => row.staff_id), staffId, driver.staff_id].map((item) => String(item ?? '').trim()).filter(Boolean))
         );
@@ -2173,7 +2174,7 @@ export default function AgencyAppPage() {
                       {showIdColumn ? <th className="w-[104px] py-2 pl-4 pr-1">ID</th> : null}
                       <th className={[compactScheduleView ? 'w-[206px]' : 'w-[184px]', 'px-1 py-2'].join(' ')}>Name</th>
                       {showAgencyColumn ? <th className="w-[92px] px-1 py-2">Agency</th> : null}
-                      {showDriverGroupColumn ? <th className="w-[80px] px-1 py-2 text-center">Group</th> : null}
+                      {showDriverGroupColumn ? <th className="w-[72px] px-1 py-2 text-center">Group</th> : null}
                       {showNoteColumn ? <th className="w-[180px] px-1 py-2">Note</th> : null}
                       <th className={[compactScheduleView ? 'w-[88px]' : 'w-[96px]', 'px-1 py-2'].join(' ')}>Position</th>
                       <th className={[compactScheduleView ? 'w-[66px]' : 'w-[72px]', 'px-1 py-2 text-center'].join(' ')}>Shift</th>
@@ -2253,7 +2254,7 @@ export default function AgencyAppPage() {
                             <select
                               value={employee.driver_group_code ? `group:${employee.driver_group_code}` : 'individual'}
                               className={[
-                                'h-8 max-w-32 rounded-full border px-2 text-[10px] font-semibold outline-none transition disabled:cursor-not-allowed disabled:opacity-50',
+                                'h-7 w-[68px] rounded-full border px-1.5 text-[9px] font-semibold outline-none transition disabled:cursor-not-allowed disabled:opacity-50',
                                 employee.driver_group_role === 'driver'
                                   ? 'border-cyan-300/40 bg-cyan-500/15 text-cyan-100'
                                   : employee.driver_group_label
@@ -2265,9 +2266,17 @@ export default function AgencyAppPage() {
                               title={employee.driver_group_label ? `Group ${employee.driver_group_label}` : 'Individual'}
                             >
                               <option value="individual">Individual</option>
-                              {driverGroupSummaries.map((group) => (
+                              {employee.driver_group_code ? (
+                                <option value={`group:${employee.driver_group_code}`}>
+                                  {employee.driver_group_label || employee.driver_group_code}
+                                </option>
+                              ) : null}
+                              {employee.driver_group_code && employee.driver_group_role !== 'driver' ? (
+                                <option value={`driver:${employee.driver_group_code}`}>Make driver</option>
+                              ) : null}
+                              {driverGroupSummaries.filter((group) => group.code !== employee.driver_group_code).map((group) => (
                                 <option key={group.code} value={`group:${group.code}`}>
-                                  {group.labels.length > 0 ? group.labels.join(' / ') : `Group ${group.code}`}
+                                  Group {group.code}
                                 </option>
                               ))}
                               <option value="new">New group {nextDriverGroupCode}</option>
