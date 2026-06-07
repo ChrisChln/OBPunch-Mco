@@ -2270,7 +2270,7 @@ export default function AgencyAppPage() {
                                   {group.labels.length > 0 ? group.labels.join(' / ') : `Group ${group.code}`}
                                 </option>
                               ))}
-                              <option value="new">New group</option>
+                              <option value="new">New group {nextDriverGroupCode}</option>
                             </select>
                           </td>
                         ) : null}
