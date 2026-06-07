@@ -1165,6 +1165,34 @@ export default function AgencyAppPage() {
     }
   };
 
+  const selectEmployeeDriverGroup = async (employee: AgencyEmployeeRow, value: string) => {
+    if (!supabase || !canOperateAgency) return;
+    const staffId = String(employee.staff_id ?? '').trim();
+    if (!staffId) return;
+    if (value === (employee.driver_group_code ? `group:${employee.driver_group_code}` : 'individual')) return;
+
+    beginBusy('Saving group');
+    try {
+      if (value === 'individual') {
+        await setAgencyDriverGroupIndividual(supabase, staffId);
+      } else {
+        const code = value === 'new' ? nextDriverGroupCode : value.replace(/^group:/, '').trim();
+        if (!code) throw new Error('Driver group is required.');
+        const groupRows = employeeRows.filter((row) => row.driver_group_code === code);
+        const driver = groupRows.find((row) => row.driver_group_role === 'driver') ?? groupRows[0] ?? employee;
+        const memberStaffIds = Array.from(
+          new Set([...groupRows.map((row) => row.staff_id), staffId, driver.staff_id].map((item) => String(item ?? '').trim()).filter(Boolean))
+        );
+        await upsertAgencyDriverGroup(supabase, code, driver.staff_id, memberStaffIds);
+      }
+      await refreshBoard();
+    } catch (nextError) {
+      openNotice('error', nextError instanceof Error ? nextError.message : 'Driver group save failed.');
+    } finally {
+      endBusy();
+    }
+  };
+
   const submitEmployeeNote = async (employee: AgencyEmployeeRow) => {
     if (!supabase || !canOperateAgency) return;
     const nextNote = normalizeAgencyNote(noteDrafts[employee.staff_id] ?? '');
@@ -2222,22 +2250,28 @@ export default function AgencyAppPage() {
                         {showAgencyColumn ? <td className="truncate px-1 py-2 text-slate-300">{employee.agency || '-'}</td> : null}
                         {showDriverGroupColumn ? (
                           <td className="px-1 py-2 text-center">
-                            <button
-                              type="button"
+                            <select
+                              value={employee.driver_group_code ? `group:${employee.driver_group_code}` : 'individual'}
                               className={[
-                                'inline-flex min-w-10 items-center justify-center rounded-full border px-2 py-1 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-50',
+                                'h-8 max-w-32 rounded-full border px-2 text-[10px] font-semibold outline-none transition disabled:cursor-not-allowed disabled:opacity-50',
                                 employee.driver_group_role === 'driver'
-                                  ? 'border-cyan-300/40 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/20'
+                                  ? 'border-cyan-300/40 bg-cyan-500/15 text-cyan-100'
                                   : employee.driver_group_label
-                                    ? 'border-white/12 bg-white/[0.05] text-slate-200 hover:bg-white/10'
-                                    : 'border-emerald-300/25 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15'
+                                    ? 'border-white/12 bg-white/[0.05] text-slate-200'
+                                    : 'border-emerald-300/25 bg-emerald-500/10 text-emerald-100'
                               ].join(' ')}
-                              disabled={!canOperateAgency}
-                              onClick={() => openDriverGroupModal(employee.driver_group_code || undefined, employee)}
+                              disabled={!canOperateAgency || busy}
+                              onChange={(event) => void selectEmployeeDriverGroup(employee, event.target.value)}
                               title={employee.driver_group_label ? `Group ${employee.driver_group_label}` : 'Individual'}
                             >
-                              {employee.driver_group_label || 'Individual'}
-                            </button>
+                              <option value="individual">Individual</option>
+                              {driverGroupSummaries.map((group) => (
+                                <option key={group.code} value={`group:${group.code}`}>
+                                  {group.labels.length > 0 ? group.labels.join(' / ') : `Group ${group.code}`}
+                                </option>
+                              ))}
+                              <option value="new">New group {nextDriverGroupCode}</option>
+                            </select>
                           </td>
                         ) : null}
                         {showNoteColumn ? (
