@@ -4717,7 +4717,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         staff_id: staff,
         date: templateDate,
         position: normalizedPosition,
-        shift: resolvedScheduleShift,
         note: getScheduleNoteFromBaseState(nextState),
         operator: user?.email ?? null,
         updated_at: new Date(serverTime).toISOString()
@@ -4743,7 +4742,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           staff_id: staff,
           date: nextWeekTemplateDate,
           position: payload.position,
-          shift: payload.shift,
           note: payload.note,
           operator: payload.operator,
           updated_at: payload.updated_at
@@ -13597,20 +13595,26 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         : addDays(new Date(serverTime), 1);
     const targetDay = Number.isNaN(parsedTarget.getTime()) ? addDays(new Date(serverTime), 1) : parsedTarget;
     const dayIndex = (targetDay.getDay() + 6) % 7; // Mon=0..Sun=6
+    const baseWeekStart = startOfWeekMonday(new Date(serverTime));
+    const targetWeekStart = startOfWeekMonday(targetDay);
+    const targetWeekOffset = clamp(
+      Math.round((targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000)),
+      0,
+      1
+    );
     const countedEarlyRows: DailyListRow[] = [];
     const countedLateRows: DailyListRow[] = [];
-    for (const employee of employees) {
-      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+    for (const row of scheduleRows) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       if (!staff) continue;
-      const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
+      const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim(), targetWeekOffset);
+      if (rowDayIndex !== dayIndex) continue;
       if (!row || !isWorkingScheduleRow(row)) continue;
       const profile = employeeProfileByStaffId.get(staff);
-      if (!profile) continue;
       const rowShift = normalizeShiftValue(String(row.shift ?? '').trim());
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-      const assignedShift = normalizeShiftValue(String((employee as any).shift ?? (employee as any).Shift ?? '').trim());
       // Schedule rows can come from legacy records without shift; default working rows to morning.
-      const shift = rowShift || assignedShift || inferredShift || 'early';
+      const shift = rowShift || inferredShift || 'early';
       if (shift !== 'early' && shift !== 'late') continue;
       const position = String(row.position ?? '').trim() || profile?.position || '';
       if (!normalizeDailyListPositionKey(position)) continue;
@@ -13621,7 +13625,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         position,
         shift,
         start_time: resolveShiftStartTime(shift, position, profile?.shiftTime || ''),
-        scheduleOnly: isScheduleOnlyAgency(profile.agency)
+        scheduleOnly: isScheduleOnlyAgency(profile?.agency ?? '')
       };
       if (shift === 'late') countedLateRows.push(item);
       else countedEarlyRows.push(item);
