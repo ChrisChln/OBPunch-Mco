@@ -2018,6 +2018,8 @@ export default function AdminAppPage() {
   const [dailyListNewHireLabel, setDailyListNewHireLabel] = useState('');
   const [dailyListNewHireEntryTime, setDailyListNewHireEntryTime] = useState('');
   const [dailyListNewHireNote, setDailyListNewHireNote] = useState('');
+  const [dailyListScheduleRows, setDailyListScheduleRows] = useState<ScheduleRow[]>([]);
+  const [dailyListScheduleRowsWeekOffset, setDailyListScheduleRowsWeekOffset] = useState<number | null>(null);
   const [dailyListSelectedPositions, setDailyListSelectedPositions] = useState<DailyListLightFlags>(
     createEmptyDailyListLightFlags
   );
@@ -2032,6 +2034,13 @@ export default function AdminAppPage() {
     const targetDay = Number.isNaN(parsedTarget.getTime()) ? addDays(new Date(serverTime), 1) : parsedTarget;
     return toDateOnly(targetDay);
   }, [dailyListDateInput, serverTime]);
+  const dailyListTargetWeekOffset = useMemo(() => {
+    const parsedTarget = new Date(`${dailyListTargetDateKey}T00:00:00`);
+    const targetDay = Number.isNaN(parsedTarget.getTime()) ? addDays(new Date(serverTime), 1) : parsedTarget;
+    const baseWeekStart = startOfWeekMonday(new Date(serverTime));
+    const targetWeekStart = startOfWeekMonday(targetDay);
+    return clamp(Math.round((targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000)), 0, 1);
+  }, [dailyListTargetDateKey, serverTime]);
   const schedulePositionDetailsRef = useRef<HTMLDetailsElement | null>(null);
   const scheduleLabelDetailsRef = useRef<HTMLDetailsElement | null>(null);
   const deferredScheduleSearch = useDeferredValue(scheduleSearch);
@@ -3028,6 +3037,40 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       window.clearInterval(timer);
     };
   }, [dailyListOpen, user?.email, offsetMs, dailyListDateInput]);
+
+  useEffect(() => {
+    if (!dailyListOpen || !supabase) return;
+    let cancelled = false;
+    const loadDailyListScheduleRows = async () => {
+      const startDate = getTemplateDateByDayIndex(0, dailyListTargetWeekOffset);
+      const endDate = getTemplateDateByDayIndex(6, dailyListTargetWeekOffset);
+      const res = await fetchAllPagedRows<ScheduleRow>({
+        pageSize: 1000,
+        fetchPage: async (from, to) =>
+          await supabase
+            .from(SCHEDULE_TABLE)
+            .select('id, staff_id, date, position, note, operator, updated_at, created_at')
+            .gte('date', startDate)
+            .lte('date', endDate)
+            .order('date', { ascending: false })
+            .order('staff_id', { ascending: true })
+            .range(from, to)
+      });
+      if (cancelled) return;
+      if (res.error) {
+        if (!isAbortLikeError(res.error)) setScheduleError(res.error);
+        setDailyListScheduleRows([]);
+        setDailyListScheduleRowsWeekOffset(dailyListTargetWeekOffset);
+        return;
+      }
+      setDailyListScheduleRows(pickLatestScheduleRowsByStaffDate(res.rows));
+      setDailyListScheduleRowsWeekOffset(dailyListTargetWeekOffset);
+    };
+    void loadDailyListScheduleRows();
+    return () => {
+      cancelled = true;
+    };
+  }, [dailyListOpen, dailyListTargetWeekOffset, supabase]);
 
   useEffect(() => {
     if (page !== 'timecard') {
@@ -13595,16 +13638,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         : addDays(new Date(serverTime), 1);
     const targetDay = Number.isNaN(parsedTarget.getTime()) ? addDays(new Date(serverTime), 1) : parsedTarget;
     const dayIndex = (targetDay.getDay() + 6) % 7; // Mon=0..Sun=6
-    const baseWeekStart = startOfWeekMonday(new Date(serverTime));
-    const targetWeekStart = startOfWeekMonday(targetDay);
-    const targetWeekOffset = clamp(
-      Math.round((targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000)),
-      0,
-      1
-    );
+    const targetWeekOffset = dailyListTargetWeekOffset;
+    const sourceScheduleRows =
+      scheduleRowsWeekOffset === targetWeekOffset
+        ? scheduleRows
+        : dailyListScheduleRowsWeekOffset === targetWeekOffset
+          ? dailyListScheduleRows
+          : [];
     const countedEarlyRows: DailyListRow[] = [];
     const countedLateRows: DailyListRow[] = [];
-    for (const row of scheduleRows) {
+    for (const row of sourceScheduleRows) {
       const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
       if (!staff) continue;
       const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim(), targetWeekOffset);
@@ -13664,6 +13707,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     dailyListDateInput,
     employees,
     scheduleRowsByStaffDayIndex,
+    scheduleRows,
+    scheduleRowsWeekOffset,
+    dailyListScheduleRows,
+    dailyListScheduleRowsWeekOffset,
+    dailyListTargetWeekOffset,
     employeeProfileByStaffId,
     employeeShiftByStaffId,
     activePositionNames,
