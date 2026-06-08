@@ -16698,15 +16698,15 @@ ${rowsToHtml(late)}
                               />
                             </div>
                           </div>
-                          <div className="min-w-0 flex-1 overflow-x-auto">
-                            <div className="grid min-w-[760px] grid-cols-5 gap-2">
+                          <div className="min-w-[420px] flex-1">
+                            <div className="grid grid-cols-[repeat(auto-fit,minmax(136px,1fr))] gap-2">
                               {tomorrowPositionSummaryCards.map((card) => (
                                 <button
                                   type="button"
                                   onClick={() => toggleDailyListSelectedPosition(card.position)}
                                   key={card.position}
                                   className={[
-                                    'flex min-h-[104px] w-full flex-col justify-between rounded-md border px-2.5 py-2 text-left transition',
+                                    'flex min-h-[104px] w-full min-w-0 flex-col justify-between rounded-md border px-2.5 py-2 text-left transition',
                                     dailyListSelectedPositions[card.position]
                                       ? themeMode === 'light'
                                         ? getHomeCardToneClass(card.position, schedulePositionToneByPosition)
@@ -16799,7 +16799,7 @@ ${rowsToHtml(late)}
                               ))}
                             </div>
                           </div>
-                          <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex shrink-0 flex-wrap items-start justify-end gap-2">
                             <button
                               type="button"
                               disabled={!canCopyDailyListAll}
