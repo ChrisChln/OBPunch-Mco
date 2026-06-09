@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizeAdminAccessContext, type AdminAccessContext } from '../shared/adminAccess';
-import type { AgencyBoard, AgencyUpsertNewHireInput, AgencyWeekSchedule, AgencyScheduleState } from './types';
+import type {
+  AgencyBoard,
+  AgencyUpsertNewHireInput,
+  AgencyWeekSchedule,
+  AgencyScheduleState
+} from './types';
 
 const PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
@@ -36,7 +41,35 @@ export const fetchAgencyBoard = async (supabase: SupabaseClient, workDate: strin
 };
 
 export const fetchAgencyScheduleWeek = async (supabase: SupabaseClient, workDate: string): Promise<AgencyWeekSchedule> => {
-  const payload = await expectRpcSuccess<AgencyWeekSchedule>(supabase.rpc('agency_get_schedule_week', { p_work_date: workDate }));
+  const [payload, driverPayload, notePayload] = await Promise.all([
+    expectRpcSuccess<AgencyWeekSchedule>(supabase.rpc('agency_get_schedule_week', { p_work_date: workDate })),
+    expectRpcSuccess<{
+      assignments?: Array<{ staff_id?: string | null; code?: string | null; role?: string | null; label?: string | null }>;
+      groups?: Array<Record<string, unknown>>;
+    }>(supabase.rpc('agency_get_driver_groups')),
+    expectRpcSuccess<Array<{ staff_id?: string | null; note?: string | null }>>(supabase.rpc('agency_get_employee_notes'))
+  ]);
+  const driverAssignmentByStaffId = new Map(
+    (Array.isArray(driverPayload.assignments) ? driverPayload.assignments : [])
+      .map((row) => {
+        const staffId = String(row?.staff_id ?? '').trim();
+        const role = String(row?.role ?? '').trim() === 'driver' ? 'driver' : 'member';
+        return [
+          staffId,
+          {
+            code: String(row?.code ?? '').trim(),
+            role,
+            label: String(row?.label ?? '').trim()
+          }
+        ] as const;
+      })
+      .filter(([staffId]) => Boolean(staffId))
+  );
+  const noteByStaffId = new Map(
+    (Array.isArray(notePayload) ? notePayload : [])
+      .map((row) => [String(row?.staff_id ?? '').trim(), String(row?.note ?? '').trim()] as const)
+      .filter(([staffId]) => Boolean(staffId))
+  );
   return {
     week_dates: Array.isArray(payload.week_dates) ? payload.week_dates.map((item) => String(item ?? '').trim()).filter(Boolean) : [],
     employees: Array.isArray(payload.employees)
@@ -50,6 +83,10 @@ export const fetchAgencyScheduleWeek = async (supabase: SupabaseClient, workDate
           label: String(row?.label ?? '').trim(),
           fixed_work_count: Number(row?.fixed_work_count ?? 0) || 0,
           termination_status: row?.termination_status == null ? null : String(row.termination_status).trim() || null,
+          driver_group_code: driverAssignmentByStaffId.get(String(row?.staff_id ?? '').trim())?.code ?? '',
+          driver_group_role: driverAssignmentByStaffId.get(String(row?.staff_id ?? '').trim())?.role ?? '',
+          driver_group_label: driverAssignmentByStaffId.get(String(row?.staff_id ?? '').trim())?.label ?? '',
+          agency_note: noteByStaffId.get(String(row?.staff_id ?? '').trim()) ?? '',
           days: Array.isArray(row?.days)
             ? row.days.map((cell) => ({
                 work_date: String(cell?.work_date ?? '').trim(),
@@ -72,6 +109,15 @@ export const fetchAgencyScheduleWeek = async (supabase: SupabaseClient, workDate
           label: String(row?.label ?? '').trim(),
           work_date: String(row?.work_date ?? '').trim(),
           can_delete: Boolean(row?.can_delete)
+        }))
+      : [],
+    driver_groups: Array.isArray(driverPayload.groups)
+      ? driverPayload.groups.map((row) => ({
+          code: String(row?.code ?? '').trim(),
+          activeMemberCount: Number(row?.activeMemberCount ?? row?.active_member_count ?? 0) || 0,
+          memberCount: Number(row?.memberCount ?? row?.member_count ?? 0) || 0,
+          driverCount: Number(row?.driverCount ?? row?.driver_count ?? 0) || 0,
+          labels: Array.isArray(row?.labels) ? row.labels.map((item) => String(item ?? '').trim()).filter(Boolean) : []
         }))
       : []
   };
@@ -212,5 +258,41 @@ export const setAgencyScheduleState = async (
       p_work_date: workDate,
       p_state: state,
       p_reason: ''
+    })
+  );
+
+export const upsertAgencyDriverGroup = async (
+  supabase: SupabaseClient,
+  code: string,
+  driverStaffId: string,
+  memberStaffIds: string[]
+) =>
+  expectRpcSuccess(
+    supabase.rpc('agency_upsert_driver_group', {
+      p_code: code,
+      p_driver_staff_id: driverStaffId,
+      p_member_staff_ids: memberStaffIds
+    })
+  );
+
+export const deleteAgencyDriverGroup = async (supabase: SupabaseClient, code: string) =>
+  expectRpcSuccess(
+    supabase.rpc('agency_delete_driver_group', {
+      p_code: code
+    })
+  );
+
+export const setAgencyDriverGroupIndividual = async (supabase: SupabaseClient, staffId: string) =>
+  expectRpcSuccess(
+    supabase.rpc('agency_set_driver_group_individual', {
+      p_staff_id: staffId
+    })
+  );
+
+export const upsertAgencyEmployeeNote = async (supabase: SupabaseClient, staffId: string, note: string) =>
+  expectRpcSuccess(
+    supabase.rpc('agency_upsert_employee_note', {
+      p_staff_id: staffId,
+      p_note: note
     })
   );

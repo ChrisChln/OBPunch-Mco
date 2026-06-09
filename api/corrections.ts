@@ -76,13 +76,11 @@ export default async function handler(req: any, res: any) {
       {
         staff_id: staffId,
         action,
-        metadata: {
-          device: 'admin_api',
-          kind: 'correction',
-          operator: 'admin_api',
-          note,
-          effective_at: effectiveAt
-        }
+        ...(effectiveAt ? { created_at: effectiveAt } : {}),
+        device: 'admin_api',
+        source: 'correction',
+        operator: 'admin_api',
+        note
       }
     ]);
 
@@ -96,7 +94,6 @@ export default async function handler(req: any, res: any) {
     res.status(500).json({ error: err?.message ?? String(err) });
   }
 }
-
 
 
 

@@ -15,6 +15,10 @@ const makeEmployee = (overrides: Partial<AgencyEmployeeRow>): AgencyEmployeeRow 
   has_absent: false,
   has_late: false,
   termination_status: null,
+  driver_group_code: '',
+  driver_group_role: '',
+  driver_group_label: '',
+  agency_note: '',
   ...overrides
 });
 

@@ -10,6 +10,26 @@ It includes punch terminals, dashboarding, device borrow/return, and a full admi
 - Admin app: /admin.html
 - Device app: /device.html
 
+## Vercel deployment
+
+Import the repository `ChrisChln/OBPunch-Mco` into Vercel and use these project settings:
+
+- Framework preset: Vite
+- Production branch: main
+- Build command: `npm run build`
+- Output directory: `dist`
+- Install command: `npm install`
+
+Required Vercel environment variables:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `ADMIN_TOKEN`
+
+Set optional table, timing, OBUP, cron, and sync variables from the Environment variables section when the deployment needs those workflows. Keep server-only secrets out of frontend `VITE_` variables.
+
 ## Full feature map
 
 ### 1) Punch app (front terminal)

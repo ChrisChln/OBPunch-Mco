@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronDown, Clock3, LayoutDashboard, LogIn, LogOut, Shield, UserRound, Waypoints } from 'lucide-react';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib/supabase';
-import { isValidStaffId, normalizeStaffId } from './lib/staffId';
+import { isValidPunchStaffId, normalizeStaffId } from './lib/staffId';
+import { submitPunchToApi } from './lib/punchApi';
+import { formatPunchFailureSummary } from './lib/punchDisplay';
 import { LABEL_TONE_KEYS, type LabelToneKey, loadLabelToneMap } from './lib/labelTone';
 import { getBarcodePromptGroupKey, getBarcodePrompts, getRandomBarcodePromptIndex } from './lib/barcodePrompt';
 import { isScheduleOnlyAgency } from './shared/agencyRules';
@@ -552,7 +554,7 @@ export default function App() {
 
   const [staffId, setStaffId] = useState('');
   const normalizedId = useMemo(() => normalizeStaffId(staffId), [staffId]);
-  const isValidId = useMemo(() => isValidStaffId(normalizedId), [normalizedId]);
+  const isValidId = useMemo(() => isValidPunchStaffId(normalizedId), [normalizedId]);
 
   const defaultUiStatusMessage = 'Enter US ID to start punch';
   const [uiStatus, setUiStatus] = useState<Status>({ tone: 'idle', message: defaultUiStatusMessage });
@@ -743,7 +745,7 @@ export default function App() {
   const [, setPunchBoardDeviceStatusByStaffId] = useState<Record<string, PunchBoardDeviceStatus>>({});
   const [, setPunchBoardUphByStaffId] = useState<Record<string, number | null>>({});
   const [, setLabelToneByName] = useState<Record<string, LabelToneKey>>(() => loadLabelToneMap());
-  const [, setSchedulePositionToneByPosition] = useState<Record<AllowedPosition, LabelToneKey>>({
+  const [, setSchedulePositionToneByPosition] = useState<Record<string, LabelToneKey>>({
     Pick: 'sky',
     Pack: 'emerald',
     Rebin: 'amber',
@@ -1360,8 +1362,8 @@ export default function App() {
     }
     if (mode === 'borrow') {
       staffId = normalizeStaffId(deviceBorrowStaffId);
-      if (!isValidStaffId(staffId)) {
-        reportDeviceFailure('Invalid USID.');
+      if (!isValidPunchStaffId(staffId)) {
+        reportDeviceFailure('Invalid staff ID.');
         return;
       }
       const lastPunch = await fetchLastPunch(staffId);
@@ -2384,9 +2386,9 @@ const fetchPunchBoardUph = async (
     }
     return next;
   };
-  const normalizePositionToneMap = (value: unknown): Record<AllowedPosition, LabelToneKey> => {
+  const normalizePositionToneMap = (value: unknown): Record<string, LabelToneKey> => {
     const raw = (value ?? {}) as Record<string, unknown>;
-    const next: Record<AllowedPosition, LabelToneKey> = {
+    const next: Record<string, LabelToneKey> = {
       Pick: 'sky',
       Pack: 'emerald',
       Rebin: 'amber',
@@ -2394,10 +2396,12 @@ const fetchPunchBoardUph = async (
       Transfer: 'violet',
       'FLEX TEAM': 'slate'
     };
-    for (const pos of ALLOWED_POSITIONS) {
-      const tone = String(raw[pos] ?? '').trim() as LabelToneKey;
+    for (const [pos, rawTone] of Object.entries(raw)) {
+      const key = String(pos ?? '').trim();
+      const tone = String(rawTone ?? '').trim() as LabelToneKey;
+      if (!key) continue;
       if (!LABEL_TONE_KEYS.includes(tone)) continue;
-      next[pos] = tone;
+      next[key] = tone;
     }
     return next;
   };
@@ -2764,7 +2768,7 @@ const fetchPunchBoardUph = async (
       return;
     }
     if (!isValidId) {
-      setUiStatus({ tone: 'error', message: 'Invalid staff ID format (example: US010454).' });
+      setUiStatus({ tone: 'error', message: 'Invalid staff ID format.' });
       playError();
       return;
     }
@@ -2827,20 +2831,11 @@ const fetchPunchBoardUph = async (
         return;
       }
 
-      const { error } = await supabase.from('ob_punches').insert([
-        {
-          staff_id: normalizedId,
-          action,
-          metadata: {
-            device: 'web_browser',
-            user_agent: navigator.userAgent
-          }
-        }
-      ]);
+      const punchRes = await submitPunchToApi({ staffId: normalizedId, action });
 
-      if (error) {
-        setUiStatus({ tone: 'error', message: `Punch failed: ${error.message}` });
-        setLastPunchSummary({ status: 'error', message: 'Punch failed', at: new Date().toISOString() });
+      if (!punchRes.ok) {
+        setUiStatus({ tone: 'error', message: `Punch failed: ${punchRes.error}` });
+        setLastPunchSummary({ status: 'error', message: formatPunchFailureSummary(punchRes.error), at: new Date().toISOString() });
         playError();
         return;
       }
@@ -2892,7 +2887,7 @@ const fetchPunchBoardUph = async (
       return;
     }
     if (!isValidId) {
-      setUiStatus({ tone: 'error', message: 'Invalid staff ID format (example: US010454).' });
+      setUiStatus({ tone: 'error', message: 'Invalid staff ID format.' });
       setLastPunchSummary({ status: 'error', message: 'Invalid staff ID', at: new Date().toISOString() });
       playError();
       return;
@@ -3062,7 +3057,7 @@ const fetchPunchBoardUph = async (
       return;
     }
     if (!isValidId) {
-      setUiStatus({ tone: 'error', message: 'Invalid staff ID format (example: US010454).' });
+      setUiStatus({ tone: 'error', message: 'Invalid staff ID format.' });
       return;
     }
 
@@ -3143,14 +3138,14 @@ const fetchPunchBoardUph = async (
           <section className="relative mx-auto w-full max-w-[1120px] overflow-hidden rounded-[36px] border border-white/10 bg-[linear-gradient(135deg,rgba(5,7,10,0.92),rgba(11,13,16,0.84))] shadow-[0_40px_120px_rgba(0,0,0,0.45)]">
             <div className="pointer-events-none absolute inset-0">
               <div className="absolute -left-20 top-[-72px] h-64 w-64 rounded-full bg-[#9eff00]/10 blur-3xl" />
-              <div className="absolute bottom-[-96px] right-[-56px] h-72 w-72 rounded-full bg-sky-400/10 blur-3xl" />
+              <div className="absolute bottom-[-96px] right-[-56px] h-72 w-72 rounded-full bg-[#9eff00]/8 blur-3xl" />
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_32%)]" />
             </div>
 
             <div className="relative grid min-h-[520px] gap-8 px-6 py-6 md:grid-cols-[minmax(0,1.3fr)_minmax(380px,0.9fr)] md:px-8 md:py-8 xl:px-10 xl:py-10">
               <div className="flex min-h-[240px] flex-col justify-between rounded-[28px] border border-white/8 bg-white/[0.03] p-6 md:p-8">
                 <div>
-                  <div className="text-[11px] uppercase tracking-[0.32em] text-sky-200/80">OBP Security</div>
+                  <div className="text-[11px] uppercase tracking-[0.32em] text-slate-300/80">OBP Security</div>
                   <h1 className="mt-6 max-w-[10ch] font-display text-5xl leading-[0.92] tracking-[0.03em] text-white md:text-6xl xl:text-7xl">
                     Punch Screen
                     <br />
@@ -3161,7 +3156,7 @@ const fetchPunchBoardUph = async (
               </div>
 
               <div className="flex items-center">
-                <div className="w-full rounded-[30px] border border-white/10 bg-sky-700/35 p-6 shadow-[0_28px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl md:p-8">
+                <div className="w-full rounded-[30px] border border-white/10 bg-[linear-gradient(145deg,rgba(18,23,19,0.78),rgba(6,9,10,0.88))] p-6 shadow-[0_28px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl md:p-8">
                   <div className="text-[11px] uppercase tracking-[0.3em] text-slate-400">Sign In</div>
                   <div className="mt-4 font-display text-4xl tracking-[0.03em] text-white md:text-5xl">Administrator Unlock</div>
 

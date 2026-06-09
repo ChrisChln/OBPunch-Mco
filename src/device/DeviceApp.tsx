@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createSupabaseClient } from '../lib/supabase';
-import { isValidStaffId as isValidStaffIdValue, normalizeStaffId } from '../lib/staffId';
+import { isValidPunchStaffId, normalizeStaffId } from '../lib/staffId';
 
 type DeviceType = string; // 现在支持任意自定义设备类型值
 type LoanAction = 'borrow' | 'return';
@@ -488,7 +488,7 @@ export default function DeviceApp() {
       setSnInput('');
       window.setTimeout(() => staffRef.current?.focus(), 0);
     };
-    if (mode === 'borrow' && (!staffId || !isValidStaffIdValue(staffId))) {
+    if (mode === 'borrow' && (!staffId || !isValidPunchStaffId(staffId))) {
       setMessage({ tone: 'error', text: 'Invalid staff ID. Please scan again.' });
       pushOpLog('error', 'Borrow invalid employee scan');
       clearBorrowInputsOnFailure();

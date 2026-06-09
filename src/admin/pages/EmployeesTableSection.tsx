@@ -153,12 +153,12 @@ export default function EmployeesTableSection({
       <div
         ref={containerRef}
         className={[
-          'no-scrollbar mt-5 max-h-[68vh] overflow-y-auto overflow-x-hidden rounded-2xl border',
+          'mt-5 max-h-[68vh] overflow-auto rounded-2xl border',
           isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/30'
         ].join(' ')}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
       >
-        <table className="w-full table-fixed text-left text-sm">
+        <table className="min-w-[1500px] w-full table-fixed text-left text-sm">
           <thead
             className={[
               'sticky top-0 z-20 border-b text-xs uppercase tracking-[0.2em] backdrop-blur',
@@ -166,8 +166,8 @@ export default function EmployeesTableSection({
             ].join(' ')}
           >
             <tr>
-              <th className="w-[118px] px-3 py-3 whitespace-nowrap">Employee ID</th>
-              <th className="w-[180px] px-3 py-3">Name</th>
+              <th className="w-[190px] px-3 py-3 whitespace-nowrap">Employee ID</th>
+              <th className="w-[220px] px-3 py-3">Name</th>
               <th className="w-[92px] px-3 py-3 whitespace-nowrap">Agency</th>
               <th className="w-[112px] px-3 py-3 whitespace-nowrap">Position</th>
               <th className="w-[72px] px-3 py-3 whitespace-nowrap">FT/PT</th>
@@ -301,8 +301,10 @@ export default function EmployeesTableSection({
                     isSelected || rowIsLocked ? '' : 'hover:bg-white/5'
                   ].join(' ')}
                 >
-                  <td className={['w-[118px] px-3 py-3 font-mono whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{displayEmployeeId}</td>
-                  <td className={['w-[180px] max-w-[180px] px-3 py-3', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
+                  <td className={['w-[190px] max-w-[190px] px-3 py-3 font-mono', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
+                    <span className="block truncate" title={displayEmployeeId}>{displayEmployeeId}</span>
+                  </td>
+                  <td className={['w-[220px] max-w-[220px] px-3 py-3', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
                     <span className="block truncate" title={name || '-'}>{name || '-'}</span>
                   </td>
                   <td className={['w-[92px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{agency || '-'}</td>
