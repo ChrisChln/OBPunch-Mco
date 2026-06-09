@@ -59,7 +59,6 @@ import {
 } from '../shared/adminAccess';
 import {
   DAILY_LIST_LIGHTS_KEY,
-  DAILY_LIST_LIGHT_POSITIONS,
   buildDailyListLightsSettingValue,
   createEmptyDailyListLightFlags,
   normalizeDailyListLightPosition,
@@ -221,7 +220,6 @@ type DailyListCapacityView = {
 
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'Water Spider', 'FLEX TEAM'] as const;
-const FALLBACK_DAILY_LIST_VISIBLE_POSITIONS = DAILY_LIST_LIGHT_POSITIONS.filter((position) => position !== 'FLEX TEAM');
 const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 'ob_audit_logs';
 const HIDDEN_AUDIT_ACTIONS = new Set(['admin_page_switch', 'schedule_open_daily_list']);
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
@@ -1384,6 +1382,14 @@ export default function AdminAppPage() {
     (moduleKey: 'employees' | 'schedule' | 'timecard', position: unknown) =>
       hasPositionAccess(adminAccessContext, moduleKey, position, 'operate'),
     [adminAccessContext]
+  );
+  const scheduleVisiblePositionNames = useMemo(
+    () => activePositionNames.filter((position) => canViewPosition('schedule', position)),
+    [activePositionNames, canViewPosition]
+  );
+  const scheduleVisiblePositionSet = useMemo(
+    () => new Set(scheduleVisiblePositionNames),
+    [scheduleVisiblePositionNames]
   );
   const scheduleCanReviewTermination = useMemo(
     () => canReviewTerminationRequests(adminAccessContext),
@@ -13660,7 +13666,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const shift = rowShift || inferredShift || 'early';
       if (shift !== 'early' && shift !== 'late') continue;
       const position = String(row.position ?? '').trim() || profile?.position || '';
-      if (!normalizeDailyListPositionKey(position)) continue;
+      const normalizedPosition = normalizeDailyListPositionKey(position);
+      if (!normalizedPosition || !scheduleVisiblePositionSet.has(normalizedPosition)) continue;
       const item: DailyListRow = {
         staff_id: staff,
         name: profile?.name || '',
@@ -13673,7 +13680,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (shift === 'late') countedLateRows.push(item);
       else countedEarlyRows.push(item);
     }
-    const positionRank = new Map(activePositionNames.map((pos, idx) => [pos, idx] as const));
+    const positionRank = new Map(scheduleVisiblePositionNames.map((pos, idx) => [pos, idx] as const));
     const dailyListSort = (a: DailyListRow, b: DailyListRow) => {
       const aIsNew = isNewHirePlaceholderStaffId(String(a.staff_id ?? '').trim()) || isNewHirePlaceholderName(String(a.name ?? '').trim());
       const bIsNew = isNewHirePlaceholderStaffId(String(b.staff_id ?? '').trim()) || isNewHirePlaceholderName(String(b.name ?? '').trim());
@@ -13714,11 +13721,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     dailyListTargetWeekOffset,
     employeeProfileByStaffId,
     employeeShiftByStaffId,
-    activePositionNames,
+    scheduleVisiblePositionNames,
+    scheduleVisiblePositionSet,
     allPositionNames
   ]);
   const dailyListVisiblePositions = useMemo(() => {
-    const sourcePositions = activePositionNames.length > 0 ? activePositionNames : FALLBACK_DAILY_LIST_VISIBLE_POSITIONS;
+    const sourcePositions = scheduleVisiblePositionNames;
     const seen = new Set<string>();
     const next: string[] = [];
     for (const position of sourcePositions) {
@@ -13728,7 +13736,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       next.push(key);
     }
     return next;
-  }, [activePositionNames, allPositionNames]);
+  }, [scheduleVisiblePositionNames, allPositionNames]);
   const dailyListCapacityByRowKey = useMemo(() => {
     const map = new Map<string, DailyListCapacityView>();
     const addRow = (row: DailyListRow) => {
@@ -14154,7 +14162,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const homeExpectedCards = useMemo(() => {
     if (page !== 'home') {
       return (['early', 'late'] as const).flatMap((shift) =>
-        activePositionNames.map((position) => ({
+        scheduleVisiblePositionNames.map((position) => ({
           key: `${shift}:${position}`,
           shift,
           position,
@@ -14172,6 +14180,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || String(row.position ?? '').trim();
       const normalizedPosition = normalizePositionKey(positionRaw);
       if (!normalizedPosition) continue;
+      if (!scheduleVisiblePositionSet.has(normalizedPosition)) continue;
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
       const shift = inferredShift;
       if (shift !== 'early' && shift !== 'late') continue;
@@ -14179,7 +14188,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       countByKey[key] = (countByKey[key] ?? 0) + 1;
     }
     return (['early', 'late'] as const).flatMap((shift) =>
-      activePositionNames.map((position) => ({
+      scheduleVisiblePositionNames.map((position) => ({
         key: `${shift}:${position}`,
         shift,
         position,
@@ -14193,18 +14202,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     homeOperationalDayIndex,
     employeeProfileByStaffId,
     employeeShiftByStaffId,
-    activePositionNames,
+    scheduleVisiblePositionNames,
+    scheduleVisiblePositionSet,
   ]);
   const homeExpectedPositionSummaryCards = useMemo(
     () => {
-      if (page !== 'home') return activePositionNames.map((position) => ({ position, early: 0, late: 0, total: 0 }));
-      return activePositionNames.map((position) => {
+      if (page !== 'home') return scheduleVisiblePositionNames.map((position) => ({ position, early: 0, late: 0, total: 0 }));
+      return scheduleVisiblePositionNames.map((position) => {
         const early = homeExpectedCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
         const late = homeExpectedCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
         return { position, early, late, total: early + late };
       });
     },
-    [page, homeExpectedCards, activePositionNames]
+    [page, homeExpectedCards, scheduleVisiblePositionNames]
   );
   const homeCardStats = useMemo(() => {
     if (page !== 'home') return {};
@@ -14227,6 +14237,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || (row ? String(row.position ?? '').trim() : '');
       const position = normalizePositionKey(positionRaw);
       if (!position) continue;
+      if (!scheduleVisiblePositionSet.has(position)) continue;
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
       const shift = inferredShift;
       if (shift !== 'early' && shift !== 'late') continue;
@@ -14247,7 +14258,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     homeOperationalDayIndex,
     employeeProfileByStaffId,
     employeeShiftByStaffId,
-    schedulePunchPresenceKeys
+    schedulePunchPresenceKeys,
+    scheduleVisiblePositionSet
   ]);
 
   const homeEmployeeByStaffId = useMemo(() => {
@@ -14388,6 +14400,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         isOnClock: false
       });
       if (isScheduleOnlyAgency(item.agency)) continue;
+      const itemPosition = normalizePositionKey(String(item.position ?? '').trim());
+      if (!itemPosition || !scheduleVisiblePositionSet.has(itemPosition)) continue;
 
       const hideLateAbsent = shift === 'late' && nowMinutes < lateAbsentVisibleMinutes;
       // 缺勤：仅在打卡存在性加载完成后再判断，避免初始加载闪烁全缺勤
@@ -14414,6 +14428,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
       const fallbackEmp = homeEmployeeByStaffId.get(staff);
       const position = String(profile?.position ?? row?.position ?? fallbackEmp?.position ?? fallbackEmp?.Position ?? '').trim();
+      const normalizedPosition = normalizePositionKey(position);
+      if (!normalizedPosition || !scheduleVisiblePositionSet.has(normalizedPosition)) continue;
       const agency = String(profile?.agency ?? fallbackEmp?.agency ?? fallbackEmp?.Agency ?? '').trim();
       if (isScheduleOnlyAgency(agency)) continue;
       onClock.push(
@@ -14444,7 +14460,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     homeFirstInAtByStaffId,
     employeeShiftByStaffId,
     employeeProfileByStaffId,
-    scheduleMistakeByStaffId
+    scheduleMistakeByStaffId,
+    scheduleVisiblePositionSet
   ]);
   const homeRosterRowsFiltered = useMemo(() => {
     if (page !== 'home') {
@@ -15458,7 +15475,7 @@ ${rowsToHtml(late)}
                 getScheduleTablePositionBadgeClass={getScheduleTablePositionBadgeClass}
                 getScheduleTableShiftBadgeClass={getScheduleTableShiftBadgeClass}
                 schedulePositionToneByPosition={schedulePositionToneByPosition}
-                homeDashboardPositionNames={activePositionNames}
+                homeDashboardPositionNames={scheduleVisiblePositionNames}
                 homeRosterPositionFilter={homeRosterPositionFilter}
                 setHomeRosterPositionFilter={setHomeRosterPositionFilter}
                 onOpenTimecardCalibration={openTimecardPunchModalForDate}
@@ -17096,7 +17113,7 @@ ${rowsToHtml(late)}
                   t={t}
                   themeMode={themeMode}
                   isLocked={scheduleReadOnly}
-                  allowedPositions={activePositionNames}
+                  allowedPositions={scheduleVisiblePositionNames}
                   dailyListNewHirePosition={dailyListNewHirePosition}
                   setDailyListNewHirePosition={setDailyListNewHirePosition}
                   dailyListNewHireShift={dailyListNewHireShift}

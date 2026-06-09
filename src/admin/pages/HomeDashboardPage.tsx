@@ -176,7 +176,7 @@ function HomeDashboardPage({
   getSchedulePositionBadgeClass,
   getScheduleTablePositionBadgeClass,
   getScheduleTableShiftBadgeClass,
-  schedulePositionToneByPosition: _schedulePositionToneByPosition,
+  schedulePositionToneByPosition,
   homeDashboardPositionNames,
   homeRosterPositionFilter: _homeRosterPositionFilter,
   setHomeRosterPositionFilter,
@@ -202,11 +202,7 @@ function HomeDashboardPage({
 
   const cardPositions = useMemo(
     () =>
-      buildDashboardCardPositions(homeDashboardPositionNames, [
-        ...homeExpectedPositionSummaryCards.map((item) => item.position),
-        ...Object.keys(homeCardStats),
-        ...homeRosterRowsCurrent.map((row) => row.position)
-      ]),
+      buildDashboardCardPositions(homeDashboardPositionNames, []),
     [homeDashboardPositionNames, homeExpectedPositionSummaryCards, homeCardStats, homeRosterRowsCurrent]
   );
 
@@ -384,7 +380,9 @@ function HomeDashboardPage({
                       key={`${card.position}:${card.shift}`}
                       className={[
                         'rounded-[24px] border px-4 py-4 shadow-none',
-                        isLight ? getAttendanceCardClassLight(card.position) : getAttendanceCardClass(card.position)
+                        isLight
+                          ? getAttendanceCardClassLight(card.position)
+                          : _getHomePanelToneClass(card.position, schedulePositionToneByPosition)
                       ].join(' ')}
                     >
                       <div className="flex items-start justify-between gap-4">
@@ -402,17 +400,7 @@ function HomeDashboardPage({
                           'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-none',
                           isLight
                             ? getAttendanceCardClassLight(card.position).replace('/85', '')
-                            : card.position === 'Pick'
-                              ? 'border-sky-300/20 bg-sky-400/[0.10]'
-                              : card.position === 'Pack'
-                                ? 'border-emerald-300/20 bg-emerald-400/[0.10]'
-                                : card.position === 'Rebin'
-                                  ? 'border-amber-300/20 bg-amber-400/[0.10]'
-                                  : card.position === 'Preship'
-                                    ? 'border-rose-300/20 bg-rose-400/[0.10]'
-                                    : card.position === 'Transfer'
-                                      ? 'border-violet-300/20 bg-violet-400/[0.10]'
-                                      : 'border-white/10 bg-white/[0.04]'
+                            : _getHomeChipToneClass(card.position, schedulePositionToneByPosition)
                         ].join(' ')}>
                           <div className={['text-[10px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>On Clock</div>
                           <div className={['mt-1 text-3xl font-semibold leading-none', isLight ? getAttendanceCardValueClassLight(card.position) : getAttendanceCardValueClass(card.position)].join(' ')}>{card.onClock}</div>
