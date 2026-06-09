@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { useCallback, type UIEvent } from 'react';
 import { isScheduleOnlyAgency } from '../../shared/agencyRules';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -105,8 +106,13 @@ export default function EmployeesTableSection({
   const TABLE_COLS = 12;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [scrollTop, setScrollTop] = useState(0);
+  const visibleStartRef = useRef(0);
+  const [visibleStart, setVisibleStart] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(640);
+
+  const getVisibleStart = useCallback((nextScrollTop: number) => {
+    return Math.max(0, Math.floor(nextScrollTop / ROW_HEIGHT) - OVERSCAN);
+  }, []);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -123,19 +129,36 @@ export default function EmployeesTableSection({
   }, []);
 
   const total = employeesFiltered.length;
+  useEffect(() => {
+    if (visibleStart < total) return;
+    visibleStartRef.current = 0;
+    setVisibleStart(0);
+    if (containerRef.current) containerRef.current.scrollTop = 0;
+  }, [total, visibleStart]);
+
   const visibleMeta = useMemo(() => {
     const safeHeight = Math.max(1, viewportHeight);
-    const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
     const visibleCount = Math.ceil(safeHeight / ROW_HEIGHT) + OVERSCAN * 2;
+    const start = Math.min(visibleStart, total);
     const end = Math.min(total, start + visibleCount);
     return { start, end };
-  }, [scrollTop, viewportHeight, total]);
+  }, [visibleStart, viewportHeight, total]);
 
   const topSpacerHeight = visibleMeta.start * ROW_HEIGHT;
   const bottomSpacerHeight = Math.max(0, (total - visibleMeta.end) * ROW_HEIGHT);
   const employeesVisible = useMemo(
     () => employeesFiltered.slice(visibleMeta.start, visibleMeta.end),
     [employeesFiltered, visibleMeta.start, visibleMeta.end]
+  );
+  const selectedStaffIds = useMemo(() => new Set(employeeBadgeBatchSelectedStaffIds), [employeeBadgeBatchSelectedStaffIds]);
+  const handleScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      const nextStart = getVisibleStart(event.currentTarget.scrollTop);
+      if (nextStart === visibleStartRef.current) return;
+      visibleStartRef.current = nextStart;
+      setVisibleStart(nextStart);
+    },
+    [getVisibleStart]
   );
 
   return (
@@ -156,7 +179,7 @@ export default function EmployeesTableSection({
           'mt-5 max-h-[68vh] overflow-auto rounded-2xl border',
           isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/30'
         ].join(' ')}
-        onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+        onScroll={handleScroll}
       >
         <table className="min-w-[1500px] w-full table-fixed text-left text-sm">
           <thead
@@ -272,7 +295,7 @@ export default function EmployeesTableSection({
                     )
                   : '';
               const displayEmployeeId = isProtectedAgencyEmployee ? '-' : displayStaffId(staff);
-              const isSelected = employeeBadgeBatchSelectedStaffIds.includes(staff);
+              const isSelected = selectedStaffIds.has(staff);
               const rowIsLocked = isLocked || !canOperateEmployeePosition(position);
               const selectedRowStyle = isSelected
                 ? themeMode === 'light'
