@@ -16076,6 +16076,7 @@ ${rowsToHtml(late)}
                           <th className="sticky top-0 z-20 w-[124px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('姓名', 'Name')}</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">{t('工作天数', 'Work Days')}</th>
                           <th className="sticky top-0 z-20 w-[82px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('中介', 'Agency')}</th>
+                          <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">Driver</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('岗位', 'Position')}</th>
                           <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('标签', 'Label')}</th>
                           <th className="sticky top-0 z-20 w-[64px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('班次', 'Shift')}</th>
@@ -16220,33 +16221,23 @@ ${rowsToHtml(late)}
                           return (
                             <tr className={scheduleRowClass} key={staff}>
                               <td className={['pl-4 pr-1 py-2 font-mono', scheduleBodyTextClass].join(' ')}>{staff}</td>
-                              <td className={['px-1 py-2 truncate', scheduleBodyTextClass].join(' ')}>
-                                <div>{name || '-'}</div>
-                                {(scheduleDriverInfo || scheduleAgencyNote) && (
-                                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
-                                    {scheduleDriverInfo ? (
-                                      <span
-                                        className={[
-                                          'inline-flex max-w-full items-center truncate rounded-full border px-1.5 py-0.5 text-[9px] font-semibold leading-none',
-                                          scheduleDriverInfo.role === 'driver'
-                                            ? 'border-cyan-300/40 bg-cyan-500/15 text-cyan-100'
-                                            : 'border-white/12 bg-white/[0.05] text-slate-200'
-                                        ].join(' ')}
-                                        title={`Driver group ${scheduleDriverInfo.code}`}
-                                      >
-                                        {scheduleDriverInfo.label}
-                                      </span>
-                                    ) : null}
+                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
+                                <div className="relative inline-flex max-w-full items-start">
+                                  <span
+                                    className="group relative inline-flex max-w-full items-start pr-2"
+                                    title={scheduleAgencyNote ? undefined : name || '-'}
+                                  >
+                                    <span className="block truncate">{name || '-'}</span>
                                     {scheduleAgencyNote ? (
-                                      <span
-                                        className="inline-flex max-w-full items-center truncate rounded-full border border-amber-300/35 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold leading-none text-amber-100"
-                                        title={scheduleAgencyNote}
-                                      >
-                                        Note
-                                      </span>
+                                      <>
+                                        <span className="absolute -right-0.5 -top-1 h-2 w-2 rounded-full border border-slate-950 bg-rose-400 shadow-[0_0_0_2px_rgba(244,63,94,0.18)]" />
+                                        <span className="pointer-events-none absolute left-0 top-full z-40 mt-1 hidden w-48 rounded-lg border border-rose-300/25 bg-slate-950/95 px-2 py-1.5 text-[11px] font-medium leading-snug text-slate-100 shadow-2xl backdrop-blur group-hover:block">
+                                          {scheduleAgencyNote}
+                                        </span>
+                                      </>
                                     ) : null}
-                                  </div>
-                                )}
+                                  </span>
+                                </div>
                                 {hasPendingTermination && (
                                   <div
                                     className={[
@@ -16265,6 +16256,23 @@ ${rowsToHtml(late)}
                                 </span>
                               </td>
                               <td className={['px-1 py-2 truncate', scheduleBodyTextClass].join(' ')}>{agency || '-'}</td>
+                              <td className="px-1 py-2 text-center">
+                                {scheduleDriverInfo ? (
+                                  <span
+                                    className={[
+                                      'inline-flex max-w-full items-center justify-center truncate rounded-full border px-1.5 py-0.5 text-[9px] font-semibold leading-none',
+                                      scheduleDriverInfo.role === 'driver'
+                                        ? 'border-cyan-300/40 bg-cyan-500/15 text-cyan-100'
+                                        : 'border-white/12 bg-white/[0.05] text-slate-200'
+                                    ].join(' ')}
+                                    title={`Driver group ${scheduleDriverInfo.code}`}
+                                  >
+                                    {scheduleDriverInfo.label}
+                                  </span>
+                                ) : (
+                                  <span className={scheduleBodyTextClass}>-</span>
+                                )}
+                              </td>
                               <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
                                 <span className={getScheduleTablePositionBadgeClass(position)}>
                                   {position || '-'}
