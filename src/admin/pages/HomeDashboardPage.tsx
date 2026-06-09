@@ -6,6 +6,12 @@ import {
   resolveDashboardPositionName
 } from '../../shared/dashboardPositions';
 import { DEFAULT_DASHBOARD_CARD_POSITIONS } from '../../shared/dashboardPositions';
+import {
+  buildDashboardAttendanceStats,
+  createDashboardAttendanceStat,
+  getDashboardAttendanceStatKey,
+  type DashboardAttendanceStat
+} from '../../shared/dashboardAttendanceStats';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -80,6 +86,14 @@ const normalizeShiftValue = (value: unknown): '' | 'early' | 'late' => {
   if (v === 'early' || v === 'morning' || v.includes('早')) return 'early';
   if (v === 'late' || v === 'night' || v.includes('晚')) return 'late';
   return '';
+};
+
+const hasPunchLog = (row: HomeRosterRow) => (row.punches ?? []).length > 0 || row.attendance === 'Normal' || row.attendance === 'Completed' || row.attendance === 'Off Worked';
+
+const isRowOnClock = (row: HomeRosterRow) => {
+  if (row.attendance === 'Normal') return true;
+  const punches = row.punches ?? [];
+  return punches[punches.length - 1]?.action === 'IN';
 };
 
 const formatShiftLabel = (value: string) => {
@@ -206,53 +220,58 @@ function HomeDashboardPage({
     [homeDashboardPositionNames, homeExpectedPositionSummaryCards, homeCardStats, homeRosterRowsCurrent]
   );
 
+  const homeAttendanceStats = useMemo(() => {
+    const rows = homeRosterRowsCurrent
+      .map((row) => {
+        const position = normalizePositionKey(row.position, homeDashboardPositionNames);
+        const shift = normalizeShiftValue(row.shift);
+        if (!position || !shift) return null;
+        return {
+          staffId: row.staff_id,
+          position,
+          shift,
+          isExpected: row.attendance !== 'Off Worked',
+          hasPunch: hasPunchLog(row),
+          isOnClock: isRowOnClock(row),
+          attendance: row.attendance
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => Boolean(row));
+    return buildDashboardAttendanceStats(rows);
+  }, [homeRosterRowsCurrent, homeDashboardPositionNames]);
+
   const outboundShiftCards = useMemo(() => {
     const summaryPositions = cardPositions.filter((position) => normalizePositionKey(position, homeDashboardPositionNames) !== 'Transfer');
-    const morningPresent = summaryPositions.reduce((sum, position) => sum + (homeCardStats[position]?.early ?? 0), 0);
+    const morningPresent = summaryPositions.reduce((sum, position) => sum + (homeAttendanceStats[getDashboardAttendanceStatKey('early', position)]?.present ?? 0), 0);
     const morningExpected = summaryPositions.reduce((sum, position) => sum + (summaryByPosition.get(position)?.early ?? 0), 0);
-    const nightPresent = summaryPositions.reduce((sum, position) => sum + (homeCardStats[position]?.late ?? 0), 0);
+    const nightPresent = summaryPositions.reduce((sum, position) => sum + (homeAttendanceStats[getDashboardAttendanceStatKey('late', position)]?.present ?? 0), 0);
     const nightExpected = summaryPositions.reduce((sum, position) => sum + (summaryByPosition.get(position)?.late ?? 0), 0);
     return [
       { shift: 'early' as const, present: morningPresent, expected: morningExpected },
       { shift: 'late' as const, present: nightPresent, expected: nightExpected }
     ];
-  }, [cardPositions, homeCardStats, homeDashboardPositionNames, summaryByPosition]);
+  }, [cardPositions, homeAttendanceStats, homeDashboardPositionNames, summaryByPosition]);
 
   const attendanceCardGroups = useMemo(
     () => {
-      const onClockCountByKey = new Map<string, number>();
-      const offWorkedCountByKey = new Map<string, number>();
-      for (const row of homeRosterRowsCurrent) {
-        const position = normalizePositionKey(row.position, homeDashboardPositionNames);
-        const shift = normalizeShiftValue(row.shift);
-        if (!position || !shift) continue;
-        const key = `${position}:${shift}`;
-        if (row.attendance === 'Normal') {
-          onClockCountByKey.set(key, (onClockCountByKey.get(key) ?? 0) + 1);
-        }
-        if (row.attendance === 'Off Worked') {
-          offWorkedCountByKey.set(key, (offWorkedCountByKey.get(key) ?? 0) + 1);
-        }
-      }
-
       return (['early', 'late'] as const).map((shift) => ({
         shift,
         cards: cardPositions.map((position) => {
-          const stats = homeCardStats[position] ?? { early: 0, late: 0, active: 0 };
           const plan = summaryByPosition.get(position) ?? { early: 0, late: 0, total: 0 };
-          const key = `${position}:${shift}`;
+          const key = getDashboardAttendanceStatKey(shift, position);
+          const stat: DashboardAttendanceStat = homeAttendanceStats[key] ?? createDashboardAttendanceStat();
           return {
             position,
             shift,
             expected: shift === 'early' ? plan.early : plan.late,
-            present: shift === 'early' ? stats.early : stats.late,
-            onClock: onClockCountByKey.get(key) ?? 0,
-            offWorked: offWorkedCountByKey.get(key) ?? 0
+            present: stat.present,
+            onClock: stat.onClock,
+            offWorked: stat.offWorked
           };
         })
       }));
     },
-    [cardPositions, homeCardStats, homeDashboardPositionNames, summaryByPosition, homeRosterRowsCurrent]
+    [cardPositions, homeAttendanceStats, summaryByPosition]
   );
 
   const positionOptions = useMemo(

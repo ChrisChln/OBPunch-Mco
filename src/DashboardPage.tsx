@@ -13,6 +13,7 @@ import {
   buildDashboardPositionOptions,
   resolveDashboardPositionName
 } from './shared/dashboardPositions';
+import { createDashboardAttendanceStat } from './shared/dashboardAttendanceStats';
 import { DEFAULT_POSITION_NAMES, buildActivePositionNames, normalizePositionName, type PositionRecord } from './shared/positions';
 
 type EmployeeRow = {
@@ -872,13 +873,11 @@ export default function DashboardPage() {
       for (const shift of ['early', 'late'] as const) {
         for (const position of orderedCardPositions) {
           const key = `${shift}:${position}`;
-          const expected = staffByKey.get(key)?.size ?? 0;
-          const presentIds = new Set<string>([
-            ...Array.from(arrivedByKey.get(key) ?? []),
-            ...Array.from(restWorkedByKey.get(key) ?? [])
-          ]);
+          const expectedIds = staffByKey.get(key) ?? new Set<string>();
+          const arrivedIds = arrivedByKey.get(key) ?? new Set<string>();
+          const presentIds = new Set(Array.from(expectedIds).filter((staffId) => arrivedIds.has(staffId)));
           nextCardStatsByKey[key] = {
-            expected,
+            expected: expectedIds.size,
             present: presentIds.size,
             onClock: onClockByKey.get(key)?.size ?? 0,
             offWorked: restWorkedByKey.get(key)?.size ?? 0
@@ -1325,7 +1324,7 @@ export default function DashboardPage() {
             String(row.shift ?? '').trim().toLowerCase() === shift
         );
         const offWorkedScope = positionShiftScope.filter((row) => row.attendance === 'Off Worked');
-        const stat = cardStatsByKey[`${shift}:${position}`] ?? { expected: 0, present: 0, onClock: 0, offWorked: 0 };
+        const stat = cardStatsByKey[`${shift}:${position}`] ?? createDashboardAttendanceStat();
         cards.push({ position, shift, expected: stat.expected, present: stat.present, onClock: stat.onClock, offWorked: stat.offWorked || offWorkedScope.length });
       }
     }
@@ -1346,7 +1345,7 @@ export default function DashboardPage() {
       let expected = 0;
       let present = 0;
       for (const position of summaryPositions) {
-        const stat = cardStatsByKey[`${shift}:${position}`] ?? { expected: 0, present: 0, onClock: 0, offWorked: 0 };
+        const stat = cardStatsByKey[`${shift}:${position}`] ?? createDashboardAttendanceStat();
         expected += Number(stat.expected || 0);
         present += Number(stat.present || 0);
       }

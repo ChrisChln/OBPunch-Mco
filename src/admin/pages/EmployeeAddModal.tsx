@@ -78,7 +78,6 @@ export default function EmployeeAddModal({
   const agencySelectValue = !normalizedAgency ? '' : hasAgencyInOptions ? normalizedAgency : NEW_AGENCY_OPTION;
   const isAddDisabled =
     isLocked ||
-    !employeeNewStaffId.trim() ||
     !employeeNewName.trim() ||
     !normalizedAgency ||
     isProtectedAgencyInput ||

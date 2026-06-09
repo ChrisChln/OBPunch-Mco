@@ -6,7 +6,6 @@ import {
   isValidScheduleStaffId,
   isValidPunchStaffId,
   isValidStaffId as isValidStaffIdValue,
-  isValidStaffIdForUpdate,
   normalizeStaffId
 } from '../lib/staffId';
 import { matchesLooseSearch } from '../lib/textSearch';
@@ -245,7 +244,6 @@ const OBUP_REPORT_DETAILS_TABLE =
 const OBUP_UPLOAD_RECORDS_TABLE = (import.meta.env.VITE_OBUP_UPLOAD_RECORDS_TABLE as string | undefined) ?? 'upload_records';
 const MISTAKE_REPORT_TABLE = (import.meta.env.VITE_MISTAKE_REPORT_TABLE as string | undefined) ?? 'ob_mistake_reports';
 const SCHEDULE_UPH_DAYS = 30;
-const STAFF_ID_EDITOR_EMAIL = 'lnchen4201@gmail.com';
 const ATTENDANCE_MARK_TYPES = ['absent', 'excuse', 'temporary_leave', 'late'] as const;
 const NON_LATE_ATTENDANCE_MARK_TYPES = ['absent', 'excuse', 'temporary_leave'] as const;
 const DEFAULT_TIMECARD_ATTENDANCE_SYNC_TABLES = ATTENDANCE_MARKS_TABLE === 'ob_attendance_marks';
@@ -448,6 +446,16 @@ const isMissingTableError = (message: unknown, table: string) => {
     text.includes('relation') ||
     text.includes('does not exist')
   ) && text.includes(target);
+};
+
+const isMissingColumnError = (error: unknown, column: string) => {
+  const text = String(
+    typeof error === 'object' && error !== null
+      ? `${(error as { code?: unknown }).code ?? ''} ${(error as { message?: unknown }).message ?? ''} ${(error as { details?: unknown }).details ?? ''} ${(error as { hint?: unknown }).hint ?? ''}`
+      : error ?? ''
+  ).toLowerCase();
+  const target = String(column ?? '').toLowerCase();
+  return Boolean(target) && text.includes(target) && (text.includes('column') || text.includes('schema cache') || text.includes('42703') || text.includes('pgrst'));
 };
 
 const isMissingLateSyncRpcError = (error: unknown) => {
@@ -898,6 +906,11 @@ const isNewHirePlaceholderStaffId = (value: string) => {
   if (/^TEMP-USID-[A-Z0-9]+-\d{4,}$/i.test(staff)) return true;
   if (/^NEWREQ-\d{8}(?:-[A-Z]+)?-\d{3,}$/i.test(staff)) return true; // legacy format
   return /^\d{4}[A-Z]+\d{3,}$/i.test(staff); // MMDD + POSITION + SEQ
+};
+const createManualTemporaryStaffId = () => {
+  const stamp = Date.now().toString(36).toUpperCase();
+  const random = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `TEMP-USID-${stamp}${random}-0001`;
 };
 const isNewHirePlaceholderName = (value: string) => /^\d{2}\/\d{2}NEW\s+[A-Z]+(\d+)$/i.test(String(value ?? '').trim());
 const isNewHireFirstWorkDate = (staffId: string, workDate: Date | string) => {
@@ -3055,7 +3068,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         fetchPage: async (from, to) =>
           await supabase
             .from(SCHEDULE_TABLE)
-            .select('id, staff_id, date, position, note, operator, updated_at, created_at')
+            .select('id, staff_id, date, shift, position, note, operator, updated_at, created_at')
             .gte('date', startDate)
             .lte('date', endDate)
             .order('date', { ascending: false })
@@ -4486,18 +4499,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     const exec = async () => {
       setScheduleError(null);
-      const res = await fetchAllPagedRows<ScheduleRow>({
-        pageSize: 1000,
-        fetchPage: async (from, to) =>
-          await supabase
-            .from(SCHEDULE_TABLE)
-            .select('id, staff_id, date, position, note, operator, updated_at, created_at')
-            .gte('date', startDate)
-            .lte('date', endDate)
-            .order('date', { ascending: false })
-            .order('staff_id', { ascending: true })
-            .range(from, to)
-      });
+      const fetchRows = (selectColumns: string) =>
+        fetchAllPagedRows<ScheduleRow>({
+          pageSize: 1000,
+          fetchPage: async (from, to) => {
+            const pageRes = await supabase
+              .from(SCHEDULE_TABLE)
+              .select(selectColumns)
+              .gte('date', startDate)
+              .lte('date', endDate)
+              .order('date', { ascending: false })
+              .order('staff_id', { ascending: true })
+              .range(from, to);
+            return pageRes as { data?: ScheduleRow[] | null; error?: { message?: string } | null };
+          }
+        });
+      let res = await fetchRows('id, staff_id, date, shift, position, note, operator, updated_at, created_at');
+      if (res.error && isMissingColumnError(res.error, 'shift')) {
+        res = await fetchRows('id, staff_id, date, position, note, operator, updated_at, created_at');
+      }
       if (res.error) {
         if (!isAbortLikeError(res.error)) setScheduleError(res.error);
         setScheduleRows([]);
@@ -6601,8 +6621,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
 
     const staffRaw = employeeNewStaffId.trim();
-    const staff = normalizeStaffId(staffRaw);
-    if (!staff || !isValidStaffIdValue(staff)) {
+    const staff = staffRaw ? normalizeStaffId(staffRaw) : createManualTemporaryStaffId();
+    if (!staff || (!isValidStaffIdValue(staff) && !isNewHirePlaceholderStaffId(staff))) {
       setEmployeesError('员工ID格式不正确。');
       return;
     }
@@ -7971,23 +7991,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setEmployeesError('Missing Supabase config.');
       return;
     }
-    const canEditStaffIdByEmail = String(user?.email ?? '').trim().toLowerCase() === STAFF_ID_EDITOR_EMAIL;
     const originalStaffRaw = String(employeeEditOriginalStaffId ?? '').trim();
     const isPlaceholderOriginal = isNewHirePlaceholderStaffId(originalStaffRaw);
     const originalStaff = isPlaceholderOriginal ? originalStaffRaw : normalizeStaffId(originalStaffRaw);
     const nextStaffInputRaw = String(employeeEditStaffId ?? '').trim();
-    const nextStaffNormalized = normalizeStaffId(nextStaffInputRaw);
-    const nextStaff = isPlaceholderOriginal && !nextStaffInputRaw ? originalStaff : nextStaffNormalized;
+    const nextStaff = nextStaffInputRaw ? normalizeStaffId(nextStaffInputRaw) : createManualTemporaryStaffId();
     if (!originalStaff || !nextStaff) return;
-    if (!isPlaceholderOriginal && !canEditStaffIdByEmail && nextStaff !== originalStaff) {
-      setEmployeesError(`Only ${STAFF_ID_EDITOR_EMAIL} can change staff ID.`);
-      return;
-    }
-    if (!isPlaceholderOriginal && !isValidStaffIdForUpdate(originalStaff, nextStaff)) {
+    if (!isPlaceholderOriginal && originalStaff !== nextStaff && !isValidStaffIdValue(nextStaff) && !isNewHirePlaceholderStaffId(nextStaff)) {
       setEmployeesError('Invalid staff ID format (e.g. US010454).');
       return;
     }
-    if (isPlaceholderOriginal && nextStaff !== originalStaff && !isValidStaffIdValue(nextStaff)) {
+    if (isPlaceholderOriginal && nextStaff !== originalStaff && !isValidStaffIdValue(nextStaff) && !isNewHirePlaceholderStaffId(nextStaff)) {
       setEmployeesError('Invalid staff ID format (e.g. US010454).');
       return;
     }
@@ -14177,12 +14191,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
       if (!row || !isWorkingScheduleRow(row)) continue;
       const positionRaw =
-        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || String(row.position ?? '').trim();
+        String(row.position ?? '').trim() || String(employeeProfileByStaffId.get(staff)?.position ?? '').trim();
       const normalizedPosition = normalizePositionKey(positionRaw);
       if (!normalizedPosition) continue;
       if (!scheduleVisiblePositionSet.has(normalizedPosition)) continue;
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-      const shift = inferredShift;
+      const shift = inferredShift || 'early';
       if (shift !== 'early' && shift !== 'late') continue;
       const key = `${shift}:${normalizedPosition}`;
       countByKey[key] = (countByKey[key] ?? 0) + 1;
@@ -14234,12 +14248,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       // 如果排班不是工作状态，但没有打卡记录，也跳过
       if (row && !isWorkingScheduleRow(row) && !hasPunch && !activeStaffSet.has(staff)) continue;
       const positionRaw =
-        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || (row ? String(row.position ?? '').trim() : '');
+        (row ? String(row.position ?? '').trim() : '') || String(employeeProfileByStaffId.get(staff)?.position ?? '').trim();
       const position = normalizePositionKey(positionRaw);
       if (!position) continue;
       if (!scheduleVisiblePositionSet.has(position)) continue;
       const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
-      const shift = inferredShift;
+      const shift = inferredShift || 'early';
       if (shift !== 'early' && shift !== 'late') continue;
       const s = (stats[position] ??= { early: 0, late: 0, active: 0 });
       if (hasPunch) {
@@ -14389,13 +14403,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const hasPunch = schedulePunchPresenceKeys.has(`${staff}__${homeOperationalDayIndex}`);
       const currentOnClockShift = homeOnClockShiftByStaffId[staff];
       const isCurrentlyOnClock = currentOnClockShift === 'early' || currentOnClockShift === 'late';
-      const shift = employeeShiftByStaffId[staff]?.shift ?? '';
+      const shift = employeeShiftByStaffId[staff]?.shift || 'early';
       const profile = employeeProfileByStaffId.get(staff);
       const item = buildHomeRosterItem({
         staff,
         profile,
         employee,
-        positionRaw: String(employee.position ?? employee.Position ?? '').trim(),
+        positionRaw: String(row?.position ?? '').trim() || String(employee.position ?? employee.Position ?? '').trim(),
         shift,
         isOnClock: false
       });
@@ -14427,7 +14441,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const profile = employeeProfileByStaffId.get(staff);
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
       const fallbackEmp = homeEmployeeByStaffId.get(staff);
-      const position = String(profile?.position ?? row?.position ?? fallbackEmp?.position ?? fallbackEmp?.Position ?? '').trim();
+      const position = String(row?.position ?? profile?.position ?? fallbackEmp?.position ?? fallbackEmp?.Position ?? '').trim();
       const normalizedPosition = normalizePositionKey(position);
       if (!normalizedPosition || !scheduleVisiblePositionSet.has(normalizedPosition)) continue;
       const agency = String(profile?.agency ?? fallbackEmp?.agency ?? fallbackEmp?.Agency ?? '').trim();
@@ -14438,7 +14452,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           profile,
           employee: fallbackEmp,
           positionRaw: position,
-          shift: shiftRaw,
+          shift: employeeShiftByStaffId[staff]?.shift || shiftRaw,
           isOnClock: true
         })
       );
@@ -17264,9 +17278,6 @@ ${rowsToHtml(late)}
                   t={t}
                   themeMode={themeMode}
                   isLocked={employeesReadOnly}
-                  userEmail={String(user?.email ?? '')}
-                  staffIdEditorEmail={STAFF_ID_EDITOR_EMAIL}
-                  isNewHirePlaceholderStaffId={isNewHirePlaceholderStaffId}
                   displayStaffId={displayStaffId}
                   employeeEditOriginalStaffId={employeeEditOriginalStaffId}
                   employeeEditStaffId={employeeEditStaffId}
