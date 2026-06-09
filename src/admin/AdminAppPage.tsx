@@ -3064,18 +3064,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const loadDailyListScheduleRows = async () => {
       const startDate = getTemplateDateByDayIndex(0, dailyListTargetWeekOffset);
       const endDate = getTemplateDateByDayIndex(6, dailyListTargetWeekOffset);
-      const res = await fetchAllPagedRows<ScheduleRow>({
-        pageSize: 1000,
-        fetchPage: async (from, to) =>
-          await supabase
-            .from(SCHEDULE_TABLE)
-            .select('id, staff_id, date, shift, position, note, operator, updated_at, created_at')
-            .gte('date', startDate)
-            .lte('date', endDate)
-            .order('date', { ascending: false })
-            .order('staff_id', { ascending: true })
-            .range(from, to)
-      });
+      const fetchRows = (selectColumns: string) =>
+        fetchAllPagedRows<ScheduleRow>({
+          pageSize: 1000,
+          fetchPage: async (from, to) => {
+            const pageRes = await supabase
+              .from(SCHEDULE_TABLE)
+              .select(selectColumns)
+              .gte('date', startDate)
+              .lte('date', endDate)
+              .order('date', { ascending: false })
+              .order('staff_id', { ascending: true })
+              .range(from, to);
+            return pageRes as { data?: ScheduleRow[] | null; error?: { message?: string } | null };
+          }
+        });
+      let res = await fetchRows('id, staff_id, date, shift, position, note, operator, updated_at, created_at');
+      if (res.error && isMissingColumnError(res.error, 'shift')) {
+        res = await fetchRows('id, staff_id, date, position, note, operator, updated_at, created_at');
+      }
       if (cancelled) return;
       if (res.error) {
         if (!isAbortLikeError(res.error)) setScheduleError(res.error);
