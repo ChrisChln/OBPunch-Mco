@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   buildEmployeeUploadRows,
   detectEmployeeImportIdentityConflicts,
+  findTemporaryEmployeeUploadMatches,
   findInvalidEmployeeUploadPositions,
   isGeneratedEmployeeUploadStaffId,
   normalizeEmployeeUploadPosition
@@ -119,6 +120,50 @@ describe('employee upload position validation', () => {
 
     expect(result.modifiedStaffIds).toEqual([]);
     expect(result.duplicateWorkAccounts).toEqual([]);
+  });
+
+  test('matches real USIDs to unique temporary employees by name and agency', () => {
+    const result = findTemporaryEmployeeUploadMatches(
+      [
+        {
+          staff_id: 'US018928',
+          name: 'Barbara Rujano',
+          agency: 'Central',
+          position: 'Putaway',
+          employment_type: 'FT',
+          work_account: 'ib-barbararujano'
+        }
+      ],
+      [{ staff_id: 'TEMP-USID-MQ2VLTPL-0002', name: 'Barbara Rujano', agency: 'Central', work_account: '' }]
+    );
+
+    expect(result).toEqual([
+      {
+        incomingStaffId: 'US018928',
+        temporaryStaffId: 'TEMP-USID-MQ2VLTPL-0002'
+      }
+    ]);
+  });
+
+  test('does not match ambiguous temporary employees by name and agency', () => {
+    const result = findTemporaryEmployeeUploadMatches(
+      [
+        {
+          staff_id: 'US018928',
+          name: 'Barbara Rujano',
+          agency: 'Central',
+          position: 'Putaway',
+          employment_type: 'FT',
+          work_account: ''
+        }
+      ],
+      [
+        { staff_id: 'TEMP-USID-MQ2VLTPL-0002', name: 'Barbara Rujano', agency: 'Central', work_account: '' },
+        { staff_id: 'TEMP-USID-MQ2VLTPL-0099', name: 'Barbara Rujano', agency: 'Central', work_account: '' }
+      ]
+    );
+
+    expect(result).toEqual([]);
   });
 
   test('reports duplicate work accounts for generated temporary new-hire IDs without calling them USID edits', () => {

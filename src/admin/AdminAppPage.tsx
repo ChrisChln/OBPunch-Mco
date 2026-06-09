@@ -114,6 +114,7 @@ import { buildAdminUserIdentityView, type AdminUserIdentityView } from './adminI
 import {
   buildEmployeeUploadRows,
   detectEmployeeImportIdentityConflicts,
+  findTemporaryEmployeeUploadMatches,
   findInvalidEmployeeUploadPositions,
   normalizeEmployeeUploadPosition
 } from './employeeUploadPositions';
@@ -12241,22 +12242,30 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             m === 'cased'
               ? 'staff_id, name, "Agency", "Position", employment_type, shift, shift_time, label, work_account, work_password'
               : 'staff_id, name, agency, position, employment_type, shift, shift_time, label, work_account, work_password';
-          const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batchStaffIds);
-          return { mode: m, res };
+          const [batchRes, allRes] = await Promise.all([
+            supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batchStaffIds),
+            supabase.from(EMPLOYEE_TABLE).select(select)
+          ]);
+          return { mode: m, batchRes, allRes };
         };
 
         let attempt = await run(mode);
-        if (attempt.res.error) {
+        if (attempt.batchRes.error || attempt.allRes.error) {
           const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
           employeeColumnModeRef.current = flipped;
           attempt = await run(flipped);
         }
 
-        if (attempt.res.error) {
-          return { mode: mode, rows: [] as any[], error: attempt.res.error };
+        if (attempt.batchRes.error || attempt.allRes.error) {
+          return { mode: mode, rows: [] as any[], allRows: [] as any[], error: attempt.batchRes.error ?? attempt.allRes.error };
         }
 
-        return { mode: attempt.mode, rows: ((attempt.res.data as any[]) ?? []) as any[], error: null as any };
+        return {
+          mode: attempt.mode,
+          rows: ((attempt.batchRes.data as any[]) ?? []) as any[],
+          allRows: ((attempt.allRes.data as any[]) ?? []) as any[],
+          error: null as any
+        };
       };
 
       const existingDetailsRes = await fetchExistingDetails();
@@ -12264,9 +12273,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return { error: existingDetailsRes.error, inserted: 0, skippedExisting: 0, updated: 0, auditItems };
       }
 
-      const existingSet = new Set<string>(existingDetailsRes.rows.map((r) => String(r.staff_id ?? '').trim()).filter(Boolean));
+      const existingSet = new Set<string>(existingDetailsRes.rows.map((r) => String(r.staff_id ?? '').trim().toUpperCase()).filter(Boolean));
+      const temporaryMatchByIncomingStaff = new Map(
+        findTemporaryEmployeeUploadMatches(rows, existingDetailsRes.allRows).map((match) => [match.incomingStaffId, match.temporaryStaffId] as const)
+      );
 
-      const toInsert = batch.filter((r) => !existingSet.has(String(r.staff_id ?? '').trim()));
+      const toInsert = batch.filter((r) => {
+        const staff = String(r.staff_id ?? '').trim();
+        const staffKey = staff.toUpperCase();
+        return !existingSet.has(staffKey) && !temporaryMatchByIncomingStaff.has(staffKey);
+      });
       const skippedExisting = batch.length - toInsert.length;
 
       const tryInsert = async (payload: any[]) => {
@@ -12359,8 +12375,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           work_password: string;
         }
       >();
-      for (const r of existingDetailsRes.rows) {
-        const staff = String(r.staff_id ?? '').trim();
+      const temporarySourceStaffIds = new Set(Array.from(temporaryMatchByIncomingStaff.values()));
+      const rowsForUpdate = [
+        ...existingDetailsRes.rows,
+        ...existingDetailsRes.allRows.filter((row) => temporarySourceStaffIds.has(String(row.staff_id ?? '').trim().toUpperCase()))
+      ];
+      for (const r of rowsForUpdate) {
+        const staff = String(r.staff_id ?? '').trim().toUpperCase();
         if (!staff) continue;
         existingByStaff.set(staff, {
           name: String(r.name ?? '').trim(),
@@ -12381,14 +12402,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       const toUpdate: Array<{
         staff_id: string;
+        source_staff_id: string;
         payload: Record<string, unknown>;
         before: Record<string, unknown>;
         after: Record<string, unknown>;
       }> = [];
       for (const row of batch) {
         const staff = String(row.staff_id ?? '').trim();
-        if (!staff || !existingSet.has(staff)) continue;
-        const existing = existingByStaff.get(staff) ?? {
+        const staffKey = staff.toUpperCase();
+        const sourceStaff = existingSet.has(staffKey) ? staffKey : temporaryMatchByIncomingStaff.get(staffKey) ?? '';
+        if (!staff || !sourceStaff) continue;
+        const sourceStaffKey = sourceStaff.toUpperCase();
+        const existing = existingByStaff.get(sourceStaffKey) ?? {
           name: '',
           agency: '',
           position: '',
@@ -12401,6 +12426,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         };
 
         const payload: Record<string, unknown> = {};
+        if (sourceStaffKey !== staffKey) payload.staff_id = staffKey;
         if (row.name && String(row.name).trim() && String(row.name).trim() !== existing.name) payload.name = String(row.name).trim();
         if (row.agency && String(row.agency).trim() && String(row.agency).trim() !== existing.agency) {
           if (existingDetailsRes.mode === 'cased') payload.Agency = String(row.agency).trim();
@@ -12431,7 +12457,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
         if (Object.keys(payload).length > 0) {
           const before = {
-            staff_id: staff,
+            staff_id: sourceStaffKey,
             name: existing.name,
             agency: existing.agency,
             position: existing.position,
@@ -12443,7 +12469,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             work_password: existing.work_password
           };
           const after = {
-            staff_id: staff,
+            staff_id: payload.staff_id ?? staffKey,
             name: payload.name ?? existing.name,
             agency: payload.agency ?? payload.Agency ?? existing.agency,
             position: payload.position ?? payload.Position ?? existing.position,
@@ -12454,7 +12480,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             work_account: payload.work_account ?? existing.work_account,
             work_password: payload.work_password ?? existing.work_password
           };
-          toUpdate.push({ staff_id: staff, payload, before, after });
+          toUpdate.push({ staff_id: staffKey, source_staff_id: sourceStaffKey, payload, before, after });
         }
       }
 
@@ -12464,15 +12490,108 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       let updated = 0;
       for (const u of toUpdate) {
-        const res = await supabase.from(EMPLOYEE_TABLE).update(u.payload).eq('staff_id', u.staff_id);
+        let punchIdsToMigrate: Array<string | number> = [];
+        let scheduleIdsToMigrate: Array<string | number> = [];
+        const isTemporaryStaffUpgrade = u.source_staff_id !== u.staff_id;
+
+        if (isTemporaryStaffUpgrade) {
+          const nextPunchRes = await supabase.from('ob_punches').select('id', { count: 'exact', head: true }).eq('staff_id', u.staff_id);
+          if (nextPunchRes.error) {
+            return { error: nextPunchRes.error, inserted: insertedCount, skippedExisting, updated, auditItems };
+          }
+          if ((nextPunchRes.count ?? 0) > 0) {
+            return {
+              error: { message: `Target staff ID already has punch rows: ${u.staff_id}` },
+              inserted: insertedCount,
+              skippedExisting,
+              updated,
+              auditItems
+            };
+          }
+
+          const nextScheduleRes = await supabase.from(SCHEDULE_TABLE).select('id', { count: 'exact', head: true }).eq('staff_id', u.staff_id);
+          if (nextScheduleRes.error) {
+            return { error: nextScheduleRes.error, inserted: insertedCount, skippedExisting, updated, auditItems };
+          }
+          if ((nextScheduleRes.count ?? 0) > 0) {
+            return {
+              error: { message: `Target staff ID already has schedule rows: ${u.staff_id}` },
+              inserted: insertedCount,
+              skippedExisting,
+              updated,
+              auditItems
+            };
+          }
+
+          const punchListRes = await supabase.from('ob_punches').select('id').eq('staff_id', u.source_staff_id);
+          if (punchListRes.error) {
+            return { error: punchListRes.error, inserted: insertedCount, skippedExisting, updated, auditItems };
+          }
+          punchIdsToMigrate = ((punchListRes.data as any[]) ?? []).map((r) => r.id).filter((id) => id !== null && id !== undefined);
+
+          const scheduleListRes = await supabase.from(SCHEDULE_TABLE).select('id').eq('staff_id', u.source_staff_id);
+          if (scheduleListRes.error) {
+            return { error: scheduleListRes.error, inserted: insertedCount, skippedExisting, updated, auditItems };
+          }
+          scheduleIdsToMigrate = ((scheduleListRes.data as any[]) ?? []).map((r) => r.id).filter((id) => id !== null && id !== undefined);
+        }
+
+        const restorePayload =
+          existingDetailsRes.mode === 'cased'
+            ? {
+                staff_id: u.source_staff_id,
+                name: u.before.name ?? null,
+                Agency: u.before.agency ?? null,
+                Position: u.before.position ?? null,
+                employment_type: u.before.employment_type ?? null,
+                shift: u.before.shift || null,
+                shift_time: u.before.shift_time || null,
+                label: u.before.label || null,
+                work_account: u.before.work_account || null,
+                work_password: u.before.work_password || null
+              }
+            : {
+                staff_id: u.source_staff_id,
+                name: u.before.name ?? null,
+                agency: u.before.agency ?? null,
+                position: u.before.position ?? null,
+                employment_type: u.before.employment_type ?? null,
+                shift: u.before.shift || null,
+                shift_time: u.before.shift_time || null,
+                label: u.before.label || null,
+                work_account: u.before.work_account || null,
+                work_password: u.before.work_password || null
+              };
+
+        const res = await supabase.from(EMPLOYEE_TABLE).update(u.payload).eq('staff_id', u.source_staff_id);
         if (res.error) {
           return { error: res.error, inserted: insertedCount, skippedExisting, updated, auditItems };
         }
+
+        if (isTemporaryStaffUpgrade && punchIdsToMigrate.length > 0) {
+          const punchUpdateRes = await supabase.from('ob_punches').update({ staff_id: u.staff_id } as any).eq('staff_id', u.source_staff_id);
+          if (punchUpdateRes.error) {
+            await supabase.from(EMPLOYEE_TABLE).update(restorePayload as any).eq('staff_id', u.staff_id);
+            return { error: punchUpdateRes.error, inserted: insertedCount, skippedExisting, updated, auditItems };
+          }
+        }
+
+        if (isTemporaryStaffUpgrade && scheduleIdsToMigrate.length > 0) {
+          const scheduleUpdateRes = await supabase.from(SCHEDULE_TABLE).update({ staff_id: u.staff_id } as any).eq('staff_id', u.source_staff_id);
+          if (scheduleUpdateRes.error) {
+            if (punchIdsToMigrate.length > 0) {
+              await supabase.from('ob_punches').update({ staff_id: u.source_staff_id } as any).in('id', punchIdsToMigrate as any[]);
+            }
+            await supabase.from(EMPLOYEE_TABLE).update(restorePayload as any).eq('staff_id', u.staff_id);
+            return { error: scheduleUpdateRes.error, inserted: insertedCount, skippedExisting, updated, auditItems };
+          }
+        }
+
         auditItems.push({
           action: 'employee_update',
           staffId: u.staff_id,
           payload: {
-            old_staff_id: u.staff_id,
+            old_staff_id: u.source_staff_id,
             staff_id: u.staff_id,
             name: u.after.name,
             agency: u.after.agency,
@@ -12483,9 +12602,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             label: u.after.label,
             work_account: u.after.work_account,
             work_password: u.after.work_password,
+            migrated_punch_rows: punchIdsToMigrate.length,
+            migrated_schedule_rows: scheduleIdsToMigrate.length,
             before: u.before,
             after: u.after,
-            source: 'import_update'
+            source: isTemporaryStaffUpgrade ? 'import_temp_staff_upgrade' : 'import_update'
           }
         });
         updated += 1;

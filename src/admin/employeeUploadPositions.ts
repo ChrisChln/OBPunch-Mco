@@ -51,6 +51,11 @@ export type EmployeeImportIdentityConflicts = {
   duplicateWorkAccounts: string[];
 };
 
+export type TemporaryEmployeeUploadMatch = {
+  incomingStaffId: string;
+  temporaryStaffId: string;
+};
+
 const EMPLOYEE_KEY_ALIASES: Record<string, keyof EmployeeUploadRow | 'staff_id'> = {
   employee_id: 'staff_id',
   employeeid: 'staff_id',
@@ -168,6 +173,49 @@ export const detectEmployeeImportIdentityConflicts = (
   }
 
   return { modifiedStaffIds, duplicateWorkAccounts };
+};
+
+export const findTemporaryEmployeeUploadMatches = (
+  rows: EmployeeUploadRow[],
+  existingRows: ExistingEmployeeIdentityRow[]
+): TemporaryEmployeeUploadMatch[] => {
+  const existingByStaff = new Set<string>();
+  const temporaryByNameAgency = new Map<string, string[]>();
+
+  for (const row of existingRows) {
+    const staff = String(row.staff_id ?? '').trim().toUpperCase();
+    if (!staff) continue;
+    existingByStaff.add(staff);
+    if (!isGeneratedEmployeeUploadStaffId(staff)) continue;
+
+    const name = String(row.name ?? '').trim().toLowerCase();
+    const agency = String(row.agency ?? row.Agency ?? '').trim().toLowerCase();
+    if (!name || !agency) continue;
+
+    const key = `${name}__${agency}`;
+    const current = temporaryByNameAgency.get(key) ?? [];
+    current.push(staff);
+    temporaryByNameAgency.set(key, current);
+  }
+
+  return rows
+    .map((row) => {
+      const incomingStaffId = String(row.staff_id ?? '').trim().toUpperCase();
+      if (!incomingStaffId || existingByStaff.has(incomingStaffId) || isGeneratedEmployeeUploadStaffId(incomingStaffId)) {
+        return null;
+      }
+
+      const name = String(row.name ?? '').trim().toLowerCase();
+      const agency = String(row.agency ?? '').trim().toLowerCase();
+      const candidates = name && agency ? temporaryByNameAgency.get(`${name}__${agency}`) ?? [] : [];
+      if (candidates.length !== 1) return null;
+
+      return {
+        incomingStaffId,
+        temporaryStaffId: candidates[0]
+      };
+    })
+    .filter((match): match is TemporaryEmployeeUploadMatch => Boolean(match));
 };
 
 export const normalizeEmployeeUploadPosition = (
