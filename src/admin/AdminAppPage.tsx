@@ -1914,11 +1914,12 @@ export default function AdminAppPage() {
   const [timecardError, setTimecardError] = useState<string | null>(null);
   const [timecardLoading, setTimecardLoading] = useState(false);
   const [timecardSearch, setTimecardSearch] = useState('');
-  const [timecardAgency, setTimecardAgency] = useState('');
+  const [timecardAgency, setTimecardAgency] = useState<string[]>([]);
+  const [timecardKnownAgencyOptions, setTimecardKnownAgencyOptions] = useState<string[]>([]);
   const [timecardAgencySort, setTimecardAgencySort] = useState<'' | 'asc' | 'desc'>('');
   const [timecardTotalSort, setTimecardTotalSort] = useState<'' | 'asc' | 'desc'>('');
-  const [timecardPosition, setTimecardPosition] = useState('');
-  const [timecardShift, setTimecardShift] = useState<'' | 'early' | 'late'>('');
+  const [timecardPosition, setTimecardPosition] = useState<string[]>([]);
+  const [timecardShift, setTimecardShift] = useState<Array<'early' | 'late'>>([]);
   const [timecardInProgressOnly, setTimecardInProgressOnly] = useState(false);
   const [timecardPresentDayFilter, setTimecardPresentDayFilter] = useState<number | null>(null);
   const [timecardMissingEmployeeOnly, setTimecardMissingEmployeeOnly] = useState(false);
@@ -1995,6 +1996,7 @@ export default function AdminAppPage() {
   const [schedulePrintDate, setSchedulePrintDate] = useState(() => toDateOnly(new Date()));
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [scheduleSearchInput, setScheduleSearchInput] = useState('');
+  const [scheduleAgency, setScheduleAgency] = useState('');
   const [schedulePosition, setSchedulePosition] = useState<string>('');
   const [scheduleEmploymentType, setScheduleEmploymentType] = useState<'' | EmploymentType>('');
   const [schedulePositionToneByPosition, setSchedulePositionToneByPosition] = useState<PositionToneMap>({
@@ -2067,6 +2069,7 @@ export default function AdminAppPage() {
   const deferredEmployeeSearch = useDeferredValue(employeeSearch);
   const deferredAccountSearch = useDeferredValue(accountSearch);
   const deferredAccountPositionFilter = useDeferredValue(accountPositionFilter);
+  const deferredScheduleAgency = useDeferredValue(scheduleAgency);
   const deferredSchedulePosition = useDeferredValue(schedulePosition);
   const deferredScheduleEmploymentType = useDeferredValue(scheduleEmploymentType);
   const deferredScheduleShift = useDeferredValue(scheduleShift);
@@ -2616,7 +2619,7 @@ export default function AdminAppPage() {
     if (scheduleError === 'Invalid staff id.') {
       setScheduleError(null);
     }
-  }, [page, scheduleSearchInput, schedulePosition, scheduleEmploymentType, scheduleLabels]);
+  }, [page, scheduleSearchInput, scheduleAgency, schedulePosition, scheduleEmploymentType, scheduleLabels]);
 
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFillDuplicates, setUploadFillDuplicates] = useState(true);
@@ -9496,8 +9499,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     reset: boolean;
     weekOffset?: number;
     search?: string;
-    agency?: string;
-    position?: string;
+    agency?: string | string[];
+    position?: string | string[];
     missingEmployeeOnly?: boolean;
     lockUi?: boolean;
     deferLateSync?: boolean;
@@ -9518,9 +9521,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const rangeStart = addDays(weekStart, -1);
     const rangeEnd = addDays(weekEnd, 1);
 
+    const normalizeTimecardFilterValues = (value: string | string[] | undefined, fallback: string[]) =>
+      (Array.isArray(value) ? value : value ? [value] : fallback)
+        .map((item) => String(item ?? '').trim())
+        .filter(Boolean);
     const searchValue = (search ?? timecardSearch).trim().replace(/,/g, ' ');
-    const agencyValue = (agency ?? timecardAgency).trim();
-    const positionValue = (position ?? timecardPosition).trim();
+    const agencyValues = normalizeTimecardFilterValues(agency, timecardAgency);
+    const positionValues = normalizeTimecardFilterValues(position, timecardPosition);
     const missingOnly = missingEmployeeOnly ?? timecardMissingEmployeeOnly;
     const shouldDeferLateSync = deferLateSync ?? true;
     setTimecardLoading(true);
@@ -9542,7 +9549,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const filterEmployeesForView = (
       employees: Array<{ staff_id: string; name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }>
     ) => {
-      const normalizedPositionNeedle = normalizePositionKey(positionValue);
+      const agencyNeedles = new Set(agencyValues.map((value) => value.toLowerCase()));
+      const positionNeedles = positionValues.map((value) => ({
+        raw: value,
+        normalized: normalizePositionKey(value)
+      }));
       const normalizedSearchStaff = normalizeStaffId(searchValue);
       const searchTerms = searchValue
         .split(/\s+/g)
@@ -9555,13 +9566,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const accessPosition = rowPosNormalized || rowPos;
         if (!canViewPosition('timecard', accessPosition)) return false;
         if (isScheduleOnlyAgency(String(employee.agency ?? '').trim())) return false;
-        if (agencyValue && String(employee.agency ?? '').trim().toLowerCase() !== agencyValue.toLowerCase()) return false;
-        if (positionValue) {
-          if (normalizedPositionNeedle) {
-            if (rowPosNormalized !== normalizedPositionNeedle) return false;
-          } else if (!rowPos.toLowerCase().includes(positionValue.toLowerCase())) {
-            return false;
-          }
+        if (agencyNeedles.size > 0 && !agencyNeedles.has(String(employee.agency ?? '').trim().toLowerCase())) return false;
+        if (positionNeedles.length > 0) {
+          const rowPosLower = rowPos.toLowerCase();
+          const positionMatches = positionNeedles.some((needle) =>
+            needle.normalized ? rowPosNormalized === needle.normalized : rowPosLower.includes(needle.raw.toLowerCase())
+          );
+          if (!positionMatches) return false;
         }
         if (searchTerms.length > 0 || normalizedSearchStaff) {
           const hay = [employee.staff_id, employee.name].map((x) => String(x ?? '').toLowerCase()).join(' ');
@@ -10460,8 +10471,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           reset: true,
           weekOffset: offset,
           search: searchValue,
-          agency: agencyValue,
-          position: positionValue,
+          agency: agencyValues,
+          position: positionValues,
           missingEmployeeOnly: missingOnly,
           lockUi: false,
           deferLateSync: false
@@ -13315,13 +13326,34 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
   const timecardAgencyOptions = useMemo(() => {
     const out = new Set<string>();
+    for (const agency of timecardKnownAgencyOptions) {
+      const v = String(agency ?? '').trim();
+      if (v) out.add(v);
+    }
     for (const r of timecardRows) {
       const v = String(r.agency ?? '').trim();
       if (v) out.add(v);
     }
-    if (timecardAgency.trim()) out.add(timecardAgency.trim());
+    for (const agency of timecardAgency) {
+      const v = String(agency ?? '').trim();
+      if (v) out.add(v);
+    }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
-  }, [timecardRows, timecardAgency]);
+  }, [timecardKnownAgencyOptions, timecardRows, timecardAgency]);
+
+  useEffect(() => {
+    if (page !== 'timecard' || timecardRows.length === 0) return;
+    setTimecardKnownAgencyOptions((current) => {
+      const out = new Set(current);
+      for (const row of timecardRows) {
+        const agency = String(row.agency ?? '').trim();
+        if (agency) out.add(agency);
+      }
+      const next = Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+      if (next.length === current.length && next.every((value, index) => value === current[index])) return current;
+      return next;
+    });
+  }, [page, timecardRows]);
 
   const timecardPositionOptions = useMemo(
     () => activePositionNames.filter((position) => canViewPosition('timecard', position)),
@@ -13330,6 +13362,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
   const timecardRowsFiltered = useMemo(() => {
     if (page !== 'timecard') return [];
+    const selectedShiftSet = new Set<string>(timecardShift);
     const filtered = timecardRows.filter((r) => {
       const weeklyPunchCount = Array.isArray(r.punchCountByDay)
         ? r.punchCountByDay.reduce((sum, value) => sum + Number(value ?? 0), 0)
@@ -13339,7 +13372,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         : 0;
       const hasWeeklyPunchActivity = weeklyPunchCount > 0 || weeklyHours > 0 || Boolean(r.inProgressWeek);
       if (!hasWeeklyPunchActivity) return false;
-      if (timecardShift && r.shift !== timecardShift) return false;
+      if (selectedShiftSet.size > 0 && !selectedShiftSet.has(r.shift)) return false;
       if (timecardInProgressOnly && !r.inProgressWeek) return false;
       if (timecardPresentDayFilter !== null && timecardPresentDayFilter >= 0 && timecardPresentDayFilter <= 6) {
         if (Number(r.punchCountByDay?.[timecardPresentDayFilter] ?? 0) <= 0) return false;
@@ -14031,6 +14064,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       .filter((employee) => {
         if (isInactiveJdlEmployee(employee)) return false;
         const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+        const agency = String(employee.agency ?? employee.Agency ?? '').trim();
         const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim()) ?? '';
         if (!canViewPosition('schedule', position)) return false;
         const employmentType = normalizeEmploymentTypeValue((employee as any).employment_type ?? (employee as any).EmploymentType ?? '');
@@ -14041,6 +14075,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           const isWork = isWorkingScheduleRow(row);
           if (!isWork) return false;
         }
+        if (deferredScheduleAgency && agency.toLowerCase() !== deferredScheduleAgency.trim().toLowerCase()) return false;
         if (selectedSchedulePositionSet.size > 0 && !selectedSchedulePositionSet.has(position)) return false;
         if (deferredScheduleEmploymentType && employmentType !== deferredScheduleEmploymentType) return false;
         if (deferredScheduleLabels.length > 0) {
@@ -14058,6 +14093,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }, [
     page,
     employees,
+    deferredScheduleAgency,
     selectedSchedulePositionSet,
     deferredScheduleEmploymentType,
     deferredScheduleLabels,
@@ -14232,6 +14268,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const total = scheduleEmployeesFiltered.length;
     const filterKey = JSON.stringify({
       search: deferredScheduleSearch.trim().toLowerCase(),
+      agency: deferredScheduleAgency.trim().toLowerCase(),
       position: selectedSchedulePositions.join(', '),
       shift: deferredScheduleShift || '',
       labels: deferredScheduleLabels.map((item) => String(item ?? '').trim().toLowerCase()),
@@ -14248,6 +14285,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     page,
     scheduleEmployeesFiltered.length,
     deferredScheduleSearch,
+    deferredScheduleAgency,
     selectedSchedulePositions,
     deferredScheduleShift,
     deferredScheduleLabels,
@@ -15813,7 +15851,7 @@ ${rowsToHtml(late)}
                   refreshSchedulePanelWithAudit={refreshSchedulePanelWithAudit}
                 />
 
-                <div className="mt-5 grid gap-4 md:grid-cols-12">
+                <div className="mt-5 grid gap-4 md:grid-cols-12 xl:grid-cols-[repeat(14,minmax(0,1fr))]">
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('周', 'Week')}</label>
                     <input
@@ -15842,6 +15880,22 @@ ${rowsToHtml(late)}
                       placeholder={t('按工号 / 姓名搜索', 'Search by staff id / name')}
                       className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
                     />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">AGENCY</label>
+                    <select
+                      value={scheduleAgency}
+                      onChange={(e) => setScheduleAgency(e.target.value)}
+                      disabled={isLocked}
+                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <option value="">{t('全部Agency', 'All agencies')}</option>
+                      {employeeAgencyOptions.map((agency) => (
+                        <option key={agency} value={agency}>
+                          {agency}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('岗位', 'Position')}</label>
