@@ -49,7 +49,7 @@ describe('api/package-metrics-import', () => {
       })
     };
 
-    vi.doMock('../../api/_forecastShared', () => ({
+    vi.doMock('../../api/_forecastShared.js', () => ({
       createServiceSupabase: () => serviceSupabase,
       parseJsonBody: () => ({
         metric_date: '2026-04-21',
@@ -60,7 +60,7 @@ describe('api/package-metrics-import', () => {
     vi.doMock('@supabase/supabase-js', () => ({
       createClient: () => userSupabase
     }));
-    vi.doMock('../../api/_packageMetricsImportCore', () => ({
+    vi.doMock('../../api/_packageMetricsImportCore.js', () => ({
       processPackageMetricsImport: vi.fn(),
       processPackageMetricsRowsImport: vi.fn()
     }));
@@ -125,7 +125,7 @@ describe('api/package-metrics-import', () => {
       computed_at: '2026-04-21T12:00:00Z'
     }));
 
-    vi.doMock('../../api/_forecastShared', () => ({
+    vi.doMock('../../api/_forecastShared.js', () => ({
       createServiceSupabase: () => serviceSupabase,
       parseJsonBody: () => ({
         metric_date: '2026-04-21',
@@ -136,7 +136,7 @@ describe('api/package-metrics-import', () => {
     vi.doMock('@supabase/supabase-js', () => ({
       createClient: () => userSupabase
     }));
-    vi.doMock('../../api/_packageMetricsImportCore', () => ({
+    vi.doMock('../../api/_packageMetricsImportCore.js', () => ({
       processPackageMetricsImport: vi.fn(),
       processPackageMetricsRowsImport
     }));
@@ -161,5 +161,89 @@ describe('api/package-metrics-import', () => {
     expect(maybeSingle).toHaveBeenCalledOnce();
     expect(res.code).toBe(200);
     expect(res.body?.status).toBe('ok');
+  });
+
+  test('uses workbook upload path when file_base64 is provided without rows', async () => {
+    const serviceSupabase = {
+      auth: {
+        getUser: async () => ({ data: { user: { id: 'u1', email: 'user@example.com' } }, error: null })
+      },
+      from: (table: string) => {
+        if (table === 'volume_forecast_daily_inputs') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({ data: null, error: null })
+              })
+            })
+          };
+        }
+
+        return {
+          insert: () => ({
+            select: () => ({
+              single: async () => ({ data: { id: 'run-1' }, error: null })
+            })
+          }),
+          update: () => ({
+            eq: async () => ({ error: null })
+          }),
+          upsert: async () => ({ error: null })
+        };
+      }
+    };
+    const userSupabase = {
+      rpc: async () => ({
+        data: {
+          user_id: 'u1',
+          role: 'level2',
+          is_active: true,
+          modules: [{ module_key: 'package_metrics', access_level: 'operate' }]
+        },
+        error: null
+      })
+    };
+    const processPackageMetricsImport = vi.fn(async () => ({
+      metrics: { metric_date: '2026-04-21' },
+      source_row_count: 1,
+      computed_at: '2026-04-21T12:00:00Z'
+    }));
+    const processPackageMetricsRowsImport = vi.fn();
+
+    vi.doMock('../../api/_forecastShared.js', () => ({
+      createServiceSupabase: () => serviceSupabase,
+      parseJsonBody: () => ({
+        metric_date: '2026-04-21',
+        filename: 'package.xlsx',
+        file_base64: 'UEsDBAo='
+      })
+    }));
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => userSupabase
+    }));
+    vi.doMock('../../api/_packageMetricsImportCore.js', () => ({
+      processPackageMetricsImport,
+      processPackageMetricsRowsImport
+    }));
+
+    const { default: handler } = await import('../../api/package-metrics-import');
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer token' },
+      body: {}
+    };
+    const res = createRes();
+    await handler(req, res);
+
+    expect(processPackageMetricsImport).toHaveBeenCalledOnce();
+    expect(processPackageMetricsImport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filename: 'package.xlsx',
+        fileBase64: 'UEsDBAo='
+      }),
+      expect.anything()
+    );
+    expect(processPackageMetricsRowsImport).not.toHaveBeenCalled();
+    expect(res.code).toBe(200);
   });
 });

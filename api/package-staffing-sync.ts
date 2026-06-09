@@ -1,5 +1,5 @@
-import { createServiceSupabase, ensureCron, isDateOnly } from './_forecastShared';
-import { getOperationalMetricDateNow, syncScheduledHeadcountForDate } from './_packageStaffingSync';
+import { createServiceSupabase, ensureCron, isDateOnly } from './_forecastShared.js';
+import { getOperationalMetricDateNow, syncScheduledHeadcountForDate } from './_packageStaffingSync.js';
 
 export default async function handler(req: any, res: any) {
   if (!ensureCron(req, res)) return;

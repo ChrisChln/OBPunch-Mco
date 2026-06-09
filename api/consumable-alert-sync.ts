@@ -1,5 +1,5 @@
-import { createServiceSupabase, ensureCron, isDateOnly } from './_forecastShared';
-import { buildTodoDueAtForInstance } from '../src/admin/todoShared';
+import { createServiceSupabase, ensureCron, isDateOnly } from './_forecastShared.js';
+import { buildTodoDueAtForInstance } from '../src/admin/todoShared.js';
 import {
   CONSUMABLE_ITEM_DEFINITIONS,
   CONSUMABLE_ITEMS_BY_KEY,
@@ -10,7 +10,7 @@ import {
   type ConsumableAdjustment,
   type ConsumableSnapshot
 } from '../src/shared/consumables';
-import { getDefaultModuleAccess, type AdminRole } from '../src/shared/adminAccess';
+import { getDefaultModuleAccess, type AdminRole } from '../src/shared/adminAccess.js';
 
 const USER_PROFILE_TABLE = (process.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 const REMINDER_TITLE = 'Consumable Snapshot';

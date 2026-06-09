@@ -5,7 +5,7 @@ import {
   isDateOnly,
   parseJsonBody
 } from './_forecastShared';
-import { runForecast } from './_forecastRunCore';
+import { runForecast } from './_forecastRunCore.js';
 
 type RunPayload = {
   target_date?: string | null;
