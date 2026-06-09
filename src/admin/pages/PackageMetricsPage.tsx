@@ -655,7 +655,22 @@ const normalizeHeaderKey = (value: unknown) =>
 const parseJsonResponse = (text: string) => {
   const trimmed = text.trim();
   if (!trimmed) return null;
-  return JSON.parse(trimmed);
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+};
+
+const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return window.btoa(binary);
 };
 
 const resolvePackageMetricsImportUrls = () => {
@@ -800,14 +815,13 @@ const buildMetricsDisplayRows = (rangeStart: string, rangeEnd: string, rows: Pac
   return displayRows;
 };
 
-const readRowsFromWorkbook = async (file: File): Promise<PackageMetricsParsedRow[]> => {
-  const buffer = await file.arrayBuffer();
+const readRowsFromWorkbookBuffer = (buffer: ArrayBuffer, filename: string): PackageMetricsParsedRow[] => {
   const workbook = XLSX.read(buffer, {
     type: 'array',
     raw: false,
     cellDates: false,
     dense: true,
-    ...(file.name.toLowerCase().endsWith('.csv') ? { codepage: 65001 } : {})
+    ...(filename.toLowerCase().endsWith('.csv') ? { codepage: 65001 } : {})
   });
   const firstSheetName = workbook.SheetNames[0];
   if (!firstSheetName) {
@@ -1384,7 +1398,8 @@ export default function PackageMetricsPage({
     try {
       const accessToken = await getFreshAccessToken(supabase, t);
 
-      const rows = await readRowsFromWorkbook(selectedFile);
+      const fileBuffer = await selectedFile.arrayBuffer();
+      const rows = readRowsFromWorkbookBuffer(fileBuffer, selectedFile.name);
       const coverage = inspectPackageMetricsDateCoverage(rows, metricDate);
       if (
         rows.length > 0 &&
@@ -1403,7 +1418,7 @@ export default function PackageMetricsPage({
       const requestBody = JSON.stringify({
         metric_date: metricDate,
         filename: selectedFile.name,
-        rows
+        file_base64: arrayBufferToBase64(fileBuffer)
       });
       const requestInit: RequestInit = {
         method: 'POST',
