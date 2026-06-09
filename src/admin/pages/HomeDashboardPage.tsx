@@ -6,6 +6,12 @@ import {
   resolveDashboardPositionName
 } from '../../shared/dashboardPositions';
 import { DEFAULT_DASHBOARD_CARD_POSITIONS } from '../../shared/dashboardPositions';
+import {
+  buildDashboardAttendanceStats,
+  createDashboardAttendanceStat,
+  getDashboardAttendanceStatKey,
+  type DashboardAttendanceStat
+} from '../../shared/dashboardAttendanceStats';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -80,6 +86,14 @@ const normalizeShiftValue = (value: unknown): '' | 'early' | 'late' => {
   if (v === 'early' || v === 'morning' || v.includes('早')) return 'early';
   if (v === 'late' || v === 'night' || v.includes('晚')) return 'late';
   return '';
+};
+
+const hasPunchLog = (row: HomeRosterRow) => (row.punches ?? []).length > 0 || row.attendance === 'Normal' || row.attendance === 'Completed' || row.attendance === 'Off Worked';
+
+const isRowOnClock = (row: HomeRosterRow) => {
+  if (row.attendance === 'Normal') return true;
+  const punches = row.punches ?? [];
+  return punches[punches.length - 1]?.action === 'IN';
 };
 
 const formatShiftLabel = (value: string) => {
@@ -176,7 +190,7 @@ function HomeDashboardPage({
   getSchedulePositionBadgeClass,
   getScheduleTablePositionBadgeClass,
   getScheduleTableShiftBadgeClass,
-  schedulePositionToneByPosition: _schedulePositionToneByPosition,
+  schedulePositionToneByPosition,
   homeDashboardPositionNames,
   homeRosterPositionFilter: _homeRosterPositionFilter,
   setHomeRosterPositionFilter,
@@ -202,61 +216,62 @@ function HomeDashboardPage({
 
   const cardPositions = useMemo(
     () =>
-      buildDashboardCardPositions(homeDashboardPositionNames, [
-        ...homeExpectedPositionSummaryCards.map((item) => item.position),
-        ...Object.keys(homeCardStats),
-        ...homeRosterRowsCurrent.map((row) => row.position)
-      ]),
+      buildDashboardCardPositions(homeDashboardPositionNames, []),
     [homeDashboardPositionNames, homeExpectedPositionSummaryCards, homeCardStats, homeRosterRowsCurrent]
   );
 
+  const homeAttendanceStats = useMemo(() => {
+    const rows = homeRosterRowsCurrent
+      .map((row) => {
+        const position = normalizePositionKey(row.position, homeDashboardPositionNames);
+        const shift = normalizeShiftValue(row.shift);
+        if (!position || !shift) return null;
+        return {
+          staffId: row.staff_id,
+          position,
+          shift,
+          isExpected: row.attendance !== 'Off Worked',
+          hasPunch: hasPunchLog(row),
+          isOnClock: isRowOnClock(row),
+          attendance: row.attendance
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => Boolean(row));
+    return buildDashboardAttendanceStats(rows);
+  }, [homeRosterRowsCurrent, homeDashboardPositionNames]);
+
   const outboundShiftCards = useMemo(() => {
     const summaryPositions = cardPositions.filter((position) => normalizePositionKey(position, homeDashboardPositionNames) !== 'Transfer');
-    const morningPresent = summaryPositions.reduce((sum, position) => sum + (homeCardStats[position]?.early ?? 0), 0);
+    const morningPresent = summaryPositions.reduce((sum, position) => sum + (homeAttendanceStats[getDashboardAttendanceStatKey('early', position)]?.present ?? 0), 0);
     const morningExpected = summaryPositions.reduce((sum, position) => sum + (summaryByPosition.get(position)?.early ?? 0), 0);
-    const nightPresent = summaryPositions.reduce((sum, position) => sum + (homeCardStats[position]?.late ?? 0), 0);
+    const nightPresent = summaryPositions.reduce((sum, position) => sum + (homeAttendanceStats[getDashboardAttendanceStatKey('late', position)]?.present ?? 0), 0);
     const nightExpected = summaryPositions.reduce((sum, position) => sum + (summaryByPosition.get(position)?.late ?? 0), 0);
     return [
       { shift: 'early' as const, present: morningPresent, expected: morningExpected },
       { shift: 'late' as const, present: nightPresent, expected: nightExpected }
     ];
-  }, [cardPositions, homeCardStats, homeDashboardPositionNames, summaryByPosition]);
+  }, [cardPositions, homeAttendanceStats, homeDashboardPositionNames, summaryByPosition]);
 
   const attendanceCardGroups = useMemo(
     () => {
-      const onClockCountByKey = new Map<string, number>();
-      const offWorkedCountByKey = new Map<string, number>();
-      for (const row of homeRosterRowsCurrent) {
-        const position = normalizePositionKey(row.position, homeDashboardPositionNames);
-        const shift = normalizeShiftValue(row.shift);
-        if (!position || !shift) continue;
-        const key = `${position}:${shift}`;
-        if (row.attendance === 'Normal') {
-          onClockCountByKey.set(key, (onClockCountByKey.get(key) ?? 0) + 1);
-        }
-        if (row.attendance === 'Off Worked') {
-          offWorkedCountByKey.set(key, (offWorkedCountByKey.get(key) ?? 0) + 1);
-        }
-      }
-
       return (['early', 'late'] as const).map((shift) => ({
         shift,
         cards: cardPositions.map((position) => {
-          const stats = homeCardStats[position] ?? { early: 0, late: 0, active: 0 };
           const plan = summaryByPosition.get(position) ?? { early: 0, late: 0, total: 0 };
-          const key = `${position}:${shift}`;
+          const key = getDashboardAttendanceStatKey(shift, position);
+          const stat: DashboardAttendanceStat = homeAttendanceStats[key] ?? createDashboardAttendanceStat();
           return {
             position,
             shift,
             expected: shift === 'early' ? plan.early : plan.late,
-            present: shift === 'early' ? stats.early : stats.late,
-            onClock: onClockCountByKey.get(key) ?? 0,
-            offWorked: offWorkedCountByKey.get(key) ?? 0
+            present: stat.present,
+            onClock: stat.onClock,
+            offWorked: stat.offWorked
           };
         })
       }));
     },
-    [cardPositions, homeCardStats, homeDashboardPositionNames, summaryByPosition, homeRosterRowsCurrent]
+    [cardPositions, homeAttendanceStats, summaryByPosition]
   );
 
   const positionOptions = useMemo(
@@ -384,7 +399,9 @@ function HomeDashboardPage({
                       key={`${card.position}:${card.shift}`}
                       className={[
                         'rounded-[24px] border px-4 py-4 shadow-none',
-                        isLight ? getAttendanceCardClassLight(card.position) : getAttendanceCardClass(card.position)
+                        isLight
+                          ? getAttendanceCardClassLight(card.position)
+                          : _getHomePanelToneClass(card.position, schedulePositionToneByPosition)
                       ].join(' ')}
                     >
                       <div className="flex items-start justify-between gap-4">
@@ -402,17 +419,7 @@ function HomeDashboardPage({
                           'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-none',
                           isLight
                             ? getAttendanceCardClassLight(card.position).replace('/85', '')
-                            : card.position === 'Pick'
-                              ? 'border-sky-300/20 bg-sky-400/[0.10]'
-                              : card.position === 'Pack'
-                                ? 'border-emerald-300/20 bg-emerald-400/[0.10]'
-                                : card.position === 'Rebin'
-                                  ? 'border-amber-300/20 bg-amber-400/[0.10]'
-                                  : card.position === 'Preship'
-                                    ? 'border-rose-300/20 bg-rose-400/[0.10]'
-                                    : card.position === 'Transfer'
-                                      ? 'border-violet-300/20 bg-violet-400/[0.10]'
-                                      : 'border-white/10 bg-white/[0.04]'
+                            : _getHomeChipToneClass(card.position, schedulePositionToneByPosition)
                         ].join(' ')}>
                           <div className={['text-[10px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>On Clock</div>
                           <div className={['mt-1 text-3xl font-semibold leading-none', isLight ? getAttendanceCardValueClassLight(card.position) : getAttendanceCardValueClass(card.position)].join(' ')}>{card.onClock}</div>
