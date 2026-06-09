@@ -145,7 +145,6 @@ export const detectEmployeeImportIdentityConflicts = (
 ): EmployeeImportIdentityConflicts => {
   const existingByStaff = new Set<string>();
   const existingByAccount = new Map<string, string>();
-  const existingByNameAgency = new Map<string, string>();
 
   for (const row of existingRows) {
     const staff = String(row.staff_id ?? '').trim().toUpperCase();
@@ -153,12 +152,6 @@ export const detectEmployeeImportIdentityConflicts = (
     existingByStaff.add(staff);
     const account = String(row.work_account ?? '').trim().toLowerCase();
     if (account && !existingByAccount.has(account)) existingByAccount.set(account, staff);
-    const name = String(row.name ?? '').trim().toLowerCase();
-    const agency = String(row.agency ?? row.Agency ?? '').trim().toLowerCase();
-    if (name && agency) {
-      const key = `${name}__${agency}`;
-      if (!existingByNameAgency.has(key)) existingByNameAgency.set(key, staff);
-    }
   }
 
   const modifiedStaffIds: string[] = [];
@@ -170,20 +163,7 @@ export const detectEmployeeImportIdentityConflicts = (
     const account = String(row.work_account ?? '').trim().toLowerCase();
     const accountOwner = account ? existingByAccount.get(account) ?? '' : '';
     if (accountOwner && accountOwner !== incomingStaff) {
-      if (isGeneratedEmployeeUploadStaffId(incomingStaff)) {
-        duplicateWorkAccounts.push(`${incomingStaff} -> ${accountOwner} (work_account)`);
-      } else {
-        modifiedStaffIds.push(`${incomingStaff} -> ${accountOwner} (work_account)`);
-      }
-      continue;
-    }
-
-    const name = String(row.name ?? '').trim().toLowerCase();
-    const agency = String(row.agency ?? '').trim().toLowerCase();
-    const key = name && agency ? `${name}__${agency}` : '';
-    const matchedStaff = key ? existingByNameAgency.get(key) ?? '' : '';
-    if (matchedStaff && matchedStaff !== incomingStaff && !isGeneratedEmployeeUploadStaffId(incomingStaff)) {
-      modifiedStaffIds.push(`${incomingStaff} -> ${matchedStaff} (${name}/${agency})`);
+      duplicateWorkAccounts.push(`${incomingStaff} -> ${accountOwner} (work_account)`);
     }
   }
 

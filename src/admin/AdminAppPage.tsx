@@ -9542,11 +9542,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         .filter(Boolean);
 
       return employees.filter((employee) => {
+        const rowPos = String(employee.position ?? '').trim();
+        const rowPosNormalized = normalizePositionKey(rowPos);
+        const accessPosition = rowPosNormalized || rowPos;
+        if (!canViewPosition('timecard', accessPosition)) return false;
         if (isScheduleOnlyAgency(String(employee.agency ?? '').trim())) return false;
         if (agencyValue && String(employee.agency ?? '').trim().toLowerCase() !== agencyValue.toLowerCase()) return false;
         if (positionValue) {
-          const rowPos = String(employee.position ?? '').trim();
-          const rowPosNormalized = normalizePositionKey(rowPos);
           if (normalizedPositionNeedle) {
             if (rowPosNormalized !== normalizedPositionNeedle) return false;
           } else if (!rowPos.toLowerCase().includes(positionValue.toLowerCase())) {
@@ -11053,6 +11055,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const openTimecardPunchModal = async (staffId: string, dayIndex: number | null) => {
     const staff = staffId.trim();
     if (!staff) return;
+    const staffKey = normalizeStaffId(staff);
+    const row = timecardRows.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
+    const employee = employees.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
+    const position = String(row?.position ?? employee?.position ?? employee?.Position ?? '').trim();
+    const accessPosition = normalizePositionKey(position) || position;
+    if (!canViewPosition('timecard', accessPosition)) {
+      setStatus({
+        tone: 'error',
+        message: t('当前账号不能查看该岗位的时间卡。', 'This account cannot view timecards for this position.')
+      });
+      return;
+    }
 
     setTimecardPunchOpen(true);
     setTimecardPunchStaffId(staff);
@@ -11105,6 +11119,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const weekOffset = Math.round((targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
     const dayIndex = Math.floor((targetDate.getTime() - targetWeekStart.getTime()) / (24 * 60 * 60 * 1000));
     if (dayIndex < 0 || dayIndex > 6) return;
+    const employee = employees.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staff);
+    const position = String(employee?.position ?? employee?.Position ?? '').trim();
+    const accessPosition = normalizePositionKey(position) || position;
+    if (!canViewPosition('timecard', accessPosition)) {
+      setStatus({
+        tone: 'error',
+        message: t('当前账号不能查看该岗位的时间卡。', 'This account cannot view timecards for this position.')
+      });
+      return;
+    }
 
     setTimecardWeekOffset(weekOffset);
     setTimecardWeekInput(dateOnly);
@@ -12157,9 +12181,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
 
-    // Guard rail: reject imports that look like an existing employee's USID was changed.
-    // Generated new-hire IDs are reported separately when their work account is already occupied.
-    const detectModifiedStaffIds = async () => {
+    // Guard rail: only reject work accounts that are already occupied.
+    const detectUploadIdentityConflicts = async () => {
       const mode = await resolveEmployeeColumnMode();
       const run = async (m: EmployeeColumnMode) => {
         const select =
@@ -12189,18 +12212,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       };
     };
 
-    const detectResult = await detectModifiedStaffIds();
+    const detectResult = await detectUploadIdentityConflicts();
     if (detectResult.error) {
       setUploadError(`导入前校验失败：${detectResult.error}`);
-      return;
-    }
-    if (detectResult.modifiedStaffIds.length > 0) {
-      const sample = detectResult.modifiedStaffIds.slice(0, 6).join('；');
-      setUploadError(
-        `检测到疑似修改USID，已拒绝导入。请不要修改导出模板中的 EMPLOYEE ID。命中：${sample}${
-          detectResult.modifiedStaffIds.length > 6 ? ` …（共 ${detectResult.modifiedStaffIds.length} 条）` : ''
-        }`
-      );
       return;
     }
     if (detectResult.duplicateWorkAccounts.length > 0) {
@@ -13181,7 +13195,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
   }, [timecardRows, timecardAgency]);
 
-  const timecardPositionOptions = activePositionNames;
+  const timecardPositionOptions = useMemo(
+    () => activePositionNames.filter((position) => canViewPosition('timecard', position)),
+    [activePositionNames, canViewPosition]
+  );
 
   const timecardRowsFiltered = useMemo(() => {
     if (page !== 'timecard') return [];

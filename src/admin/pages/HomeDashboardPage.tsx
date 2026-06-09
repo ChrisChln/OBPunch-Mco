@@ -199,6 +199,7 @@ function HomeDashboardPage({
 }: HomeDashboardPageProps) {
   const isLight = _themeMode === 'light';
   const [search, setSearch] = useState('');
+  const [agencyFilter, setAgencyFilter] = useState('');
   const [positionFilter, setPositionFilter] = useState('');
   const [shiftFilter, setShiftFilter] = useState('');
   const [absentOnly, setAbsentOnly] = useState(false);
@@ -283,6 +284,15 @@ function HomeDashboardPage({
     [homeDashboardPositionNames, homeRosterRowsCurrent]
   );
 
+  const agencyOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of homeRosterRowsCurrent) {
+      const agency = String(row.agency ?? '').trim();
+      if (agency) set.add(agency);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'en-US', { sensitivity: 'base' }));
+  }, [homeRosterRowsCurrent]);
+
   const shiftOptions = useMemo(() => {
     const set = new Set<string>();
     for (const row of homeRosterRowsCurrent) {
@@ -319,6 +329,10 @@ function HomeDashboardPage({
       ) {
         return false;
       }
+      if (agencyFilter) {
+        const agency = String(row.agency ?? '').trim();
+        if (agency !== agencyFilter) return false;
+      }
       if (positionFilter) {
         const key = normalizePositionKey(row.position, homeDashboardPositionNames) || row.position;
         if (key !== positionFilter) return false;
@@ -330,7 +344,7 @@ function HomeDashboardPage({
       if (attendanceFilters.length > 0 && !attendanceFilters.includes(row.attendance)) return false;
       return true;
     });
-  }, [tableRows, search, positionFilter, shiftFilter, absentOnly, onClockOnly, offWorkOnly, homeDashboardPositionNames]);
+  }, [tableRows, search, agencyFilter, positionFilter, shiftFilter, absentOnly, onClockOnly, offWorkOnly, homeDashboardPositionNames]);
 
   const operationalDate = useMemo(() => {
     const now = new Date();
@@ -432,7 +446,7 @@ function HomeDashboardPage({
             ))}
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.5fr)_220px_220px_repeat(3,minmax(0,160px))]">
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.4fr)_200px_200px_180px_repeat(3,minmax(0,150px))]">
             <label className={['relative flex h-12 items-center overflow-hidden rounded-[20px] border px-4', isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-white/[0.04]'].join(' ')}>
               <SearchIcon className={['pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2', isLight ? 'text-slate-400' : 'text-stone-400'].join(' ')} />
               <input
@@ -442,6 +456,19 @@ function HomeDashboardPage({
                 className={['home-search-input h-full w-full bg-transparent pl-8 text-sm outline-none', isLight ? 'text-slate-800 placeholder:text-slate-400' : 'text-stone-100 placeholder:text-stone-500'].join(' ')}
               />
             </label>
+            <div className="relative">
+              <select
+                value={agencyFilter}
+                onChange={(e) => setAgencyFilter(e.target.value)}
+                className={['h-12 w-full appearance-none rounded-[20px] border px-4 pr-10 text-sm outline-none transition', isLight ? 'border-slate-200 bg-white text-slate-800 focus:border-slate-300' : 'border-white/10 bg-white/[0.04] text-stone-100 focus:border-white/20'].join(' ')}
+              >
+                <option value="">All agencies</option>
+                {agencyOptions.map((agency) => (
+                  <option key={agency} value={agency}>{agency}</option>
+                ))}
+              </select>
+              <ChevronDownIcon className={['pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2', isLight ? 'text-slate-400' : 'text-stone-400'].join(' ')} />
+            </div>
             <div className="relative">
               <select
                 value={positionFilter}
@@ -493,12 +520,13 @@ function HomeDashboardPage({
 
         <div className={['mt-6 overflow-hidden rounded-[28px] border', isLight ? 'border-slate-300/80 bg-white/80' : 'border-white/10 bg-black/20'].join(' ')}>
           <div className="overflow-auto">
-            <table className="min-w-[1100px] w-full border-collapse text-sm">
+            <table className="min-w-[1200px] w-full border-collapse text-sm">
               <thead className={['sticky top-0 z-10 text-xs uppercase tracking-[0.16em] backdrop-blur', isLight ? 'bg-[#f4efe7]/95 text-slate-600' : 'bg-[#17191c]/95 text-stone-400'].join(' ')}>
                 <tr>
                   <th className="px-3 py-3 text-left">SN</th>
                   <th className="px-3 py-3 text-left">Staff ID</th>
                   <th className="px-3 py-3 text-left">Name</th>
+                  <th className="px-3 py-3 text-left">Agency</th>
                   <th className="px-3 py-3 text-left">Position</th>
                   <th className="px-3 py-3 text-left">Label</th>
                   <th className="px-3 py-3 text-left">Shift</th>
@@ -523,6 +551,7 @@ function HomeDashboardPage({
                       <td className={['whitespace-nowrap px-3 py-3 font-mono', isLight ? 'text-slate-500' : 'text-stone-500'].join(' ')}>{idx + 1}</td>
                       <td className={['whitespace-nowrap px-3 py-3 font-mono', isLight ? 'text-slate-800' : 'text-stone-100'].join(' ')}>{row.staff_id || '-'}</td>
                       <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-800' : 'text-stone-100'].join(' ')}>{row.name || '-'}</td>
+                      <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-600' : 'text-stone-300'].join(' ')}>{row.agency || '-'}</td>
                       <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-600' : 'text-stone-300'].join(' ')}>
                         <span className={['inline-flex items-center rounded-full border px-2.5 py-1', isLight ? getScheduleTablePositionBadgeClass(row.position) : getSchedulePositionBadgeClass(row.position)].join(' ')}>
                           {row.position || '-'}
@@ -591,7 +620,7 @@ function HomeDashboardPage({
                 })}
                 {renderedRows.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-3 py-10 text-center text-sm text-stone-400">{t('当前无记录', 'No records')}</td>
+                    <td colSpan={8} className="px-3 py-10 text-center text-sm text-stone-400">{t('当前无记录', 'No records')}</td>
                   </tr>
                 )}
               </tbody>

@@ -102,6 +102,25 @@ describe('employee upload position validation', () => {
     expect(result.duplicateWorkAccounts).toEqual([]);
   });
 
+  test('allows USID changes when name and agency match an existing temporary employee', () => {
+    const result = detectEmployeeImportIdentityConflicts(
+      [
+        {
+          staff_id: 'US018928',
+          name: 'Barbara Rujano',
+          agency: 'Central',
+          position: 'Pick',
+          employment_type: 'FT',
+          work_account: ''
+        }
+      ],
+      [{ staff_id: 'TEMP-USID-MQ2VLTPL-0002', name: 'Barbara Rujano', agency: 'Central', work_account: '' }]
+    );
+
+    expect(result.modifiedStaffIds).toEqual([]);
+    expect(result.duplicateWorkAccounts).toEqual([]);
+  });
+
   test('reports duplicate work accounts for generated temporary new-hire IDs without calling them USID edits', () => {
     const result = detectEmployeeImportIdentityConflicts(
       [

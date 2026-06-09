@@ -1416,7 +1416,8 @@ export default function AgencyAppPage() {
 
   const showIdColumn = !compactScheduleView;
   const showAgencyColumn = !compactScheduleView;
-  const showDriverGroupColumn = !compactScheduleView;
+  const showDriverGroupControls = false;
+  const showDriverGroupColumn = false;
   const showNoteColumn = !compactScheduleView;
   const showStartTimeColumn = !compactScheduleView;
   const selectedDateColumnToneClass = compactScheduleView ? selectedDateColumnClassMobile : selectedDateColumnClass;
@@ -2121,58 +2122,60 @@ export default function AgencyAppPage() {
                   <option value="late">Night</option>
                 </select>
               </div>
-              <div className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                    <Users className="h-4 w-4 text-cyan-200" />
-                    <span>Driver Groups</span>
+              {showDriverGroupControls ? (
+                <div className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                      <Users className="h-4 w-4 text-cyan-200" />
+                      <span>Driver Groups</span>
+                    </div>
+                    <button
+                      type="button"
+                      className={neonButtonClass}
+                      disabled={busy || !canOperateAgency || driverGroupEmployeeOptions.length < 2}
+                      onClick={() => openDriverGroupModal()}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      New
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className={neonButtonClass}
-                    disabled={busy || !canOperateAgency || driverGroupEmployeeOptions.length < 2}
-                    onClick={() => openDriverGroupModal()}
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    New
-                  </button>
-                </div>
-                {driverGroupWarnings.length > 0 ? (
-                  <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-                    {driverGroupWarnings.map((warning) => (
-                      <div key={warning.code}>{warning.message} {warning.staffIds.join(', ')}</div>
-                    ))}
+                  {driverGroupWarnings.length > 0 ? (
+                    <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                      {driverGroupWarnings.map((warning) => (
+                        <div key={warning.code}>{warning.message} {warning.staffIds.join(', ')}</div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {driverGroupSummaries.length > 0 ? (
+                      driverGroupSummaries.map((group) => (
+                        <div key={group.code} className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2">
+                          <button
+                            type="button"
+                            className="text-sm font-semibold text-white transition hover:text-cyan-100"
+                            disabled={!canOperateAgency}
+                            onClick={() => openDriverGroupModal(group.code)}
+                          >
+                            Group {group.code}
+                          </button>
+                          <span className="text-xs text-slate-400">{group.activeMemberCount}</span>
+                          <button
+                            type="button"
+                            className="rounded-lg p-1 text-slate-400 transition hover:bg-white/10 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={busy || !canOperateAgency}
+                            onClick={() => requestDeleteDriverGroup(group.code)}
+                            aria-label={`Delete driver group ${group.code}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-sm text-slate-400">No groups.</div>
+                    )}
                   </div>
-                ) : null}
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {driverGroupSummaries.length > 0 ? (
-                    driverGroupSummaries.map((group) => (
-                      <div key={group.code} className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2">
-                        <button
-                          type="button"
-                          className="text-sm font-semibold text-white transition hover:text-cyan-100"
-                          disabled={!canOperateAgency}
-                          onClick={() => openDriverGroupModal(group.code)}
-                        >
-                          Group {group.code}
-                        </button>
-                        <span className="text-xs text-slate-400">{group.activeMemberCount}</span>
-                        <button
-                          type="button"
-                          className="rounded-lg p-1 text-slate-400 transition hover:bg-white/10 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={busy || !canOperateAgency}
-                          onClick={() => requestDeleteDriverGroup(group.code)}
-                          aria-label={`Delete driver group ${group.code}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-sm text-slate-400">No groups.</div>
-                  )}
                 </div>
-              </div>
+              ) : null}
               <div className={[
                 'overflow-x-auto rounded-2xl border border-white/10 bg-black/30 py-1',
                 compactScheduleView ? 'px-2' : ''
