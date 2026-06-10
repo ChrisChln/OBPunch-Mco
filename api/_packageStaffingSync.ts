@@ -1,5 +1,5 @@
-import { getDateOnlyInTimeZone } from '../src/shared/packageMetrics';
-import { shouldCountScheduledPackageMetricsStaff } from '../src/shared/packageStaffing';
+import { getDateOnlyInTimeZone } from '../src/shared/packageMetrics.js';
+import { shouldCountScheduledPackageMetricsStaff } from '../src/shared/packageStaffing.js';
 
 type ScheduleSnapshotRow = {
   staff_id?: string | null;

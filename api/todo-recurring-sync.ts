@@ -1,4 +1,4 @@
-import { createServiceSupabase, ensureCron, getDefaultTargetDate } from './_forecastShared';
+import { createServiceSupabase, ensureCron, getDefaultTargetDate } from './_forecastShared.js';
 import {
   buildTodoDueAtForInstance,
   getDateOnlyInTimeZone,

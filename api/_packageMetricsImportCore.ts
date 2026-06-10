@@ -5,7 +5,7 @@ import {
   parsePackageQuantity,
   type PackageDailyMetrics,
   type PackageMetricsParsedRow
-} from '../src/shared/packageMetrics';
+} from '../src/shared/packageMetrics.js';
 
 type PackageImportPersistence = {
   insertRun: (payload: {

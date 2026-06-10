@@ -8,7 +8,7 @@ import {
   loadForecastSetting,
   toDateOnlyNy
 } from './_forecastShared';
-import { runForecast } from './_forecastRunCore';
+import { runForecast } from './_forecastRunCore.js';
 
 const getNowInTimezoneParts = (timeZone: string) => {
   const parts = new Intl.DateTimeFormat('en-CA', {
