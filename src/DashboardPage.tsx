@@ -121,6 +121,12 @@ const ChevronDownIcon = ({ className = iconStrokeClass }: IconProps) => (
   </svg>
 );
 
+const CheckIcon = ({ className = iconStrokeClass }: IconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" className={className} aria-hidden="true">
+    <path d="M5 12.5l4.25 4.25L19 7" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
 const WarningIcon = ({ className = iconStrokeClass }: IconProps) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
     <path d="M12 4l8 14H4l8-14z" strokeLinecap="round" strokeLinejoin="round" />
@@ -524,7 +530,8 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
-  const [positionFilter, setPositionFilter] = useState('');
+  const [positionFilters, setPositionFilters] = useState<string[]>([]);
+  const [positionFilterOpen, setPositionFilterOpen] = useState(false);
   const [shiftFilter, setShiftFilter] = useState('');
   const [absentOnly, setAbsentOnly] = useState(false);
   const [onClockOnly, setOnClockOnly] = useState(false);
@@ -566,6 +573,7 @@ export default function DashboardPage() {
   };
   const [accountUsageRows, setAccountUsageRows] = useState<TempAccountUsageRow[]>([]);
   const inFlightRef = useRef(false);
+  const positionFilterRef = useRef<HTMLDivElement | null>(null);
   const mistakeEmployeePickerRef = useRef<HTMLDivElement | null>(null);
   const fetchSeqRef = useRef(0);
   const employeeCacheRef = useRef<Map<string, EmployeeRow>>(new Map());
@@ -1243,6 +1251,29 @@ export default function DashboardPage() {
     () => buildDashboardPositionOptions(dashboardPositionNames, rows.map((row) => normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim())),
     [dashboardPositionNames, rows]
   );
+  const selectedPositionSet = useMemo(() => new Set(positionFilters), [positionFilters]);
+  const positionFilterLabel = useMemo(() => {
+    if (positionFilters.length === 0) return 'All positions';
+    if (positionFilters.length === 1) return positionFilters[0];
+    return `${positionFilters.length} positions`;
+  }, [positionFilters]);
+  const togglePositionFilter = (position: string) => {
+    setPositionFilters((current) =>
+      current.includes(position)
+        ? current.filter((item) => item !== position)
+        : [...current, position]
+    );
+  };
+  useEffect(() => {
+    if (!positionFilterOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!positionFilterRef.current?.contains(event.target as Node)) {
+        setPositionFilterOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [positionFilterOpen]);
   const shiftOptions = useMemo(
     () =>
       Array.from(new Set(rows.map((row) => String(row.display_shift ?? row.shift ?? '').trim().toLowerCase()).filter(Boolean))).sort((a, b) =>
@@ -1255,7 +1286,7 @@ export default function DashboardPage() {
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((row) => {
-      if (positionFilter && (normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim()) !== positionFilter) return false;
+      if (selectedPositionSet.size > 0 && !selectedPositionSet.has(normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim())) return false;
       if (shiftFilter && String(row.display_shift ?? row.shift ?? '').trim().toLowerCase() !== shiftFilter) return false;
       if (absentOnly && row.attendance !== 'Absent') return false;
       if (onClockOnly) {
@@ -1268,11 +1299,11 @@ export default function DashboardPage() {
       if (haystack.includes(q)) return true;
       return staffIdSearchMatches(q, String(row.staff_id ?? ''));
     });
-  }, [rows, search, positionFilter, shiftFilter, absentOnly, onClockOnly, offWorkOnly]);
+  }, [rows, search, selectedPositionSet, shiftFilter, absentOnly, onClockOnly, offWorkOnly, dashboardPositionNames]);
 
   useEffect(() => {
     setRenderCount(120);
-  }, [search, positionFilter, shiftFilter, absentOnly, onClockOnly, offWorkOnly, rows.length]);
+  }, [search, positionFilters, shiftFilter, absentOnly, onClockOnly, offWorkOnly, rows.length]);
 
   const renderedRows = useMemo(
     () => filteredRows.slice(0, Math.max(0, renderCount)),
@@ -2049,20 +2080,66 @@ export default function DashboardPage() {
                 className="h-full w-full bg-transparent text-sm text-stone-100 outline-none placeholder:text-stone-500"
               />
             </label>
-            <div className="relative">
-              <select
-                value={positionFilter}
-                onChange={(e) => setPositionFilter(e.target.value)}
-                className="h-12 w-full appearance-none rounded-[20px] border border-white/10 bg-white/[0.04] px-4 pr-10 text-sm text-stone-100 outline-none transition focus:border-white/20"
+            <div ref={positionFilterRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setPositionFilterOpen((open) => !open)}
+                aria-haspopup="listbox"
+                aria-expanded={positionFilterOpen}
+                className="flex h-12 w-full items-center justify-between gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4 text-left text-sm text-stone-100 outline-none transition hover:bg-white/[0.06] focus:border-white/20"
               >
-                <option value="">All positions</option>
-                {positionOptions.map((position) => (
-                  <option key={position} value={position}>
-                    {position}
-                  </option>
-                ))}
-              </select>
-              <ChevronDownIcon className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+                <span className="min-w-0 truncate">{positionFilterLabel}</span>
+                <ChevronDownIcon className="h-4 w-4 shrink-0 text-stone-400" />
+              </button>
+              {positionFilterOpen && (
+                <div
+                  role="listbox"
+                  aria-multiselectable="true"
+                  className="absolute left-0 top-[calc(100%+8px)] z-40 max-h-72 w-full overflow-auto rounded-[20px] border border-white/10 bg-[#171717] p-1.5 shadow-2xl shadow-black/40"
+                >
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={positionFilters.length === 0}
+                    onClick={() => setPositionFilters([])}
+                    className={[
+                      'flex w-full items-center gap-2 rounded-[14px] px-3 py-2 text-left text-sm transition',
+                      positionFilters.length === 0 ? 'bg-white/10 text-stone-50' : 'text-stone-300 hover:bg-white/[0.06] hover:text-stone-50'
+                    ].join(' ')}
+                  >
+                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-white/20">
+                      {positionFilters.length === 0 ? <CheckIcon className="h-3 w-3 text-[#e8dfcf]" /> : null}
+                    </span>
+                    <span className="truncate">All positions</span>
+                  </button>
+                  {positionOptions.map((position) => {
+                    const selected = selectedPositionSet.has(position);
+                    return (
+                      <button
+                        key={position}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        onClick={() => togglePositionFilter(position)}
+                        className={[
+                          'flex w-full items-center gap-2 rounded-[14px] px-3 py-2 text-left text-sm transition',
+                          selected ? 'bg-[#e8dfcf]/12 text-stone-50' : 'text-stone-300 hover:bg-white/[0.06] hover:text-stone-50'
+                        ].join(' ')}
+                      >
+                        <span
+                          className={[
+                            'flex h-4 w-4 shrink-0 items-center justify-center rounded border',
+                            selected ? 'border-[#e8dfcf]/70 bg-[#e8dfcf]/15' : 'border-white/20'
+                          ].join(' ')}
+                        >
+                          {selected ? <CheckIcon className="h-3 w-3 text-[#e8dfcf]" /> : null}
+                        </span>
+                        <span className="truncate">{position}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             <div className="relative">
               <select
