@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { LabelToneKey } from '../../lib/labelTone';
 import {
   buildDashboardCardPositions,
@@ -71,12 +71,6 @@ const SearchIcon = ({ className = iconStrokeClass }: IconProps) => (
   </svg>
 );
 
-const ChevronDownIcon = ({ className = iconStrokeClass }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
-    <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-
 const normalizePositionKey = (value: string, positionNames: readonly string[] = HOME_DASHBOARD_CARD_POSITIONS): string =>
   resolveDashboardPositionName(value, positionNames);
 
@@ -102,6 +96,131 @@ const formatShiftLabel = (value: string) => {
   if (v === 'late') return 'Night';
   return value || '-';
 };
+
+type DashboardMultiSelectOption<Value extends string = string> = {
+  value: Value;
+  label: string;
+  badgeClass?: string;
+};
+
+const buildDashboardMultiSelectLabel = (allLabel: string, selected: string[]) => {
+  if (selected.length === 0) return allLabel;
+  if (selected.length === 1) return selected[0];
+  return `${selected.length} selected`;
+};
+
+function DashboardMultiSelect<Value extends string>({
+  allLabel,
+  selected,
+  options,
+  onChange,
+  isLight
+}: {
+  allLabel: string;
+  selected: Value[];
+  options: readonly DashboardMultiSelectOption<Value>[];
+  onChange: (value: Value[]) => void;
+  isLight: boolean;
+}) {
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
+  const selectedSet = new Set(selected);
+
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      const root = detailsRef.current;
+      if (!root || !root.open) return;
+      const target = event.target as Node | null;
+      if (target && root.contains(target)) return;
+      root.open = false;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const root = detailsRef.current;
+      if (root?.open) root.open = false;
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
+  const toggleValue = (value: Value) => {
+    onChange(selectedSet.has(value) ? selected.filter((item) => item !== value) : [...selected, value]);
+  };
+
+  const optionClass = (active: boolean) =>
+    [
+      'flex w-full cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm transition',
+      active
+        ? isLight
+          ? 'border-emerald-700/50 bg-emerald-100 text-emerald-900'
+          : 'border-neon/50 bg-neon/10 text-neon'
+        : isLight
+          ? 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
+          : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+    ].join(' ');
+
+  return (
+    <details ref={detailsRef} className="relative">
+      <summary
+        className={[
+          'flex h-12 cursor-pointer list-none items-center justify-between rounded-[20px] border px-4 text-sm outline-none transition',
+          isLight ? 'border-slate-200 bg-white text-slate-800 hover:border-slate-300' : 'border-white/10 bg-white/[0.04] text-stone-100 hover:border-white/20'
+        ].join(' ')}
+      >
+        <span className="truncate">{buildDashboardMultiSelectLabel(allLabel, selected)}</span>
+        <span className={['ml-3 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{selected.length}</span>
+      </summary>
+      <div
+        className={[
+          'absolute z-40 mt-2 w-full rounded-2xl border p-3',
+          isLight
+            ? 'border-slate-200 bg-white shadow-[0_18px_40px_rgba(15,23,42,0.16)]'
+            : 'border-slate-700 bg-slate-900 shadow-[0_18px_40px_rgba(0,0,0,0.45)]'
+        ].join(' ')}
+      >
+        <div className={['mb-2 flex items-center justify-between text-[11px]', isLight ? 'text-slate-500' : 'text-slate-300'].join(' ')}>
+          <span>Multi-select</span>
+          <button
+            type="button"
+            disabled={selected.length === 0}
+            onClick={(event) => {
+              event.preventDefault();
+              onChange([]);
+            }}
+            className={[
+              'min-w-[52px] rounded-md border px-2 py-1 text-[12px] font-medium leading-none transition disabled:cursor-not-allowed disabled:opacity-50',
+              isLight
+                ? 'border-slate-300 bg-white text-slate-600 shadow-sm hover:border-slate-400 hover:bg-slate-50'
+                : 'border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700'
+            ].join(' ')}
+          >
+            Clear
+          </button>
+        </div>
+        <div className="max-h-56 space-y-1 overflow-auto pr-1">
+          <button type="button" className={optionClass(selected.length === 0)} onClick={() => onChange([])}>
+            <span className="inline-flex max-w-[80%] items-center truncate rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">{allLabel}</span>
+          </button>
+          {options.map((option) => {
+            const active = selectedSet.has(option.value);
+            return (
+              <button key={option.value} type="button" className={optionClass(active)} onClick={() => toggleValue(option.value)}>
+                <span className={['inline-flex max-w-[80%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold', option.badgeClass ?? 'border-white/20'].join(' ')}>
+                  {option.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </details>
+  );
+}
 
 const getHomeShiftBadgeClass = (value: '' | 'early' | 'late') => {
   if (value === 'early') return 'badge-elevated-dark border-amber-300/30 bg-amber-400/[0.13] text-amber-100';
@@ -199,9 +318,9 @@ function HomeDashboardPage({
 }: HomeDashboardPageProps) {
   const isLight = _themeMode === 'light';
   const [search, setSearch] = useState('');
-  const [agencyFilter, setAgencyFilter] = useState('');
-  const [positionFilter, setPositionFilter] = useState('');
-  const [shiftFilter, setShiftFilter] = useState('');
+  const [agencyFilter, setAgencyFilter] = useState<string[]>([]);
+  const [positionFilter, setPositionFilter] = useState<string[]>([]);
+  const [shiftFilter, setShiftFilter] = useState<Array<'early' | 'late'>>([]);
   const [absentOnly, setAbsentOnly] = useState(false);
   const [onClockOnly, setOnClockOnly] = useState(false);
   const [offWorkOnly, setOffWorkOnly] = useState(false);
@@ -329,17 +448,18 @@ function HomeDashboardPage({
       ) {
         return false;
       }
-      if (agencyFilter) {
+      if (agencyFilter.length > 0) {
         const agency = String(row.agency ?? '').trim();
-        if (agency !== agencyFilter) return false;
+        if (!agencyFilter.includes(agency)) return false;
       }
-      if (positionFilter) {
+      if (positionFilter.length > 0) {
         const key = normalizePositionKey(row.position, homeDashboardPositionNames) || row.position;
-        if (key !== positionFilter) return false;
+        if (!positionFilter.includes(key)) return false;
       }
-      if (shiftFilter) {
+      if (shiftFilter.length > 0) {
         const rowShift = normalizeShiftValue(row.shift);
-        if (rowShift !== shiftFilter) return false;
+        if (!rowShift) return false;
+        if (!shiftFilter.includes(rowShift)) return false;
       }
       if (attendanceFilters.length > 0 && !attendanceFilters.includes(row.attendance)) return false;
       return true;
@@ -456,52 +576,38 @@ function HomeDashboardPage({
                 className={['home-search-input h-full w-full bg-transparent pl-8 text-sm outline-none', isLight ? 'text-slate-800 placeholder:text-slate-400' : 'text-stone-100 placeholder:text-stone-500'].join(' ')}
               />
             </label>
-            <div className="relative">
-              <select
-                value={agencyFilter}
-                onChange={(e) => setAgencyFilter(e.target.value)}
-                className={['h-12 w-full appearance-none rounded-[20px] border px-4 pr-10 text-sm outline-none transition', isLight ? 'border-slate-200 bg-white text-slate-800 focus:border-slate-300' : 'border-white/10 bg-white/[0.04] text-stone-100 focus:border-white/20'].join(' ')}
-              >
-                <option value="">All agencies</option>
-                {agencyOptions.map((agency) => (
-                  <option key={agency} value={agency}>{agency}</option>
-                ))}
-              </select>
-              <ChevronDownIcon className={['pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2', isLight ? 'text-slate-400' : 'text-stone-400'].join(' ')} />
-            </div>
-            <div className="relative">
-              <select
-                value={positionFilter}
-                onChange={(e) => {
-                  setPositionFilter(e.target.value);
-                  if (!e.target.value) {
-                    setHomeRosterPositionFilter('ALL');
-                  } else {
-                    setHomeRosterPositionFilter(e.target.value);
-                  }
-                }}
-                className={['h-12 w-full appearance-none rounded-[20px] border px-4 pr-10 text-sm outline-none transition', isLight ? 'border-slate-200 bg-white text-slate-800 focus:border-slate-300' : 'border-white/10 bg-white/[0.04] text-stone-100 focus:border-white/20'].join(' ')}
-              >
-                <option value="">All positions</option>
-                {positionOptions.map((position) => (
-                  <option key={position} value={position}>{position}</option>
-                ))}
-              </select>
-              <ChevronDownIcon className={['pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2', isLight ? 'text-slate-400' : 'text-stone-400'].join(' ')} />
-            </div>
-            <div className="relative">
-              <select
-                value={shiftFilter}
-                onChange={(e) => setShiftFilter(e.target.value)}
-                className={['h-12 w-full appearance-none rounded-[20px] border px-4 pr-10 text-sm outline-none transition', isLight ? 'border-slate-200 bg-white text-slate-800 focus:border-slate-300' : 'border-white/10 bg-white/[0.04] text-stone-100 focus:border-white/20'].join(' ')}
-              >
-                <option value="">All shifts</option>
-                {shiftOptions.map((shift) => (
-                  <option key={shift} value={shift}>{formatShiftLabel(shift)}</option>
-                ))}
-              </select>
-              <ChevronDownIcon className={['pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2', isLight ? 'text-slate-400' : 'text-stone-400'].join(' ')} />
-            </div>
+            <DashboardMultiSelect
+              allLabel="All agencies"
+              selected={agencyFilter}
+              options={agencyOptions.map((agency) => ({ value: agency, label: agency }))}
+              onChange={setAgencyFilter}
+              isLight={isLight}
+            />
+            <DashboardMultiSelect
+              allLabel="All positions"
+              selected={positionFilter}
+              options={positionOptions.map((position) => ({
+                value: position,
+                label: position,
+                badgeClass: isLight ? getScheduleTablePositionBadgeClass(position) : getSchedulePositionBadgeClass(position)
+              }))}
+              onChange={(value) => {
+                setPositionFilter(value);
+                setHomeRosterPositionFilter(value.length === 1 ? value[0] : 'ALL');
+              }}
+              isLight={isLight}
+            />
+            <DashboardMultiSelect<'early' | 'late'>
+              allLabel="All shifts"
+              selected={shiftFilter}
+              options={shiftOptions.map((shift) => ({
+                value: shift as 'early' | 'late',
+                label: formatShiftLabel(shift),
+                badgeClass: getHomeShiftBadgeClass(shift as '' | 'early' | 'late')
+              }))}
+              onChange={setShiftFilter}
+              isLight={isLight}
+            />
             <label className={['flex h-12 items-center gap-3 rounded-[20px] border px-4 text-sm', isLight ? 'border-slate-200 bg-white text-slate-700' : 'border-white/10 bg-white/[0.04] text-stone-200'].join(' ')}>
               <input type="checkbox" checked={absentOnly} onChange={(e) => setAbsentOnly(e.target.checked)} className="home-filter-checkbox h-4 w-4 shrink-0 appearance-auto rounded border border-slate-300 bg-white accent-indigo-600 shadow-none" />
               Absent

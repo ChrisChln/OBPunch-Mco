@@ -121,12 +121,6 @@ const ChevronDownIcon = ({ className = iconStrokeClass }: IconProps) => (
   </svg>
 );
 
-const CheckIcon = ({ className = iconStrokeClass }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" className={className} aria-hidden="true">
-    <path d="M5 12.5l4.25 4.25L19 7" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-
 const WarningIcon = ({ className = iconStrokeClass }: IconProps) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
     <path d="M12 4l8 14H4l8-14z" strokeLinecap="round" strokeLinejoin="round" />
@@ -1196,7 +1190,7 @@ export default function DashboardPage() {
       const digest = `${nextRows.length}|${nextRows
         .map(
           (r) =>
-            `${r.staff_id}:${r.attendance}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}:${r.schedule_state}:${r.work_account}:${r.temp_account_name}:${r.mistake_count_7d ?? 0}`
+            `${r.staff_id}:${r.name}:${r.agency}:${r.position}:${r.label}:${r.shift}:${r.attendance}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}:${r.schedule_state}:${r.work_account}:${r.temp_account_name}:${r.mistake_count_7d ?? 0}`
         )
         .join(';')}`;
 
@@ -2095,22 +2089,31 @@ export default function DashboardPage() {
                 <div
                   role="listbox"
                   aria-multiselectable="true"
-                  className="absolute left-0 top-[calc(100%+8px)] z-40 max-h-72 w-full overflow-auto rounded-[20px] border border-white/10 bg-[#171717] p-1.5 shadow-2xl shadow-black/40"
+                  className="absolute left-0 top-[calc(100%+8px)] z-40 w-full rounded-2xl border border-slate-700 bg-slate-900 p-3 shadow-[0_18px_40px_rgba(0,0,0,0.45)]"
                 >
+                  <div className="mb-2 flex items-center justify-between text-[11px] text-slate-300">
+                    <span>Multi-select</span>
+                    <button
+                      type="button"
+                      disabled={positionFilters.length === 0}
+                      onClick={() => setPositionFilters([])}
+                      className="min-w-[52px] rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-[12px] font-medium leading-none text-slate-100 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <div className="max-h-56 space-y-1 overflow-auto pr-1">
                   <button
                     type="button"
                     role="option"
                     aria-selected={positionFilters.length === 0}
                     onClick={() => setPositionFilters([])}
                     className={[
-                      'flex w-full items-center gap-2 rounded-[14px] px-3 py-2 text-left text-sm transition',
-                      positionFilters.length === 0 ? 'bg-white/10 text-stone-50' : 'text-stone-300 hover:bg-white/[0.06] hover:text-stone-50'
+                      'flex w-full cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm transition',
+                      positionFilters.length === 0 ? 'border-neon/50 bg-neon/10 text-neon' : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
                     ].join(' ')}
                   >
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-white/20">
-                      {positionFilters.length === 0 ? <CheckIcon className="h-3 w-3 text-[#e8dfcf]" /> : null}
-                    </span>
-                    <span className="truncate">All positions</span>
+                    <span className="inline-flex max-w-[80%] items-center truncate rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">All positions</span>
                   </button>
                   {positionOptions.map((position) => {
                     const selected = selectedPositionSet.has(position);
@@ -2122,22 +2125,17 @@ export default function DashboardPage() {
                         aria-selected={selected}
                         onClick={() => togglePositionFilter(position)}
                         className={[
-                          'flex w-full items-center gap-2 rounded-[14px] px-3 py-2 text-left text-sm transition',
-                          selected ? 'bg-[#e8dfcf]/12 text-stone-50' : 'text-stone-300 hover:bg-white/[0.06] hover:text-stone-50'
+                          'flex w-full cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm transition',
+                          selected ? 'border-neon/50 bg-neon/10 text-neon' : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
                         ].join(' ')}
                       >
-                        <span
-                          className={[
-                            'flex h-4 w-4 shrink-0 items-center justify-center rounded border',
-                            selected ? 'border-[#e8dfcf]/70 bg-[#e8dfcf]/15' : 'border-white/20'
-                          ].join(' ')}
-                        >
-                          {selected ? <CheckIcon className="h-3 w-3 text-[#e8dfcf]" /> : null}
+                        <span className={['inline-flex max-w-[80%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold', getPositionBadgeClass(position)].join(' ')}>
+                          {position}
                         </span>
-                        <span className="truncate">{position}</span>
                       </button>
                     );
                   })}
+                  </div>
                 </div>
               )}
             </div>

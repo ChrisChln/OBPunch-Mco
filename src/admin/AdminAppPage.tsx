@@ -22,6 +22,7 @@ import AdminNav from './components/AdminNav';
 import BusyOverlay from './components/BusyOverlay';
 import AdminLoginPanel from './components/AdminLoginPanel';
 import ScheduleToolbar from './components/ScheduleToolbar';
+import { matchesScheduleDriverFilter, normalizeScheduleDriverFilterValue } from './scheduleDriverFilter';
 import DailyListNewHireModal from './components/DailyListNewHireModal';
 import AdminUserAvatar from './components/AdminUserAvatar';
 import DevicesPage from './pages/DevicesPage';
@@ -1851,9 +1852,9 @@ export default function AdminAppPage() {
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [accountSearch, setAccountSearch] = useState('');
   const [accountPositionFilter, setAccountPositionFilter] = useState('');
-  const [employeeAgency, setEmployeeAgency] = useState('');
-  const [employeePosition, setEmployeePosition] = useState('');
-  const [employeeShiftFilter, setEmployeeShiftFilter] = useState<'' | 'early' | 'late'>('');
+  const [employeeAgency, setEmployeeAgency] = useState<string[]>([]);
+  const [employeePosition, setEmployeePosition] = useState<string[]>([]);
+  const [employeeShiftFilter, setEmployeeShiftFilter] = useState<Array<'early' | 'late'>>([]);
   const [employeeLabels, setEmployeeLabels] = useState<string[]>([]);
   const [, setEmployeesHasMore] = useState(false);
   useEffect(() => {
@@ -1997,6 +1998,7 @@ export default function AdminAppPage() {
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [scheduleSearchInput, setScheduleSearchInput] = useState('');
   const [scheduleAgency, setScheduleAgency] = useState('');
+  const [scheduleDriverFilter, setScheduleDriverFilter] = useState('');
   const [schedulePosition, setSchedulePosition] = useState<string>('');
   const [scheduleEmploymentType, setScheduleEmploymentType] = useState<'' | EmploymentType>('');
   const [schedulePositionToneByPosition, setSchedulePositionToneByPosition] = useState<PositionToneMap>({
@@ -2070,6 +2072,7 @@ export default function AdminAppPage() {
   const deferredAccountSearch = useDeferredValue(accountSearch);
   const deferredAccountPositionFilter = useDeferredValue(accountPositionFilter);
   const deferredScheduleAgency = useDeferredValue(scheduleAgency);
+  const deferredScheduleDriverFilter = useDeferredValue(scheduleDriverFilter);
   const deferredSchedulePosition = useDeferredValue(schedulePosition);
   const deferredScheduleEmploymentType = useDeferredValue(scheduleEmploymentType);
   const deferredScheduleShift = useDeferredValue(scheduleShift);
@@ -2619,7 +2622,7 @@ export default function AdminAppPage() {
     if (scheduleError === 'Invalid staff id.') {
       setScheduleError(null);
     }
-  }, [page, scheduleSearchInput, scheduleAgency, schedulePosition, scheduleEmploymentType, scheduleLabels]);
+  }, [page, scheduleSearchInput, scheduleAgency, scheduleDriverFilter, schedulePosition, scheduleEmploymentType, scheduleLabels]);
 
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFillDuplicates, setUploadFillDuplicates] = useState(true);
@@ -8276,8 +8279,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       await fetchEmployees({
         reset: true,
         search: employeeSearch,
-        agency: employeeAgency,
-        position: employeePosition,
+        agency: '',
+        position: '',
         labels: employeeLabels
       });
     }
@@ -12785,15 +12788,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
   }, [employeesAllowedByPositionScope]);
 
-  const collectEmployeeLabelOptionsByPosition = (positionRaw: string) => {
-    const targetPosition = normalizePositionKey(positionRaw);
+  const collectEmployeeLabelOptionsByPosition = (positionRaw: string | string[]) => {
+    const sourcePositions = Array.isArray(positionRaw) ? positionRaw : [positionRaw];
+    const targetPositions = new Set(sourcePositions.map((item) => normalizePositionKey(item)).filter(Boolean));
     const out = new Set<string>();
     for (const e of employeesAllowedByPositionScope) {
       const label = String(e.label ?? e.Label ?? '').trim();
       if (!label) continue;
-      if (targetPosition) {
+      if (targetPositions.size > 0) {
         const rowPosition = normalizePositionKey(String(e.position ?? e.Position ?? '').trim());
-        if (rowPosition !== targetPosition) continue;
+        if (!rowPosition || !targetPositions.has(rowPosition)) continue;
       }
       out.add(label);
     }
@@ -12835,9 +12839,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const employeeFilterNeedles = useMemo(() => {
     return {
       search: deferredEmployeeSearch.trim().toLowerCase(),
-      agency: employeeAgency.trim().toLowerCase(),
-      position: employeePosition.trim().toLowerCase(),
-      shift: employeeShiftFilter,
+      agencies: new Set(employeeAgency.map((item) => item.trim().toLowerCase()).filter(Boolean)),
+      positions: new Set(employeePosition.map((item) => item.trim().toLowerCase()).filter(Boolean)),
+      shifts: new Set(employeeShiftFilter),
       labels: employeeLabels.map((item) => item.trim().toLowerCase()).filter(Boolean)
     };
   }, [deferredEmployeeSearch, employeeAgency, employeePosition, employeeShiftFilter, employeeLabels]);
@@ -12845,7 +12849,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   // Step 2: Filter employees (depends on employee data + filter needles)
   const employeesAfterFilter = useMemo(() => {
     if (page !== 'employees') return [];
-    const { search: searchNeedle, agency: agencyNeedle, position: positionNeedle, shift: shiftNeedle, labels: labelNeedles } = employeeFilterNeedles;
+    const { search: searchNeedle, agencies: agencyNeedles, positions: positionNeedles, shifts: shiftNeedles, labels: labelNeedles } = employeeFilterNeedles;
     return employeesAllowedByPositionScope.filter((e) => {
       if (isInactiveJdlEmployee(e)) return false;
       const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
@@ -12857,9 +12861,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
       const shiftInfo = employeeShiftByStaffId[staff];
       const shift = shiftInfo?.shift || '';
-      if (agencyNeedle && !agency.toLowerCase().includes(agencyNeedle)) return false;
-      if (positionNeedle && !position.toLowerCase().includes(positionNeedle)) return false;
-      if (shiftNeedle && shift !== shiftNeedle) return false;
+      if (agencyNeedles.size > 0 && !agencyNeedles.has(agency.toLowerCase())) return false;
+      if (positionNeedles.size > 0 && !positionNeedles.has(position.toLowerCase())) return false;
+      if (shiftNeedles.size > 0 && !shiftNeedles.has(shift as 'early' | 'late')) return false;
       if (labelNeedles.length > 0) {
         const normalizedLabel = label.toLowerCase();
         const hit = labelNeedles.some((needle) => normalizedLabel === needle);
@@ -13449,8 +13453,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
 
     const { start: dayStart, end: dayEnd } = getDayRange(weekStart, idx);
-    const includedIds = new Set<string>();
-
     const events = rowsBase
       .map((r) => {
         const at = r.created_at ? new Date(r.created_at) : null;
@@ -13465,38 +13467,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return a.id.localeCompare(b.id, 'en-US');
     });
 
-    const overlaps = (aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) =>
-      Math.min(aEnd.getTime(), bEnd.getTime()) > Math.max(aStart.getTime(), bStart.getTime());
-
-    let currentIn: { id: string; at: Date } | null = null;
-    for (const ev of events) {
-      if (ev.action === 'IN') {
-        currentIn = { id: ev.id, at: ev.at };
-        continue;
-      }
-      if (ev.action === 'OUT') {
-        if (currentIn && ev.at.getTime() > currentIn.at.getTime()) {
-          if (overlaps(dayStart, dayEnd, currentIn.at, ev.at)) {
-            includedIds.add(currentIn.id);
-            includedIds.add(ev.id);
-          }
-          currentIn = null;
-        }
-      }
-    }
-
+    const includedIds = new Set<string>();
     for (const ev of events) {
       const bucketTimeMs = getOperationalBucketTimeMs(ev.at, ev.action);
       if (bucketTimeMs >= dayStart.getTime() && bucketTimeMs < dayEnd.getTime()) {
         includedIds.add(ev.id);
-      }
-    }
-
-    if (currentIn) {
-      const now = new Date(serverTime);
-      const capEnd = new Date(clamp(now.getTime(), dayStart.getTime(), dayEnd.getTime()));
-      if (overlaps(dayStart, dayEnd, currentIn.at, capEnd)) {
-        includedIds.add(currentIn.id);
       }
     }
 
@@ -14076,6 +14051,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           if (!isWork) return false;
         }
         if (deferredScheduleAgency && agency.toLowerCase() !== deferredScheduleAgency.trim().toLowerCase()) return false;
+        if (normalizeScheduleDriverFilterValue(deferredScheduleDriverFilter)) {
+          const driverInfo = scheduleDriverGroupByStaffId[staff];
+          const driverValue = driverInfo?.code || driverInfo?.label || '';
+          if (!matchesScheduleDriverFilter(driverValue, deferredScheduleDriverFilter)) return false;
+        }
         if (selectedSchedulePositionSet.size > 0 && !selectedSchedulePositionSet.has(position)) return false;
         if (deferredScheduleEmploymentType && employmentType !== deferredScheduleEmploymentType) return false;
         if (deferredScheduleLabels.length > 0) {
@@ -14094,6 +14074,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     page,
     employees,
     deferredScheduleAgency,
+    deferredScheduleDriverFilter,
     selectedSchedulePositionSet,
     deferredScheduleEmploymentType,
     deferredScheduleLabels,
@@ -14101,6 +14082,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     employeeShiftByStaffId,
     isInactiveJdlEmployee,
     scheduleWorkDayFilter,
+    scheduleDriverGroupByStaffId,
     scheduleRowsByStaffDayIndex
   ]);
 
@@ -15851,7 +15833,7 @@ ${rowsToHtml(late)}
                   refreshSchedulePanelWithAudit={refreshSchedulePanelWithAudit}
                 />
 
-                <div className="mt-5 grid gap-4 md:grid-cols-12 xl:grid-cols-[repeat(14,minmax(0,1fr))]">
+                <div className="mt-5 grid gap-4 md:grid-cols-12 xl:grid-cols-[repeat(16,minmax(0,1fr))]">
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('周', 'Week')}</label>
                     <input
@@ -15896,6 +15878,17 @@ ${rowsToHtml(late)}
                         </option>
                       ))}
                     </select>
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">DRIVER</label>
+                    <input
+                      inputMode="numeric"
+                      value={scheduleDriverFilter}
+                      onChange={(e) => setScheduleDriverFilter(normalizeScheduleDriverFilterValue(e.target.value))}
+                      disabled={isLocked}
+                      placeholder="1"
+                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+                    />
                   </div>
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('岗位', 'Position')}</label>
@@ -17389,6 +17382,7 @@ ${rowsToHtml(late)}
                   employeeShiftFilter={employeeShiftFilter}
                   employeeLabels={employeeLabels}
                   employeeFilterLabelOptions={employeeFilterLabelOptions}
+                  getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                   getScheduleLabelToneClass={getScheduleLabelToneClass}
                   cycleScheduleLabelTone={cycleScheduleLabelTone}
                 />

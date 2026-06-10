@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import StyledDateInput from '../components/StyledDateInput';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -67,50 +68,92 @@ function TimecardMultiSelect<Value extends string>({
   isLight: boolean;
   controlClass: string;
 }) {
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
   const selectedSet = new Set(selected);
   const menuClass = [
-    'absolute z-30 mt-2 max-h-72 w-full overflow-auto rounded-2xl border p-2 shadow-2xl',
-    isLight ? 'border-slate-200 bg-white text-slate-900 shadow-slate-200/70' : 'border-white/10 bg-[#11161f] text-white shadow-black/40'
+    'absolute z-30 mt-2 w-full rounded-2xl border p-3',
+    isLight ? 'border-slate-200 bg-white text-slate-900 shadow-[0_18px_40px_rgba(15,23,42,0.16)]' : 'border-slate-700 bg-slate-900 text-slate-100 shadow-[0_18px_40px_rgba(0,0,0,0.45)]'
   ].join(' ');
   const optionClass = (active: boolean) =>
     [
-      'flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm transition',
+      'flex w-full cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm transition',
       active
         ? isLight
-          ? 'bg-sky-50 text-sky-900'
-          : 'bg-sky-500/15 text-sky-100'
+          ? 'border-emerald-700/50 bg-emerald-100 text-emerald-900'
+          : 'border-neon/50 bg-neon/10 text-neon'
         : isLight
-          ? 'text-slate-700 hover:bg-slate-100'
-          : 'text-slate-200 hover:bg-white/10'
+          ? 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
+          : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
     ].join(' ');
 
   const toggleValue = (value: Value) => {
     onChange(selectedSet.has(value) ? selected.filter((item) => item !== value) : [...selected, value]);
   };
 
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      const root = detailsRef.current;
+      if (!root || !root.open) return;
+      const target = event.target as Node | null;
+      if (target && root.contains(target)) return;
+      root.open = false;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const root = detailsRef.current;
+      if (root?.open) root.open = false;
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
   return (
     <div className="relative">
       <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{label}</label>
-      <details className="group">
+      <details ref={detailsRef} className="group">
         <summary
-          aria-disabled={disabled}
           className={[
             controlClass,
-            'flex cursor-pointer list-none items-center justify-between gap-3 truncate',
+            'flex cursor-pointer list-none items-center justify-between gap-3 truncate text-left',
             disabled ? 'pointer-events-none cursor-not-allowed opacity-60' : ''
           ].join(' ')}
         >
-          <span className="truncate">{buildMultiSelectLabel(allLabel, selected)}</span>
-          <span className={['text-xs transition group-open:rotate-180', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>v</span>
+          <span className="min-w-0 truncate">{buildMultiSelectLabel(allLabel, selected)}</span>
+          <span className={['ml-3 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{selected.length}</span>
         </summary>
         <div className={menuClass}>
+          <div className={['mb-2 flex items-center justify-between text-[11px]', isLight ? 'text-slate-500' : 'text-slate-300'].join(' ')}>
+            <span>Multi-select</span>
+            <button
+              type="button"
+              disabled={disabled || selected.length === 0}
+              onClick={(event) => {
+                event.preventDefault();
+                onChange([]);
+              }}
+              className={[
+                'min-w-[52px] rounded-md border px-2 py-1 text-[12px] font-medium leading-none transition disabled:cursor-not-allowed disabled:opacity-50',
+                isLight
+                  ? 'border-slate-300 bg-white text-slate-600 shadow-sm hover:border-slate-400 hover:bg-slate-50'
+                  : 'border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700'
+              ].join(' ')}
+            >
+              Clear
+            </button>
+          </div>
+          <div className="max-h-56 space-y-1 overflow-auto pr-1">
           <button
             type="button"
             className={optionClass(selected.length === 0)}
             onClick={() => onChange([])}
           >
-            <input type="checkbox" checked={selected.length === 0} readOnly className="h-4 w-4 accent-neon" />
-            <span className="truncate">{allLabel}</span>
+            <span className="inline-flex max-w-[80%] items-center truncate rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">{allLabel}</span>
           </button>
           {options.map((option) => {
             const active = selectedSet.has(option.value);
@@ -121,11 +164,11 @@ function TimecardMultiSelect<Value extends string>({
                 className={optionClass(active)}
                 onClick={() => toggleValue(option.value)}
               >
-                <input type="checkbox" checked={active} readOnly className="h-4 w-4 accent-neon" />
-                <span className="truncate">{option.label}</span>
+                <span className="inline-flex max-w-[80%] items-center truncate rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">{option.label}</span>
               </button>
             );
           })}
+          </div>
         </div>
       </details>
     </div>
