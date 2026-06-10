@@ -125,7 +125,12 @@ import {
   type DailyCapacityProcKey,
   type DailyCapacityStaffStats
 } from './dailyCapacity';
-import { filterDailyListCountedRows, filterDailyListDisplayRows, selectDailyListCapacityRows } from './dailyList';
+import {
+  filterDailyListCountedRows,
+  filterDailyListDisplayRows,
+  resolveDailyListPositionSource,
+  selectDailyListCapacityRows
+} from './dailyList';
 import {
   applyFlexCoverageToRecommendedRows,
   buildFlexCoverageByDayIndex,
@@ -905,14 +910,20 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
 const isNewHirePlaceholderStaffId = (value: string) => {
   const staff = String(value ?? '').trim().toUpperCase();
   if (!staff) return false;
+  if (/^TUS\d{6,}$/i.test(staff)) return true;
   if (/^TEMP-USID-[A-Z0-9]+-\d{4,}$/i.test(staff)) return true;
   if (/^NEWREQ-\d{8}(?:-[A-Z]+)?-\d{3,}$/i.test(staff)) return true; // legacy format
   return /^\d{4}[A-Z]+\d{3,}$/i.test(staff); // MMDD + POSITION + SEQ
 };
-const createManualTemporaryStaffId = () => {
-  const stamp = Date.now().toString(36).toUpperCase();
-  const random = Math.random().toString(36).slice(2, 6).toUpperCase();
-  return `TEMP-USID-${stamp}${random}-0001`;
+const createManualTemporaryStaffId = (existingStaffIds: string[] = []) => {
+  let max = 0;
+  for (const value of existingStaffIds) {
+    const match = String(value ?? '').trim().toUpperCase().match(/^TUS(\d{6,})$/);
+    if (!match) continue;
+    const n = Number(match[1]);
+    if (Number.isFinite(n)) max = Math.max(max, n);
+  }
+  return `TUS${String(max + 1).padStart(6, '0')}`;
 };
 const isNewHirePlaceholderName = (value: string) => /^\d{2}\/\d{2}NEW\s+[A-Z]+(\d+)$/i.test(String(value ?? '').trim());
 const isNewHireFirstWorkDate = (staffId: string, workDate: Date | string) => {
@@ -4794,8 +4805,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const employeePosition = String(employee.position ?? employee.Position ?? '').trim();
-      const normalizedPosition =
-        activePositionNames.find((p) => p.toLowerCase() === employeePosition.toLowerCase()) ?? activePositionNames[0] ?? (activePositionNames[0] ?? ALLOWED_POSITIONS[0]);
+      const normalizedPosition = normalizePositionKey(employeePosition);
+      if (!normalizedPosition) {
+        setScheduleError(`Employee position is missing or inactive: ${staff}`);
+        return;
+      }
       const payload = {
         staff_id: staff,
         date: templateDate,
@@ -6635,7 +6649,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
 
     const staffRaw = employeeNewStaffId.trim();
-    const staff = staffRaw ? normalizeStaffId(staffRaw) : createManualTemporaryStaffId();
+    const staff = staffRaw
+      ? normalizeStaffId(staffRaw)
+      : createManualTemporaryStaffId(employees.map((row) => String(row.staff_id ?? '').trim()));
     if (!staff || (!isValidStaffIdValue(staff) && !isNewHirePlaceholderStaffId(staff))) {
       setEmployeesError('员工ID格式不正确。');
       return;
@@ -8009,7 +8025,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const isPlaceholderOriginal = isNewHirePlaceholderStaffId(originalStaffRaw);
     const originalStaff = isPlaceholderOriginal ? originalStaffRaw : normalizeStaffId(originalStaffRaw);
     const nextStaffInputRaw = String(employeeEditStaffId ?? '').trim();
-    const nextStaff = nextStaffInputRaw ? normalizeStaffId(nextStaffInputRaw) : createManualTemporaryStaffId();
+    const nextStaff = nextStaffInputRaw
+      ? normalizeStaffId(nextStaffInputRaw)
+      : createManualTemporaryStaffId(employees.map((row) => String(row.staff_id ?? '').trim()));
     if (!originalStaff || !nextStaff) return;
     if (!isPlaceholderOriginal && originalStaff !== nextStaff && !isValidStaffIdValue(nextStaff) && !isNewHirePlaceholderStaffId(nextStaff)) {
       setEmployeesError('Invalid staff ID format (e.g. US010454).');
@@ -8223,6 +8241,39 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             return;
           }
           migratedScheduleCount = scheduleIdsToMigrate.length;
+        }
+
+        if (isNewHirePlaceholderStaffId(originalStaff) && isValidStaffIdValue(nextStaff)) {
+          const aliasPayload = {
+            staff_id: nextStaff,
+            position: normalizedPos ?? null,
+            work_account: workAccount || String(originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? '').trim() || originalStaff,
+            work_password: workPassword || String(originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? '').trim() || null,
+            source_temp_staff_id: originalStaff,
+            window_start: new Date(serverTime).toISOString(),
+            window_end: '9999-12-31T23:59:59.000Z',
+            is_active: false,
+            released_at: new Date(serverTime).toISOString(),
+            release_reason: 'staff_id_alias',
+            updated_at: new Date(serverTime).toISOString()
+          };
+          const existingAliasRes = await supabase
+            .from(TEMP_ACCOUNT_ASSIGNMENT_TABLE)
+            .select('id')
+            .eq('source_temp_staff_id', originalStaff)
+            .limit(1);
+          if (existingAliasRes.error) {
+            setEmployeesError('Temporary account binding failed: ' + existingAliasRes.error.message);
+            return;
+          }
+          const existingAliasId = ((existingAliasRes.data as Array<{ id?: number | string }> | null) ?? [])[0]?.id;
+          const aliasWriteRes = existingAliasId
+            ? await supabase.from(TEMP_ACCOUNT_ASSIGNMENT_TABLE).update(aliasPayload as any).eq('id', existingAliasId)
+            : await supabase.from(TEMP_ACCOUNT_ASSIGNMENT_TABLE).insert([aliasPayload as any]);
+          if (aliasWriteRes.error) {
+            setEmployeesError('Temporary account binding failed: ' + aliasWriteRes.error.message);
+            return;
+          }
         }
       }
 
@@ -9196,7 +9247,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (!isWorkingScheduleBaseState(state)) continue;
         const profile = profileByStaff.get(staff);
         const shift = initialShiftByStaff.get(staff) || profile?.shift || 'early';
-        const position = String((row as any).position ?? profile?.position ?? '').trim();
+        const position = String(profile?.position ?? (row as any).position ?? '').trim();
         if (!position) continue;
         const terminatedAt = String(profile?.terminatedAt ?? '').trim();
         if (terminatedAt) {
@@ -13832,7 +13883,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       // Schedule rows can come from legacy records without shift; default working rows to morning.
       const shift = rowShift || inferredShift || 'early';
       if (shift !== 'early' && shift !== 'late') continue;
-      const position = String(row.position ?? '').trim() || profile?.position || '';
+      const { position, profilePosition, schedulePosition } = resolveDailyListPositionSource(profile?.position, row.position);
       const normalizedPosition = normalizeDailyListPositionKey(position);
       if (!normalizedPosition || !scheduleVisiblePositionSet.has(normalizedPosition)) continue;
       const item: DailyListRow = {
@@ -13842,7 +13893,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         position,
         shift,
         start_time: resolveShiftStartTime(shift, position, profile?.shiftTime || ''),
-        scheduleOnly: isScheduleOnlyAgency(profile?.agency ?? '')
+        scheduleOnly: isScheduleOnlyAgency(profile?.agency ?? ''),
+        profilePosition,
+        schedulePosition
       };
       if (shift === 'late') countedLateRows.push(item);
       else countedEarlyRows.push(item);
@@ -14028,6 +14081,106 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (!yyyy || !mm || !dd) return String(tomorrowDailyList.targetDate ?? '');
     return `${mm}/${dd}/${yyyy}`;
   }, [tomorrowDailyList.targetDate]);
+  const dailyListDataAudit = useMemo(() => {
+    const parsedTarget = new Date(`${tomorrowDailyList.targetDate}T00:00:00`);
+    const dayIndex = Number.isNaN(parsedTarget.getTime()) ? null : (parsedTarget.getDay() + 6) % 7;
+    const sourceScheduleRows =
+      scheduleRowsWeekOffset === dailyListTargetWeekOffset
+        ? scheduleRows
+        : dailyListScheduleRowsWeekOffset === dailyListTargetWeekOffset
+          ? dailyListScheduleRows
+          : [];
+    const includedStaff = new Set(
+      [...tomorrowDailyList.countedEarlyRows, ...tomorrowDailyList.countedLateRows]
+        .map((row) => normalizeStaffId(String(row.staff_id ?? '').trim()))
+        .filter(Boolean)
+    );
+    const missingRows: Array<{
+      staff_id: string;
+      name: string;
+      agency: string;
+      position: string;
+      schedulePosition: string;
+      shift: string;
+      reason: string;
+    }> = [];
+    const positionMismatches: Array<{
+      staff_id: string;
+      name: string;
+      agency: string;
+      profilePosition: string;
+      schedulePosition: string;
+    }> = [];
+
+    if (dayIndex === null) return { missingRows, positionMismatches };
+
+    for (const row of sourceScheduleRows) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) continue;
+      const rowDayIndex = getDayIndexFromTemplateDate(String(row.date ?? '').trim(), dailyListTargetWeekOffset);
+      if (rowDayIndex !== dayIndex) continue;
+      if (!isWorkingScheduleRow(row)) continue;
+
+      const profile = employeeProfileByStaffId.get(staff);
+      const { position, profilePosition, schedulePosition } = resolveDailyListPositionSource(profile?.position, row.position);
+      const normalizedSchedulePosition = normalizeDailyListPositionKey(schedulePosition);
+      const normalizedProfilePosition = normalizeDailyListPositionKey(profilePosition);
+      if (
+        normalizedSchedulePosition &&
+        normalizedProfilePosition &&
+        normalizedSchedulePosition !== normalizedProfilePosition
+      ) {
+        positionMismatches.push({
+          staff_id: staff,
+          name: profile?.name || '',
+          agency: profile?.agency || '',
+          profilePosition,
+          schedulePosition
+        });
+      }
+
+      if (includedStaff.has(staff)) continue;
+
+      const rowShift = normalizeShiftValue(String(row.shift ?? '').trim());
+      const inferredShift = employeeShiftByStaffId[staff]?.shift ?? '';
+      const shift = rowShift || inferredShift || 'early';
+      const normalizedPosition = normalizeDailyListPositionKey(position);
+      const reason =
+        shift !== 'early' && shift !== 'late'
+          ? 'shift'
+          : !normalizedPosition
+            ? 'position'
+            : !scheduleVisiblePositionSet.has(normalizedPosition)
+              ? 'access'
+              : !profile
+                ? 'profile'
+                : 'filtered';
+
+      missingRows.push({
+        staff_id: staff,
+        name: profile?.name || '',
+        agency: profile?.agency || '',
+        position,
+        schedulePosition,
+        shift,
+        reason
+      });
+    }
+
+    positionMismatches.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
+    missingRows.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
+    return { missingRows, positionMismatches };
+  }, [
+    tomorrowDailyList,
+    scheduleRows,
+    scheduleRowsWeekOffset,
+    dailyListScheduleRows,
+    dailyListScheduleRowsWeekOffset,
+    dailyListTargetWeekOffset,
+    employeeProfileByStaffId,
+    employeeShiftByStaffId,
+    scheduleVisiblePositionSet
+  ]);
   const dailyListTotalDemandCount = useMemo(
     () => Number(tomorrowDailyList.countedEarlyRows.length ?? 0) + Number(tomorrowDailyList.countedLateRows.length ?? 0),
     [tomorrowDailyList]
@@ -14356,7 +14509,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
       if (!row || !isWorkingScheduleRow(row)) continue;
       const positionRaw =
-        String(row.position ?? '').trim() || String(employeeProfileByStaffId.get(staff)?.position ?? '').trim();
+        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || String(row.position ?? '').trim();
       const normalizedPosition = normalizePositionKey(positionRaw);
       if (!normalizedPosition) continue;
       if (!scheduleVisiblePositionSet.has(normalizedPosition)) continue;
@@ -14413,7 +14566,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       // 如果排班不是工作状态，但没有打卡记录，也跳过
       if (row && !isWorkingScheduleRow(row) && !hasPunch && !activeStaffSet.has(staff)) continue;
       const positionRaw =
-        (row ? String(row.position ?? '').trim() : '') || String(employeeProfileByStaffId.get(staff)?.position ?? '').trim();
+        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || (row ? String(row.position ?? '').trim() : '');
       const position = normalizePositionKey(positionRaw);
       if (!position) continue;
       if (!scheduleVisiblePositionSet.has(position)) continue;
@@ -14574,7 +14727,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         staff,
         profile,
         employee,
-        positionRaw: String(row?.position ?? '').trim() || String(employee.position ?? employee.Position ?? '').trim(),
+        positionRaw: String(profile?.position ?? '').trim() || String(employee.position ?? employee.Position ?? '').trim() || String(row?.position ?? '').trim(),
         shift,
         isOnClock: false
       });
@@ -17142,6 +17295,23 @@ ${rowsToHtml(late)}
                             {dailyCapacityError ? (
                               <div className={['mt-2 text-xs', themeMode === 'light' ? 'text-amber-700' : 'text-amber-200'].join(' ')}>
                                 {t('预计产能已回退到模板值。', 'Capacity has fallen back to template values.')}
+                              </div>
+                            ) : null}
+                            {dailyListDataAudit.missingRows.length > 0 ? (
+                              <div
+                                className={[
+                                  'mt-2 rounded-xl border px-3 py-2 text-xs',
+                                  themeMode === 'light'
+                                    ? 'border-amber-200 bg-amber-50 text-amber-800'
+                                    : 'border-amber-300/20 bg-amber-400/[0.08] text-amber-100'
+                                ].join(' ')}
+                              >
+                                {dailyListDataAudit.missingRows.length > 0 ? (
+                                  <div>
+                                    Missing: {dailyListDataAudit.missingRows.slice(0, 6).map((row) => `${row.staff_id} ${row.name || '-'} (${row.reason})`).join(' | ')}
+                                    {dailyListDataAudit.missingRows.length > 6 ? ` +${dailyListDataAudit.missingRows.length - 6}` : ''}
+                                  </div>
+                                ) : null}
                               </div>
                             ) : null}
                           </div>

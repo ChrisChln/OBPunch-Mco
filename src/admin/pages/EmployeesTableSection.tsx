@@ -107,6 +107,8 @@ export default function EmployeesTableSection({
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const visibleStartRef = useRef(0);
+  const pendingScrollTopRef = useRef(0);
+  const scrollRafRef = useRef<number | null>(null);
   const [visibleStart, setVisibleStart] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(640);
 
@@ -126,6 +128,14 @@ export default function EmployeesTableSection({
     }
     window.addEventListener('resize', sync);
     return () => window.removeEventListener('resize', sync);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
+    };
   }, []);
 
   const total = employeesFiltered.length;
@@ -153,10 +163,15 @@ export default function EmployeesTableSection({
   const selectedStaffIds = useMemo(() => new Set(employeeBadgeBatchSelectedStaffIds), [employeeBadgeBatchSelectedStaffIds]);
   const handleScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {
-      const nextStart = getVisibleStart(event.currentTarget.scrollTop);
-      if (nextStart === visibleStartRef.current) return;
-      visibleStartRef.current = nextStart;
-      setVisibleStart(nextStart);
+      pendingScrollTopRef.current = event.currentTarget.scrollTop;
+      if (scrollRafRef.current !== null) return;
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        const nextStart = getVisibleStart(pendingScrollTopRef.current);
+        if (nextStart === visibleStartRef.current) return;
+        visibleStartRef.current = nextStart;
+        setVisibleStart(nextStart);
+      });
     },
     [getVisibleStart]
   );
@@ -179,12 +194,13 @@ export default function EmployeesTableSection({
           'mt-5 max-h-[68vh] overflow-auto rounded-2xl border',
           isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/30'
         ].join(' ')}
+        style={{ contain: 'layout paint style' }}
         onScroll={handleScroll}
       >
         <table className="min-w-[1500px] w-full table-fixed text-left text-sm">
           <thead
             className={[
-              'sticky top-0 z-20 border-b text-xs uppercase tracking-[0.2em] backdrop-blur',
+              'sticky top-0 z-20 border-b text-xs uppercase tracking-[0.2em]',
               isLight ? 'border-slate-200 bg-white/95 text-slate-500' : 'border-white/10 bg-slate-950/95 text-slate-400'
             ].join(' ')}
           >

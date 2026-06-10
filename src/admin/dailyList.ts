@@ -26,3 +26,13 @@ export const filterDailyListDisplayRows = (
 ) => rows.filter((row) => isDailyListDisplayRow(row, normalizePosition));
 
 export const selectDailyListCapacityRows = (countedRows: DailyListRow[]) => countedRows;
+
+export const resolveDailyListPositionSource = (profilePosition: unknown, schedulePosition: unknown) => {
+  const profile = String(profilePosition ?? '').trim();
+  const schedule = String(schedulePosition ?? '').trim();
+  return {
+    position: profile || schedule,
+    profilePosition: profile,
+    schedulePosition: schedule
+  };
+};

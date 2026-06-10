@@ -29,6 +29,11 @@ type EmployeeRow = {
   terminated_at?: string | null;
 };
 
+type TempAccountAssignmentRow = {
+  staff_id?: string | null;
+  source_temp_staff_id?: string | null;
+};
+
 type PunchRow = {
   action?: string | null;
   created_at?: string | null;
@@ -59,6 +64,13 @@ const isMissingMetadataColumnError = (value: unknown) => {
   return message.includes('metadata') && message.includes('ob_punches') && message.includes('schema cache');
 };
 
+const isMissingTempBindingSchemaError = (value: unknown) => {
+  const message = getErrorMessage(value, '').toLowerCase();
+  const mentionsBindingSchema =
+    message.includes('ob_temp_account_assignments') || message.includes('source_temp_staff_id');
+  return mentionsBindingSchema && (message.includes('schema cache') || message.includes('does not exist'));
+};
+
 const loadEmployee = async (supabase: SupabaseLike, staffId: string): Promise<QueryResponse<EmployeeRow>> => {
   const query = supabase.from('ob_employees').select?.('staff_id, agency, terminated_at') as
     | undefined
@@ -69,6 +81,26 @@ const loadEmployee = async (supabase: SupabaseLike, staffId: string): Promise<Qu
       };
   if (!query) return { data: null, error: { message: 'Employee query is not available.' } };
   return query.eq('staff_id', staffId).limit(1);
+};
+
+const loadTempAccountBinding = async (
+  supabase: SupabaseLike,
+  tempStaffId: string
+): Promise<QueryResponse<TempAccountAssignmentRow>> => {
+  const query = supabase.from('ob_temp_account_assignments').select?.('staff_id, source_temp_staff_id') as
+    | undefined
+    | {
+        eq: (column: string, value: string) => {
+          order: (
+            column: string,
+            options: { ascending: boolean }
+          ) => {
+            limit: (count: number) => Promise<QueryResponse<TempAccountAssignmentRow>>;
+          };
+        };
+      };
+  if (!query) return { data: [], error: null };
+  return query.eq('source_temp_staff_id', tempStaffId).order('created_at', { ascending: false }).limit(1);
 };
 
 const loadLatestPunch = async (supabase: SupabaseLike, staffId: string): Promise<QueryResponse<PunchRow>> => {
@@ -110,23 +142,40 @@ export const submitPunchWithServiceRole = async (
     return { ok: false, status: 400, error: 'Invalid punch action.' };
   }
 
-  const employeeRes = await loadEmployee(supabase, staffId);
+  let resolvedStaffId = staffId;
+  let employeeRes = await loadEmployee(supabase, resolvedStaffId);
   if (employeeRes.error) {
     return { ok: false, status: 500, error: getErrorMessage(employeeRes.error, 'Failed to verify employee.') };
   }
 
-  const employee = (employeeRes.data ?? [])[0] ?? null;
+  let employee = (employeeRes.data ?? [])[0] ?? null;
+  if (!employee) {
+    const bindingRes = await loadTempAccountBinding(supabase, staffId);
+    if (bindingRes.error && !isMissingTempBindingSchemaError(bindingRes.error)) {
+      return { ok: false, status: 500, error: getErrorMessage(bindingRes.error, 'Failed to verify temporary account binding.') };
+    }
+    const boundStaffId = normalizeStaffId(String((bindingRes.data ?? [])[0]?.staff_id ?? ''));
+    if (boundStaffId && boundStaffId !== staffId) {
+      resolvedStaffId = boundStaffId;
+      employeeRes = await loadEmployee(supabase, resolvedStaffId);
+      if (employeeRes.error) {
+        return { ok: false, status: 500, error: getErrorMessage(employeeRes.error, 'Failed to verify employee.') };
+      }
+      employee = (employeeRes.data ?? [])[0] ?? null;
+    }
+  }
+
   if (!employee) {
     return { ok: false, status: 404, error: `Employee not registered: ${staffId}` };
   }
   if (isScheduleOnlyAgency(String(employee.agency ?? ''))) {
-    return { ok: false, status: 409, error: `Employee does not use punch: ${staffId}` };
+    return { ok: false, status: 409, error: `Employee does not use punch: ${resolvedStaffId}` };
   }
   if (isEmployeeTerminated({ terminatedAt: employee.terminated_at })) {
-    return { ok: false, status: 409, error: `Employee is terminated and cannot punch: ${staffId}` };
+    return { ok: false, status: 409, error: `Employee is terminated and cannot punch: ${resolvedStaffId}` };
   }
 
-  const latestRes = await loadLatestPunch(supabase, staffId);
+  const latestRes = await loadLatestPunch(supabase, resolvedStaffId);
   if (latestRes.error) {
     return { ok: false, status: 500, error: getErrorMessage(latestRes.error, 'Failed to load last punch.') };
   }
@@ -143,11 +192,12 @@ export const submitPunchWithServiceRole = async (
   }
 
   const rowWithMetadata = {
-    staff_id: staffId,
+    staff_id: resolvedStaffId,
     action: request.action,
     metadata: {
       device: 'web_browser',
       source: 'api_punch',
+      input_staff_id: staffId,
       user_agent: String(request.userAgent ?? '')
     }
   };
@@ -162,12 +212,12 @@ export const submitPunchWithServiceRole = async (
     if (fallbackRes.error) {
       return { ok: false, status: 500, error: getErrorMessage(fallbackRes.error, 'Punch failed.') };
     }
-    return { ok: true, status: 200, staffId, action: request.action };
+    return { ok: true, status: 200, staffId: resolvedStaffId, action: request.action };
   }
 
   if (insertRes.error) {
     return { ok: false, status: 500, error: getErrorMessage(insertRes.error, 'Punch failed.') };
   }
 
-  return { ok: true, status: 200, staffId, action: request.action };
+  return { ok: true, status: 200, staffId: resolvedStaffId, action: request.action };
 };

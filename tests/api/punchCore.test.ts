@@ -6,6 +6,7 @@ type QueryResult = { data: any[] | null; error: { message: string } | null };
 
 type MockOptions = {
   employees?: QueryResult;
+  tempAssignments?: QueryResult;
   latestPunches?: QueryResult;
   insertError?: string | null;
   firstInsertError?: string | null;
@@ -18,8 +19,24 @@ const createSupabaseMock = (options: MockOptions) => {
       if (table === 'ob_employees') {
         return {
           select: () => ({
+            eq: (_column: string, value: string) => ({
+              limit: async () =>
+                options.employees ?? {
+                  data: [{ staff_id: value, agency: null, terminated_at: null }],
+                  error: null
+                }
+            })
+          })
+        };
+      }
+
+      if (table === 'ob_temp_account_assignments') {
+        return {
+          select: () => ({
             eq: () => ({
-              limit: async () => options.employees ?? { data: [{ staff_id: 'US010454', agency: null, terminated_at: null }], error: null }
+              order: () => ({
+                limit: async () => options.tempAssignments ?? { data: [], error: null }
+              })
             })
           })
         };
@@ -79,8 +96,65 @@ describe('submitPunchWithServiceRole', () => {
     expect(inserts[0]?.[0]).toMatchObject({ staff_id: '0606PICK001', action: 'IN' });
   });
 
+  test('resolves a bound temporary staff ID to the current employee before punching', async () => {
+    let employeeLookup = 0;
+    const { supabase, inserts } = createSupabaseMock({
+      employees: { data: [], error: null },
+      tempAssignments: { data: [{ staff_id: 'US010454', source_temp_staff_id: 'TUS000001' }], error: null }
+    });
+    const wrappedSupabase = {
+      from(table: string) {
+        const builder = supabase.from(table);
+        if (table !== 'ob_employees') return builder;
+        return {
+          select: () => ({
+            eq: (_column: string, value: string) => ({
+              limit: async () => {
+                employeeLookup += 1;
+                return employeeLookup === 1
+                  ? { data: [], error: null }
+                  : { data: [{ staff_id: value, agency: null, terminated_at: null }], error: null };
+              }
+            })
+          })
+        };
+      }
+    };
+
+    const result = await submitPunchWithServiceRole(wrappedSupabase, {
+      staffId: 'tus000001',
+      action: 'IN',
+      userAgent: 'test-agent'
+    });
+
+    expect(result).toEqual({ ok: true, status: 200, staffId: 'US010454', action: 'IN' });
+    expect(inserts[0]?.[0]).toMatchObject({
+      staff_id: 'US010454',
+      action: 'IN',
+      metadata: { input_staff_id: 'TUS000001' }
+    });
+  });
+
   test('rejects unregistered employees', async () => {
     const { supabase } = createSupabaseMock({ employees: { data: [], error: null } });
+
+    const result = await submitPunchWithServiceRole(supabase, {
+      staffId: 'US010454',
+      action: 'IN',
+      userAgent: 'test-agent'
+    });
+
+    expect(result).toEqual({ ok: false, status: 404, error: 'Employee not registered: US010454' });
+  });
+
+  test('keeps unregistered response when temporary binding schema is not deployed yet', async () => {
+    const { supabase } = createSupabaseMock({
+      employees: { data: [], error: null },
+      tempAssignments: {
+        data: null,
+        error: { message: "Could not find the 'source_temp_staff_id' column of 'ob_temp_account_assignments' in the schema cache" }
+      }
+    });
 
     const result = await submitPunchWithServiceRole(supabase, {
       staffId: 'US010454',
@@ -153,6 +227,7 @@ describe('submitPunchWithServiceRole', () => {
           metadata: {
             device: 'web_browser',
             source: 'api_punch',
+            input_staff_id: 'US010454',
             user_agent: 'test-agent'
           }
         }
@@ -224,6 +299,7 @@ describe('submitPunchWithServiceRole', () => {
           metadata: {
             device: 'web_browser',
             source: 'api_punch',
+            input_staff_id: 'US010454',
             user_agent: 'test-agent'
           }
         }

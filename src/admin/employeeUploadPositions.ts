@@ -139,10 +139,13 @@ const normalizeShiftTimeValue = (value: unknown) => {
   return formatClockMinutes(parsed as number);
 };
 
-const buildTemporaryStaffId = (prefix: string, index: number) => `${prefix}-${String(index + 1).padStart(4, '0')}`;
+const buildTemporaryStaffId = (prefix: string, index: number) => {
+  if (prefix === 'TUS') return `TUS${String(index + 1).padStart(6, '0')}`;
+  return `${prefix}-${String(index + 1).padStart(4, '0')}`;
+};
 
 export const isGeneratedEmployeeUploadStaffId = (value: unknown) =>
-  /^TEMP-USID-[A-Z0-9]+-\d{4,}$/i.test(String(value ?? '').trim());
+  /^(?:TUS\d{6,}|TEMP-USID-[A-Z0-9]+-\d{4,})$/i.test(String(value ?? '').trim());
 
 export const detectEmployeeImportIdentityConflicts = (
   rows: EmployeeUploadRow[],
@@ -259,8 +262,7 @@ export const buildEmployeeUploadRows = (
   const uniqueByStaff = new Map<string, EmployeeUploadRow>();
   let duplicateInFileCount = 0;
   let temporaryStaffIdIndex = 0;
-  const temporaryIdPrefix =
-    options?.temporaryIdPrefix ?? `TEMP-USID-${Date.now().toString(36).toUpperCase()}`;
+  const temporaryIdPrefix = options?.temporaryIdPrefix ?? 'TUS';
 
   for (const sourceRow of parsedRows) {
     const canonical: Partial<Record<keyof EmployeeUploadRow, string>> = {};

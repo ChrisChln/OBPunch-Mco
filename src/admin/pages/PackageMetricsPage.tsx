@@ -1076,7 +1076,7 @@ const loadPackageLaborSummaryByDate = async (supabase: any, metricsRows: Package
     const staffId = normalizeStaffId(String(row.staff_id ?? ''));
     if (!staffId) continue;
     if (!activeStaffIds.has(staffId)) continue;
-    const position = normalizeOutboundStaffingPosition(row.position ?? '') || (positionByStaff.get(staffId) ?? '');
+    const position = positionByStaff.get(staffId) ?? '';
     if (!shouldCountScheduledPackageMetricsStaff(position, row.note)) continue;
     if (!scheduledStaffByDate.has(metricDate)) scheduledStaffByDate.set(metricDate, new Set<string>());
     scheduledStaffByDate.get(metricDate)!.add(staffId);
