@@ -6,6 +6,7 @@ import { createSupabaseClient } from './lib/supabase';
 import { normalizeStaffId } from './lib/staffId';
 import { getLabelToneClass, loadLabelToneMap } from './lib/labelTone';
 import { isExactOperationalCutoffOut } from './shared/operationalPunches';
+import { isScheduleOnlyAgency } from './shared/agencyRules';
 import AppDialog from './components/AppDialog';
 import {
   DEFAULT_DASHBOARD_CARD_POSITIONS,
@@ -262,8 +263,28 @@ const normalizeShiftValue = (value: unknown): '' | 'early' | 'late' => {
   if (v === 'late' || v === 'night' || v === 'pm') return 'late';
   return '';
 };
+const getShiftBucketFromPunchTime = (value: unknown): '' | 'early' | 'late' => {
+  const dt = new Date(String(value ?? ''));
+  if (Number.isNaN(dt.getTime())) return '';
+  const minutes = dt.getHours() * 60 + dt.getMinutes();
+  return minutes >= 5 * 60 && minutes < 15 * 60 ? 'early' : 'late';
+};
 const normalizePositionKey = (value: string, positionNames: readonly string[] = DEFAULT_POSITION_NAMES): string =>
   resolveDashboardPositionName(value, positionNames);
+const resolveDashboardStaffPosition = (
+  schedulePosition: unknown,
+  employeePosition: unknown,
+  positionNames: readonly string[]
+) => {
+  const scheduleValue = String(schedulePosition ?? '').trim();
+  const employeeValue = String(employeePosition ?? '').trim();
+  return (
+    normalizePositionKey(scheduleValue, positionNames) ||
+    normalizePositionKey(employeeValue, positionNames) ||
+    normalizePositionName(scheduleValue) ||
+    normalizePositionName(employeeValue)
+  );
+};
 const getPositionBadgeClass = (value: string) => {
   const pos = normalizePositionKey(value);
   if (pos === 'Pick') return 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]';
@@ -619,7 +640,7 @@ export default function DashboardPage() {
       let scheduleRowsRaw: any[] = [];
       const scheduleByDateRes = await supabase
         .from(SCHEDULE_TABLE)
-        .select('id, staff_id, note, updated_at, created_at, date')
+        .select('id, staff_id, position, note, updated_at, created_at, date')
         .eq('date', templateDate)
         .order('created_at', { ascending: false })
         .limit(20000);
@@ -636,7 +657,7 @@ export default function DashboardPage() {
       if (scheduleRowsRaw.length === 0) {
         const scheduleByDateRangeRes = await supabase
           .from(SCHEDULE_TABLE)
-          .select('id, staff_id, note, updated_at, created_at, date')
+          .select('id, staff_id, position, note, updated_at, created_at, date')
           .gte('date', `${templateDate}T00:00:00`)
           .lt('date', `${templateDate}T23:59:59.999`)
           .order('created_at', { ascending: false })
@@ -656,7 +677,7 @@ export default function DashboardPage() {
       if (scheduleRowsRaw.length === 0) {
         const scheduleByWorkDateRes = await supabase
           .from(SCHEDULE_TABLE)
-          .select('id, staff_id, note, updated_at, created_at, work_date')
+          .select('id, staff_id, position, note, updated_at, created_at, work_date')
           .eq('work_date', currentOperationalDate)
           .order('created_at', { ascending: false })
           .limit(20000);
@@ -675,7 +696,7 @@ export default function DashboardPage() {
       if (scheduleRowsRaw.length === 0) {
         const recentScheduleRes = await supabase
           .from(SCHEDULE_TABLE)
-          .select('id, staff_id, note, updated_at, created_at, date')
+          .select('id, staff_id, position, note, updated_at, created_at, date')
           .gte('created_at', new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString())
           .order('created_at', { ascending: false })
           .limit(30000);
@@ -692,12 +713,15 @@ export default function DashboardPage() {
       }
 
       const latestScheduleRows = pickLatestByStaff(scheduleRowsRaw);
-      const scheduledByStaff = new Map<string, { scheduleState: string }>();
+      const scheduledByStaff = new Map<string, { scheduleState: string; position: string }>();
       for (const row of latestScheduleRows) {
         const staffId = normalizeStaffId(String((row as any).staff_id ?? '').trim());
         if (!staffId) continue;
         const scheduleState = getScheduleStateFromNote((row as any).note);
-        scheduledByStaff.set(staffId, { scheduleState });
+        scheduledByStaff.set(staffId, {
+          scheduleState,
+          position: String((row as any).position ?? '').trim()
+        });
       }
       const scheduledStaffIds = Array.from(scheduledByStaff.keys());
 
@@ -793,6 +817,12 @@ export default function DashboardPage() {
         if (employee) employeeCacheRef.current.set(staffId, employee);
         else employeeCacheRef.current.delete(staffId);
       }
+      const attendanceTrackedStaffIds = new Set(
+        activeDisplayStaffIds.filter((staffId) => {
+          const agency = String(employeeCacheRef.current.get(staffId)?.agency ?? '').trim();
+          return !isScheduleOnlyAgency(agency);
+        })
+      );
 
       const staffByKey = new Map<string, Set<string>>();
       const restByKey = new Map<string, Set<string>>();
@@ -802,9 +832,12 @@ export default function DashboardPage() {
       for (const staffId of activeScheduledStaffIds) {
         const schedule = scheduledByStaff.get(staffId);
         if (!schedule) continue;
-        const employeePosition = normalizePositionKey(String(employeeCacheRef.current.get(staffId)?.position ?? ''), activePositionNames);
-        const position = employeePosition;
-        const shift = normalizeShiftValue(String(employeeCacheRef.current.get(staffId)?.shift ?? ''));
+        const position = resolveDashboardStaffPosition(
+          schedule.position,
+          employeeCacheRef.current.get(staffId)?.position,
+          activePositionNames
+        );
+        const shift = normalizeShiftValue(String(employeeCacheRef.current.get(staffId)?.shift ?? '')) || 'early';
         if (!position || !shift) continue;
         const key = `${shift}:${position}`;
         const isWork = isWorkingScheduleState(String(schedule.scheduleState ?? ''));
@@ -826,14 +859,20 @@ export default function DashboardPage() {
       }
       for (const staffId of activePunchedStaffIds) {
         if (keysByStaff.has(staffId) || hasWorkScheduleStaff.has(staffId) || hasRestScheduleStaff.has(staffId)) continue;
+        if (!attendanceTrackedStaffIds.has(staffId)) continue;
         const employee = employeeCacheRef.current.get(staffId);
         const position = normalizePositionKey(String(employee?.position ?? ''), activePositionNames);
-        const shift = normalizeShiftValue(String(employee?.shift ?? ''));
+        const punches = punchesByStaff.get(staffId) ?? [];
+        const firstPunch = punches[0];
+        const shift =
+          normalizeShiftValue(String(employee?.shift ?? '')) ||
+          getShiftBucketFromPunchTime(firstPunch?.created_at);
         if (!position || !shift) continue;
         keysByStaff.set(staffId, [`${shift}:${position}`]);
       }
       const arrivedByKey = new Map<string, Set<string>>();
       for (const staffId of punchedStaffIds) {
+        if (!attendanceTrackedStaffIds.has(staffId)) continue;
         const keys = keysByStaff.get(staffId) ?? [];
         for (const key of keys) {
           if (!arrivedByKey.has(key)) arrivedByKey.set(key, new Set());
@@ -842,7 +881,7 @@ export default function DashboardPage() {
       }
       const onClockByKey = new Map<string, Set<string>>();
       for (const [staffId, punches] of punchesByStaff.entries()) {
-        if (!activeEmployeeStaffIds.has(staffId)) continue;
+        if (!activeEmployeeStaffIds.has(staffId) || !attendanceTrackedStaffIds.has(staffId)) continue;
         const last = punches[punches.length - 1];
         if (!last || last.action !== 'IN') continue;
         const keys = keysByStaff.get(staffId) ?? [];
@@ -854,13 +893,14 @@ export default function DashboardPage() {
       const restWorkedByKey = new Map<string, Set<string>>();
       for (const [key, restSet] of restByKey.entries()) {
         for (const staffId of restSet) {
-          if (!activeEmployeeStaffIds.has(staffId) || !activePunchedStaffIds.includes(staffId)) continue;
+          if (!activeEmployeeStaffIds.has(staffId) || !attendanceTrackedStaffIds.has(staffId) || !activePunchedStaffIds.includes(staffId)) continue;
           if (!restWorkedByKey.has(key)) restWorkedByKey.set(key, new Set());
           restWorkedByKey.get(key)?.add(staffId);
         }
       }
       for (const staffId of activePunchedStaffIds) {
         if (hasWorkScheduleStaff.has(staffId) || hasRestScheduleStaff.has(staffId)) continue;
+        if (!attendanceTrackedStaffIds.has(staffId)) continue;
         const keys = keysByStaff.get(staffId) ?? [];
         for (const key of keys) {
           if (!restWorkedByKey.has(key)) restWorkedByKey.set(key, new Set());
@@ -895,7 +935,10 @@ export default function DashboardPage() {
           const punches = punchesByStaff.get(staffId) ?? [];
           const state = String(schedule?.scheduleState ?? '');
           const isPlannedWork = isWorkingScheduleState(state);
-          const employeeShift = normalizeShiftValue(employee?.shift ?? '');
+          const firstPunch = punches[0];
+          const employeeShift =
+            normalizeShiftValue(employee?.shift ?? '') ||
+            (schedule ? 'early' : getShiftBucketFromPunchTime(firstPunch?.created_at));
           const normalizedShift = employeeShift;
           const displayShift = normalizedShift;
           const workHoursToday = computeWorkHoursFromPunches(punches, capEnd);
@@ -905,9 +948,7 @@ export default function DashboardPage() {
               : !isPlannedWork && workHoursToday > 0
                 ? 'Off Worked'
                 : 'Normal';
-          const currentPosition =
-            normalizePositionKey(String(employee?.position ?? '').trim(), activePositionNames) ||
-            normalizePositionName(employee?.position ?? '');
+          const currentPosition = resolveDashboardStaffPosition(schedule?.position, employee?.position, activePositionNames);
           return {
             staff_id: staffId,
             name: employee?.name ?? '',
@@ -932,6 +973,7 @@ export default function DashboardPage() {
         .filter((row) => {
           if (!String(row.staff_id ?? '').trim()) return false;
           if (isNewHirePlaceholderStaffId(row.staff_id)) return false;
+          if (!attendanceTrackedStaffIds.has(row.staff_id)) return false;
           const state = String(scheduledByStaff.get(row.staff_id)?.scheduleState ?? '');
           const isPlannedWork = isWorkingScheduleState(state);
           const isOffWorked = !isPlannedWork && row.work_hours_today > 0;
