@@ -1976,6 +1976,8 @@ export default function AdminAppPage() {
   const [employeeAuditLoading, setEmployeeAuditLoading] = useState(false);
   const [employeeAuditError, setEmployeeAuditError] = useState<string | null>(null);
   const [employeeLastPunchAtByStaffId, setEmployeeLastPunchAtByStaffId] = useState<Record<string, string | null>>({});
+  const [employeePunchMetaLoading, setEmployeePunchMetaLoading] = useState(false);
+  const [employeeLastPunchSortNowMs, setEmployeeLastPunchSortNowMs] = useState(() => Date.now());
   const [employeeSortByLastPunchDesc, setEmployeeSortByLastPunchDesc] = useState(false);
   const [employeeSortByHireDateDesc, setEmployeeSortByHireDateDesc] = useState(false);
   const [employeeBadgePrintingStaffId, setEmployeeBadgePrintingStaffId] = useState<string | null>(null);
@@ -6447,10 +6449,82 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   };
 
+  const fetchEmployeeLastPunchMeta = async (sourceEmployees: EmployeeRow[]): Promise<boolean> => {
+    if (!supabase) {
+      setEmployeesError('缺少 Supabase 配置。');
+      return false;
+    }
+
+    const staffIdsRaw = sourceEmployees.map((e) => String(e.staff_id ?? '').trim()).filter(Boolean);
+    const staffIdsForQuery = Array.from(
+      new Set(
+        staffIdsRaw
+          .flatMap((id) => {
+            const trimmed = String(id ?? '').trim();
+            if (!trimmed) return [] as string[];
+            return [trimmed, trimmed.toUpperCase(), trimmed.toLowerCase(), normalizeStaffId(trimmed)];
+          })
+          .filter((id) => isAttendanceQueryableStaffId(id))
+          .filter(Boolean)
+      )
+    );
+
+    if (staffIdsForQuery.length === 0) {
+      setEmployeeLastPunchAtByStaffId({});
+      return true;
+    }
+
+    setEmployeePunchMetaLoading(true);
+    try {
+      const out: Record<string, string | null> = {};
+      const batches = chunk(staffIdsForQuery, 200);
+      const pageSize = 1000;
+
+      for (const batch of batches) {
+        const found = new Set<string>();
+        const base = () => supabase.from('ob_punches').select('staff_id, created_at, id').in('staff_id', batch);
+
+        for (let from = 0; ; from += pageSize) {
+          const to = from + pageSize - 1;
+          const attemptCreatedAt = await base().order('created_at', { ascending: false }).range(from, to);
+          const attempt = attemptCreatedAt.error
+            ? await base().order('id', { ascending: false }).range(from, to)
+            : attemptCreatedAt;
+          if (attempt.error) {
+            setEmployeeLastPunchAtByStaffId({});
+            setEmployeesError(attempt.error.message);
+            return false;
+          }
+
+          const rows = (attempt.data as Array<{ staff_id?: string | null; created_at?: string | null }> | null) ?? [];
+          for (const row of rows) {
+            const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+            if (!staff || found.has(staff)) continue;
+            out[staff] = String(row.created_at ?? '').trim() || null;
+            found.add(staff);
+          }
+
+          if (found.size >= batch.length || rows.length < pageSize) break;
+        }
+
+        for (const staff of batch) {
+          const key = normalizeStaffId(String(staff ?? '').trim());
+          if (!key) continue;
+          if (!(key in out)) out[key] = null;
+        }
+      }
+
+      setEmployeeLastPunchAtByStaffId(out);
+      return true;
+    } finally {
+      setEmployeePunchMetaLoading(false);
+    }
+  };
+
   const fetchEmployees = async ({
     reset: _reset,
     lockUi: lockUiOption,
-    includePunchMeta = true,
+    includePunchMeta = false,
     streamPartialState = true
   }: {
     reset: boolean;
@@ -6538,7 +6612,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           })
           .filter((row) => isEmployeeActive(row));
         activeLoaded.push(...loadedChunk);
-        if (streamPartialState) {
+        if (streamPartialState && pageCount === 0) {
           setEmployees([...activeLoaded]);
         }
         pageCount += 1;
@@ -6556,8 +6630,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setEmployeesHasMore(false);
       fetchedEmployees = [...activeLoaded];
 
-      const staffIdsRaw = all.map((e) => String(e.staff_id ?? '').trim()).filter(Boolean);
-      const staffIds = Array.from(new Set(staffIdsRaw.map((id) => normalizeStaffId(id)).filter(Boolean)));
+      const staffIds = Array.from(
+        new Set(all.map((e) => normalizeStaffId(String(e.staff_id ?? '').trim())).filter(Boolean))
+      );
       if (staffIds.length === 0) {
         setEmployeeShiftByStaffId({});
         if (includePunchMeta) setEmployeeLastPunchAtByStaffId({});
@@ -6574,68 +6649,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setEmployeeShiftByStaffId(shiftMap);
 
       if (!includePunchMeta) {
+        setEmployeeLastPunchAtByStaffId({});
+        setEmployeeSortByLastPunchDesc(false);
         return;
       }
 
-      const staffIdsForQuery = Array.from(
-        new Set(
-          staffIdsRaw
-            .flatMap((id) => {
-              const trimmed = String(id ?? '').trim();
-              if (!trimmed) return [] as string[];
-              return [trimmed, trimmed.toUpperCase(), trimmed.toLowerCase(), normalizeStaffId(trimmed)];
-            })
-            .filter((id) => isAttendanceQueryableStaffId(id))
-            .filter(Boolean)
-        )
-      );
-
-      const fetchLatestPunchAtByStaff = async (ids: string[]) => {
-        const out: Record<string, string | null> = {};
-        const batches = chunk(ids, 200);
-        const pageSize = 1000;
-
-        for (const batch of batches) {
-          const found = new Set<string>();
-          const base = () => supabase.from('ob_punches').select('staff_id, created_at, id').in('staff_id', batch);
-
-          for (let from = 0; ; from += pageSize) {
-            const to = from + pageSize - 1;
-            const attemptCreatedAt = await base().order('created_at', { ascending: false }).range(from, to);
-            const attempt = attemptCreatedAt.error
-              ? await base().order('id', { ascending: false }).range(from, to)
-              : attemptCreatedAt;
-            if (attempt.error) {
-              return { map: {} as Record<string, string | null>, error: attempt.error.message };
-            }
-
-            const rows = (attempt.data as Array<{ staff_id?: string | null; created_at?: string | null }> | null) ?? [];
-            for (const row of rows) {
-              const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-              if (!staff || found.has(staff)) continue;
-              out[staff] = String(row.created_at ?? '').trim() || null;
-              found.add(staff);
-            }
-
-            if (found.size >= batch.length || rows.length < pageSize) break;
-          }
-
-          for (const staff of batch) {
-            const key = normalizeStaffId(String(staff ?? '').trim());
-            if (!key) continue;
-            if (!(key in out)) out[key] = null;
-          }
-        }
-
-        return { map: out, error: null as string | null };
-      };
-
-      const latestPunchRes = await fetchLatestPunchAtByStaff(staffIdsForQuery);
-      if (latestPunchRes.error) {
-        setEmployeeLastPunchAtByStaffId({});
-      } else {
-        setEmployeeLastPunchAtByStaffId(latestPunchRes.map);
-      }
+      await fetchEmployeeLastPunchMeta(fetchedEmployees ?? []);
 
     };
     if (!lockUi) {
@@ -13009,7 +13028,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const employeesFiltered = useMemo(() => {
     if (!employeeSortByLastPunchDesc) return employeesAfterHireDateSort;
     const dayMs = 24 * 60 * 60 * 1000;
-    const nowMs = serverTime.getTime();
+    const nowMs = employeeLastPunchSortNowMs;
     const daysAgoForStaff = (staff: string) => {
       const at = String(employeeLastPunchAtByStaffId[staff] ?? '').trim();
       if (!at) return null;
@@ -13027,7 +13046,30 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (valA !== valB) return valB - valA;
       return staffA.localeCompare(staffB, 'en-US');
     });
-  }, [employeesAfterHireDateSort, employeeSortByLastPunchDesc, employeeLastPunchAtByStaffId, serverTime]);
+  }, [employeesAfterHireDateSort, employeeSortByLastPunchDesc, employeeLastPunchAtByStaffId, employeeLastPunchSortNowMs]);
+
+  const toggleEmployeeLastPunchSort = async () => {
+    if (employeeSortByLastPunchDesc) {
+      setEmployeeSortByLastPunchDesc(false);
+      return;
+    }
+
+    const needsPunchMeta = employeesAfterHireDateSort.some((employee) => {
+      const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+      return staff && !(staff in employeeLastPunchAtByStaffId);
+    });
+    if (needsPunchMeta) {
+      const loaded = await fetchEmployeeLastPunchMeta(employeesAfterHireDateSort);
+      if (!loaded) return;
+    }
+    setEmployeeLastPunchSortNowMs(serverTime.getTime());
+    setEmployeeSortByLastPunchDesc(true);
+  };
+
+  const toggleEmployeeHireDateSort = () => {
+    setEmployeeSortByHireDateDesc((prev) => !prev);
+    setEmployeeSortByLastPunchDesc(false);
+  };
   const accountRowsAll = useMemo(() => {
     const tempRows = tempAccounts.map((row) => ({
       staff: normalizeStaffId(String(row.staff_id ?? '').trim()),
@@ -17627,15 +17669,10 @@ ${rowsToHtml(late)}
                   employeesError={employeesError}
                   employeesFiltered={employeesFiltered}
                   employeeSortByLastPunchDesc={employeeSortByLastPunchDesc}
+                  employeePunchMetaLoading={employeePunchMetaLoading}
                   employeeSortByHireDateDesc={employeeSortByHireDateDesc}
-                  onToggleSort={() => {
-                    setEmployeeSortByLastPunchDesc((prev) => !prev);
-                    setEmployeeSortByHireDateDesc(false);
-                  }}
-                  onToggleHireDateSort={() => {
-                    setEmployeeSortByHireDateDesc((prev) => !prev);
-                    setEmployeeSortByLastPunchDesc(false);
-                  }}
+                  onToggleSort={toggleEmployeeLastPunchSort}
+                  onToggleHireDateSort={toggleEmployeeHireDateSort}
                   displayStaffId={displayStaffId}
                   getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                   getScheduleLabelToneClass={getScheduleLabelToneClass}
@@ -17646,7 +17683,7 @@ ${rowsToHtml(late)}
                   normalizeShiftValue={normalizeShiftValue}
                   homeOperationalDayIndex={homeOperationalDayIndex}
                   employeeLastPunchAtByStaffId={employeeLastPunchAtByStaffId}
-                  serverTime={serverTime}
+                  employeeLastPunchNowMs={employeeLastPunchSortNowMs}
                   shiftAnalysisDays={SHIFT_ANALYSIS_DAYS}
                   toDateOnly={toDateOnly}
                   employeeBadgePrintingStaffId={employeeBadgePrintingStaffId}

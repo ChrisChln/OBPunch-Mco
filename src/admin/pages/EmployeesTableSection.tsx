@@ -17,6 +17,7 @@ type EmployeesTableSectionProps = {
   employeesError: string | null;
   employeesFiltered: any[];
   employeeSortByLastPunchDesc: boolean;
+  employeePunchMetaLoading: boolean;
   employeeSortByHireDateDesc: boolean;
   onToggleSort: () => void;
   onToggleHireDateSort: () => void;
@@ -30,7 +31,7 @@ type EmployeesTableSectionProps = {
   normalizeShiftValue: (value: string) => '' | 'early' | 'late';
   homeOperationalDayIndex: number;
   employeeLastPunchAtByStaffId: Record<string, string | null>;
-  serverTime: Date;
+  employeeLastPunchNowMs: number;
   shiftAnalysisDays: number;
   toDateOnly: (date: Date) => string;
   employeeBadgePrintingStaffId: string | null;
@@ -75,6 +76,7 @@ export default function EmployeesTableSection({
   employeesError,
   employeesFiltered,
   employeeSortByLastPunchDesc,
+  employeePunchMetaLoading,
   employeeSortByHireDateDesc,
   onToggleSort,
   onToggleHireDateSort,
@@ -88,7 +90,7 @@ export default function EmployeesTableSection({
   normalizeShiftValue,
   homeOperationalDayIndex,
   employeeLastPunchAtByStaffId,
-  serverTime,
+  employeeLastPunchNowMs,
   shiftAnalysisDays,
   toDateOnly,
   employeeBadgePrintingStaffId,
@@ -231,14 +233,15 @@ export default function EmployeesTableSection({
               <th className="w-[96px] px-3 py-3 whitespace-nowrap">
                 <button
                   type="button"
+                  disabled={employeePunchMetaLoading}
                   onClick={onToggleSort}
                   className={[
-                    'inline-flex items-center gap-1 whitespace-nowrap text-xs uppercase tracking-[0.2em] transition',
+                    'inline-flex items-center gap-1 whitespace-nowrap text-xs uppercase tracking-[0.2em] transition disabled:cursor-wait disabled:opacity-60',
                     isLight ? 'text-slate-500 hover:text-slate-700' : 'text-slate-400 hover:text-slate-200'
                   ].join(' ')}
                   title={t('按天数从高到低排序', 'Sort by days high to low')}
                 >
-                  {t('最后打卡', 'Last punch')}
+                  {employeePunchMetaLoading ? t('加载中...', 'Loading...') : t('最后打卡', 'Last punch')}
                   {employeeSortByLastPunchDesc ? ' ↓' : ''}
                 </button>
               </th>
@@ -295,7 +298,7 @@ export default function EmployeesTableSection({
               if (lastPunchAt) {
                 const at = new Date(lastPunchAt);
                 if (!Number.isNaN(at.getTime())) {
-                  const days = Math.max(0, Math.floor((serverTime.getTime() - at.getTime()) / (24 * 60 * 60 * 1000)));
+                  const days = Math.max(0, Math.floor((employeeLastPunchNowMs - at.getTime()) / (24 * 60 * 60 * 1000)));
                   lastPunchDaysText = t(`${days}天前`, `${days}d ago`);
                 }
               }
