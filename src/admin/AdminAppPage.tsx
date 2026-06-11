@@ -910,7 +910,7 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
 const isNewHirePlaceholderStaffId = (value: string) => {
   const staff = String(value ?? '').trim().toUpperCase();
   if (!staff) return false;
-  if (/^TUS\d{6,}$/i.test(staff)) return true;
+  if (/^TUS\d{7,}$/i.test(staff)) return true;
   if (/^TEMP-USID-[A-Z0-9]+-\d{4,}$/i.test(staff)) return true;
   if (/^NEWREQ-\d{8}(?:-[A-Z]+)?-\d{3,}$/i.test(staff)) return true; // legacy format
   return /^\d{4}[A-Z]+\d{3,}$/i.test(staff); // MMDD + POSITION + SEQ
@@ -918,12 +918,12 @@ const isNewHirePlaceholderStaffId = (value: string) => {
 const createManualTemporaryStaffId = (existingStaffIds: string[] = []) => {
   let max = 0;
   for (const value of existingStaffIds) {
-    const match = String(value ?? '').trim().toUpperCase().match(/^TUS(\d{6,})$/);
+    const match = String(value ?? '').trim().toUpperCase().match(/^TUS(\d{7,})$/);
     if (!match) continue;
     const n = Number(match[1]);
     if (Number.isFinite(n)) max = Math.max(max, n);
   }
-  return `TUS${String(max + 1).padStart(6, '0')}`;
+  return `TUS${String(max + 1).padStart(7, '0')}`;
 };
 const isNewHirePlaceholderName = (value: string) => /^\d{2}\/\d{2}NEW\s+[A-Z]+(\d+)$/i.test(String(value ?? '').trim());
 const isNewHireFirstWorkDate = (staffId: string, workDate: Date | string) => {
@@ -8244,6 +8244,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         }
 
         if (isNewHirePlaceholderStaffId(originalStaff) && isValidStaffIdValue(nextStaff)) {
+          const existingAliasUpdateRes = await supabase
+            .from(TEMP_ACCOUNT_ASSIGNMENT_TABLE)
+            .update({
+              staff_id: nextStaff,
+              updated_at: new Date(serverTime).toISOString()
+            } as any)
+            .eq('staff_id', originalStaff);
+          if (existingAliasUpdateRes.error) {
+            setEmployeesError('Temporary account binding failed: ' + existingAliasUpdateRes.error.message);
+            return;
+          }
+
           const aliasPayload = {
             staff_id: nextStaff,
             position: normalizedPos ?? null,

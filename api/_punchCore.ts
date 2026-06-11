@@ -120,6 +120,55 @@ const loadLatestPunch = async (supabase: SupabaseLike, staffId: string): Promise
   return query.eq('staff_id', staffId).order('created_at', { ascending: false }).limit(1);
 };
 
+const resolveEmployeeByStaffAlias = async (
+  supabase: SupabaseLike,
+  inputStaffId: string
+): Promise<
+  | { employee: EmployeeRow; resolvedStaffId: string; error: null }
+  | { employee: null; resolvedStaffId: string; error: { status: 500; message: string } | null }
+> => {
+  let currentStaffId = inputStaffId;
+  const visited = new Set<string>();
+
+  for (let depth = 0; depth < 6; depth += 1) {
+    if (!currentStaffId || visited.has(currentStaffId)) break;
+    visited.add(currentStaffId);
+
+    const employeeRes = await loadEmployee(supabase, currentStaffId);
+    if (employeeRes.error) {
+      return {
+        employee: null,
+        resolvedStaffId: currentStaffId,
+        error: { status: 500, message: getErrorMessage(employeeRes.error, 'Failed to verify employee.') }
+      };
+    }
+
+    const employee = (employeeRes.data ?? [])[0] ?? null;
+    if (employee) {
+      return { employee, resolvedStaffId: currentStaffId, error: null };
+    }
+
+    const bindingRes = await loadTempAccountBinding(supabase, currentStaffId);
+    if (bindingRes.error) {
+      if (isMissingTempBindingSchemaError(bindingRes.error)) break;
+      return {
+        employee: null,
+        resolvedStaffId: currentStaffId,
+        error: {
+          status: 500,
+          message: getErrorMessage(bindingRes.error, 'Failed to verify temporary account binding.')
+        }
+      };
+    }
+
+    const boundStaffId = normalizeStaffId(String((bindingRes.data ?? [])[0]?.staff_id ?? ''));
+    if (!boundStaffId || boundStaffId === currentStaffId) break;
+    currentStaffId = boundStaffId;
+  }
+
+  return { employee: null, resolvedStaffId: currentStaffId || inputStaffId, error: null };
+};
+
 const isAllowedNextAction = (action: PunchAction, latestAction: PunchAction | null) =>
   (action === 'IN' && (latestAction === null || latestAction === 'OUT')) ||
   (action === 'OUT' && latestAction === 'IN');
@@ -142,29 +191,12 @@ export const submitPunchWithServiceRole = async (
     return { ok: false, status: 400, error: 'Invalid punch action.' };
   }
 
-  let resolvedStaffId = staffId;
-  let employeeRes = await loadEmployee(supabase, resolvedStaffId);
-  if (employeeRes.error) {
-    return { ok: false, status: 500, error: getErrorMessage(employeeRes.error, 'Failed to verify employee.') };
+  const resolved = await resolveEmployeeByStaffAlias(supabase, staffId);
+  if (resolved.error) {
+    return { ok: false, status: resolved.error.status, error: resolved.error.message };
   }
 
-  let employee = (employeeRes.data ?? [])[0] ?? null;
-  if (!employee) {
-    const bindingRes = await loadTempAccountBinding(supabase, staffId);
-    if (bindingRes.error && !isMissingTempBindingSchemaError(bindingRes.error)) {
-      return { ok: false, status: 500, error: getErrorMessage(bindingRes.error, 'Failed to verify temporary account binding.') };
-    }
-    const boundStaffId = normalizeStaffId(String((bindingRes.data ?? [])[0]?.staff_id ?? ''));
-    if (boundStaffId && boundStaffId !== staffId) {
-      resolvedStaffId = boundStaffId;
-      employeeRes = await loadEmployee(supabase, resolvedStaffId);
-      if (employeeRes.error) {
-        return { ok: false, status: 500, error: getErrorMessage(employeeRes.error, 'Failed to verify employee.') };
-      }
-      employee = (employeeRes.data ?? [])[0] ?? null;
-    }
-  }
-
+  const { employee, resolvedStaffId } = resolved;
   if (!employee) {
     return { ok: false, status: 404, error: `Employee not registered: ${staffId}` };
   }
@@ -205,7 +237,7 @@ export const submitPunchWithServiceRole = async (
   if (insertRes.error && isMissingMetadataColumnError(insertRes.error)) {
     const fallbackRes = await punchInsertBuilder.insert([
       {
-        staff_id: staffId,
+        staff_id: resolvedStaffId,
         action: request.action
       }
     ]);

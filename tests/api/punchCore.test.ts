@@ -6,7 +6,7 @@ type QueryResult = { data: any[] | null; error: { message: string } | null };
 
 type MockOptions = {
   employees?: QueryResult;
-  tempAssignments?: QueryResult;
+  tempAssignments?: QueryResult | ((sourceStaffId: string) => QueryResult);
   latestPunches?: QueryResult;
   insertError?: string | null;
   firstInsertError?: string | null;
@@ -33,9 +33,12 @@ const createSupabaseMock = (options: MockOptions) => {
       if (table === 'ob_temp_account_assignments') {
         return {
           select: () => ({
-            eq: () => ({
+            eq: (_column: string, value: string) => ({
               order: () => ({
-                limit: async () => options.tempAssignments ?? { data: [], error: null }
+                limit: async () =>
+                  typeof options.tempAssignments === 'function'
+                    ? options.tempAssignments(value)
+                    : options.tempAssignments ?? { data: [], error: null }
               })
             })
           })
@@ -100,7 +103,7 @@ describe('submitPunchWithServiceRole', () => {
     let employeeLookup = 0;
     const { supabase, inserts } = createSupabaseMock({
       employees: { data: [], error: null },
-      tempAssignments: { data: [{ staff_id: 'US010454', source_temp_staff_id: 'TUS000001' }], error: null }
+      tempAssignments: { data: [{ staff_id: 'US010454', source_temp_staff_id: 'TUS0000001' }], error: null }
     });
     const wrappedSupabase = {
       from(table: string) {
@@ -122,7 +125,7 @@ describe('submitPunchWithServiceRole', () => {
     };
 
     const result = await submitPunchWithServiceRole(wrappedSupabase, {
-      staffId: 'tus000001',
+      staffId: 'tus0000001',
       action: 'IN',
       userAgent: 'test-agent'
     });
@@ -131,7 +134,53 @@ describe('submitPunchWithServiceRole', () => {
     expect(inserts[0]?.[0]).toMatchObject({
       staff_id: 'US010454',
       action: 'IN',
-      metadata: { input_staff_id: 'TUS000001' }
+      metadata: { input_staff_id: 'TUS0000001' }
+    });
+  });
+
+  test('resolves legacy temporary IDs through the short temporary ID to the current employee', async () => {
+    const employeesByStaff = new Map([
+      ['US010454', { staff_id: 'US010454', agency: null, terminated_at: null }]
+    ]);
+    const { supabase, inserts } = createSupabaseMock({
+      tempAssignments: (sourceStaffId) => {
+        if (sourceStaffId === 'TEMP-USID-MQ74Q3U11B4O-0001') {
+          return {
+            data: [{ staff_id: 'TUS0000001', source_temp_staff_id: 'TEMP-USID-MQ74Q3U11B4O-0001' }],
+            error: null
+          };
+        }
+        if (sourceStaffId === 'TUS0000001') {
+          return { data: [{ staff_id: 'US010454', source_temp_staff_id: 'TUS0000001' }], error: null };
+        }
+        return { data: [], error: null };
+      }
+    });
+    const wrappedSupabase = {
+      from(table: string) {
+        const builder = supabase.from(table);
+        if (table !== 'ob_employees') return builder;
+        return {
+          select: () => ({
+            eq: (_column: string, value: string) => ({
+              limit: async () => ({ data: employeesByStaff.has(value) ? [employeesByStaff.get(value)] : [], error: null })
+            })
+          })
+        };
+      }
+    };
+
+    const result = await submitPunchWithServiceRole(wrappedSupabase, {
+      staffId: 'temp-usid-mq74q3u11b4o-0001',
+      action: 'IN',
+      userAgent: 'test-agent'
+    });
+
+    expect(result).toEqual({ ok: true, status: 200, staffId: 'US010454', action: 'IN' });
+    expect(inserts[0]?.[0]).toMatchObject({
+      staff_id: 'US010454',
+      action: 'IN',
+      metadata: { input_staff_id: 'TEMP-USID-MQ74Q3U11B4O-0001' }
     });
   });
 

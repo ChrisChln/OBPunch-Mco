@@ -33,7 +33,7 @@ describe('employee upload position validation', () => {
 
   test('allows imported employees without USID by assigning temporary editable IDs', () => {
     const defaultResult = buildEmployeeUploadRows([{ staff_id: '', name: 'Taylor', agency: 'OB' }], positions);
-    expect(defaultResult.rows[0]?.staff_id).toBe('TUS000001');
+    expect(defaultResult.rows[0]?.staff_id).toBe('TUS0000001');
 
     const result = buildEmployeeUploadRows(
       [
@@ -102,7 +102,7 @@ describe('employee upload position validation', () => {
     );
 
     expect(isGeneratedEmployeeUploadStaffId('TEMP-USID-TEST-0001')).toBe(true);
-    expect(isGeneratedEmployeeUploadStaffId('TUS000001')).toBe(true);
+    expect(isGeneratedEmployeeUploadStaffId('TUS0000001')).toBe(true);
     expect(result.modifiedStaffIds).toEqual([]);
     expect(result.duplicateWorkAccounts).toEqual([]);
   });

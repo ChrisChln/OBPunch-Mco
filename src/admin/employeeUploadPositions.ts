@@ -140,12 +140,12 @@ const normalizeShiftTimeValue = (value: unknown) => {
 };
 
 const buildTemporaryStaffId = (prefix: string, index: number) => {
-  if (prefix === 'TUS') return `TUS${String(index + 1).padStart(6, '0')}`;
+  if (prefix === 'TUS') return `TUS${String(index + 1).padStart(7, '0')}`;
   return `${prefix}-${String(index + 1).padStart(4, '0')}`;
 };
 
 export const isGeneratedEmployeeUploadStaffId = (value: unknown) =>
-  /^(?:TUS\d{6,}|TEMP-USID-[A-Z0-9]+-\d{4,})$/i.test(String(value ?? '').trim());
+  /^(?:TUS\d{7,}|TEMP-USID-[A-Z0-9]+-\d{4,})$/i.test(String(value ?? '').trim());
 
 export const detectEmployeeImportIdentityConflicts = (
   rows: EmployeeUploadRow[],

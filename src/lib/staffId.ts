@@ -4,7 +4,7 @@ import { isScheduleOnlyAgency } from '../shared/agencyRules.js';
 export const STAFF_ID_PATTERN = /^US\d{3,12}$/;
 const SCHEDULE_ONLY_STAFF_ID_PATTERN = /^[A-Z0-9_-]{1,64}$/;
 const SCHEDULE_PLACEHOLDER_STAFF_ID_PATTERNS = [
-  /^TUS\d{6,}$/,
+  /^TUS\d{7,}$/,
   /^TEMP-USID-[A-Z0-9]+-\d{4,}$/,
   /^NEWREQ-\d{8}(?:-[A-Z]+)?-\d{3,}$/,
   /^\d{4}[A-Z]+\d{3,}$/,
