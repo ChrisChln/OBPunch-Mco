@@ -2811,7 +2811,7 @@ const fetchPunchBoardUph = async (
 
   const submitPunch = async (
     action: PunchAction,
-    options?: { latestAction?: PunchAction | null; skipLatestFetch?: boolean; clearInput?: boolean }
+    options?: { latestAction?: PunchAction | null; skipLatestFetch?: boolean; clearInput?: boolean; retryOutWhenAlreadyIn?: boolean }
   ) => {
     if (isLocked) {
       return;
@@ -2884,6 +2884,10 @@ const fetchPunchBoardUph = async (
       const punchRes = await submitPunchToApi({ staffId: normalizedId, action });
 
       if (!punchRes.ok) {
+        if (options?.retryOutWhenAlreadyIn && action === 'IN' && /last action is in/i.test(punchRes.error)) {
+          await submitPunch('OUT', { skipLatestFetch: true, clearInput: options.clearInput });
+          return;
+        }
         setUiStatus({ tone: 'error', message: `Punch failed: ${punchRes.error}` });
         setLastPunchSummary({ status: 'error', message: formatPunchFailureSummary(punchRes.error), at: new Date().toISOString() });
         playError();
@@ -2967,7 +2971,12 @@ const fetchPunchBoardUph = async (
     }
 
     const nextAction: PunchAction = latest.action === 'IN' ? 'OUT' : 'IN';
-    await submitPunch(nextAction, { latestAction: latest.action, skipLatestFetch: true, clearInput: true });
+    await submitPunch(nextAction, {
+      latestAction: latest.action,
+      skipLatestFetch: true,
+      clearInput: true,
+      retryOutWhenAlreadyIn: nextAction === 'IN'
+    });
   };
 
   const onStaffIdKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
