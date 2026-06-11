@@ -22,6 +22,9 @@ type AccountManagementPageProps = {
   isReadOnly?: boolean;
   accountSearch: string;
   setAccountSearch: (value: string) => void;
+  accountDepartmentFilter: string[];
+  setAccountDepartmentFilter: (value: string[]) => void;
+  accountDepartmentOptions: Array<{ value: string; label: string }>;
   accountPositionFilter: string;
   setAccountPositionFilter: (value: string) => void;
   accountPositionOptions: string[];
@@ -47,6 +50,9 @@ export default function AccountManagementPage({
   isReadOnly = false,
   accountSearch,
   setAccountSearch,
+  accountDepartmentFilter,
+  setAccountDepartmentFilter,
+  accountDepartmentOptions,
   accountPositionFilter,
   setAccountPositionFilter,
   accountPositionOptions,
@@ -299,7 +305,7 @@ export default function AccountManagementPage({
         </div>
       </div>
 
-      <div className="mt-5 grid gap-4 md:grid-cols-5">
+      <div className="mt-5 grid gap-4 md:grid-cols-6">
         <div className="md:col-span-3">
           <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('搜索', 'Search')}</label>
           <input
@@ -309,6 +315,22 @@ export default function AccountManagementPage({
             placeholder={t('按账号 / 姓名 / 工号搜索', 'Search by account / name / staff id')}
             className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
           />
+        </div>
+        <div>
+          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Dept</label>
+          <select
+            value={accountDepartmentFilter[0] ?? ''}
+            onChange={(e) => setAccountDepartmentFilter(e.target.value ? [e.target.value] : [])}
+            disabled={isLocked}
+            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <option value="">{t('全部部门', 'All dept')}</option>
+            {accountDepartmentOptions.map((department) => (
+              <option key={department.value} value={department.value}>
+                {department.label}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="md:col-span-2">
           <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('岗位筛选', 'Position filter')}</label>

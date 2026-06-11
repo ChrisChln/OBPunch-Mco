@@ -15,7 +15,8 @@ import type {
   AdminAccessSavePayload,
   AdminAccessUserOption
 } from '../adminAccessApi';
-import type { PositionRecord } from '../../shared/positions';
+import { LABEL_TONE_KEYS, type LabelToneKey } from '../../lib/labelTone';
+import { POSITION_DEPARTMENTS, normalizePositionDepartment, normalizePositionTone, type PositionDepartment, type PositionRecord } from '../../shared/positions';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -33,7 +34,7 @@ type AdminPermissionsPageProps = {
   resolveAdminUserIdentity?: (input: { userId?: string | null; userEmail?: string | null; actor?: unknown; displayName?: string | null }) => unknown;
   onRefreshAccess: () => void | Promise<void>;
   onSaveAccess: (payload: AdminAccessSavePayload) => void | Promise<void>;
-  onSavePosition: (payload: { name: string; display_order: number; is_active: boolean; original_name?: string | null }) => void | Promise<void>;
+  onSavePosition: (payload: { name: string; display_order: number; is_active: boolean; department?: PositionDepartment; tone?: LabelToneKey; original_name?: string | null }) => void | Promise<void>;
   onRefreshRequests: () => void | Promise<void>;
   onCreateRequest: (payload: AdminAccessRequestCreatePayload) => void | Promise<void>;
   onReviewRequest: (request: AdminAccessRequestRecord, action: 'approve' | 'reject') => void | Promise<void>;
@@ -138,6 +139,8 @@ export default function AdminPermissionsPage({
   const [reason, setReason] = useState('');
   const [savingRequest, setSavingRequest] = useState(false);
   const [positionDraftName, setPositionDraftName] = useState('');
+  const [positionDraftDepartment, setPositionDraftDepartment] = useState<PositionDepartment>('OB');
+  const [positionDraftTone, setPositionDraftTone] = useState<LabelToneKey>('slate');
   const [positionDraftOrder, setPositionDraftOrder] = useState('');
   const [positionSavingKey, setPositionSavingKey] = useState<string | null>(null);
 
@@ -209,6 +212,8 @@ export default function AdminPermissionsPage({
     name: string;
     display_order: number;
     is_active: boolean;
+    department?: PositionDepartment;
+    tone?: LabelToneKey;
     original_name?: string | null;
   }) => {
     const key = payload.original_name ?? payload.name;
@@ -217,6 +222,8 @@ export default function AdminPermissionsPage({
       await onSavePosition(payload);
       if (!payload.original_name) {
         setPositionDraftName('');
+        setPositionDraftDepartment('OB');
+        setPositionDraftTone('slate');
         setPositionDraftOrder('');
       }
     } finally {
@@ -335,7 +342,7 @@ export default function AdminPermissionsPage({
             </button>
           </div>
 
-          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_140px_auto]">
+          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_140px_120px_140px_auto]">
             <input
               type="text"
               value={positionDraftName}
@@ -362,12 +369,48 @@ export default function AdminPermissionsPage({
                   : 'border border-white/10 bg-black/30 text-white placeholder:text-slate-500 focus:border-neon focus:shadow-glow'
               ].join(' ')}
             />
+            <select
+              value={positionDraftDepartment}
+              onChange={(event) => setPositionDraftDepartment(normalizePositionDepartment(event.target.value))}
+              disabled={isLocked || Boolean(positionSavingKey)}
+              className={[
+                'h-11 rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                isLight
+                  ? 'border border-slate-200 bg-white text-slate-900 focus:border-neon/60 focus:shadow-[0_0_0_2px_rgba(132,204,22,0.15)]'
+                  : 'border border-white/10 bg-black/30 text-white focus:border-neon focus:shadow-glow'
+              ].join(' ')}
+            >
+              {POSITION_DEPARTMENTS.map((department) => (
+                <option key={department} value={department}>
+                  {department === 'hidden' ? t('隐藏', 'Hidden') : department}
+                </option>
+              ))}
+            </select>
+            <select
+              value={positionDraftTone}
+              onChange={(event) => setPositionDraftTone(normalizePositionTone(event.target.value))}
+              disabled={isLocked || Boolean(positionSavingKey)}
+              className={[
+                'h-11 rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                isLight
+                  ? 'border border-slate-200 bg-white text-slate-900 focus:border-neon/60 focus:shadow-[0_0_0_2px_rgba(132,204,22,0.15)]'
+                  : 'border border-white/10 bg-black/30 text-white focus:border-neon focus:shadow-glow'
+              ].join(' ')}
+            >
+              {LABEL_TONE_KEYS.map((tone) => (
+                <option key={tone} value={tone}>
+                  {tone}
+                </option>
+              ))}
+            </select>
             <button
               type="button"
               disabled={isLocked || Boolean(positionSavingKey) || !positionDraftName.trim()}
               onClick={() =>
                 void submitPosition({
                   name: positionDraftName,
+                  department: positionDraftDepartment,
+                  tone: positionDraftTone,
                   display_order: Number(positionDraftOrder || positions.length * 10 + 10),
                   is_active: true
                 })
@@ -379,10 +422,12 @@ export default function AdminPermissionsPage({
           </div>
 
           <div className="mt-5 overflow-auto rounded-2xl border border-white/10 bg-black/30">
-            <table className="min-w-[760px] w-full text-left text-sm">
+            <table className="min-w-[900px] w-full text-left text-sm">
               <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-xs uppercase tracking-[0.2em] text-slate-400 backdrop-blur">
                 <tr>
                   <th className="px-4 py-3">Position</th>
+                  <th className="px-4 py-3">{t('部门', 'Dept')}</th>
+                  <th className="px-4 py-3">Color</th>
                   <th className="px-4 py-3">Order</th>
                   <th className="px-4 py-3">{t('状态', 'Status')}</th>
                   <th className="px-4 py-3 text-right">{t('操作', 'Actions')}</th>
@@ -400,6 +445,8 @@ export default function AdminPermissionsPage({
                           if (nextName && nextName !== position.name) {
                             void submitPosition({
                               name: nextName,
+                              department: normalizePositionDepartment(position.department),
+                              tone: normalizePositionTone(position.tone),
                               display_order: position.display_order,
                               is_active: position.is_active,
                               original_name: position.name
@@ -415,6 +462,68 @@ export default function AdminPermissionsPage({
                       />
                     </td>
                     <td className="px-4 py-3">
+                      <select
+                        defaultValue={normalizePositionDepartment(position.department)}
+                        disabled={isLocked || Boolean(positionSavingKey)}
+                        onChange={(event) => {
+                          const nextDepartment = normalizePositionDepartment(event.currentTarget.value);
+                          if (nextDepartment !== normalizePositionDepartment(position.department)) {
+                            void submitPosition({
+                              name: position.name,
+                              department: nextDepartment,
+                              tone: normalizePositionTone(position.tone),
+                              display_order: position.display_order,
+                              is_active: position.is_active,
+                              original_name: position.name
+                            });
+                          }
+                        }}
+                        className={[
+                          'h-9 w-32 rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                          isLight
+                            ? 'border border-slate-200 bg-white text-slate-900 focus:border-neon/60'
+                            : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                        ].join(' ')}
+                      >
+                        {POSITION_DEPARTMENTS.map((department) => (
+                          <option key={department} value={department}>
+                            {department === 'hidden' ? t('隐藏', 'Hidden') : department}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-3">
+                      <select
+                        value={normalizePositionTone(position.tone)}
+                        disabled={isLocked || Boolean(positionSavingKey)}
+                        onChange={(event) => {
+                          const nextTone = normalizePositionTone(event.target.value);
+                          if (nextTone !== normalizePositionTone(position.tone)) {
+                            void submitPosition({
+                              name: position.name,
+                              department: normalizePositionDepartment(position.department),
+                              tone: nextTone,
+                              display_order: position.display_order,
+                              is_active: position.is_active,
+                              original_name: position.name
+                            });
+                          }
+                        }}
+                        className={[
+                          'h-9 w-32 rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                          isLight
+                            ? 'border border-slate-200 bg-white text-slate-900 focus:border-neon/60'
+                            : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                        ].join(' ')}
+                      >
+                        {LABEL_TONE_KEYS.map((tone) => (
+                          <option key={tone} value={tone}>
+                            {tone}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-3">
                       <input
                         type="number"
                         defaultValue={position.display_order}
@@ -424,6 +533,8 @@ export default function AdminPermissionsPage({
                           if (nextOrder !== position.display_order) {
                             void submitPosition({
                               name: position.name,
+                              department: normalizePositionDepartment(position.department),
+                              tone: normalizePositionTone(position.tone),
                               display_order: nextOrder,
                               is_active: position.is_active,
                               original_name: position.name
@@ -457,6 +568,8 @@ export default function AdminPermissionsPage({
                         onClick={() =>
                           void submitPosition({
                             name: position.name,
+                            department: normalizePositionDepartment(position.department),
+                            tone: normalizePositionTone(position.tone),
                             display_order: position.display_order,
                             is_active: !position.is_active,
                             original_name: position.name
@@ -759,5 +872,3 @@ export default function AdminPermissionsPage({
     </section>
   );
 }
-
-

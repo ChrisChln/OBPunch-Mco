@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { LabelToneKey } from '../../lib/labelTone';
+import { POSITION_DEPARTMENTS, normalizePositionDepartment, type PositionDepartment } from '../../shared/positions';
 import {
   buildDashboardCardPositions,
   buildDashboardPositionOptions,
@@ -7,8 +8,11 @@ import {
 } from '../../shared/dashboardPositions';
 import { DEFAULT_DASHBOARD_CARD_POSITIONS } from '../../shared/dashboardPositions';
 import {
+  buildDashboardDepartmentCoverageCards,
   buildDashboardAttendanceStats,
   createDashboardAttendanceStat,
+  getDashboardDepartmentLabel,
+  getDashboardDepartmentTonePosition,
   getDashboardAttendanceStatKey,
   type DashboardAttendanceStat
 } from '../../shared/dashboardAttendanceStats';
@@ -43,6 +47,7 @@ type HomeDashboardPageProps = {
   getScheduleTablePositionBadgeClass: (position: string) => string;
   getScheduleTableShiftBadgeClass: (value: '' | 'early' | 'late') => string;
   schedulePositionToneByPosition: Partial<Record<string, LabelToneKey>>;
+  positionDepartmentByPosition?: Record<string, PositionDepartment>;
   homeDashboardPositionNames: string[];
   homeRosterPositionFilter: string;
   setHomeRosterPositionFilter: (value: string) => void;
@@ -265,7 +270,12 @@ const getAttendanceCardClass = (position: string) => {
   if (position === 'Pack') return 'border-emerald-300/20 bg-emerald-400/[0.08]';
   if (position === 'Rebin') return 'border-amber-300/20 bg-amber-400/[0.08]';
   if (position === 'Preship') return 'border-rose-300/20 bg-rose-400/[0.08]';
+  if (position === 'Shipping') return 'border-indigo-300/20 bg-indigo-400/[0.08]';
   if (position === 'Transfer') return 'border-violet-300/20 bg-violet-400/[0.08]';
+  if (position === 'Putaway') return 'border-orange-300/20 bg-orange-400/[0.08]';
+  if (position === 'Receive') return 'border-lime-300/20 bg-lime-400/[0.08]';
+  if (position === 'Load') return 'border-pink-300/20 bg-pink-400/[0.08]';
+  if (position === 'Inventory') return 'border-fuchsia-300/20 bg-fuchsia-400/[0.08]';
   return 'border-white/10 bg-white/[0.04]';
 };
 
@@ -274,7 +284,12 @@ const getAttendanceCardClassLight = (position: string) => {
   if (position === 'Pack') return 'border-emerald-200 bg-emerald-50/85';
   if (position === 'Rebin') return 'border-amber-200 bg-amber-50/85';
   if (position === 'Preship') return 'border-rose-200 bg-rose-50/85';
+  if (position === 'Shipping') return 'border-indigo-200 bg-indigo-50/85';
   if (position === 'Transfer') return 'border-violet-200 bg-violet-50/85';
+  if (position === 'Putaway') return 'border-orange-200 bg-orange-50/85';
+  if (position === 'Receive') return 'border-lime-200 bg-lime-50/85';
+  if (position === 'Load') return 'border-pink-200 bg-pink-50/85';
+  if (position === 'Inventory') return 'border-fuchsia-200 bg-fuchsia-50/85';
   return 'border-slate-200 bg-white/90';
 };
 
@@ -283,7 +298,12 @@ const getAttendanceCardValueClassLight = (position: string) => {
   if (position === 'Pack') return 'text-emerald-700';
   if (position === 'Rebin') return 'text-amber-700';
   if (position === 'Preship') return 'text-rose-700';
+  if (position === 'Shipping') return 'text-indigo-700';
   if (position === 'Transfer') return 'text-violet-700';
+  if (position === 'Putaway') return 'text-orange-700';
+  if (position === 'Receive') return 'text-lime-700';
+  if (position === 'Load') return 'text-pink-700';
+  if (position === 'Inventory') return 'text-fuchsia-700';
   return 'text-slate-700';
 };
 
@@ -292,7 +312,12 @@ const getAttendanceCardValueClass = (position: string) => {
   if (position === 'Pack') return 'text-emerald-100';
   if (position === 'Rebin') return 'text-amber-100';
   if (position === 'Preship') return 'text-rose-100';
+  if (position === 'Shipping') return 'text-indigo-100';
   if (position === 'Transfer') return 'text-violet-100';
+  if (position === 'Putaway') return 'text-orange-100';
+  if (position === 'Receive') return 'text-lime-100';
+  if (position === 'Load') return 'text-pink-100';
+  if (position === 'Inventory') return 'text-fuchsia-100';
   return 'text-stone-100';
 };
 
@@ -309,7 +334,8 @@ function HomeDashboardPage({
   getSchedulePositionBadgeClass,
   getScheduleTablePositionBadgeClass,
   getScheduleTableShiftBadgeClass,
-  schedulePositionToneByPosition,
+  schedulePositionToneByPosition: _schedulePositionToneByPosition,
+  positionDepartmentByPosition = {},
   homeDashboardPositionNames,
   homeRosterPositionFilter: _homeRosterPositionFilter,
   setHomeRosterPositionFilter,
@@ -319,6 +345,7 @@ function HomeDashboardPage({
   const isLight = _themeMode === 'light';
   const [search, setSearch] = useState('');
   const [agencyFilter, setAgencyFilter] = useState<string[]>([]);
+  const [departmentFilter, setDepartmentFilter] = useState<string[]>([]);
   const [positionFilter, setPositionFilter] = useState<string[]>([]);
   const [shiftFilter, setShiftFilter] = useState<Array<'early' | 'late'>>([]);
   const [absentOnly, setAbsentOnly] = useState(false);
@@ -360,38 +387,44 @@ function HomeDashboardPage({
     return buildDashboardAttendanceStats(rows);
   }, [homeRosterRowsCurrent, homeDashboardPositionNames]);
 
-  const outboundShiftCards = useMemo(() => {
-    const summaryPositions = cardPositions.filter((position) => normalizePositionKey(position, homeDashboardPositionNames) !== 'Transfer');
-    const morningPresent = summaryPositions.reduce((sum, position) => sum + (homeAttendanceStats[getDashboardAttendanceStatKey('early', position)]?.present ?? 0), 0);
-    const morningExpected = summaryPositions.reduce((sum, position) => sum + (summaryByPosition.get(position)?.early ?? 0), 0);
-    const nightPresent = summaryPositions.reduce((sum, position) => sum + (homeAttendanceStats[getDashboardAttendanceStatKey('late', position)]?.present ?? 0), 0);
-    const nightExpected = summaryPositions.reduce((sum, position) => sum + (summaryByPosition.get(position)?.late ?? 0), 0);
-    return [
-      { shift: 'early' as const, present: morningPresent, expected: morningExpected },
-      { shift: 'late' as const, present: nightPresent, expected: nightExpected }
-    ];
-  }, [cardPositions, homeAttendanceStats, homeDashboardPositionNames, summaryByPosition]);
+  const departmentCoverageCards = useMemo(
+    () =>
+      buildDashboardDepartmentCoverageCards({
+        positions: cardPositions,
+        positionDepartments: positionDepartmentByPosition,
+        stats: homeAttendanceStats,
+        expectedByPosition: summaryByPosition
+      }),
+    [cardPositions, homeAttendanceStats, positionDepartmentByPosition, summaryByPosition]
+  );
 
-  const attendanceCardGroups = useMemo(
+  const departmentAttendanceGroups = useMemo(
     () => {
-      return (['early', 'late'] as const).map((shift) => ({
-        shift,
-        cards: cardPositions.map((position) => {
-          const plan = summaryByPosition.get(position) ?? { early: 0, late: 0, total: 0 };
-          const key = getDashboardAttendanceStatKey(shift, position);
-          const stat: DashboardAttendanceStat = homeAttendanceStats[key] ?? createDashboardAttendanceStat();
-          return {
-            position,
-            shift,
-            expected: shift === 'early' ? plan.early : plan.late,
-            present: stat.present,
-            onClock: stat.onClock,
-            offWorked: stat.offWorked
-          };
-        })
-      }));
+      return POSITION_DEPARTMENTS.filter((department) => department !== 'hidden').map((department) => {
+        const departmentPositions = cardPositions.filter(
+          (position) => normalizePositionDepartment(positionDepartmentByPosition[position]) === department
+        );
+        return {
+          department,
+          cards: (['early', 'late'] as const).flatMap((shift) =>
+            departmentPositions.map((position) => {
+              const plan = summaryByPosition.get(position) ?? { early: 0, late: 0, total: 0 };
+              const key = getDashboardAttendanceStatKey(shift, position);
+              const stat: DashboardAttendanceStat = homeAttendanceStats[key] ?? createDashboardAttendanceStat();
+              return {
+                position,
+                shift,
+                expected: shift === 'early' ? plan.early : plan.late,
+                present: stat.present,
+                onClock: stat.onClock,
+                offWorked: stat.offWorked
+              };
+            })
+          )
+        };
+      }).filter((group) => group.cards.length > 0);
     },
-    [cardPositions, homeAttendanceStats, summaryByPosition]
+    [cardPositions, homeAttendanceStats, positionDepartmentByPosition, summaryByPosition]
   );
 
   const positionOptions = useMemo(
@@ -399,8 +432,19 @@ function HomeDashboardPage({
       buildDashboardPositionOptions(
         homeDashboardPositionNames,
         homeRosterRowsCurrent.map((row) => normalizePositionKey(row.position, homeDashboardPositionNames) || row.position)
+      ).filter((position) => departmentFilter.length === 0 || departmentFilter.includes(normalizePositionDepartment(positionDepartmentByPosition[position]))),
+    [departmentFilter, homeDashboardPositionNames, homeRosterRowsCurrent, positionDepartmentByPosition]
+  );
+
+  const departmentOptions = useMemo(
+    () =>
+      POSITION_DEPARTMENTS.filter((department) =>
+        homeRosterRowsCurrent.some((row) => {
+          const position = normalizePositionKey(row.position, homeDashboardPositionNames) || row.position;
+          return normalizePositionDepartment(positionDepartmentByPosition[position]) === department;
+        })
       ),
-    [homeDashboardPositionNames, homeRosterRowsCurrent]
+    [homeDashboardPositionNames, homeRosterRowsCurrent, positionDepartmentByPosition]
   );
 
   const agencyOptions = useMemo(() => {
@@ -456,6 +500,10 @@ function HomeDashboardPage({
         const key = normalizePositionKey(row.position, homeDashboardPositionNames) || row.position;
         if (!positionFilter.includes(key)) return false;
       }
+      if (departmentFilter.length > 0) {
+        const key = normalizePositionKey(row.position, homeDashboardPositionNames) || row.position;
+        if (!departmentFilter.includes(normalizePositionDepartment(positionDepartmentByPosition[key]))) return false;
+      }
       if (shiftFilter.length > 0) {
         const rowShift = normalizeShiftValue(row.shift);
         if (!rowShift) return false;
@@ -464,7 +512,7 @@ function HomeDashboardPage({
       if (attendanceFilters.length > 0 && !attendanceFilters.includes(row.attendance)) return false;
       return true;
     });
-  }, [tableRows, search, agencyFilter, positionFilter, shiftFilter, absentOnly, onClockOnly, offWorkOnly, homeDashboardPositionNames]);
+  }, [tableRows, search, agencyFilter, departmentFilter, positionDepartmentByPosition, positionFilter, shiftFilter, absentOnly, onClockOnly, offWorkOnly, homeDashboardPositionNames]);
 
   const operationalDate = useMemo(() => {
     const now = new Date();
@@ -495,24 +543,26 @@ function HomeDashboardPage({
             </div>
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-2">
-            {outboundShiftCards.map((card) => {
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {departmentCoverageCards.map((card) => {
               const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
               const isMorning = card.shift === 'early';
+              const isOverPlan = card.present > card.expected;
+              const tonePosition = getDashboardDepartmentTonePosition(card.department);
               return (
                 <div
-                    key={`outbound:${card.shift}`}
+                    key={`${card.department}:${card.shift}`}
                     className={[
                       'rounded-[24px] border px-5 py-4 shadow-none',
-                      isLight ? getAttendanceCardClassLight(isMorning ? 'Pick' : 'Transfer') : getAttendanceCardClass(isMorning ? 'Pick' : 'Transfer')
+                      isLight ? getAttendanceCardClassLight(tonePosition) : getAttendanceCardClass(tonePosition)
                     ].join(' ')}
                   >
                   <div className="flex items-end justify-between gap-4">
                     <div>
-                      <div className={['text-[11px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>{isMorning ? 'Outbound Morning' : 'Outbound Night'}</div>
+                      <div className={['text-[11px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>{getDashboardDepartmentLabel(card.department)} {isMorning ? 'Morning' : 'Night'}</div>
                       <div className="mt-3 flex items-end gap-3">
-                        <span className={['text-3xl font-semibold tracking-[-0.03em]', isLight ? 'text-slate-800' : 'text-stone-50'].join(' ')}>{card.present}/{card.expected}</span>
-                        <span className={['pb-1 text-sm font-semibold', isLight ? (ratio < 80 ? 'text-rose-500' : ratio >= 90 ? getAttendanceCardValueClassLight(isMorning ? 'Pick' : 'Transfer') : 'text-slate-500') : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? getAttendanceCardValueClass(isMorning ? 'Pick' : 'Transfer') : 'text-stone-300'].join(' ')}>
+                        <span className={['text-3xl font-semibold tracking-[-0.03em]', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : isLight ? 'text-slate-800' : 'text-stone-50'].join(' ')}>{card.present}/{card.expected}</span>
+                        <span className={['pb-1 text-sm font-semibold', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : isLight ? (ratio < 80 ? 'text-rose-500' : ratio >= 90 ? getAttendanceCardValueClassLight(tonePosition) : 'text-slate-500') : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? getAttendanceCardValueClass(tonePosition) : 'text-stone-300'].join(' ')}>
                           {card.expected > 0 ? `${ratio.toFixed(1)}% coverage` : '0.0% coverage'}
                         </span>
                       </div>
@@ -523,50 +573,57 @@ function HomeDashboardPage({
             })}
           </div>
 
-          <div className="space-y-3">
-            {attendanceCardGroups.map((group) => (
-              <div key={`attendance:${group.shift}`} className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
-                {group.cards.map((card) => {
-                  const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
-                  return (
-                    <div
-                      key={`${card.position}:${card.shift}`}
-                      className={[
-                        'rounded-[24px] border px-4 py-4 shadow-none',
-                        isLight
-                          ? getAttendanceCardClassLight(card.position)
-                          : _getHomePanelToneClass(card.position, schedulePositionToneByPosition)
-                      ].join(' ')}
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <div className={['text-sm font-semibold', isLight ? 'text-slate-800' : 'text-stone-100'].join(' ')}>{card.shift === 'early' ? 'Morning' : 'Night'} {card.position}</div>
-                          <div className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>
-                            {card.present}/{card.expected}
-                            <span className={['ml-2 font-semibold', isLight ? (ratio < 80 ? 'text-rose-500' : ratio >= 90 ? getAttendanceCardValueClassLight(card.position) : 'text-slate-500') : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'].join(' ')}>
-                              {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
-                            </span>
-                          </div>
-                          {card.offWorked > 0 ? <div className={['mt-2 text-xs font-medium', isLight ? 'text-slate-500' : 'text-stone-300'].join(' ')}>+{card.offWorked} off worked</div> : null}
-                        </div>
-                        <div className={[
-                          'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-none',
+          <div className="space-y-4">
+            {departmentAttendanceGroups.map((group) => (
+              <section key={`attendance:${group.department}`} className="space-y-2">
+                <div className={['text-[12px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>
+                  {getDashboardDepartmentLabel(group.department)}:
+                </div>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
+                  {group.cards.map((card) => {
+                    const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
+                    const isOverPlan = card.present > card.expected;
+                    return (
+                      <div
+                        key={`${card.position}:${card.shift}`}
+                        className={[
+                          'rounded-[24px] border px-4 py-4 shadow-none',
                           isLight
-                            ? getAttendanceCardClassLight(card.position).replace('/85', '')
-                            : _getHomeChipToneClass(card.position, schedulePositionToneByPosition)
-                        ].join(' ')}>
-                          <div className={['text-[10px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>On Clock</div>
-                          <div className={['mt-1 text-3xl font-semibold leading-none', isLight ? getAttendanceCardValueClassLight(card.position) : getAttendanceCardValueClass(card.position)].join(' ')}>{card.onClock}</div>
+                            ? getAttendanceCardClassLight(card.position)
+                            : getAttendanceCardClass(card.position)
+                        ].join(' ')}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className={['text-sm font-semibold', isLight ? 'text-slate-800' : 'text-stone-100'].join(' ')}>{card.shift === 'early' ? 'Morning' : 'Night'} {card.position}</div>
+                            <div className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>
+                              <span className={['font-bold', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : ''].join(' ')}>
+                                {card.present}/{card.expected}
+                              </span>
+                              <span className={['ml-2 font-semibold', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : isLight ? (ratio < 80 ? 'text-rose-500' : ratio >= 90 ? getAttendanceCardValueClassLight(card.position) : 'text-slate-500') : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'].join(' ')}>
+                                {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
+                              </span>
+                            </div>
+                          </div>
+                          <div className={[
+                            'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-none',
+                            isLight
+                              ? getAttendanceCardClassLight(card.position).replace('/85', '')
+                              : getAttendanceCardClass(card.position)
+                          ].join(' ')}>
+                            <div className={['text-[10px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>On Clock</div>
+                            <div className={['mt-1 text-3xl font-semibold leading-none', isLight ? getAttendanceCardValueClassLight(card.position) : getAttendanceCardValueClass(card.position)].join(' ')}>{card.onClock}</div>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              </section>
             ))}
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.4fr)_200px_200px_180px_repeat(3,minmax(0,150px))]">
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.4fr)_180px_160px_180px_160px_repeat(3,minmax(0,140px))]">
             <label className={['relative flex h-12 items-center overflow-hidden rounded-[20px] border px-4', isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-white/[0.04]'].join(' ')}>
               <SearchIcon className={['pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2', isLight ? 'text-slate-400' : 'text-stone-400'].join(' ')} />
               <input
@@ -581,6 +638,16 @@ function HomeDashboardPage({
               selected={agencyFilter}
               options={agencyOptions.map((agency) => ({ value: agency, label: agency }))}
               onChange={setAgencyFilter}
+              isLight={isLight}
+            />
+            <DashboardMultiSelect
+              allLabel="All dept"
+              selected={departmentFilter}
+              options={departmentOptions.map((department) => ({
+                value: department,
+                label: department === 'hidden' ? 'Hidden' : department
+              }))}
+              onChange={setDepartmentFilter}
               isLight={isLight}
             />
             <DashboardMultiSelect

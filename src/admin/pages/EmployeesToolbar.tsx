@@ -19,6 +19,7 @@ type EmployeesToolbarProps = {
   fetchEmployees: (arg: { reset: boolean; search?: string; agency?: string; position?: string; labels?: string[] }) => void | Promise<unknown>;
   setEmployeeSearch: (value: string) => void;
   setEmployeeAgency: (value: string[] | ((prev: string[]) => string[])) => void;
+  setEmployeeDepartment: (value: string[] | ((prev: string[]) => string[])) => void;
   setEmployeePosition: (value: string[] | ((prev: string[]) => string[])) => void;
   setEmployeeShiftFilter: (value: Array<'early' | 'late'> | ((prev: Array<'early' | 'late'>) => Array<'early' | 'late'>)) => void;
   setEmployeeLabels: (value: string[] | ((prev: string[]) => string[])) => void;
@@ -26,6 +27,8 @@ type EmployeesToolbarProps = {
   employeeSearch: string;
   employeeAgency: string[];
   employeeAgencyOptions: string[];
+  employeeDepartment: string[];
+  employeeDepartmentOptions: Array<{ value: string; label: string }>;
   employeePosition: string[];
   employeePositionOptions: string[];
   employeeShiftFilter: Array<'early' | 'late'>;
@@ -209,6 +212,7 @@ export default function EmployeesToolbar({
   fetchEmployees,
   setEmployeeSearch,
   setEmployeeAgency,
+  setEmployeeDepartment,
   setEmployeePosition,
   setEmployeeShiftFilter,
   setEmployeeLabels,
@@ -216,6 +220,8 @@ export default function EmployeesToolbar({
   employeeSearch,
   employeeAgency,
   employeeAgencyOptions,
+  employeeDepartment,
+  employeeDepartmentOptions,
   employeePosition,
   employeePositionOptions,
   employeeShiftFilter,
@@ -326,6 +332,7 @@ export default function EmployeesToolbar({
             onClick={() => {
               setEmployeeSearch('');
               setEmployeeAgency([]);
+              setEmployeeDepartment([]);
               setEmployeePosition([]);
               setEmployeeShiftFilter([]);
               setEmployeeLabels([]);
@@ -339,7 +346,7 @@ export default function EmployeesToolbar({
       </div>
       {uploadError && <p className="mt-3 text-sm text-ember">{uploadError}</p>}
 
-      <div className="mt-5 grid gap-4 md:grid-cols-6">
+      <div className="mt-5 grid gap-4 md:grid-cols-7">
         <div className="md:col-span-2">
           <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Search</label>
           <input
@@ -356,6 +363,15 @@ export default function EmployeesToolbar({
           selected={employeeAgency}
           options={employeeAgencyOptions.map((agency) => ({ value: agency, label: agency }))}
           onChange={setEmployeeAgency}
+          disabled={isLocked}
+          isLight={isLight}
+        />
+        <EmployeeMultiSelect
+          label="Dept"
+          allLabel={t('全部部门', 'All dept')}
+          selected={employeeDepartment}
+          options={employeeDepartmentOptions}
+          onChange={setEmployeeDepartment}
           disabled={isLocked}
           isLight={isLight}
         />

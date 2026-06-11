@@ -24,8 +24,11 @@ type DevicesPageProps = {
   setDeviceSearch: (value: string) => void;
   deviceFilterType: DeviceType | '';
   setDeviceFilterType: (value: DeviceType | '') => void;
+  deviceFilterDepartment: string[];
+  setDeviceFilterDepartment: (value: string[]) => void;
   deviceFilterPosition: string;
   setDeviceFilterPosition: (value: string) => void;
+  deviceDepartmentOptions: Array<{ value: string; label: string }>;
   deviceBorrowedOnly: boolean;
   setDeviceBorrowedOnly: (value: boolean) => void;
   devicesError: string | null;
@@ -65,8 +68,11 @@ export default function DevicesPage({
   setDeviceSearch,
   deviceFilterType,
   setDeviceFilterType,
+  deviceFilterDepartment,
+  setDeviceFilterDepartment,
   deviceFilterPosition,
   setDeviceFilterPosition,
+  deviceDepartmentOptions,
   deviceBorrowedOnly,
   setDeviceBorrowedOnly,
   devicesError,
@@ -170,7 +176,7 @@ export default function DevicesPage({
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-5">
               <input
                 value={deviceSearch}
                 onChange={(e) => setDeviceSearch(e.target.value)}
@@ -188,6 +194,19 @@ export default function DevicesPage({
                 {DEVICE_TYPES.map((item) => (
                   <option key={item} value={item}>
                     {item}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={deviceFilterDepartment[0] ?? ''}
+                onChange={(e) => setDeviceFilterDepartment(e.target.value ? [e.target.value] : [])}
+                disabled={isLocked}
+                className="h-10 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">{t('全部部门', 'All dept')}</option>
+                {deviceDepartmentOptions.map((department) => (
+                  <option key={department.value} value={department.value}>
+                    {department.label}
                   </option>
                 ))}
               </select>

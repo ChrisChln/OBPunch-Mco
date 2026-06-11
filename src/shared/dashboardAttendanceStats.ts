@@ -1,3 +1,5 @@
+import { normalizePositionDepartment, type PositionDepartment } from './positions';
+
 export type DashboardAttendanceShift = 'early' | 'late';
 
 export type DashboardAttendanceStatus = 'Absent' | 'Off Worked' | 'Normal' | 'Completed';
@@ -19,6 +21,16 @@ export type DashboardAttendanceRow = {
   hasPunch: boolean;
   isOnClock: boolean;
   attendance?: DashboardAttendanceStatus;
+};
+
+export const DASHBOARD_COVERAGE_DEPARTMENTS = ['OB', 'IB', 'INV'] as const;
+export type DashboardCoverageDepartment = (typeof DASHBOARD_COVERAGE_DEPARTMENTS)[number];
+
+export type DashboardDepartmentCoverageCard = {
+  department: DashboardCoverageDepartment;
+  shift: DashboardAttendanceShift;
+  expected: number;
+  present: number;
 };
 
 export const createDashboardAttendanceStat = (): DashboardAttendanceStat => ({
@@ -45,10 +57,11 @@ export const buildDashboardAttendanceStats = (rows: readonly DashboardAttendance
     if (row.isExpected) {
       if (!expectedByKey.has(key)) expectedByKey.set(key, new Set());
       expectedByKey.get(key)?.add(staffId);
-      if (row.hasPunch) {
-        if (!presentByKey.has(key)) presentByKey.set(key, new Set());
-        presentByKey.get(key)?.add(staffId);
-      }
+    }
+
+    if (row.hasPunch) {
+      if (!presentByKey.has(key)) presentByKey.set(key, new Set());
+      presentByKey.get(key)?.add(staffId);
     }
 
     if (row.isOnClock) {
@@ -78,4 +91,50 @@ export const buildDashboardAttendanceStats = (rows: readonly DashboardAttendance
     };
   }
   return stats;
+};
+
+const isDashboardCoverageDepartment = (value: PositionDepartment): value is DashboardCoverageDepartment =>
+  DASHBOARD_COVERAGE_DEPARTMENTS.includes(value as DashboardCoverageDepartment);
+
+export const getDashboardDepartmentTonePosition = (department: DashboardCoverageDepartment) => {
+  if (department === 'IB') return 'Receive';
+  if (department === 'INV') return 'Inventory';
+  return 'Pick';
+};
+
+export const getDashboardDepartmentLabel = (department: DashboardCoverageDepartment) => department;
+
+export const buildDashboardDepartmentCoverageCards = ({
+  positions,
+  positionDepartments,
+  stats,
+  expectedByPosition
+}: {
+  positions: readonly string[];
+  positionDepartments: Readonly<Record<string, unknown>>;
+  stats: DashboardAttendanceSummary;
+  expectedByPosition?: ReadonlyMap<string, Partial<Record<DashboardAttendanceShift, number>>>;
+}): DashboardDepartmentCoverageCard[] => {
+  const cards = new Map<string, DashboardDepartmentCoverageCard>();
+  for (const shift of ['early', 'late'] as const) {
+    for (const department of DASHBOARD_COVERAGE_DEPARTMENTS) {
+      cards.set(`${department}:${shift}`, { department, shift, expected: 0, present: 0 });
+    }
+  }
+
+  for (const position of positions) {
+    const department = normalizePositionDepartment(positionDepartments[position]);
+    if (!isDashboardCoverageDepartment(department)) continue;
+
+    for (const shift of ['early', 'late'] as const) {
+      const stat = stats[getDashboardAttendanceStatKey(shift, position)] ?? createDashboardAttendanceStat();
+      const expected = expectedByPosition?.get(position)?.[shift] ?? stat.expected;
+      const card = cards.get(`${department}:${shift}`);
+      if (!card) continue;
+      card.expected += Number(expected || 0);
+      card.present += Number(stat.present || 0);
+    }
+  }
+
+  return Array.from(cards.values());
 };

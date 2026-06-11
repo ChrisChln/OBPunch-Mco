@@ -20,7 +20,7 @@ type TimecardControlsProps = {
   changeTimecardWeek: (value: number, source: string) => void | Promise<void>;
   timecardWeekInput: string;
   setTimecardWeekInput: (value: string) => void;
-  fetchTimecard: (payload: { reset: boolean; weekOffset?: number; search?: string; agency?: string[]; position?: string[]; lockUi?: boolean }) => void | Promise<any>;
+  fetchTimecard: (payload: { reset: boolean; weekOffset?: number; search?: string; agency?: string[]; department?: string[]; position?: string[]; lockUi?: boolean }) => void | Promise<any>;
   refreshTimecardWithAudit: (source: string) => void | Promise<void>;
   timecardRowsFilteredCount: number;
   exportTimecard: () => void | Promise<void>;
@@ -28,6 +28,7 @@ type TimecardControlsProps = {
   timecardMissingEmployeeOnly: boolean;
   setTimecardMissingEmployeeOnly: (value: boolean | ((prev: boolean) => boolean)) => void;
   setTimecardAgency: (value: string[]) => void;
+  setTimecardDepartment: (value: string[]) => void;
   setTimecardPosition: (value: string[]) => void;
   setTimecardSearch: (value: string) => void;
   setTimecardShift: (value: TimecardShiftFilter[]) => void;
@@ -36,6 +37,8 @@ type TimecardControlsProps = {
   timecardSearch: string;
   timecardAgency: string[];
   timecardAgencyOptions: string[];
+  timecardDepartment: string[];
+  timecardDepartmentOptions: Array<{ value: string; label: string }>;
   timecardPosition: string[];
   timecardPositionOptions: readonly string[];
   timecardShift: TimecardShiftFilter[];
@@ -195,6 +198,7 @@ export default function TimecardControls({
   timecardMissingEmployeeOnly,
   setTimecardMissingEmployeeOnly,
   setTimecardAgency,
+  setTimecardDepartment,
   setTimecardPosition,
   setTimecardSearch,
   setTimecardShift,
@@ -203,6 +207,8 @@ export default function TimecardControls({
   timecardSearch,
   timecardAgency,
   timecardAgencyOptions,
+  timecardDepartment,
+  timecardDepartmentOptions,
   timecardPosition,
   timecardPositionOptions,
   timecardShift,
@@ -321,6 +327,7 @@ export default function TimecardControls({
                 const next = !prev;
                 if (next) {
                   setTimecardAgency([]);
+                  setTimecardDepartment([]);
                   setTimecardPosition([]);
                 }
                 return next;
@@ -346,12 +353,13 @@ export default function TimecardControls({
             onClick={() => {
               setTimecardSearch('');
               setTimecardAgency([]);
+              setTimecardDepartment([]);
               setTimecardPosition([]);
               setTimecardShift([]);
               setTimecardInProgressOnly(false);
               setTimecardPresentDayFilter(null);
               setTimecardMissingEmployeeOnly(false);
-              void fetchTimecard({ reset: true, search: '', agency: [], position: [], lockUi: false });
+              void fetchTimecard({ reset: true, search: '', agency: [], department: [], position: [], lockUi: false });
             }}
             className={ghostButtonClass}
           >
@@ -360,7 +368,7 @@ export default function TimecardControls({
         </div>
       </div>
 
-      <div className="mt-5 grid gap-4 md:grid-cols-6">
+      <div className="mt-5 grid gap-4 md:grid-cols-7">
         <div className="md:col-span-2">
           <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Search</label>
           <input
@@ -379,6 +387,17 @@ export default function TimecardControls({
           options={timecardAgencyOptions.map((agency) => ({ value: agency, label: agency }))}
           onChange={setTimecardAgency}
             disabled={isLocked || timecardMissingEmployeeOnly}
+          isLight={isLight}
+          controlClass={controlInputClass}
+        />
+
+        <TimecardMultiSelect
+          label="Dept"
+          allLabel={t('全部部门', 'All dept')}
+          selected={timecardDepartment}
+          options={timecardDepartmentOptions}
+          onChange={setTimecardDepartment}
+          disabled={isLocked || timecardMissingEmployeeOnly}
           isLight={isLight}
           controlClass={controlInputClass}
         />

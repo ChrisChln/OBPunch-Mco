@@ -14,8 +14,20 @@ import {
   buildDashboardPositionOptions,
   resolveDashboardPositionName
 } from './shared/dashboardPositions';
-import { createDashboardAttendanceStat } from './shared/dashboardAttendanceStats';
-import { DEFAULT_POSITION_NAMES, buildActivePositionNames, normalizePositionName, type PositionRecord } from './shared/positions';
+import {
+  buildDashboardDepartmentCoverageCards,
+  createDashboardAttendanceStat,
+  getDashboardDepartmentLabel,
+  getDashboardDepartmentTonePosition
+} from './shared/dashboardAttendanceStats';
+import {
+  DEFAULT_POSITION_NAMES,
+  POSITION_DEPARTMENTS,
+  buildAttendanceTrackedPositionNames,
+  normalizePositionDepartment,
+  normalizePositionName,
+  type PositionRecord
+} from './shared/positions';
 
 type EmployeeRow = {
   staff_id: string;
@@ -271,7 +283,7 @@ const getShiftBucketFromPunchTime = (value: unknown): '' | 'early' | 'late' => {
 };
 const normalizePositionKey = (value: string, positionNames: readonly string[] = DEFAULT_POSITION_NAMES): string =>
   resolveDashboardPositionName(value, positionNames);
-const resolveDashboardStaffPosition = (
+export const resolveDashboardStaffPosition = (
   schedulePosition: unknown,
   employeePosition: unknown,
   positionNames: readonly string[]
@@ -279,10 +291,10 @@ const resolveDashboardStaffPosition = (
   const scheduleValue = String(schedulePosition ?? '').trim();
   const employeeValue = String(employeePosition ?? '').trim();
   return (
-    normalizePositionKey(scheduleValue, positionNames) ||
     normalizePositionKey(employeeValue, positionNames) ||
-    normalizePositionName(scheduleValue) ||
-    normalizePositionName(employeeValue)
+    normalizePositionKey(scheduleValue, positionNames) ||
+    normalizePositionName(employeeValue) ||
+    normalizePositionName(scheduleValue)
   );
 };
 const getPositionBadgeClass = (value: string) => {
@@ -302,22 +314,32 @@ const getShiftBadgeClass = (value: string) => {
   return 'badge-elevated-dark border-white/12 text-stone-100 bg-white/[0.05]';
 };
 const getAttendanceCardClass = (position: string) => {
-  const pos = normalizePositionKey(position);
+  const pos = normalizePositionKey(position) || normalizePositionName(position);
   if (pos === 'Pick') return 'border-sky-300/20 bg-gradient-to-br from-sky-400/[0.14] via-sky-300/[0.06] to-transparent';
   if (pos === 'Pack') return 'border-emerald-300/20 bg-gradient-to-br from-emerald-400/[0.14] via-emerald-300/[0.06] to-transparent';
   if (pos === 'Rebin') return 'border-amber-300/20 bg-gradient-to-br from-amber-400/[0.16] via-amber-300/[0.07] to-transparent';
   if (pos === 'Preship') return 'border-rose-300/20 bg-gradient-to-br from-rose-400/[0.14] via-rose-300/[0.06] to-transparent';
+  if (pos === 'Shipping') return 'border-indigo-300/20 bg-gradient-to-br from-indigo-400/[0.14] via-indigo-300/[0.06] to-transparent';
   if (pos === 'Transfer') return 'border-violet-300/20 bg-gradient-to-br from-violet-400/[0.14] via-violet-300/[0.06] to-transparent';
+  if (pos === 'Putaway') return 'border-orange-300/20 bg-gradient-to-br from-orange-400/[0.14] via-orange-300/[0.06] to-transparent';
+  if (pos === 'Receive') return 'border-lime-300/20 bg-gradient-to-br from-lime-400/[0.14] via-lime-300/[0.06] to-transparent';
+  if (pos === 'Load') return 'border-pink-300/20 bg-gradient-to-br from-pink-400/[0.14] via-pink-300/[0.06] to-transparent';
+  if (pos === 'Inventory') return 'border-fuchsia-300/20 bg-gradient-to-br from-fuchsia-400/[0.14] via-fuchsia-300/[0.06] to-transparent';
   if (pos === 'FLEX TEAM') return 'border-slate-300/20 bg-gradient-to-br from-slate-400/[0.14] via-slate-300/[0.06] to-transparent';
   return 'border-white/12 bg-white/[0.03]';
 };
 const getAttendanceCardValueClass = (position: string) => {
-  const pos = normalizePositionKey(position);
+  const pos = normalizePositionKey(position) || normalizePositionName(position);
   if (pos === 'Pick') return 'text-sky-100';
   if (pos === 'Pack') return 'text-emerald-100';
   if (pos === 'Rebin') return 'text-amber-100';
   if (pos === 'Preship') return 'text-rose-100';
+  if (pos === 'Shipping') return 'text-indigo-100';
   if (pos === 'Transfer') return 'text-violet-100';
+  if (pos === 'Putaway') return 'text-orange-100';
+  if (pos === 'Receive') return 'text-lime-100';
+  if (pos === 'Load') return 'text-pink-100';
+  if (pos === 'Inventory') return 'text-fuchsia-100';
   if (pos === 'FLEX TEAM') return 'text-slate-100';
   return 'text-stone-100';
 };
@@ -541,10 +563,12 @@ export default function DashboardPage() {
   const [rows, setRows] = useState<DashboardRow[]>([]);
   const [cardStatsByKey, setCardStatsByKey] = useState<Record<string, { expected: number; present: number; onClock: number; offWorked: number }>>({});
   const [dashboardPositionNames, setDashboardPositionNames] = useState<string[]>([...DEFAULT_POSITION_NAMES]);
+  const [dashboardPositionDepartments, setDashboardPositionDepartments] = useState<Record<string, string>>({});
   const [cardPositions, setCardPositions] = useState<string[]>([...DEFAULT_DASHBOARD_CARD_POSITIONS]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [departmentFilters, setDepartmentFilters] = useState<string[]>([]);
   const [positionFilters, setPositionFilters] = useState<string[]>([]);
   const [positionFilterOpen, setPositionFilterOpen] = useState(false);
   const [shiftFilter, setShiftFilter] = useState('');
@@ -619,14 +643,31 @@ export default function DashboardPage() {
       const operationalDayIndex = Number.isNaN(operationalDateObj.getTime()) ? 0 : (operationalDateObj.getDay() + 6) % 7;
       const templateDate = getTemplateDateByDayIndex(operationalDayIndex);
       let activePositionNames = dashboardPositionNames.length ? dashboardPositionNames : [...DEFAULT_POSITION_NAMES];
-      const positionsRes = await supabase
-        .from(POSITIONS_TABLE)
-        .select('id, name, is_active, display_order, created_at, updated_at')
-        .order('display_order', { ascending: true })
-        .order('name', { ascending: true })
-        .limit(500);
+      const loadPositions = (selectColumns: string) =>
+        supabase
+          .from(POSITIONS_TABLE)
+          .select(selectColumns)
+          .order('display_order', { ascending: true })
+          .order('name', { ascending: true })
+          .limit(500);
+      let positionsRes = await loadPositions('id, name, department, is_active, display_order, created_at, updated_at');
+      if (positionsRes.error && isMissingColumnError(positionsRes.error.message, 'department')) {
+        positionsRes = await loadPositions('id, name, is_active, display_order, created_at, updated_at');
+      }
+      const hiddenPositionNames = new Set<string>();
       if (!positionsRes.error) {
-        const active = buildActivePositionNames(((positionsRes.data as PositionRecord[] | null) ?? []));
+        const positionRecords = ((positionsRes.data as unknown as PositionRecord[] | null) ?? []);
+        const nextDepartments: Record<string, string> = {};
+        for (const position of positionRecords) {
+          const name = normalizePositionName(position.name);
+          if (name) nextDepartments[name] = normalizePositionDepartment(position.department);
+          if (normalizePositionDepartment(position.department) === 'hidden') {
+            const key = name.toLowerCase();
+            if (key) hiddenPositionNames.add(key);
+          }
+        }
+        setDashboardPositionDepartments(nextDepartments);
+        const active = buildAttendanceTrackedPositionNames(positionRecords);
         if (active.length > 0) {
           activePositionNames = active;
           setDashboardPositionNames((current) =>
@@ -636,6 +677,12 @@ export default function DashboardPage() {
       } else if (!isMissingTableError(positionsRes.error.message, POSITIONS_TABLE)) {
         console.warn('[dashboard] load positions failed:', positionsRes.error.message);
       }
+      const isHiddenPosition = (value: unknown) => {
+        const raw = normalizePositionName(value).toLowerCase();
+        if (!raw) return false;
+        const resolved = normalizePositionKey(raw, activePositionNames).toLowerCase();
+        return hiddenPositionNames.has(raw) || Boolean(resolved && hiddenPositionNames.has(resolved));
+      };
 
       let scheduleRowsRaw: any[] = [];
       const scheduleByDateRes = await supabase
@@ -808,17 +855,21 @@ export default function DashboardPage() {
           });
         }
       }
-      const activeDisplayStaffIds = displayStaffIds.filter((staffId) => activeEmployeeStaffIds.has(staffId));
-      const activeScheduledStaffIds = scheduledStaffIds.filter((staffId) => activeEmployeeStaffIds.has(staffId));
-      const activePunchedStaffIds = punchedStaffIds.filter((staffId) => activeEmployeeStaffIds.has(staffId));
-
       for (const staffId of displayStaffIds) {
         const employee = fetchedEmployeesByStaff.get(staffId);
         if (employee) employeeCacheRef.current.set(staffId, employee);
         else employeeCacheRef.current.delete(staffId);
       }
+      const activeDisplayStaffIds = displayStaffIds.filter((staffId) => activeEmployeeStaffIds.has(staffId));
+      const visibleActiveDisplayStaffIds = activeDisplayStaffIds.filter((staffId) => {
+        const employeePosition = employeeCacheRef.current.get(staffId)?.position;
+        const schedulePosition = scheduledByStaff.get(staffId)?.position;
+        return !isHiddenPosition(employeePosition) && !isHiddenPosition(schedulePosition);
+      });
+      const activeScheduledStaffIds = scheduledStaffIds.filter((staffId) => activeEmployeeStaffIds.has(staffId) && visibleActiveDisplayStaffIds.includes(staffId));
+      const activePunchedStaffIds = punchedStaffIds.filter((staffId) => activeEmployeeStaffIds.has(staffId) && visibleActiveDisplayStaffIds.includes(staffId));
       const attendanceTrackedStaffIds = new Set(
-        activeDisplayStaffIds.filter((staffId) => {
+        visibleActiveDisplayStaffIds.filter((staffId) => {
           const agency = String(employeeCacheRef.current.get(staffId)?.agency ?? '').trim();
           return !isScheduleOnlyAgency(agency);
         })
@@ -927,7 +978,7 @@ export default function DashboardPage() {
         }
       }
 
-      const nextRows: DashboardRow[] = activeDisplayStaffIds
+      const nextRows: DashboardRow[] = visibleActiveDisplayStaffIds
         .sort((a, b) => a.localeCompare(b, 'en-US'))
         .map((staffId) => {
           const employee = employeeCacheRef.current.get(staffId);
@@ -1284,9 +1335,23 @@ export default function DashboardPage() {
   }, []);
 
   const positionOptions = useMemo(
-    () => buildDashboardPositionOptions(dashboardPositionNames, rows.map((row) => normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim())),
-    [dashboardPositionNames, rows]
+    () =>
+      buildDashboardPositionOptions(dashboardPositionNames, rows.map((row) => normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim())).filter(
+        (position) => departmentFilters.length === 0 || departmentFilters.includes(normalizePositionDepartment(dashboardPositionDepartments[position]))
+      ),
+    [dashboardPositionDepartments, dashboardPositionNames, departmentFilters, rows]
   );
+  const departmentOptions = useMemo(
+    () =>
+      POSITION_DEPARTMENTS.filter((department) =>
+        rows.some((row) => {
+          const position = normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim();
+          return normalizePositionDepartment(dashboardPositionDepartments[position]) === department;
+        })
+      ),
+    [dashboardPositionDepartments, dashboardPositionNames, rows]
+  );
+  const selectedDepartmentSet = useMemo(() => new Set(departmentFilters), [departmentFilters]);
   const selectedPositionSet = useMemo(() => new Set(positionFilters), [positionFilters]);
   const positionFilterLabel = useMemo(() => {
     if (positionFilters.length === 0) return 'All positions';
@@ -1323,6 +1388,10 @@ export default function DashboardPage() {
     const q = search.trim().toLowerCase();
     return rows.filter((row) => {
       if (selectedPositionSet.size > 0 && !selectedPositionSet.has(normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim())) return false;
+      if (selectedDepartmentSet.size > 0) {
+        const position = normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || String(row.position ?? '').trim();
+        if (!selectedDepartmentSet.has(normalizePositionDepartment(dashboardPositionDepartments[position]))) return false;
+      }
       if (shiftFilter && String(row.display_shift ?? row.shift ?? '').trim().toLowerCase() !== shiftFilter) return false;
       if (absentOnly && row.attendance !== 'Absent') return false;
       if (onClockOnly) {
@@ -1335,11 +1404,11 @@ export default function DashboardPage() {
       if (haystack.includes(q)) return true;
       return staffIdSearchMatches(q, String(row.staff_id ?? ''));
     });
-  }, [rows, search, selectedPositionSet, shiftFilter, absentOnly, onClockOnly, offWorkOnly, dashboardPositionNames]);
+  }, [rows, search, selectedPositionSet, selectedDepartmentSet, dashboardPositionDepartments, shiftFilter, absentOnly, onClockOnly, offWorkOnly, dashboardPositionNames]);
 
   useEffect(() => {
     setRenderCount(120);
-  }, [search, positionFilters, shiftFilter, absentOnly, onClockOnly, offWorkOnly, rows.length]);
+  }, [search, departmentFilters, positionFilters, shiftFilter, absentOnly, onClockOnly, offWorkOnly, rows.length]);
 
   const renderedRows = useMemo(
     () => filteredRows.slice(0, Math.max(0, renderCount)),
@@ -1397,28 +1466,29 @@ export default function DashboardPage() {
     }
     return cards;
   }, [rows, cardPositions, cardStatsByKey, dashboardPositionNames]);
-  const attendanceCardGroups = useMemo(
+  const departmentAttendanceGroups = useMemo(
     () =>
-      (['early', 'late'] as const).map((shift) => ({
-        shift,
-        cards: attendanceCards.filter((card) => card.shift === shift)
-      })),
-    [attendanceCards]
+      POSITION_DEPARTMENTS.filter((department) => department !== 'hidden').map((department) => ({
+        department,
+        cards: (['early', 'late'] as const).flatMap((shift) =>
+          attendanceCards.filter(
+            (card) =>
+              card.shift === shift &&
+              normalizePositionDepartment(dashboardPositionDepartments[card.position]) === department
+          )
+        )
+      })).filter((group) => group.cards.length > 0),
+    [attendanceCards, dashboardPositionDepartments]
   );
-  const outboundShiftCards = useMemo(() => {
-    const shifts: Array<'early' | 'late'> = ['early', 'late'];
-    const summaryPositions = cardPositions.filter((position) => normalizePositionKey(position, dashboardPositionNames) !== 'Transfer');
-    return shifts.map((shift) => {
-      let expected = 0;
-      let present = 0;
-      for (const position of summaryPositions) {
-        const stat = cardStatsByKey[`${shift}:${position}`] ?? createDashboardAttendanceStat();
-        expected += Number(stat.expected || 0);
-        present += Number(stat.present || 0);
-      }
-      return { shift, expected, present };
-    });
-  }, [cardPositions, cardStatsByKey, dashboardPositionNames]);
+  const departmentCoverageCards = useMemo(
+    () =>
+      buildDashboardDepartmentCoverageCards({
+        positions: cardPositions,
+        positionDepartments: dashboardPositionDepartments,
+        stats: cardStatsByKey
+      }),
+    [cardPositions, cardStatsByKey, dashboardPositionDepartments]
+  );
   const presentRows = useMemo(
     () => rows.filter((row) => row.attendance !== 'Absent' && !isNewHirePlaceholderStaffId(String(row.staff_id ?? '').trim())),
     [rows]
@@ -2013,32 +2083,36 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-2">
-            {outboundShiftCards.map((card) => {
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {departmentCoverageCards.map((card) => {
               const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
               const isMorning = card.shift === 'early';
+              const isOverPlan = card.present > card.expected;
+              const tonePosition = getDashboardDepartmentTonePosition(card.department);
               return (
                 <div
-                  key={`outbound:${card.shift}`}
+                  key={`${card.department}:${card.shift}`}
                   className={[
                     'rounded-[24px] border px-5 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
-                    getAttendanceCardClass(isMorning ? 'Pick' : 'Transfer')
+                    getAttendanceCardClass(tonePosition)
                   ].join(' ')}
                 >
                   <div className="flex items-end justify-between gap-4">
                     <div>
                       <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">
-                        {isMorning ? 'Outbound Morning' : 'Outbound Night'}
+                        {getDashboardDepartmentLabel(card.department)} {isMorning ? 'Morning' : 'Night'}
                       </div>
                       <div className="mt-3 flex items-end gap-3">
-                        <span className="text-3xl font-semibold tracking-[-0.03em] text-stone-50">{card.present}/{card.expected}</span>
+                        <span className={['text-3xl font-semibold tracking-[-0.03em]', isOverPlan ? 'text-rose-300' : 'text-stone-50'].join(' ')}>{card.present}/{card.expected}</span>
                         <span
                           className={[
                             'pb-1 text-sm font-semibold',
-                            ratio < 80
+                            isOverPlan
+                              ? 'text-rose-300'
+                              : ratio < 80
                               ? 'text-rose-300'
                               : ratio >= 90
-                                ? getAttendanceCardValueClass(isMorning ? 'Pick' : 'Transfer')
+                                ? getAttendanceCardValueClass(tonePosition)
                                 : 'text-stone-300'
                           ].join(' ')}
                         >
@@ -2052,11 +2126,16 @@ export default function DashboardPage() {
             })}
           </div>
 
-          <div className="space-y-3">
-            {attendanceCardGroups.map((group) => (
-              <div key={`attendance:${group.shift}`} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="space-y-4">
+            {departmentAttendanceGroups.map((group) => (
+              <section key={`attendance:${group.department}`} className="space-y-2">
+                <div className="text-[12px] font-semibold uppercase tracking-[0.18em] text-stone-400">
+                  {getDashboardDepartmentLabel(group.department)}:
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 {group.cards.map((card) => {
                   const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
+                  const isOverPlan = card.present > card.expected;
                   return (
                     <div key={`${card.position}:${card.shift}`} className={['rounded-[24px] border px-4 py-4', getAttendanceCardClass(card.position)].join(' ')}>
                       <div className="flex items-start justify-between gap-4">
@@ -2065,32 +2144,23 @@ export default function DashboardPage() {
                             {card.shift === 'early' ? 'Morning' : 'Night'} {card.position}
                           </div>
                           <div className="mt-2 text-xs text-stone-400">
-                            {card.present}/{card.expected}
+                            <span className={['font-bold', isOverPlan ? 'text-rose-300' : ''].join(' ')}>
+                              {card.present}/{card.expected}
+                            </span>
                             <span
                               className={[
                                 'ml-2 font-semibold',
-                                ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'
+                                isOverPlan ? 'text-rose-300' : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'
                               ].join(' ')}
                             >
                               {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
                             </span>
                           </div>
-                          {card.offWorked > 0 && <div className="mt-2 text-xs font-medium text-stone-300">+{card.offWorked} off worked</div>}
                         </div>
                         <div
                           className={[
                             'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
-                            card.position === 'Pick'
-                              ? 'border-sky-300/20 bg-sky-400/[0.10]'
-                              : card.position === 'Pack'
-                                ? 'border-emerald-300/20 bg-emerald-400/[0.10]'
-                                : card.position === 'Rebin'
-                                  ? 'border-amber-300/20 bg-amber-400/[0.10]'
-                                  : card.position === 'Preship'
-                                    ? 'border-rose-300/20 bg-rose-400/[0.10]'
-                                    : card.position === 'Transfer'
-                                      ? 'border-violet-300/20 bg-violet-400/[0.10]'
-                                      : 'border-white/10 bg-white/[0.04]'
+                            getAttendanceCardClass(card.position)
                           ].join(' ')}
                         >
                           <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">On Clock</div>
@@ -2102,11 +2172,12 @@ export default function DashboardPage() {
                     </div>
                   );
                 })}
-              </div>
+                </div>
+              </section>
             ))}
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.5fr)_220px_220px_repeat(3,minmax(0,160px))]">
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.5fr)_160px_220px_200px_repeat(3,minmax(0,150px))]">
             <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4">
               <SearchIcon className="h-4 w-4 text-stone-400" />
               <input
@@ -2116,6 +2187,21 @@ export default function DashboardPage() {
                 className="h-full w-full bg-transparent text-sm text-stone-100 outline-none placeholder:text-stone-500"
               />
             </label>
+            <div className="relative">
+              <select
+                value={departmentFilters[0] ?? ''}
+                onChange={(e) => setDepartmentFilters(e.target.value ? [e.target.value] : [])}
+                className="h-12 w-full appearance-none rounded-[20px] border border-white/10 bg-white/[0.04] px-4 pr-10 text-sm text-stone-100 outline-none transition focus:border-white/20"
+              >
+                <option value="">All dept</option>
+                {departmentOptions.map((department) => (
+                  <option key={department} value={department}>
+                    {department === 'hidden' ? 'Hidden' : department}
+                  </option>
+                ))}
+              </select>
+              <ChevronDownIcon className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+            </div>
             <div ref={positionFilterRef} className="relative">
               <button
                 type="button"

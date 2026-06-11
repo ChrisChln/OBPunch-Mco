@@ -11,6 +11,7 @@ import {
 } from '../workHourStats';
 import { getTrackedStaffIds } from '../workHourGlobalStats';
 import { buildComparisonRows } from '../workHourComparisonData';
+import { POSITION_DEPARTMENTS, normalizePositionDepartment, type PositionDepartment } from '../../shared/positions';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -23,6 +24,7 @@ type WorkHourComparisonPageProps = {
   serverTime: Date;
   userEmail?: string;
   userDisplayName?: string;
+  positionDepartmentByPosition?: Record<string, PositionDepartment>;
   onOpenTimecardCalibration?: (staffId: string, workDate: string) => void | Promise<void>;
 };
 
@@ -513,6 +515,7 @@ export default function WorkHourComparisonPage({
   serverTime,
   userEmail = '',
   userDisplayName = '',
+  positionDepartmentByPosition = {},
   onOpenTimecardCalibration
 }: WorkHourComparisonPageProps) {
   const isLight = themeMode === 'light';
@@ -522,6 +525,7 @@ export default function WorkHourComparisonPage({
   const [selectedDate, setSelectedDate] = useState(() => getDefaultDateTMinus1(new Date(serverTime)));
   const [search, setSearch] = useState('');
   const [agencyFilter, setAgencyFilter] = useState('');
+  const [departmentFilter, setDepartmentFilter] = useState('');
   const [positionFilter, setPositionFilter] = useState('');
   const [shiftFilter, setShiftFilter] = useState<'' | 'early' | 'late'>('');
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('');
@@ -1203,8 +1207,21 @@ export default function WorkHourComparisonPage({
   }, [rows]);
 
   const positionOptions = useMemo(() => {
-    return sortPositionsByDisplayOrder(Array.from(new Set(rows.map((row) => row.position).filter((v) => String(v).trim()))));
-  }, [rows]);
+    return sortPositionsByDisplayOrder(
+      Array.from(new Set(rows.map((row) => row.position).filter((v) => String(v).trim()))).filter((position) => {
+        if (!departmentFilter) return true;
+        return normalizePositionDepartment(positionDepartmentByPosition[String(position).trim()]) === normalizePositionDepartment(departmentFilter);
+      })
+    );
+  }, [departmentFilter, positionDepartmentByPosition, rows]);
+
+  const departmentOptions = useMemo(
+    () =>
+      POSITION_DEPARTMENTS.filter((department) =>
+        rows.some((row) => normalizePositionDepartment(positionDepartmentByPosition[String(row.position ?? '').trim()]) === department)
+      ),
+    [positionDepartmentByPosition, rows]
+  );
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1212,6 +1229,7 @@ export default function WorkHourComparisonPage({
       .filter((row) => {
         if (Math.abs(row.systemHours) < EPSILON && Math.abs(row.iamsHours) < EPSILON) return false;
         if (agencyFilter && row.agency !== agencyFilter) return false;
+        if (departmentFilter && normalizePositionDepartment(positionDepartmentByPosition[String(row.position ?? '').trim()]) !== normalizePositionDepartment(departmentFilter)) return false;
         if (positionFilter && row.position !== positionFilter) return false;
         if (shiftFilter && row.shift !== shiftFilter) return false;
         if (hideTransfer && row.position === 'Transfer') return false;
@@ -1223,7 +1241,7 @@ export default function WorkHourComparisonPage({
         return haystack.includes(q);
       })
       .sort((a, b) => Math.abs(b.diffHours) - Math.abs(a.diffHours));
-  }, [rows, search, agencyFilter, positionFilter, shiftFilter, directionFilter, discrepancyOnly, hideTransfer]);
+  }, [rows, search, agencyFilter, departmentFilter, positionDepartmentByPosition, positionFilter, shiftFilter, directionFilter, discrepancyOnly, hideTransfer]);
 
   const summary = useMemo(() => {
     const totalSystem = filteredRows.reduce((sum, row) => sum + row.systemHours, 0);
@@ -1595,6 +1613,14 @@ export default function WorkHourComparisonPage({
               {agencyOptions.map((option) => (
                 <option key={option} value={option}>
                   {option}
+                </option>
+              ))}
+            </select>
+            <select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} className={[inputClass, 'w-[130px] shrink-0'].join(' ')}>
+              <option value="">{t('全部部门', 'All dept')}</option>
+              {departmentOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option === 'hidden' ? t('隐藏', 'Hidden') : option}
                 </option>
               ))}
             </select>
