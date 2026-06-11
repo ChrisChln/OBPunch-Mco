@@ -2954,28 +2954,59 @@ const fetchPunchBoardUph = async (
       return;
     }
 
-    const resolved = await resolvePunchStaffId(normalizedId);
-    if (resolved.error) {
-      setUiStatus({ tone: 'error', message: `Failed to verify employee: ${resolved.error}` });
-      setLastPunchSummary({ status: 'error', message: 'Failed to verify employee', at: new Date().toISOString() });
-      playError();
-      return;
-    }
+    setUiStatus({ tone: 'pending', message: 'Punching...' });
 
-    const latest = await fetchLastPunch(resolved.staffId);
-    if (latest.error) {
-      setUiStatus({ tone: 'error', message: `Failed to load last punch: ${latest.error}` });
-      setLastPunchSummary({ status: 'error', message: 'Failed to load last punch', at: new Date().toISOString() });
-      playError();
-      return;
-    }
+    await runLocked('punch', async () => {
+      const punchRes = await submitPunchToApi({ staffId: normalizedId, action: 'AUTO' });
+      if (!punchRes.ok) {
+        setUiStatus({ tone: 'error', message: `Punch failed: ${punchRes.error}` });
+        setLastPunchSummary({
+          status: 'error',
+          message: formatPunchFailureSummary(punchRes.error),
+          at: new Date().toISOString()
+        });
+        playError();
+        return;
+      }
 
-    const nextAction: PunchAction = latest.action === 'IN' ? 'OUT' : 'IN';
-    await submitPunch(nextAction, {
-      latestAction: latest.action,
-      skipLatestFetch: true,
-      clearInput: true,
-      retryOutWhenAlreadyIn: nextAction === 'IN'
+      const punchedStaffId = normalizeStaffId(punchRes.staffId || normalizedId);
+      const staffName = await resolveStaffDisplayName(punchedStaffId);
+      setUiStatus({
+        tone: 'success',
+        message: `${punchRes.action} · ${staffName || punchedStaffId}`
+      });
+      playSuccess(punchRes.action);
+      setLastPunchAction(punchRes.action);
+      setLastPunchActionError(null);
+      const punchedAt = new Date().toISOString();
+      setLastPunchSummary({
+        status: 'success',
+        staffId: punchedStaffId,
+        staffName: staffName || punchedStaffId,
+        action: punchRes.action,
+        at: punchedAt
+      });
+      setPunchSuccessAnimation({
+        key: Date.now(),
+        staffId: punchedStaffId,
+        staffName: staffName || punchedStaffId,
+        action: punchRes.action,
+        at: punchedAt
+      });
+      setStaffId('');
+      if (punchRes.action === 'OUT') {
+        const [outCountRes, outstanding] = await Promise.all([
+          fetchTodayOutCount(punchedStaffId),
+          fetchOutstandingDevicesByStaff(punchedStaffId)
+        ]);
+        if (!outCountRes.error && outCountRes.count >= 2 && !outstanding.error && outstanding.items.length > 0) {
+          const reminderName = staffName || (await resolveStaffDisplayName(punchedStaffId));
+          setDeviceReturnReminder({ staffId: punchedStaffId, staffName: reminderName, items: outstanding.items });
+        }
+      }
+      void fetchPunchBoard();
+      void fetchAbsentRoster();
+      void fetchArrivalMetrics();
     });
   };
 

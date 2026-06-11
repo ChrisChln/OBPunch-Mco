@@ -284,6 +284,47 @@ describe('submitPunchWithServiceRole', () => {
     ]);
   });
 
+  test('auto punches OUT when the latest punch is IN after resolving a legacy temporary ID', async () => {
+    const employeesByStaff = new Map([
+      ['TUS0000074', { staff_id: 'TUS0000074', agency: null, terminated_at: null }]
+    ]);
+    const { supabase, inserts } = createSupabaseMock({
+      latestPunches: { data: [{ action: 'IN', created_at: '2026-06-11T01:24:42Z' }], error: null },
+      tempAssignments: (sourceStaffId) => {
+        if (sourceStaffId === 'TEMP-USID-MQ2NNFMV-0001') {
+          return { data: [{ staff_id: 'TUS0000074', source_temp_staff_id: sourceStaffId }], error: null };
+        }
+        return { data: [], error: null };
+      }
+    });
+    const wrappedSupabase = {
+      from(table: string) {
+        const builder = supabase.from(table);
+        if (table !== 'ob_employees') return builder;
+        return {
+          select: () => ({
+            eq: (_column: string, value: string) => ({
+              limit: async () => ({ data: employeesByStaff.has(value) ? [employeesByStaff.get(value)] : [], error: null })
+            })
+          })
+        };
+      }
+    };
+
+    const result = await submitPunchWithServiceRole(wrappedSupabase, {
+      staffId: 'TEMP-USID-MQ2NNFMV-0001',
+      action: 'AUTO',
+      userAgent: 'test-agent'
+    });
+
+    expect(result).toEqual({ ok: true, status: 200, staffId: 'TUS0000074', action: 'OUT' });
+    expect(inserts[0]?.[0]).toMatchObject({
+      staff_id: 'TUS0000074',
+      action: 'OUT',
+      metadata: { input_staff_id: 'TEMP-USID-MQ2NNFMV-0001' }
+    });
+  });
+
   test('keeps the Supabase insert builder context when writing punches', async () => {
     const inserts: any[][] = [];
     const punchBuilder = {

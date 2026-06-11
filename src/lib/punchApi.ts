@@ -1,8 +1,9 @@
 export type PunchApiAction = 'IN' | 'OUT';
+export type PunchApiRequestAction = PunchApiAction | 'AUTO';
 
 type SubmitPunchArgs = {
   staffId: string;
-  action: PunchApiAction;
+  action: PunchApiRequestAction;
 };
 
 type SubmitPunchResult =

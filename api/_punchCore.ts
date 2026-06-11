@@ -3,10 +3,11 @@ import { isScheduleOnlyAgency } from '../src/shared/agencyRules.js';
 import { isEmployeeTerminated } from '../src/shared/employeeStatus.js';
 
 export type PunchAction = 'IN' | 'OUT';
+export type PunchRequestAction = PunchAction | 'AUTO';
 
 type PunchRequest = {
   staffId: string;
-  action: PunchAction;
+  action: PunchRequestAction;
   userAgent: string;
 };
 
@@ -187,7 +188,7 @@ export const submitPunchWithServiceRole = async (
   if (!isValidPunchStaffId(staffId)) {
     return { ok: false, status: 400, error: 'Invalid staff ID format.' };
   }
-  if (request.action !== 'IN' && request.action !== 'OUT') {
+  if (request.action !== 'IN' && request.action !== 'OUT' && request.action !== 'AUTO') {
     return { ok: false, status: 400, error: 'Invalid punch action.' };
   }
 
@@ -214,7 +215,8 @@ export const submitPunchWithServiceRole = async (
 
   const latestActionRaw = String((latestRes.data ?? [])[0]?.action ?? '').toUpperCase();
   const latestAction: PunchAction | null = latestActionRaw === 'IN' || latestActionRaw === 'OUT' ? latestActionRaw : null;
-  if (!isAllowedNextAction(request.action, latestAction)) {
+  const punchAction: PunchAction = request.action === 'AUTO' ? (latestAction === 'IN' ? 'OUT' : 'IN') : request.action;
+  if (!isAllowedNextAction(punchAction, latestAction)) {
     return { ok: false, status: 409, error: getNextActionError(latestAction) };
   }
 
@@ -225,7 +227,7 @@ export const submitPunchWithServiceRole = async (
 
   const rowWithMetadata = {
     staff_id: resolvedStaffId,
-    action: request.action,
+    action: punchAction,
     metadata: {
       device: 'web_browser',
       source: 'api_punch',
@@ -238,18 +240,18 @@ export const submitPunchWithServiceRole = async (
     const fallbackRes = await punchInsertBuilder.insert([
       {
         staff_id: resolvedStaffId,
-        action: request.action
+        action: punchAction
       }
     ]);
     if (fallbackRes.error) {
       return { ok: false, status: 500, error: getErrorMessage(fallbackRes.error, 'Punch failed.') };
     }
-    return { ok: true, status: 200, staffId: resolvedStaffId, action: request.action };
+    return { ok: true, status: 200, staffId: resolvedStaffId, action: punchAction };
   }
 
   if (insertRes.error) {
     return { ok: false, status: 500, error: getErrorMessage(insertRes.error, 'Punch failed.') };
   }
 
-  return { ok: true, status: 200, staffId: resolvedStaffId, action: request.action };
+  return { ok: true, status: 200, staffId: resolvedStaffId, action: punchAction };
 };
