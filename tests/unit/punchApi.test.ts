@@ -17,7 +17,7 @@ describe('submitPunchToApi', () => {
 
     const result = await submitPunchToApi({ staffId: 'US010454', action: 'IN' });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, staffId: 'US010454', action: 'IN' });
     expect(fetchMock).toHaveBeenCalledWith('/api/punch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -2837,24 +2837,25 @@ const fetchPunchBoardUph = async (
         return;
       }
       if (!registered.registered) {
-        setUiStatus({ tone: 'error', message: `Employee not registered: ${normalizedId}` });
-        playError();
-        return;
+        setUiStatus({ tone: 'pending', message: `Verifying... (${action})` });
       }
-      if (registered.scheduleOnly) {
+      if (registered.registered && registered.scheduleOnly) {
         setUiStatus({ tone: 'error', message: `Employee does not use punch: ${normalizedId}` });
         playError();
         return;
       }
-      if (registered.terminated) {
+      if (registered.registered && registered.terminated) {
         setUiStatus({ tone: 'error', message: `Employee is terminated and cannot punch: ${normalizedId}` });
         playError();
         return;
       }
 
-      const latest = options?.skipLatestFetch
-        ? { action: options?.latestAction ?? null, error: null as string | null }
-        : await fetchLastPunch(registered.staffId);
+      const canUseLocalPunchState = registered.registered;
+      const latest = canUseLocalPunchState
+        ? options?.skipLatestFetch
+          ? { action: options?.latestAction ?? null, error: null as string | null }
+          : await fetchLastPunch(registered.staffId)
+        : { action: null as PunchAction | null, error: null as string | null };
       if (latest.error) {
         setUiStatus({ tone: 'error', message: `Failed to load last punch: ${latest.error}` });
         setLastPunchSummary({ status: 'error', message: `Failed to load last punch`, at: new Date().toISOString() });
@@ -2865,7 +2866,7 @@ const fetchPunchBoardUph = async (
       const allowed =
         (action === 'IN' && (latest.action === null || latest.action === 'OUT')) ||
         (action === 'OUT' && latest.action === 'IN');
-      if (!allowed) {
+      if (canUseLocalPunchState && !allowed) {
         const msg =
           latest.action === null
             ? 'No previous record found. First action must be IN.'
@@ -2889,40 +2890,41 @@ const fetchPunchBoardUph = async (
         return;
       }
 
-      const staffName = await resolveStaffDisplayName(registered.staffId);
+      const punchedStaffId = normalizeStaffId(punchRes.staffId || registered.staffId || normalizedId);
+      const staffName = await resolveStaffDisplayName(punchedStaffId);
       setUiStatus({
         tone: 'success',
-        message: `${action === 'IN' ? 'IN' : 'OUT'} · ${staffName || registered.staffId}`
+        message: `${punchRes.action} · ${staffName || punchedStaffId}`
       });
-      playSuccess(action);
-      setLastPunchAction(action);
+      playSuccess(punchRes.action);
+      setLastPunchAction(punchRes.action);
       setLastPunchActionError(null);
       const punchedAt = new Date().toISOString();
       setLastPunchSummary({
         status: 'success',
-        staffId: registered.staffId,
-        staffName: staffName || registered.staffId,
-        action,
+        staffId: punchedStaffId,
+        staffName: staffName || punchedStaffId,
+        action: punchRes.action,
         at: punchedAt
       });
       setPunchSuccessAnimation({
         key: Date.now(),
-        staffId: registered.staffId,
-        staffName: staffName || registered.staffId,
-        action,
+        staffId: punchedStaffId,
+        staffName: staffName || punchedStaffId,
+        action: punchRes.action,
         at: punchedAt
       });
       if (options?.clearInput ?? true) {
         setStaffId('');
       }
-      if (action === 'OUT') {
+      if (punchRes.action === 'OUT') {
         const [outCountRes, outstanding] = await Promise.all([
-          fetchTodayOutCount(registered.staffId),
-          fetchOutstandingDevicesByStaff(registered.staffId)
+          fetchTodayOutCount(punchedStaffId),
+          fetchOutstandingDevicesByStaff(punchedStaffId)
         ]);
         if (!outCountRes.error && outCountRes.count >= 2 && !outstanding.error && outstanding.items.length > 0) {
-          const reminderName = staffName || (await resolveStaffDisplayName(registered.staffId));
-          setDeviceReturnReminder({ staffId: registered.staffId, staffName: reminderName, items: outstanding.items });
+          const reminderName = staffName || (await resolveStaffDisplayName(punchedStaffId));
+          setDeviceReturnReminder({ staffId: punchedStaffId, staffName: reminderName, items: outstanding.items });
         }
       }
       void fetchPunchBoard();
