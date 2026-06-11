@@ -127,6 +127,8 @@ const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | 
 const EMPLOYEE_REQUESTS_TABLE = (import.meta.env.VITE_EMPLOYEE_REQUESTS_TABLE as string | undefined) ?? 'ob_employee_requests';
 const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
+const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
+  (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
 const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
 const OBUP_REPORT_DETAILS_TABLE =
@@ -1021,18 +1023,62 @@ export default function App() {
     return { action, error: null as string | null };
   };
 
+  const isMissingTempAssignmentSchemaError = (message: string) => {
+    const text = String(message ?? '').toLowerCase();
+    return (
+      (text.includes(TEMP_ACCOUNT_ASSIGNMENT_TABLE.toLowerCase()) || text.includes('source_temp_staff_id')) &&
+      (text.includes('schema cache') || text.includes('does not exist'))
+    );
+  };
+
+  const resolvePunchStaffId = async (staff: string) => {
+    if (!supabase) {
+      return { staffId: staff, error: 'Missing Supabase configuration.' };
+    }
+
+    let current = normalizeStaffId(String(staff ?? '').trim());
+    const visited = new Set<string>();
+    for (let depth = 0; depth < 6; depth += 1) {
+      if (!current || visited.has(current)) break;
+      visited.add(current);
+
+      const res = await supabase
+        .from(TEMP_ACCOUNT_ASSIGNMENT_TABLE)
+        .select('staff_id, source_temp_staff_id, created_at')
+        .eq('source_temp_staff_id', current)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (res.error) {
+        if (isMissingTempAssignmentSchemaError(res.error.message)) break;
+        return { staffId: current, error: res.error.message };
+      }
+
+      const next = normalizeStaffId(String(((res.data as any[] | null) ?? [])[0]?.staff_id ?? '').trim());
+      if (!next || next === current) break;
+      current = next;
+    }
+
+    return { staffId: current || staff, error: null as string | null };
+  };
+
   const checkEmployeeRegistered = async (staff: string) => {
     if (!supabase) {
-      return { registered: false, scheduleOnly: false, terminated: false, error: 'Missing Supabase configuration.' };
+      return { staffId: staff, registered: false, scheduleOnly: false, terminated: false, error: 'Missing Supabase configuration.' };
     }
 
-    const mapRes = await fetchEmployeeMap([staff]);
+    const resolved = await resolvePunchStaffId(staff);
+    if (resolved.error) {
+      return { staffId: resolved.staffId, registered: false, scheduleOnly: false, terminated: false, error: resolved.error };
+    }
+
+    const mapRes = await fetchEmployeeMap([resolved.staffId]);
     if (mapRes.error) {
-      return { registered: false, scheduleOnly: false, terminated: false, error: mapRes.error };
+      return { staffId: resolved.staffId, registered: false, scheduleOnly: false, terminated: false, error: mapRes.error };
     }
 
-    const employee = mapRes.map[staff];
+    const employee = mapRes.map[resolved.staffId];
     return {
+      staffId: resolved.staffId,
       registered: Boolean(employee),
       scheduleOnly: isScheduleOnlyAgency(String(employee?.agency ?? '').trim()),
       terminated: isEmployeeTerminated({ terminatedAt: employee?.terminatedAt }),
@@ -1633,7 +1679,10 @@ export default function App() {
     const timer = window.setTimeout(() => {
       void (async () => {
         setLastPunchActionLoading(true);
-        const { action, error } = await fetchLastPunch(staff);
+        const resolved = await resolvePunchStaffId(staff);
+        const { action, error } = resolved.error
+          ? { action: null as PunchAction | null, error: resolved.error }
+          : await fetchLastPunch(resolved.staffId);
         if (!active) return;
         setLastPunchAction(action);
         setLastPunchActionError(error);
@@ -2805,7 +2854,7 @@ const fetchPunchBoardUph = async (
 
       const latest = options?.skipLatestFetch
         ? { action: options?.latestAction ?? null, error: null as string | null }
-        : await fetchLastPunch(normalizedId);
+        : await fetchLastPunch(registered.staffId);
       if (latest.error) {
         setUiStatus({ tone: 'error', message: `Failed to load last punch: ${latest.error}` });
         setLastPunchSummary({ status: 'error', message: `Failed to load last punch`, at: new Date().toISOString() });
@@ -2840,10 +2889,10 @@ const fetchPunchBoardUph = async (
         return;
       }
 
-      const staffName = await resolveStaffDisplayName(normalizedId);
+      const staffName = await resolveStaffDisplayName(registered.staffId);
       setUiStatus({
         tone: 'success',
-        message: `${action === 'IN' ? 'IN' : 'OUT'} · ${staffName || normalizedId}`
+        message: `${action === 'IN' ? 'IN' : 'OUT'} · ${staffName || registered.staffId}`
       });
       playSuccess(action);
       setLastPunchAction(action);
@@ -2851,15 +2900,15 @@ const fetchPunchBoardUph = async (
       const punchedAt = new Date().toISOString();
       setLastPunchSummary({
         status: 'success',
-        staffId: normalizedId,
-        staffName: staffName || normalizedId,
+        staffId: registered.staffId,
+        staffName: staffName || registered.staffId,
         action,
         at: punchedAt
       });
       setPunchSuccessAnimation({
         key: Date.now(),
-        staffId: normalizedId,
-        staffName: staffName || normalizedId,
+        staffId: registered.staffId,
+        staffName: staffName || registered.staffId,
         action,
         at: punchedAt
       });
@@ -2868,12 +2917,12 @@ const fetchPunchBoardUph = async (
       }
       if (action === 'OUT') {
         const [outCountRes, outstanding] = await Promise.all([
-          fetchTodayOutCount(normalizedId),
-          fetchOutstandingDevicesByStaff(normalizedId)
+          fetchTodayOutCount(registered.staffId),
+          fetchOutstandingDevicesByStaff(registered.staffId)
         ]);
         if (!outCountRes.error && outCountRes.count >= 2 && !outstanding.error && outstanding.items.length > 0) {
-          const reminderName = staffName || (await resolveStaffDisplayName(normalizedId));
-          setDeviceReturnReminder({ staffId: normalizedId, staffName: reminderName, items: outstanding.items });
+          const reminderName = staffName || (await resolveStaffDisplayName(registered.staffId));
+          setDeviceReturnReminder({ staffId: registered.staffId, staffName: reminderName, items: outstanding.items });
         }
       }
       void fetchPunchBoard();
@@ -2899,7 +2948,15 @@ const fetchPunchBoardUph = async (
       return;
     }
 
-    const latest = await fetchLastPunch(normalizedId);
+    const resolved = await resolvePunchStaffId(normalizedId);
+    if (resolved.error) {
+      setUiStatus({ tone: 'error', message: `Failed to verify employee: ${resolved.error}` });
+      setLastPunchSummary({ status: 'error', message: 'Failed to verify employee', at: new Date().toISOString() });
+      playError();
+      return;
+    }
+
+    const latest = await fetchLastPunch(resolved.staffId);
     if (latest.error) {
       setUiStatus({ tone: 'error', message: `Failed to load last punch: ${latest.error}` });
       setLastPunchSummary({ status: 'error', message: 'Failed to load last punch', at: new Date().toISOString() });
