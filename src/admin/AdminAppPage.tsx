@@ -2623,7 +2623,18 @@ export default function AdminAppPage() {
       if (!row) return;
       const value = (row.value ?? {}) as Record<string, unknown>;
       const next = normalizePositionToneMap(value.tones ?? {});
-      setSchedulePositionToneByPosition(next);
+      setSchedulePositionToneByPosition((current) => {
+        const positionToneKeys = new Set(
+          positions
+            .map((position) => normalizePositionToneKey(position.name))
+            .filter(Boolean)
+        );
+        const merged = { ...current, ...next };
+        for (const key of positionToneKeys) {
+          merged[key] = current[key] ?? merged[key] ?? getDefaultPositionToneKey(key);
+        }
+        return merged;
+      });
     } catch {
       // ignore legacy tone sync failures
     }
@@ -4553,6 +4564,100 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         payload: { device_sn: sn, active: nextActive }
       });
       setStatus({ tone: 'success', message: nextActive ? t(`设备已启用：${sn}`, `Device enabled: ${sn}`) : t(`设备已停用：${sn}`, `Device disabled: ${sn}`) });
+      await refreshDevicePanel({ lockUi: false });
+    });
+  };
+
+  const updateDevice = async (
+    original: DeviceRow,
+    draft: {
+      device_name: string;
+      device_sn: string;
+      device_type: string;
+      position: string;
+      note: string;
+      active: boolean;
+    }
+  ) => {
+    if (!devicesCanOperate) {
+      throw new Error(t('设备模块当前为只读。', 'Devices is read-only.'));
+    }
+    if (!supabase) {
+      throw new Error(t('缺少 Supabase 配置。', 'Missing Supabase configuration.'));
+    }
+    const oldSn = normalizeDeviceSn(String(original.device_sn ?? original.sn ?? ''));
+    const nextSn = normalizeDeviceSn(String(draft.device_sn ?? ''));
+    const nextType = normalizeDeviceType(String(draft.device_type ?? ''));
+    if (!oldSn) {
+      throw new Error(t('原设备缺少 SN。', 'Original device is missing SN.'));
+    }
+    if (!nextSn) {
+      throw new Error(t('SN 必填。', 'SN is required.'));
+    }
+    if (!nextType) {
+      throw new Error(t('类型必填。', 'Type is required.'));
+    }
+
+    await runLocked('device_edit', async () => {
+      if (oldSn !== nextSn) {
+        const existingRes = await supabase
+          .from(DEVICE_TABLE)
+          .select('device_sn')
+          .eq('device_sn', nextSn)
+          .maybeSingle();
+        if (existingRes.error) {
+          throw new Error(t(`检查 SN 失败：${existingRes.error.message}`, `SN check failed: ${existingRes.error.message}`));
+        }
+        if (existingRes.data) {
+          throw new Error(t(`SN 已存在：${nextSn}`, `SN already exists: ${nextSn}`));
+        }
+      }
+
+      const nextDevice: Pick<DeviceRow, 'device_name' | 'device_sn' | 'device_type' | 'position' | 'note' | 'active' | 'updated_at'> = {
+        device_name: draft.device_name.trim() || null,
+        device_sn: nextSn,
+        device_type: nextType,
+        position: draft.position.trim() || null,
+        note: draft.note.trim() || null,
+        active: draft.active,
+        updated_at: new Date(serverTime).toISOString()
+      };
+      const updateRes = await supabase
+        .from(DEVICE_TABLE)
+        .update(nextDevice)
+        .eq('device_sn', oldSn);
+      if (updateRes.error) {
+        throw new Error(t(`保存设备失败：${updateRes.error.message}`, `Save device failed: ${updateRes.error.message}`));
+      }
+
+      if (oldSn !== nextSn) {
+        const loanUpdateRes = await supabase
+          .from(DEVICE_LOANS_TABLE)
+          .update({ device_sn: nextSn })
+          .eq('device_sn', oldSn);
+        if (loanUpdateRes.error) {
+          throw new Error(t(`同步借还记录失败：${loanUpdateRes.error.message}`, `Loan sync failed: ${loanUpdateRes.error.message}`));
+        }
+      }
+
+      await writeAudit({
+        action: 'device_update',
+        target: DEVICE_TABLE,
+        payload: {
+          device_sn: nextSn,
+          previous_device_sn: oldSn,
+          before: {
+            device_name: original.device_name ?? original.name ?? null,
+            device_sn: oldSn,
+            device_type: original.device_type ?? original.type ?? null,
+            position: original.position ?? null,
+            note: original.note ?? null,
+            active: original.active !== false
+          },
+          after: nextDevice
+        }
+      });
+      setStatus({ tone: 'success', message: t(`设备已更新：${nextSn}`, `Device updated: ${nextSn}`) });
       await refreshDevicePanel({ lockUi: false });
     });
   };
@@ -15998,6 +16103,7 @@ ${rowsToHtml(late)}
                 deviceLabelPrintingSn={deviceLabelPrintingSn}
                 printDeviceLabel={printDeviceLabel}
                 toggleDeviceActive={toggleDeviceActive}
+                updateDevice={updateDevice}
               />
             )}
             {page === 'forecast' && (

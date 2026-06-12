@@ -215,6 +215,23 @@ describe('api/corrections', () => {
     ]);
   });
 
+  test('allows correction inserts on the termination date', async () => {
+    process.env.ADMIN_TOKEN = 'secret';
+    process.env.SUPABASE_URL = 'https://example.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role';
+    mockSupabaseModule({ terminatedAt: '2026-04-20T08:00:00Z' });
+    const { default: handler } = await import('../../api/corrections');
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer secret' },
+      body: { staff_id: 'US010454', action: 'OUT', effective_at: '2026-04-20T18:00:00Z' }
+    };
+    const res = createRes();
+    await handler(req, res);
+    expect(res.code).toBe(200);
+    expect(res.body).toEqual({ status: 'ok' });
+  });
+
   test('returns 409 for terminated employee', async () => {
     process.env.ADMIN_TOKEN = 'secret';
     process.env.SUPABASE_URL = 'https://example.supabase.co';

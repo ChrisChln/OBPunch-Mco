@@ -1,0 +1,74 @@
+- generic [ref=e3]:
+  - generic:
+    - generic: OUT · TUS0000074
+  - generic:
+    - generic:
+      - generic:
+        - img
+      - generic:
+        - generic:
+          - img
+          - text: Punch saved
+        - generic: TUS0000074
+      - generic: OUT
+  - generic [ref=e23]:
+    - generic [ref=e25]:
+      - generic [ref=e26]:
+        - generic [ref=e27]:
+          - img "OBP logo" [ref=e28]
+          - generic [ref=e29]: OBPUNCH
+        - button "Open menu" [ref=e31] [cursor=pointer]:
+          - generic "User avatar" [ref=e32]: L
+          - img [ref=e33]
+      - generic [ref=e35]:
+        - generic [ref=e36]:
+          - generic [ref=e37]:
+            - generic [ref=e38]:
+              - generic [ref=e39]:
+                - img [ref=e40]
+                - text: Live
+              - generic [ref=e43]: 21:36:39
+            - generic [ref=e44]: 2026-06-10
+          - generic [ref=e46]:
+            - generic [ref=e47]:
+              - generic [ref=e48]: Last Punch
+              - generic [ref=e49]:
+                - generic [ref=e50]: TUS0000074
+                - generic [ref=e51]: 21:36
+            - generic [ref=e52]: OUT
+          - textbox "See you on the next journey." [active] [ref=e97]
+        - complementary [ref=e57]:
+          - generic [ref=e58]:
+            - generic [ref=e59]:
+              - generic [ref=e60]:
+                - generic [ref=e61]: Device Log
+                - generic [ref=e62]: Latest action
+              - generic [ref=e63]: Idle
+            - generic [ref=e64]: No device action yet
+          - generic [ref=e65]:
+            - generic [ref=e66]:
+              - img [ref=e68]
+              - generic [ref=e71]:
+                - generic [ref=e72]: Device
+                - generic [ref=e73]: Borrow Device
+            - generic [ref=e74]:
+              - generic [ref=e75]:
+                - generic [ref=e76]: USID
+                - textbox "USID" [ref=e77]
+              - generic [ref=e78]:
+                - generic [ref=e79]: Device SN
+                - textbox "Device SN" [ref=e80]
+              - button "Borrow" [ref=e81] [cursor=pointer]
+          - generic [ref=e83]:
+            - generic [ref=e84]:
+              - img [ref=e86]
+              - generic [ref=e89]:
+                - generic [ref=e90]: Device
+                - generic [ref=e91]: Return Device
+            - generic [ref=e92]:
+              - generic [ref=e93]:
+                - generic [ref=e94]: Device SN
+                - textbox "Device SN" [ref=e95]:
+                  - /placeholder: Scan Device SN
+              - button "Return" [ref=e96] [cursor=pointer]
+    - contentinfo

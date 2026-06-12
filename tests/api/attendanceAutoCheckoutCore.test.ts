@@ -104,6 +104,33 @@ describe('attendance auto checkout', () => {
     ]);
   });
 
+  test('inserts OUT when the same staff has an earlier complete pair and a later open IN', async () => {
+    const { supabase, inserts } = createSupabaseMock({
+      punches: [
+        { staff_id: 'US003', action: 'IN', created_at: '2026-06-11T12:37:00.000Z' },
+        { staff_id: 'US003', action: 'OUT', created_at: '2026-06-11T17:05:00.000Z' },
+        { staff_id: 'US003', action: 'IN', created_at: '2026-06-11T21:04:00.000Z' }
+      ],
+      employees: [{ staff_id: 'US003', agency: 'Central' }]
+    });
+
+    const result = await runAttendanceAutoCheckout(supabase, {
+      now: new Date('2026-06-12T09:05:00.000Z'),
+      timezone: 'America/New_York',
+      cutoffHour: 5
+    });
+
+    expect(result.inserted_staff_ids).toEqual(['US003']);
+    expect(result.inserted).toBe(1);
+    expect(inserts[0]).toEqual([
+      expect.objectContaining({
+        staff_id: 'US003',
+        action: 'OUT',
+        created_at: '2026-06-12T09:00:00.000Z'
+      })
+    ]);
+  });
+
   test('skips schedule-only and terminated employees', async () => {
     const { supabase, inserts } = createSupabaseMock({
       punches: [

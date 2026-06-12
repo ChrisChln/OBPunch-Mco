@@ -29,6 +29,42 @@ body {
   font-family: "Poppins", "Manrope", sans-serif;
 }
 
+.blur-reveal-line {
+  display: block;
+  overflow: hidden;
+}
+
+.blur-reveal-word {
+  display: inline-block;
+  margin-right: 0.18em;
+  opacity: 0;
+  filter: blur(10px);
+  transform: translateY(28px);
+  animation: blurRevealFromBottom 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: opacity, filter, transform;
+}
+
+.blur-reveal-word:last-child {
+  margin-right: 0;
+}
+
+@keyframes blurRevealFromBottom {
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blur-reveal-word {
+    animation: none;
+    opacity: 1;
+    filter: none;
+    transform: none;
+  }
+}
+
 body[data-theme='light'] {
   background:
     radial-gradient(900px 500px at 8% 10%, rgba(168, 180, 189, 0.16), transparent 60%),

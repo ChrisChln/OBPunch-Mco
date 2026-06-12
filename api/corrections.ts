@@ -67,7 +67,7 @@ export default async function handler(req: any, res: any) {
     }
 
     const employee = ((employeeRes.data as EmployeeStatusRow[] | null) ?? [])[0] ?? null;
-    if (isEmployeeTerminated({ terminatedAt: employee?.terminated_at })) {
+    if (isEmployeeTerminated({ terminatedAt: employee?.terminated_at }, { referenceAt: effectiveAt ?? new Date(), allowTerminationDate: true })) {
       res.status(409).json({ error: 'Terminated employee cannot punch.' });
       return;
     }
@@ -94,7 +94,6 @@ export default async function handler(req: any, res: any) {
     res.status(500).json({ error: err?.message ?? String(err) });
   }
 }
-
 
 
 

@@ -204,7 +204,7 @@ export const submitPunchWithServiceRole = async (
   if (isScheduleOnlyAgency(String(employee.agency ?? ''))) {
     return { ok: false, status: 409, error: `Employee does not use punch: ${resolvedStaffId}` };
   }
-  if (isEmployeeTerminated({ terminatedAt: employee.terminated_at })) {
+  if (isEmployeeTerminated({ terminatedAt: employee.terminated_at }, { referenceAt: new Date(), allowTerminationDate: true })) {
     return { ok: false, status: 409, error: `Employee is terminated and cannot punch: ${resolvedStaffId}` };
   }
 

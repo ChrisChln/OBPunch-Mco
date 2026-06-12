@@ -230,6 +230,17 @@ export default function TimecardControls({
   const baseWeekStart = startOfWeekMonday(serverTime);
   const visibleWeekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
   const visibleWeekEnd = addDays(visibleWeekStart, 6);
+  const handleWeekInputChange = (raw: string) => {
+    setTimecardWeekInput(raw);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return;
+    const dt = new Date(`${raw}T00:00:00`);
+    if (Number.isNaN(dt.getTime())) return;
+    const targetWeekStart = startOfWeekMonday(dt);
+    const nextOffset = Math.round((targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
+    void Promise.resolve(changeTimecardWeek(nextOffset, 'date_input')).then(() => {
+      setTimecardWeekInput(raw);
+    });
+  };
 
   return (
     <>
@@ -252,15 +263,7 @@ export default function TimecardControls({
               size="compact"
               disabled={isLocked}
               value={timecardWeekInput}
-              onChange={(raw) => {
-                setTimecardWeekInput(raw);
-                if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return;
-                const dt = new Date(`${raw}T00:00:00`);
-                if (Number.isNaN(dt.getTime())) return;
-                const targetWeekStart = startOfWeekMonday(dt);
-                const nextOffset = Math.round((targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
-                void changeTimecardWeek(nextOffset, 'date_input');
-              }}
+              onChange={handleWeekInputChange}
               title={t('选择任意日期', 'Pick any date')}
             />
           </div>

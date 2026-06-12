@@ -53,6 +53,35 @@ type PunchSuccessAnimation = LastPunchSummary & {
   key: number;
 };
 
+type BlurRevealTextProps = {
+  label: string;
+  lines: string[][];
+  className: string;
+  delayStepMs?: number;
+};
+
+function BlurRevealText({ label, lines, className, delayStepMs = 240 }: BlurRevealTextProps) {
+  let wordIndex = 0;
+
+  return (
+    <span className={className} aria-label={label}>
+      {lines.map((line, lineIndex) => (
+        <span key={`${label}-${lineIndex}`} className="blur-reveal-line" aria-hidden="true">
+          {line.map((word) => {
+            const delay = wordIndex * delayStepMs;
+            wordIndex += 1;
+            return (
+              <span key={`${label}-${word}-${delay}`} className="blur-reveal-word" style={{ animationDelay: `${delay}ms` }}>
+                {word}
+              </span>
+            );
+          })}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 type DailyRosterItem = {
   staff_id: string;
   name: string;
@@ -814,6 +843,17 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [punchSuccessAnimation]);
 
+  useEffect(() => {
+    if (lastPunchSummary?.status !== 'error') return;
+    const errorMessage = lastPunchSummary.message;
+    const timer = window.setTimeout(() => {
+      setLastPunchSummary((current) =>
+        current?.status === 'error' && current.message === errorMessage ? null : current
+      );
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [lastPunchSummary]);
+
   const rosterStaffIds = useMemo(
     () => Array.from(new Set(dailyRoster.map((row) => normalizeStaffId(row.staff_id)).filter(Boolean))),
     [dailyRoster]
@@ -858,6 +898,11 @@ export default function App() {
       busyRef.current = false;
       setBusy(null);
     }
+  };
+
+  const clearPunchInputAfterError = () => {
+    setStaffId('');
+    window.setTimeout(() => inputRef.current?.focus(), 0);
   };
 
   const loadPunchAvatarByEmail = async (emailRaw: string) => {
@@ -1081,7 +1126,7 @@ export default function App() {
       staffId: resolved.staffId,
       registered: Boolean(employee),
       scheduleOnly: isScheduleOnlyAgency(String(employee?.agency ?? '').trim()),
-      terminated: isEmployeeTerminated({ terminatedAt: employee?.terminatedAt }),
+      terminated: isEmployeeTerminated({ terminatedAt: employee?.terminatedAt }, { referenceAt: new Date(), allowTerminationDate: true }),
       error: null as string | null
     };
   };
@@ -2819,11 +2864,13 @@ const fetchPunchBoardUph = async (
     if (!isValidId) {
       setUiStatus({ tone: 'error', message: 'Invalid staff ID format.' });
       playError();
+      clearPunchInputAfterError();
       return;
     }
     if (!supabase) {
       setUiStatus({ tone: 'error', message: 'Missing Supabase configuration. Please check environment variables.' });
       playError();
+      clearPunchInputAfterError();
       return;
     }
 
@@ -2834,6 +2881,7 @@ const fetchPunchBoardUph = async (
       if (registered.error) {
         setUiStatus({ tone: 'error', message: `Failed to verify employee: ${registered.error}` });
         playError();
+        clearPunchInputAfterError();
         return;
       }
       if (!registered.registered) {
@@ -2842,11 +2890,13 @@ const fetchPunchBoardUph = async (
       if (registered.registered && registered.scheduleOnly) {
         setUiStatus({ tone: 'error', message: `Employee does not use punch: ${normalizedId}` });
         playError();
+        clearPunchInputAfterError();
         return;
       }
       if (registered.registered && registered.terminated) {
         setUiStatus({ tone: 'error', message: `Employee is terminated and cannot punch: ${normalizedId}` });
         playError();
+        clearPunchInputAfterError();
         return;
       }
 
@@ -2860,6 +2910,7 @@ const fetchPunchBoardUph = async (
         setUiStatus({ tone: 'error', message: `Failed to load last punch: ${latest.error}` });
         setLastPunchSummary({ status: 'error', message: `Failed to load last punch`, at: new Date().toISOString() });
         playError();
+        clearPunchInputAfterError();
         return;
       }
 
@@ -2876,6 +2927,7 @@ const fetchPunchBoardUph = async (
         setUiStatus({ tone: 'error', message: msg });
         setLastPunchSummary({ status: 'error', message: msg, at: new Date().toISOString() });
         playError();
+        clearPunchInputAfterError();
         setLastPunchAction(latest.action);
         setLastPunchActionError(null);
         return;
@@ -2891,6 +2943,7 @@ const fetchPunchBoardUph = async (
         setUiStatus({ tone: 'error', message: `Punch failed: ${punchRes.error}` });
         setLastPunchSummary({ status: 'error', message: formatPunchFailureSummary(punchRes.error), at: new Date().toISOString() });
         playError();
+        clearPunchInputAfterError();
         return;
       }
 
@@ -2945,12 +2998,14 @@ const fetchPunchBoardUph = async (
       setUiStatus({ tone: 'error', message: 'Invalid staff ID format.' });
       setLastPunchSummary({ status: 'error', message: 'Invalid staff ID', at: new Date().toISOString() });
       playError();
+      clearPunchInputAfterError();
       return;
     }
     if (!supabase) {
       setUiStatus({ tone: 'error', message: 'Missing Supabase configuration. Please check environment variables.' });
       setLastPunchSummary({ status: 'error', message: 'Missing system configuration', at: new Date().toISOString() });
       playError();
+      clearPunchInputAfterError();
       return;
     }
 
@@ -2966,6 +3021,7 @@ const fetchPunchBoardUph = async (
           at: new Date().toISOString()
         });
         playError();
+        clearPunchInputAfterError();
         return;
       }
 
@@ -3245,11 +3301,11 @@ const fetchPunchBoardUph = async (
               <div className="flex min-h-[240px] flex-col justify-between rounded-[28px] border border-white/8 bg-white/[0.03] p-6 md:p-8">
                 <div>
                   <div className="text-[11px] uppercase tracking-[0.32em] text-slate-300/80">OBP Security</div>
-                  <h1 className="mt-6 max-w-[10ch] font-display text-5xl leading-[0.92] tracking-[0.03em] text-white md:text-6xl xl:text-7xl">
-                    Punch Screen
-                    <br />
-                    Unlock
-                  </h1>
+                  <BlurRevealText
+                    label="Punch Screen Unlock"
+                    lines={[['Punch', 'Screen'], ['Unlock']]}
+                    className="mt-6 block max-w-[10ch] font-display text-5xl leading-[0.92] tracking-[0.03em] text-white md:text-6xl xl:text-7xl"
+                  />
                 </div>
                 <div />
               </div>
@@ -3257,7 +3313,11 @@ const fetchPunchBoardUph = async (
               <div className="flex items-center">
                 <div className="w-full rounded-[30px] border border-white/10 bg-[linear-gradient(145deg,rgba(18,23,19,0.78),rgba(6,9,10,0.88))] p-6 shadow-[0_28px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl md:p-8">
                   <div className="text-[11px] uppercase tracking-[0.3em] text-slate-400">Sign In</div>
-                  <div className="mt-4 font-display text-4xl tracking-[0.03em] text-white md:text-5xl">Administrator Unlock</div>
+                  <BlurRevealText
+                    label="Administrator Unlock"
+                    lines={[['Administrator'], ['Unlock']]}
+                    className="mt-4 block font-display text-4xl leading-[1.05] tracking-[0.03em] text-white md:text-[2.75rem] xl:text-5xl"
+                  />
 
                   <div className="mt-8 grid gap-5">
                     <label className="grid gap-2">

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import { submitPunchWithServiceRole } from '../../api/_punchCore';
 
@@ -240,6 +240,26 @@ describe('submitPunchWithServiceRole', () => {
     });
 
     expect(result).toEqual({ ok: false, status: 409, error: 'Employee is terminated and cannot punch: US010454' });
+  });
+
+  test('allows employees to punch on their termination date', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-20T18:00:00Z'));
+    try {
+      const { supabase } = createSupabaseMock({
+        employees: { data: [{ staff_id: 'US010454', agency: null, terminated_at: '2026-04-20T08:00:00Z' }], error: null }
+      });
+
+      const result = await submitPunchWithServiceRole(supabase, {
+        staffId: 'US010454',
+        action: 'IN',
+        userAgent: 'test-agent'
+      });
+
+      expect(result).toEqual({ ok: true, status: 200, staffId: 'US010454', action: 'IN' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('rejects repeated IN when latest punch is IN', async () => {
