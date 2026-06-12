@@ -378,7 +378,8 @@
   display: none;
 }
 
-.gooey-button-auto {
+.gooey-button-auto,
+.magic-button-surface {
   --magic-x: 50%;
   --magic-y: 50%;
   position: relative !important;
@@ -407,7 +408,8 @@
     opacity 0.2s ease !important;
 }
 
-.gooey-button-auto:hover:not(:disabled):not([aria-disabled='true']) {
+.gooey-button-auto:hover:not(:disabled):not([aria-disabled='true']),
+.magic-button-surface:hover:not(:disabled):not([aria-disabled='true']) {
   border-color: rgba(255, 255, 255, 0.72) !important;
   background:
     radial-gradient(circle at var(--magic-x) var(--magic-y), rgba(255, 255, 255, 1), transparent 38%),
@@ -421,7 +423,8 @@
   transform: translateY(-1px);
 }
 
-.gooey-button-auto:focus-visible {
+.gooey-button-auto:focus-visible,
+.magic-button-surface:focus-visible {
   outline: none !important;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.96),
@@ -430,30 +433,36 @@
     0 0 0 5px rgba(255, 255, 255, 0.16) !important;
 }
 
-.gooey-button-auto > :not(.gooey-button-particle) {
+.gooey-button-auto > :not(.gooey-button-particle),
+.magic-button-surface > :not(.gooey-button-particle) {
   color: inherit !important;
   position: relative;
   z-index: 2;
 }
 
-.gooey-button-auto :not(.gooey-button-particle):not(.gooey-button-point) {
+.gooey-button-auto :not(.gooey-button-particle):not(.gooey-button-point),
+.magic-button-surface :not(.gooey-button-particle):not(.gooey-button-point) {
   color: inherit !important;
 }
 
-.gooey-button-auto svg {
+.gooey-button-auto svg,
+.magic-button-surface svg {
   color: inherit !important;
   stroke: currentColor;
 }
 
 .gooey-button-auto:disabled,
-.gooey-button-auto[aria-disabled='true'] {
+.gooey-button-auto[aria-disabled='true'],
+.magic-button-surface:disabled,
+.magic-button-surface[aria-disabled='true'] {
   color: rgba(5, 7, 10, 0.52) !important;
   cursor: not-allowed;
   opacity: 0.72;
   transform: none;
 }
 
-.gooey-button-auto::before {
+.gooey-button-auto::before,
+.magic-button-surface::before {
   content: '';
   position: absolute;
   inset: -1px;
@@ -467,11 +476,14 @@
 }
 
 .gooey-button-auto:hover::before,
-.gooey-button-auto.gooey-button-animating::before {
+.gooey-button-auto.gooey-button-animating::before,
+.magic-button-surface:hover::before,
+.magic-button-surface.gooey-button-animating::before {
   opacity: 0.62;
 }
 
-.gooey-button-auto::after {
+.gooey-button-auto::after,
+.magic-button-surface::after {
   content: '';
   position: absolute;
   inset: 1px;
@@ -481,7 +493,8 @@
   pointer-events: none;
 }
 
-.gooey-button-auto.gooey-button-animating {
+.gooey-button-auto.gooey-button-animating,
+.magic-button-surface.gooey-button-animating {
   color: #05070a !important;
 }
 

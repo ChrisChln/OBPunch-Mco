@@ -34,6 +34,7 @@ const noise = (n = 1) => n / 2 - Math.random() * n;
 const shouldStyleButton = (button: HTMLButtonElement) => {
   if (button.closest(SKIP_CONTAINER_SELECTOR)) return false;
   if (button.closest(MENU_CONTAINER_SELECTOR)) return false;
+  if (button.closest('[data-gooey-skip="true"], [data-magic-button-skip="true"]')) return false;
   if (button.dataset.gooeySkip === 'true') return false;
   const className = button.className;
   const classText = typeof className === 'string' ? className : '';
