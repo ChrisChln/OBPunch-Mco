@@ -2102,6 +2102,7 @@ export default function AdminAppPage() {
     'FLEX TEAM': 'slate'
   });
   const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
+  const [scheduleLabelSavingStaffId, setScheduleLabelSavingStaffId] = useState<string | null>(null);
   const [scheduleLabelToneByName, setScheduleLabelToneByName] = useState<Record<string, LabelToneKey>>(() =>
     loadLabelToneMap()
   );
@@ -14466,6 +14467,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
   }, [employees, selectedSchedulePositionSet, isInactiveJdlEmployee, deferredScheduleDepartment, matchesDepartmentFilter]);
+  const scheduleLabelOptionsByPosition = useMemo(() => {
+    const byPosition: Record<string, Set<string>> = {};
+    for (const employee of employees) {
+      if (isInactiveJdlEmployee(employee)) continue;
+      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+      const label = String(employee.label ?? employee.Label ?? '').trim();
+      if (!position || !label) continue;
+      (byPosition[position] ??= new Set<string>()).add(label);
+    }
+    return Object.fromEntries(
+      Object.entries(byPosition).map(([position, labels]) => [
+        position,
+        Array.from(labels).sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      ])
+    ) as Record<string, string[]>;
+  }, [employees, isInactiveJdlEmployee]);
   const dailyListNewHireLabelOptions = useMemo(() => {
     const targetPosition = normalizePositionKey(dailyListNewHirePosition);
     if (!targetPosition) return [];
@@ -14539,6 +14556,64 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const next = LABEL_TONE_KEYS[(idx + 1) % LABEL_TONE_KEYS.length];
       return { ...prev, [key]: next };
     });
+  };
+
+  const updateScheduleEmployeeLabel = async (employee: EmployeeRow, nextLabelRaw: string) => {
+    const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+    const currentLabel = String(employee.label ?? employee.Label ?? '').trim();
+    const nextLabel = String(nextLabelRaw ?? '').trim();
+    const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+    if (!staff || !position || nextLabel === currentLabel) return;
+    if (!scheduleCanOperate || !canOperatePosition('schedule', position)) {
+      setStatus({ tone: 'error', message: t('排班模块当前为只读。', 'Schedule is read-only.') });
+      return;
+    }
+    const allowedLabels = scheduleLabelOptionsByPosition[position] ?? [];
+    if (!allowedLabels.some((item) => item.toLowerCase() === nextLabel.toLowerCase())) {
+      setStatus({ tone: 'error', message: t('Label 必须来自同岗位。', 'Label must be from the same position.') });
+      return;
+    }
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
+      return;
+    }
+
+    setScheduleLabelSavingStaffId(staff);
+    try {
+      await runLocked('schedule_label_update', async () => {
+        const mode = await resolveEmployeeColumnMode();
+        const { error } = await supabase
+          .from(EMPLOYEE_TABLE)
+          .update({ label: nextLabel } as any)
+          .eq('staff_id', staff);
+        if (error) {
+          setStatus({ tone: 'error', message: `${t('保存失败：', 'Save failed: ')}${error.message}` });
+          return;
+        }
+        setEmployees((prev) =>
+          prev.map((row) => {
+            const rowStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
+            if (rowStaff !== staff) return row;
+            return mode === 'cased' ? ({ ...row, Label: nextLabel, label: nextLabel } as EmployeeRow) : ({ ...row, label: nextLabel } as EmployeeRow);
+          })
+        );
+        await writeAudit({
+          action: 'employee_label_update',
+          staffId: staff,
+          target: EMPLOYEE_TABLE,
+          payload: {
+            staff_id: staff,
+            position,
+            before: { label: currentLabel },
+            after: { label: nextLabel },
+            source: 'schedule'
+          }
+        });
+        setStatus({ tone: 'success', message: t('Label 已更新。', 'Label updated.') });
+      });
+    } finally {
+      setScheduleLabelSavingStaffId((current) => (current === staff ? null : current));
+    }
   };
 
   const scheduleEmployeesFiltered = useMemo(() => {
@@ -16673,6 +16748,14 @@ ${rowsToHtml(late)}
                           const attendanceTrackingDisabled = scheduleOnlyStaffIds.has(staff);
                           const position = String(employee.position ?? employee.Position ?? '').trim();
                           const label = String(employee.label ?? employee.Label ?? '').trim();
+                          const normalizedPosition = normalizePositionKey(position);
+                          const labelOptions = normalizedPosition ? (scheduleLabelOptionsByPosition[normalizedPosition] ?? []) : [];
+                          const canEditScheduleLabel =
+                            Boolean(normalizedPosition) &&
+                            labelOptions.length > 0 &&
+                            !scheduleReadOnly &&
+                            canOperatePosition('schedule', normalizedPosition);
+                          const labelSaving = scheduleLabelSavingStaffId === staff;
                           const pendingTerminationRequest = pendingTerminationRequestsByStaffId.get(staff) ?? null;
                           const hasPendingTermination = Boolean(pendingTerminationRequest);
                           const scheduleDriverInfo = scheduleDriverGroupByStaffId[staff] ?? null;
@@ -16800,10 +16883,28 @@ ${rowsToHtml(late)}
                                 </span>
                               </td>
                               <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
-                                {label ? (
-                                  <span
-                                    className={getScheduleTableLabelBadgeClass(label)}
+                                {canEditScheduleLabel ? (
+                                  <select
+                                    value={labelOptions.includes(label) ? label : ''}
+                                    disabled={labelSaving || isLocked}
+                                    onChange={(event) => void updateScheduleEmployeeLabel(employee, event.target.value)}
+                                    aria-label={t('修改 Label', 'Edit label')}
+                                    title={labelSaving ? t('保存中...', 'Saving...') : t('修改 Label', 'Edit label')}
+                                    className={[
+                                      'h-6 max-w-[78px] rounded-full border px-2 pr-6 text-[10px] font-semibold leading-none outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                                      label ? getScheduleTableLabelBadgeClass(label) : 'border-white/12 bg-white/[0.05] text-slate-200',
+                                      themeMode === 'light' ? 'bg-white' : ''
+                                    ].join(' ')}
                                   >
+                                    {!labelOptions.includes(label) ? <option value="">-</option> : null}
+                                    {labelOptions.map((item) => (
+                                      <option key={`${staff}-label-${item}`} value={item}>
+                                        {item}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : label ? (
+                                  <span className={getScheduleTableLabelBadgeClass(label)}>
                                     <span className="truncate">{label}</span>
                                   </span>
                                 ) : (
