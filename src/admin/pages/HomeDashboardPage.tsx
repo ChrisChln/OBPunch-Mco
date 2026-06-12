@@ -593,8 +593,8 @@ function HomeDashboardPage({
                             : getAttendanceCardClass(card.position)
                         ].join(' ')}
                       >
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
+                        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
                             <div className={['text-sm font-semibold', isLight ? 'text-slate-800' : 'text-stone-100'].join(' ')}>{card.shift === 'early' ? 'Morning' : 'Night'} {card.position}</div>
                             <div className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>
                               <span className={['font-bold', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : ''].join(' ')}>
@@ -606,7 +606,7 @@ function HomeDashboardPage({
                             </div>
                           </div>
                           <div className={[
-                            'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-none',
+                            'ml-auto w-[92px] max-w-full shrink-0 rounded-[20px] border px-3 py-2 text-center shadow-none',
                             isLight
                               ? getAttendanceCardClassLight(card.position).replace('/85', '')
                               : getAttendanceCardClass(card.position)

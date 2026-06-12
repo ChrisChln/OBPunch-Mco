@@ -3,15 +3,18 @@ import { gsap } from 'gsap';
 
 import '../admin/components/GooeyNav.css';
 
-const BUTTON_SELECTOR = 'button:not([data-gooey-skip])';
+const INTERACTIVE_SELECTOR =
+  'button:not([data-gooey-skip]), label.cursor-pointer.rounded-2xl:not([data-gooey-skip]), label.cursor-pointer.rounded-xl:not([data-gooey-skip])';
 const SKIP_CONTAINER_SELECTOR = '.gooey-nav-container';
 const CHIP_CLASS_HINTS = ['text-[10px]', 'text-[11px]', 'px-1', 'px-1.5', 'py-0.5'];
 const MENU_CONTAINER_SELECTOR = '[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]';
 const PARTICLE_COUNT = 12;
 const GLOW_COLOR = '255, 255, 255';
 const MAX_RIPPLE_DIAMETER = 72;
-const COMPACT_MAX_HEIGHT = 44;
-const COMPACT_MAX_WIDTH = 180;
+const COMPACT_MAX_HEIGHT = 52;
+const COMPACT_MAX_WIDTH = 200;
+
+type MagicTarget = HTMLElement;
 
 type ButtonAnimationState = {
   isHovered: boolean;
@@ -21,9 +24,9 @@ type ButtonAnimationState = {
   magnetismTween: gsap.core.Tween | null;
 };
 
-const animationState = new WeakMap<HTMLButtonElement, ButtonAnimationState>();
+const animationState = new WeakMap<MagicTarget, ButtonAnimationState>();
 
-const getAnimationState = (button: HTMLButtonElement): ButtonAnimationState => {
+const getAnimationState = (button: MagicTarget): ButtonAnimationState => {
   const current = animationState.get(button);
   if (current) return current;
   const next: ButtonAnimationState = {
@@ -37,31 +40,43 @@ const getAnimationState = (button: HTMLButtonElement): ButtonAnimationState => {
   return next;
 };
 
-const shouldStyleButton = (button: HTMLButtonElement) => {
-  if (button.closest(SKIP_CONTAINER_SELECTOR)) return false;
-  if (button.closest(MENU_CONTAINER_SELECTOR)) return false;
-  if (button.closest('[data-gooey-skip="true"], [data-magic-button-skip="true"]')) return false;
-  if (button.dataset.gooeySkip === 'true') return false;
-  const className = button.className;
+const isHeaderAvatarButton = (element: MagicTarget) => {
+  if (!element.closest('header')) return false;
+  const text = element.textContent?.trim() ?? '';
+  const rect = element.getBoundingClientRect();
+  return text.length <= 2 && rect.width <= 72 && rect.height <= 72;
+};
+
+const isDisabledTarget = (element: MagicTarget) => {
+  return (element instanceof HTMLButtonElement && element.disabled) || element.getAttribute('aria-disabled') === 'true';
+};
+
+const shouldStyleTarget = (element: MagicTarget) => {
+  if (element.closest(SKIP_CONTAINER_SELECTOR)) return false;
+  if (element.closest(MENU_CONTAINER_SELECTOR)) return false;
+  if (element.closest('[data-gooey-skip="true"], [data-magic-button-skip="true"]')) return false;
+  if (element.dataset.gooeySkip === 'true') return false;
+  if (isHeaderAvatarButton(element)) return false;
+  const className = element.className;
   const classText = typeof className === 'string' ? className : '';
   const isSmallChip = CHIP_CLASS_HINTS.some((hint) => classText.includes(hint));
-  if (button.closest('table') && isSmallChip) return false;
-  if (button.closest('.absolute') && (classText.includes('w-full') || classText.includes('text-left'))) return false;
+  if (element.closest('table') && (isSmallChip || (classText.includes('w-full') && classText.includes('text-left')))) return false;
+  if (element.closest('.absolute') && (classText.includes('w-full') || classText.includes('text-left'))) return false;
   return true;
 };
 
-const isCompactButton = (button: HTMLButtonElement) => {
-  const rect = button.getBoundingClientRect();
+const isCompactButton = (element: MagicTarget) => {
+  const rect = element.getBoundingClientRect();
   if (rect.width > 0 && rect.height > 0) return rect.height <= COMPACT_MAX_HEIGHT && rect.width <= COMPACT_MAX_WIDTH;
 
-  const className = button.className;
+  const className = element.className;
   const classText = typeof className === 'string' ? className : '';
   return ['h-8', 'h-9', 'h-10', 'min-h-10', 'text-xs', 'px-3'].some((hint) => classText.includes(hint));
 };
 
 const applyButtonClass = (root: ParentNode = document) => {
-  root.querySelectorAll<HTMLButtonElement>(BUTTON_SELECTOR).forEach((button) => {
-    if (shouldStyleButton(button)) {
+  root.querySelectorAll<MagicTarget>(INTERACTIVE_SELECTOR).forEach((button) => {
+    if (shouldStyleTarget(button)) {
       button.classList.add('gooey-button-auto');
       button.style.setProperty('--magic-glow-rgb', GLOW_COLOR);
       button.classList.toggle('magic-button-compact', isCompactButton(button));
@@ -72,7 +87,7 @@ const applyButtonClass = (root: ParentNode = document) => {
   });
 };
 
-const updatePointerGlow = (button: HTMLButtonElement, clientX: number, clientY: number) => {
+const updatePointerGlow = (button: MagicTarget, clientX: number, clientY: number) => {
   const rect = button.getBoundingClientRect();
   const x = ((clientX - rect.left) / rect.width) * 100;
   const y = ((clientY - rect.top) / rect.height) * 100;
@@ -84,7 +99,7 @@ const updatePointerGlow = (button: HTMLButtonElement, clientX: number, clientY: 
   button.style.setProperty('--glow-radius', '120px');
 };
 
-const clearButtonParticles = (button: HTMLButtonElement) => {
+const clearButtonParticles = (button: MagicTarget) => {
   const state = getAnimationState(button);
   state.timeouts.forEach((timeoutId) => window.clearTimeout(timeoutId));
   state.timeouts = [];
@@ -110,14 +125,14 @@ const createParticleElement = (x: number, y: number) => {
   return particle;
 };
 
-const initializeParticles = (button: HTMLButtonElement) => {
+const initializeParticles = (button: MagicTarget) => {
   const state = getAnimationState(button);
   if (state.particleTemplate.length > 0) return;
   const { width, height } = button.getBoundingClientRect();
   state.particleTemplate = Array.from({ length: PARTICLE_COUNT }, () => createParticleElement(Math.random() * width, Math.random() * height));
 };
 
-const animateButtonParticles = (button: HTMLButtonElement) => {
+const animateButtonParticles = (button: MagicTarget) => {
   const state = getAnimationState(button);
   if (!state.isHovered) return;
 
@@ -152,8 +167,8 @@ const animateButtonParticles = (button: HTMLButtonElement) => {
   });
 };
 
-const handleButtonEnter = (button: HTMLButtonElement) => {
-  if (!shouldStyleButton(button) || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
+const handleButtonEnter = (button: MagicTarget) => {
+  if (!shouldStyleTarget(button) || isDisabledTarget(button)) return;
   const state = getAnimationState(button);
   state.isHovered = true;
   button.classList.add('gooey-button-animating');
@@ -161,7 +176,7 @@ const handleButtonEnter = (button: HTMLButtonElement) => {
   animateButtonParticles(button);
 };
 
-const handleButtonLeave = (button: HTMLButtonElement) => {
+const handleButtonLeave = (button: MagicTarget) => {
   const state = getAnimationState(button);
   state.isHovered = false;
   button.classList.remove('gooey-button-animating');
@@ -170,8 +185,8 @@ const handleButtonLeave = (button: HTMLButtonElement) => {
   gsap.to(button, { x: 0, y: 0, duration: 0.3, ease: 'power2.out' });
 };
 
-const handleButtonMove = (button: HTMLButtonElement, event: PointerEvent) => {
-  if (!shouldStyleButton(button) || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
+const handleButtonMove = (button: MagicTarget, event: PointerEvent) => {
+  if (!shouldStyleTarget(button) || isDisabledTarget(button)) return;
   updatePointerGlow(button, event.clientX, event.clientY);
   const rect = button.getBoundingClientRect();
   const x = event.clientX - rect.left;
@@ -188,8 +203,8 @@ const handleButtonMove = (button: HTMLButtonElement, event: PointerEvent) => {
   });
 };
 
-const playButtonAnimation = (button: HTMLButtonElement, event: PointerEvent) => {
-  if (!shouldStyleButton(button) || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
+const playButtonAnimation = (button: MagicTarget, event: PointerEvent) => {
+  if (!shouldStyleTarget(button) || isDisabledTarget(button)) return;
 
   updatePointerGlow(button, event.clientX, event.clientY);
 
@@ -227,7 +242,7 @@ export default function GooeyButtonController() {
       mutations.forEach((mutation) => {
         mutation.addedNodes.forEach((node) => {
           if (!(node instanceof Element)) return;
-          if (node instanceof HTMLButtonElement && shouldStyleButton(node)) {
+          if (node instanceof HTMLElement && node.matches(INTERACTIVE_SELECTOR) && shouldStyleTarget(node)) {
             node.classList.add('gooey-button-auto');
           }
           applyButtonClass(node);
@@ -236,23 +251,23 @@ export default function GooeyButtonController() {
     });
 
     const onPointerDown = (event: PointerEvent) => {
-      const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>(BUTTON_SELECTOR) : null;
+      const button = event.target instanceof Element ? event.target.closest<MagicTarget>(INTERACTIVE_SELECTOR) : null;
       if (button) playButtonAnimation(button, event);
     };
 
     const onPointerMove = (event: PointerEvent) => {
-      const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>(BUTTON_SELECTOR) : null;
+      const button = event.target instanceof Element ? event.target.closest<MagicTarget>(INTERACTIVE_SELECTOR) : null;
       if (button) handleButtonMove(button, event);
     };
 
     const onPointerEnter = (event: PointerEvent) => {
-      const button = event.target instanceof HTMLButtonElement ? event.target : null;
-      if (button?.matches(BUTTON_SELECTOR)) handleButtonEnter(button);
+      const button = event.target instanceof HTMLElement ? event.target : null;
+      if (button?.matches(INTERACTIVE_SELECTOR)) handleButtonEnter(button);
     };
 
     const onPointerLeave = (event: PointerEvent) => {
-      const button = event.target instanceof HTMLButtonElement ? event.target : null;
-      if (button?.matches(BUTTON_SELECTOR)) handleButtonLeave(button);
+      const button = event.target instanceof HTMLElement ? event.target : null;
+      if (button?.matches(INTERACTIVE_SELECTOR)) handleButtonLeave(button);
     };
 
     observer.observe(document.body, { childList: true, subtree: true });
