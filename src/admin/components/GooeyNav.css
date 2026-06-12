@@ -387,17 +387,17 @@
   overflow: hidden !important;
   border-radius: 12px !important;
   border-width: 1px !important;
-  border-color: rgba(255, 255, 255, 0.78) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
   background:
-    radial-gradient(circle at var(--magic-x) var(--magic-y), rgba(255, 255, 255, 1), transparent 42%),
-    linear-gradient(180deg, #ffffff, #f3f6fb) !important;
-  color: #05070a !important;
+    radial-gradient(circle at var(--magic-x) var(--magic-y), rgba(255, 255, 255, 0.16), transparent 42%),
+    linear-gradient(180deg, rgba(24, 22, 30, 0.96), rgba(13, 12, 18, 0.96)) !important;
+  color: rgba(255, 255, 255, 0.92) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.96),
-    inset 0 -1px 0 rgba(15, 23, 42, 0.08),
-    0 1px 2px rgba(2, 6, 23, 0.22),
-    0 0 0 1px rgba(255, 255, 255, 0.42),
-    0 0 18px rgba(255, 255, 255, 0.22) !important;
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.38),
+    0 1px 2px rgba(2, 6, 23, 0.38),
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 0 16px rgba(255, 255, 255, 0.04) !important;
   font-weight: 700;
   text-shadow: none !important;
   transform: translateZ(0);
@@ -412,17 +412,17 @@
 
 .gooey-button-auto:hover:not(:disabled):not([aria-disabled='true']),
 .magic-button-surface:hover:not(:disabled):not([aria-disabled='true']) {
-  border-color: rgba(255, 255, 255, 0.72) !important;
+  border-color: rgba(255, 255, 255, 0.36) !important;
   background:
-    radial-gradient(circle at var(--magic-x) var(--magic-y), rgba(255, 255, 255, 1), transparent 38%),
-    linear-gradient(180deg, #ffffff, #eef3fa) !important;
+    radial-gradient(circle at var(--magic-x) var(--magic-y), rgba(255, 255, 255, 0.28), transparent 46%),
+    linear-gradient(180deg, rgba(32, 30, 40, 0.98), rgba(16, 15, 22, 0.98)) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.96),
-    inset 0 -1px 0 rgba(15, 23, 42, 0.1),
-    0 8px 22px rgba(2, 6, 23, 0.2),
-    0 0 34px rgba(255, 255, 255, 0.62),
-    0 0 0 1px rgba(255, 255, 255, 0.78),
-    0 0 0 4px rgba(255, 255, 255, 0.1) !important;
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.42),
+    0 8px 22px rgba(2, 6, 23, 0.32),
+    0 0 26px rgba(255, 255, 255, 0.16),
+    0 0 0 1px rgba(255, 255, 255, 0.22),
+    0 0 0 4px rgba(255, 255, 255, 0.04) !important;
   transform: translateY(-1px);
 }
 
@@ -430,10 +430,10 @@
 .magic-button-surface:focus-visible {
   outline: none !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.96),
-    0 10px 24px rgba(2, 6, 23, 0.2),
-    0 0 0 2px rgba(255, 255, 255, 0.72),
-    0 0 0 5px rgba(255, 255, 255, 0.16) !important;
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 10px 24px rgba(2, 6, 23, 0.32),
+    0 0 0 2px rgba(255, 255, 255, 0.48),
+    0 0 0 5px rgba(255, 255, 255, 0.08) !important;
 }
 
 .gooey-button-auto > :not(.gooey-button-particle),
@@ -458,9 +458,9 @@
 .gooey-button-auto[aria-disabled='true'],
 .magic-button-surface:disabled,
 .magic-button-surface[aria-disabled='true'] {
-  color: rgba(5, 7, 10, 0.52) !important;
+  color: rgba(255, 255, 255, 0.38) !important;
   cursor: not-allowed;
-  opacity: 0.72;
+  opacity: 0.62;
   transform: none;
 }
 
@@ -472,8 +472,8 @@
   z-index: 0;
   border-radius: inherit;
   background:
-    radial-gradient(circle at var(--magic-x) var(--magic-y), rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.42) 24%, transparent 62%);
-  opacity: 0.34;
+    radial-gradient(circle at var(--magic-x) var(--magic-y), rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.08) 24%, transparent 62%);
+  opacity: 0.42;
   pointer-events: none;
   transition: opacity 0.24s ease;
 }
@@ -492,16 +492,16 @@
   inset: 1px;
   z-index: 0;
   border-radius: calc(12px - 1px);
-  border: 1px solid rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow:
-    inset 0 0 18px rgba(255, 255, 255, 0.2),
-    0 0 16px rgba(255, 255, 255, 0.18);
+    inset 0 0 18px rgba(255, 255, 255, 0.04),
+    0 0 16px rgba(255, 255, 255, 0.04);
   pointer-events: none;
 }
 
 .gooey-button-auto.gooey-button-animating,
 .magic-button-surface.gooey-button-animating {
-  color: #05070a !important;
+  color: rgba(255, 255, 255, 0.96) !important;
 }
 
 .gooey-button-particle,
