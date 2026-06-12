@@ -10,6 +10,8 @@ const MENU_CONTAINER_SELECTOR = '[role="menu"], [role="listbox"], [data-radix-po
 const PARTICLE_COUNT = 12;
 const GLOW_COLOR = '255, 255, 255';
 const MAX_RIPPLE_DIAMETER = 72;
+const COMPACT_MAX_HEIGHT = 44;
+const COMPACT_MAX_WIDTH = 180;
 
 type ButtonAnimationState = {
   isHovered: boolean;
@@ -48,13 +50,23 @@ const shouldStyleButton = (button: HTMLButtonElement) => {
   return true;
 };
 
+const isCompactButton = (button: HTMLButtonElement) => {
+  const rect = button.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) return rect.height <= COMPACT_MAX_HEIGHT && rect.width <= COMPACT_MAX_WIDTH;
+
+  const className = button.className;
+  const classText = typeof className === 'string' ? className : '';
+  return ['h-8', 'h-9', 'h-10', 'min-h-10', 'text-xs', 'px-3'].some((hint) => classText.includes(hint));
+};
+
 const applyButtonClass = (root: ParentNode = document) => {
   root.querySelectorAll<HTMLButtonElement>(BUTTON_SELECTOR).forEach((button) => {
     if (shouldStyleButton(button)) {
       button.classList.add('gooey-button-auto');
       button.style.setProperty('--magic-glow-rgb', GLOW_COLOR);
+      button.classList.toggle('magic-button-compact', isCompactButton(button));
     } else {
-      button.classList.remove('gooey-button-auto', 'gooey-button-animating');
+      button.classList.remove('gooey-button-auto', 'gooey-button-animating', 'magic-button-compact');
       button.querySelectorAll(':scope > .gooey-button-particle, :scope > .gooey-button-ripple').forEach((effect) => effect.remove());
     }
   });
@@ -145,6 +157,7 @@ const handleButtonEnter = (button: HTMLButtonElement) => {
   const state = getAnimationState(button);
   state.isHovered = true;
   button.classList.add('gooey-button-animating');
+  if (button.classList.contains('magic-button-compact')) return;
   animateButtonParticles(button);
 };
 
@@ -165,6 +178,7 @@ const handleButtonMove = (button: HTMLButtonElement, event: PointerEvent) => {
   const y = event.clientY - rect.top;
   const centerX = rect.width / 2;
   const centerY = rect.height / 2;
+  if (button.classList.contains('magic-button-compact')) return;
   const state = getAnimationState(button);
   state.magnetismTween = gsap.to(button, {
     x: (x - centerX) * 0.05,
