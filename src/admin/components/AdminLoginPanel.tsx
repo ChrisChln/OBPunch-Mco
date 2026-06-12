@@ -1,3 +1,7 @@
+import { LoaderCircle, LogIn } from 'lucide-react';
+
+import GooeyNav, { type GooeyNavItem } from './GooeyNav';
+
 type TranslateFn = (zh: string, en: string) => string;
 
 type AdminLoginPanelProps = {
@@ -42,9 +46,17 @@ export default function AdminLoginPanel({
   const inputClass = isLight
     ? 'h-14 w-full rounded-[20px] border border-slate-300/80 bg-white/80 px-5 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:shadow-[0_0_0_2px_rgba(120,130,141,0.12)] disabled:cursor-not-allowed disabled:opacity-60'
     : 'h-14 w-full rounded-[20px] border border-white/12 bg-black/30 px-5 text-base text-white outline-none transition placeholder:text-slate-500 focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60';
-  const buttonClass = isLight
-    ? 'mt-2 h-14 w-full rounded-[20px] bg-slate-900 text-base font-semibold text-white shadow-[0_14px_28px_rgba(35,40,45,0.18)] transition hover:-translate-y-0.5 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60'
-    : 'mt-2 h-14 w-full rounded-[20px] bg-neon text-base font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-60';
+  const loginDisabled = isLocked || email.trim() === '' || password === '';
+  const loginItems: GooeyNavItem[] = [
+    {
+      label: isLocked ? 'Signing In' : 'Admin Login',
+      disabled: loginDisabled,
+      icon: isLocked ? <LoaderCircle className="h-4 w-4 animate-spin" strokeWidth={2.2} /> : <LogIn className="h-4 w-4" strokeWidth={2.2} />,
+      onClick: () => {
+        void doLogin();
+      },
+    },
+  ];
   return (
     <section className={shellClass}>
       <div className="pointer-events-none absolute inset-0">
@@ -104,13 +116,18 @@ export default function AdminLoginPanel({
                 />
               </label>
 
-              <button
-                type="submit"
-                disabled={isLocked || email.trim() === '' || password === ''}
-                className={buttonClass}
-              >
-                Admin Login
-              </button>
+              <GooeyNav
+                items={loginItems}
+                particleCount={49}
+                particleDistances={[90, 10]}
+                particleR={100}
+                initialActiveIndex={0}
+                animationTime={600}
+                timeVariance={300}
+                colors={isLight ? [1, 2, 3, 1, 4, 2, 3, 1] : [1, 2, 3, 1, 2, 3, 1, 4]}
+                className={isLight ? 'admin-login-gooey admin-login-gooey-light mt-2' : 'admin-login-gooey admin-login-gooey-dark mt-2'}
+                ariaLabel="Admin login"
+              />
             </div>
 
           </form>
@@ -119,4 +136,3 @@ export default function AdminLoginPanel({
     </section>
   );
 }
-
