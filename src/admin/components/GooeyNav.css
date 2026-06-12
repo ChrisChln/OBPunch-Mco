@@ -380,50 +380,41 @@
 
 .gooey-button-auto,
 .magic-button-surface {
+  --magic-glow-rgb: 255, 255, 255;
   --magic-x: 50%;
   --magic-y: 50%;
+  --glow-x: 50%;
+  --glow-y: 50%;
+  --glow-intensity: 0;
+  --glow-radius: 120px;
   position: relative !important;
   isolation: isolate;
   overflow: hidden !important;
-  border-radius: 12px !important;
+  border-radius: 14px !important;
   border-width: 1px !important;
-  border-color: rgba(255, 255, 255, 0.14) !important;
-  background:
-    radial-gradient(circle at var(--magic-x) var(--magic-y), rgba(255, 255, 255, 0.16), transparent 42%),
-    linear-gradient(180deg, rgba(24, 22, 30, 0.96), rgba(13, 12, 18, 0.96)) !important;
-  color: rgba(255, 255, 255, 0.92) !important;
+  border-color: #2f293a !important;
+  background: #120f17 !important;
+  color: #ffffff !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.38),
-    0 1px 2px rgba(2, 6, 23, 0.38),
-    0 0 0 1px rgba(255, 255, 255, 0.06),
-    0 0 16px rgba(255, 255, 255, 0.04) !important;
-  font-weight: 700;
+    0 4px 20px rgba(46, 24, 78, 0.12),
+    0 0 30px rgba(var(--magic-glow-rgb), 0.06) !important;
+  font-weight: 600;
   text-shadow: none !important;
   transform: translateZ(0);
   transition:
-    color 0.24s ease,
-    border-color 0.24s ease,
-    background 0.24s ease,
-    box-shadow 0.24s ease,
-    transform 0.2s ease,
-    opacity 0.2s ease !important;
+    border-color 0.3s ease,
+    box-shadow 0.3s ease,
+    transform 0.3s ease,
+    opacity 0.3s ease !important;
 }
 
 .gooey-button-auto:hover:not(:disabled):not([aria-disabled='true']),
 .magic-button-surface:hover:not(:disabled):not([aria-disabled='true']) {
-  border-color: rgba(255, 255, 255, 0.36) !important;
-  background:
-    radial-gradient(circle at var(--magic-x) var(--magic-y), rgba(255, 255, 255, 0.28), transparent 46%),
-    linear-gradient(180deg, rgba(32, 30, 40, 0.98), rgba(16, 15, 22, 0.98)) !important;
+  border-color: rgba(255, 255, 255, 0.26) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.42),
-    0 8px 22px rgba(2, 6, 23, 0.32),
-    0 0 26px rgba(255, 255, 255, 0.16),
-    0 0 0 1px rgba(255, 255, 255, 0.22),
-    0 0 0 4px rgba(255, 255, 255, 0.04) !important;
-  transform: translateY(-1px);
+    0 4px 20px rgba(46, 24, 78, 0.2),
+    0 0 30px rgba(var(--magic-glow-rgb), 0.18) !important;
+  transform: translateY(-2px);
 }
 
 .gooey-button-auto:focus-visible,
@@ -468,35 +459,47 @@
 .magic-button-surface::before {
   content: '';
   position: absolute;
-  inset: -1px;
+  inset: 0;
   z-index: 0;
   border-radius: inherit;
-  background:
-    radial-gradient(circle at var(--magic-x) var(--magic-y), rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.08) 24%, transparent 62%);
-  opacity: 0.42;
+  background: radial-gradient(circle at var(--magic-x) var(--magic-y), rgba(var(--magic-glow-rgb), 0.12), transparent 46%);
+  opacity: 0;
   pointer-events: none;
-  transition: opacity 0.24s ease;
+  transition: opacity 0.3s ease;
 }
 
 .gooey-button-auto:hover::before,
 .gooey-button-auto.gooey-button-animating::before,
 .magic-button-surface:hover::before,
 .magic-button-surface.gooey-button-animating::before {
-  opacity: 0.62;
+  opacity: 1;
 }
 
 .gooey-button-auto::after,
 .magic-button-surface::after {
   content: '';
   position: absolute;
-  inset: 1px;
-  z-index: 0;
-  border-radius: calc(12px - 1px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow:
-    inset 0 0 18px rgba(255, 255, 255, 0.04),
-    0 0 16px rgba(255, 255, 255, 0.04);
+  inset: 0;
+  z-index: 1;
+  padding: 6px;
+  border-radius: inherit;
+  background: radial-gradient(
+    var(--glow-radius) circle at var(--glow-x) var(--glow-y),
+    rgba(var(--magic-glow-rgb), calc(var(--glow-intensity) * 0.8)) 0%,
+    rgba(var(--magic-glow-rgb), calc(var(--glow-intensity) * 0.4)) 30%,
+    transparent 60%
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
   pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.3s ease;
 }
 
 .gooey-button-auto.gooey-button-animating,
@@ -514,42 +517,24 @@
 }
 
 .gooey-button-particle {
-  width: 5px;
-  height: 5px;
-  left: var(--particle-x);
-  top: var(--particle-y);
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 0 12px rgba(255, 255, 255, 0.9);
-  animation: magic-button-star 0.86s ease-out forwards;
+  width: 4px;
+  height: 4px;
+  background: rgba(var(--magic-glow-rgb), 1);
+  box-shadow: 0 0 6px rgba(var(--magic-glow-rgb), 0.6);
+  z-index: 100;
+}
+
+.gooey-button-particle::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: 50%;
+  background: rgba(var(--magic-glow-rgb), 0.2);
 }
 
 .gooey-button-ripple {
-  width: 12px;
-  height: 12px;
-  left: var(--ripple-x);
-  top: var(--ripple-y);
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 70%);
-  transform: translate(-50%, -50%) scale(0);
-  animation: magic-button-ripple 0.56s ease-out forwards;
-}
-
-@keyframes magic-button-star {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(0);
-  }
-  18% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translate(calc(-50% + var(--move-x)), calc(-50% + var(--move-y))) scale(calc(var(--scale) * 0.25));
-  }
-}
-
-@keyframes magic-button-ripple {
-  to {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(18);
-  }
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(var(--magic-glow-rgb), 0.4) 0%, rgba(var(--magic-glow-rgb), 0.2) 30%, transparent 70%);
+  z-index: 1000;
 }
