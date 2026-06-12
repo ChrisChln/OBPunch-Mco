@@ -427,15 +427,15 @@
     0 0 0 5px rgba(255, 255, 255, 0.08) !important;
 }
 
-.gooey-button-auto > :not(.gooey-button-particle),
-.magic-button-surface > :not(.gooey-button-particle) {
+.gooey-button-auto > :not(.gooey-button-particle):not(.gooey-button-ripple),
+.magic-button-surface > :not(.gooey-button-particle):not(.gooey-button-ripple) {
   color: inherit !important;
   position: relative;
   z-index: 2;
 }
 
-.gooey-button-auto :not(.gooey-button-particle):not(.gooey-button-point),
-.magic-button-surface :not(.gooey-button-particle):not(.gooey-button-point) {
+.gooey-button-auto :not(.gooey-button-particle):not(.gooey-button-ripple):not(.gooey-button-point),
+.magic-button-surface :not(.gooey-button-particle):not(.gooey-button-ripple):not(.gooey-button-point) {
   color: inherit !important;
 }
 
@@ -510,10 +510,15 @@
 .gooey-button-particle,
 .gooey-button-ripple {
   display: block;
-  position: absolute;
+  position: absolute !important;
   z-index: 1;
   border-radius: 100%;
   pointer-events: none;
+  flex: 0 0 auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
 }
 
 .gooey-button-particle {
@@ -536,5 +541,5 @@
 .gooey-button-ripple {
   border-radius: 50%;
   background: radial-gradient(circle, rgba(var(--magic-glow-rgb), 0.4) 0%, rgba(var(--magic-glow-rgb), 0.2) 30%, transparent 70%);
-  z-index: 1000;
+  z-index: 1;
 }

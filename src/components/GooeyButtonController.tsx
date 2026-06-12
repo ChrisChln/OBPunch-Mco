@@ -9,6 +9,7 @@ const CHIP_CLASS_HINTS = ['text-[10px]', 'text-[11px]', 'px-1', 'px-1.5', 'py-0.
 const MENU_CONTAINER_SELECTOR = '[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]';
 const PARTICLE_COUNT = 12;
 const GLOW_COLOR = '255, 255, 255';
+const MAX_RIPPLE_DIAMETER = 72;
 
 type ButtonAnimationState = {
   isHovered: boolean;
@@ -187,12 +188,14 @@ const playButtonAnimation = (button: HTMLButtonElement, event: PointerEvent) => 
     Math.hypot(x, y - rect.height),
     Math.hypot(x - rect.width, y - rect.height)
   );
+  const rippleDiameter = Math.min(maxDistance * 2, Math.max(rect.width, rect.height, MAX_RIPPLE_DIAMETER));
+  const rippleRadius = rippleDiameter / 2;
   const ripple = document.createElement('span');
   ripple.className = 'gooey-button-ripple';
-  ripple.style.width = `${maxDistance * 2}px`;
-  ripple.style.height = `${maxDistance * 2}px`;
-  ripple.style.left = `${x - maxDistance}px`;
-  ripple.style.top = `${y - maxDistance}px`;
+  ripple.style.width = `${rippleDiameter}px`;
+  ripple.style.height = `${rippleDiameter}px`;
+  ripple.style.left = `${x - rippleRadius}px`;
+  ripple.style.top = `${y - rippleRadius}px`;
   button.appendChild(ripple);
 
   gsap.fromTo(
