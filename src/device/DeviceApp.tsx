@@ -36,12 +36,19 @@ type EmployeeRow = {
   name?: string | null;
 };
 
+type TempAccountAssignmentRow = {
+  staff_id?: string | null;
+  source_temp_staff_id?: string | null;
+};
+
 const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
 type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
+const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
+  (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
 const BORROW_OVERDUE_MS = 8 * 60 * 60 * 1000;
 const COUNTING_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_FILTERS_STORAGE_KEY = 'ob_device_filters_v1';
@@ -206,6 +213,50 @@ export default function DeviceApp() {
       action: action === 'IN' || action === 'OUT' ? (action as 'IN' | 'OUT') : null,
       error: null as string | null
     };
+  };
+
+  const resolveBorrowEmployee = async (
+    inputStaffId: string
+  ): Promise<{ staffId: string; employee: EmployeeRow | null; error: string | null }> => {
+    if (!supabase) return { staffId: inputStaffId, employee: null, error: 'Missing Supabase configuration.' };
+
+    let currentStaffId = normalizeStaffId(inputStaffId);
+    const visited = new Set<string>();
+
+    for (let depth = 0; depth < 6; depth += 1) {
+      if (!currentStaffId || visited.has(currentStaffId)) break;
+      visited.add(currentStaffId);
+
+      const employeeRes = await supabase.from(EMPLOYEE_TABLE).select('staff_id, name').eq('staff_id', currentStaffId).limit(1);
+      if (employeeRes.error) {
+        return { staffId: currentStaffId, employee: null, error: `Failed to verify employee: ${employeeRes.error.message}` };
+      }
+
+      const employee = ((employeeRes.data as EmployeeRow[] | null) ?? [])[0] ?? null;
+      if (employee) return { staffId: currentStaffId, employee, error: null };
+
+      const bindingRes = await supabase
+        .from(TEMP_ACCOUNT_ASSIGNMENT_TABLE)
+        .select('staff_id, source_temp_staff_id, created_at')
+        .eq('source_temp_staff_id', currentStaffId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (bindingRes.error) {
+        return {
+          staffId: currentStaffId,
+          employee: null,
+          error: `Failed to verify temporary account binding: ${bindingRes.error.message}`
+        };
+      }
+
+      const boundStaffId = normalizeStaffId(
+        String(((bindingRes.data as TempAccountAssignmentRow[] | null) ?? [])[0]?.staff_id ?? '')
+      );
+      if (!boundStaffId || boundStaffId === currentStaffId) break;
+      currentStaffId = boundStaffId;
+    }
+
+    return { staffId: currentStaffId || inputStaffId, employee: null, error: null };
   };
 
   const canonicalDevices = useMemo(() => {
@@ -508,28 +559,27 @@ export default function DeviceApp() {
       return;
     }
 
+    let borrowStaffId = staffId;
     let borrowStaffName = '';
     if (mode === 'borrow') {
-      const employeeCheck = await supabase.from(EMPLOYEE_TABLE).select('staff_id, name').eq('staff_id', staffId).limit(1);
-      if (employeeCheck.error) {
-        setMessage({ tone: 'error', text: `Failed to verify employee: ${employeeCheck.error.message}` });
+      const resolvedEmployee = await resolveBorrowEmployee(staffId);
+      borrowStaffId = resolvedEmployee.staffId;
+      if (resolvedEmployee.error) {
+        setMessage({ tone: 'error', text: resolvedEmployee.error });
         pushOpLog('error', 'Borrow employee verify error');
         clearBorrowInputsOnFailure();
         playDeviceSound('error');
         return;
       }
-      const employeeRows = ((employeeCheck.data as Array<{ staff_id?: string | null; name?: string | null }>) ?? []).filter((row) =>
-        normalizeStaffId(String(row.staff_id ?? '').trim())
-      );
-      if (employeeRows.length === 0) {
+      if (!resolvedEmployee.employee) {
         setMessage({ tone: 'error', text: `Employee not registered: ${staffId}` });
         pushOpLog('error', 'Borrow employee not registered');
         clearBorrowInputsOnFailure();
         playDeviceSound('error');
         return;
       }
-      borrowStaffName = String(employeeRows[0]?.name ?? '').trim();
-      const lastPunch = await fetchLastPunchAction(staffId);
+      borrowStaffName = String(resolvedEmployee.employee.name ?? '').trim();
+      const lastPunch = await fetchLastPunchAction(borrowStaffId);
       if (lastPunch.error) {
         setMessage({ tone: 'error', text: `Failed to verify sign-in: ${lastPunch.error}` });
         pushOpLog('error', 'Borrow sign-in verify error');
@@ -576,7 +626,7 @@ export default function DeviceApp() {
       return;
     }
     setMessage({ tone: 'pending', text: mode === 'borrow' ? 'Borrowing...' : 'Returning...' });
-    const submitStaffId = mode === 'borrow' ? staffId : borrowed!.staffId;
+    const submitStaffId = mode === 'borrow' ? borrowStaffId : borrowed!.staffId;
     const res = await supabase.from(DEVICE_LOANS_TABLE).insert([
       {
         staff_id: submitStaffId,
@@ -589,7 +639,7 @@ export default function DeviceApp() {
     if (res.error) {
       setMessage({ tone: 'error', text: `Submit failed: ${res.error.message}` });
       if (mode === 'borrow') {
-        const staffName = borrowStaffName || getStaffName(staffId);
+        const staffName = borrowStaffName || getStaffName(borrowStaffId);
         pushOpLog('error', `Borrow ${staffName} / ${deviceName}`);
         clearBorrowInputsOnFailure();
       } else {
@@ -601,7 +651,7 @@ export default function DeviceApp() {
     }
 
     if (mode === 'borrow') {
-      const staffName = borrowStaffName || getStaffName(staffId);
+      const staffName = borrowStaffName || getStaffName(borrowStaffId);
       pushOpLog('success', `Borrow ${staffName} / ${deviceName}`);
     } else {
       const holderName = getStaffName(borrowed!.staffId);
@@ -609,7 +659,7 @@ export default function DeviceApp() {
     }
     setMessage({
       tone: 'success',
-      text: mode === 'borrow' ? `Borrowed: ${staffId} -> ${sn}` : `Returned: ${sn}`
+      text: mode === 'borrow' ? `Borrowed: ${borrowStaffId} -> ${sn}` : `Returned: ${sn}`
     });
     playDeviceSound(mode === 'borrow' ? 'successIn' : 'successOut');
     setStaffIdInput('');

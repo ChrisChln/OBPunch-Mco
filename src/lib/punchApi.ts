@@ -1,13 +1,16 @@
 export type PunchApiAction = 'IN' | 'OUT';
+export type PunchApiRequestAction = PunchApiAction | 'AUTO';
 
 type SubmitPunchArgs = {
   staffId: string;
-  action: PunchApiAction;
+  action: PunchApiRequestAction;
 };
 
 type SubmitPunchResult =
   | {
       ok: true;
+      staffId: string;
+      action: PunchApiAction;
     }
   | {
       ok: false;
@@ -36,7 +39,13 @@ export const submitPunchToApi = async ({ staffId, action }: SubmitPunchArgs): Pr
       return { ok: false, error: await readErrorMessage(response) };
     }
 
-    return { ok: true };
+    const payload = (await response.json()) as { staff_id?: unknown; action?: unknown };
+    const responseAction = String(payload.action ?? action).toUpperCase();
+    return {
+      ok: true,
+      staffId: String(payload.staff_id ?? staffId).trim(),
+      action: responseAction === 'OUT' ? 'OUT' : 'IN'
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, error: `Punch API request failed: ${message}` };

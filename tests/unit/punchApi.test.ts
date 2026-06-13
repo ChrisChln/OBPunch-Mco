@@ -17,11 +17,28 @@ describe('submitPunchToApi', () => {
 
     const result = await submitPunchToApi({ staffId: 'US010454', action: 'IN' });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, staffId: 'US010454', action: 'IN' });
     expect(fetchMock).toHaveBeenCalledWith('/api/punch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ staff_id: 'US010454', action: 'IN' })
+    });
+  });
+
+  test('posts auto punch payload and returns the resolved action', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ status: 'ok', staff_id: 'TUS0000074', action: 'OUT' })
+    })) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await submitPunchToApi({ staffId: 'TEMP-USID-MQ2NNFMV-0001', action: 'AUTO' });
+
+    expect(result).toEqual({ ok: true, staffId: 'TUS0000074', action: 'OUT' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/punch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ staff_id: 'TEMP-USID-MQ2NNFMV-0001', action: 'AUTO' })
     });
   });
 

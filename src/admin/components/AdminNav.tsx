@@ -18,6 +18,7 @@ import {
   HiUsers
 } from 'react-icons/hi2';
 import type { AdminPage } from '../types';
+import GooeyNav, { type GooeyNavItem } from './GooeyNav';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -110,14 +111,42 @@ function AdminNav({
     themeMode === 'light'
       ? 'border-r border-slate-200 bg-white text-slate-900'
       : 'border-r border-slate-800/90 bg-slate-950 text-slate-100';
-  const activeClass =
-    themeMode === 'light'
-      ? 'border-indigo-200 bg-indigo-50 text-indigo-700 shadow-[0_10px_24px_rgba(79,70,229,0.08)]'
-      : 'border-indigo-500/20 bg-indigo-500/12 text-indigo-200 shadow-[0_10px_24px_rgba(2,6,23,0.28)]';
-  const inactiveClass =
-    themeMode === 'light'
-      ? 'border-transparent bg-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-900'
-      : 'border-transparent bg-transparent text-slate-300 hover:border-slate-700 hover:bg-slate-900/80 hover:text-slate-50';
+  const activeIndex = Math.max(0, items.findIndex((item) => item.page === page));
+  const navItems: GooeyNavItem[] = items.map((item) => {
+    const badgeCount =
+      item.badge === 'leave'
+        ? leaveApprovalPendingCount
+        : item.badge === 'schedule'
+          ? scheduleTerminationPendingCount
+          : item.badge === 'todo'
+            ? todoPendingCount
+            : 0;
+    const showBadgeDot = !expanded && badgeCount > 0;
+    const badgeTone = item.badge === 'todo' ? 'bg-indigo-100 text-indigo-700' : 'bg-rose-100 text-rose-700';
+
+    return {
+      label: item.label(t),
+      disabled: isLocked,
+      icon: (
+        <span className="relative grid h-7 w-7 shrink-0 place-items-center">
+          <NavIcon page={item.page} />
+          {showBadgeDot ? (
+            <span
+              className="pointer-events-none absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border border-slate-950/80 bg-rose-500"
+              aria-hidden="true"
+            />
+          ) : null}
+        </span>
+      ),
+      rightSlot:
+        expanded && badgeCount > 0 ? (
+          <span className={['rounded-full px-2 py-0.5 text-[10px] font-semibold', badgeTone].join(' ')}>
+            {badgeCount}
+          </span>
+        ) : null,
+      onClick: () => onSetPage(item.page),
+    };
+  });
 
   const clearCollapseTimer = () => {
     if (collapseTimerRef.current !== null) {
@@ -152,69 +181,34 @@ function AdminNav({
       <div
         className={[
           'absolute left-0 top-0 flex h-full min-h-0 flex-col overflow-hidden will-change-[width] transition-[width,box-shadow] duration-150 ease-out',
-          expanded ? 'w-[240px] shadow-[0_10px_30px_rgba(2,6,23,0.24)]' : 'w-[60px]',
+          expanded ? 'w-[176px] shadow-[0_10px_30px_rgba(2,6,23,0.24)]' : 'w-[60px]',
           shellClass
         ].join(' ')}
       >
-        <nav
+        <div
           className={[
             'min-h-0 flex-1 overflow-y-auto py-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden',
-            expanded ? 'px-3' : 'px-2'
+            expanded ? 'px-2' : 'px-2'
           ].join(' ')}
         >
-          <div className="space-y-0">
-            {items.map((item) => {
-              const active = page === item.page;
-              const badgeCount =
-                item.badge === 'leave'
-                  ? leaveApprovalPendingCount
-                  : item.badge === 'schedule'
-                    ? scheduleTerminationPendingCount
-                    : item.badge === 'todo'
-                      ? todoPendingCount
-                      : 0;
-              const showBadgeDot = !expanded && badgeCount > 0;
-              const badgeTone =
-                item.badge === 'todo' ? 'bg-indigo-100 text-indigo-700' : 'bg-rose-100 text-rose-700';
-
-              return (
-                <button
-                  key={item.page}
-                  type="button"
-                  disabled={isLocked}
-                  onClick={() => onSetPage(item.page)}
-                  className={[
-                    'group flex w-full items-center rounded-xl border text-left transition disabled:cursor-not-allowed disabled:opacity-60',
-                    expanded ? 'h-8 gap-2 px-2.5' : 'h-8 justify-center px-0',
-                    active ? activeClass : inactiveClass
-                  ].join(' ')}
-                >
-                  <span className={['relative grid h-7 w-7 shrink-0 place-items-center transition', active ? 'text-indigo-600' : 'text-slate-500'].join(' ')}>
-                    <NavIcon page={item.page} />
-                    {showBadgeDot ? (
-                      <span
-                        className="pointer-events-none absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border border-slate-950/80 bg-rose-500"
-                        aria-hidden="true"
-                      />
-                    ) : null}
-                  </span>
-                  {expanded ? (
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="truncate text-[15px] font-semibold leading-tight">{item.label(t)}</div>
-                        {badgeCount > 0 ? (
-                          <span className={['rounded-full px-2 py-0.5 text-[10px] font-semibold', badgeTone].join(' ')}>
-                            {badgeCount}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </nav>
+          <GooeyNav
+            items={navItems}
+            activeIndex={activeIndex}
+            initialActiveIndex={activeIndex}
+            particleCount={49}
+            particleDistances={[132, 14]}
+            particleR={520}
+            animationTime={600}
+            timeVariance={720}
+            colors={[1, 2, 3, 1, 2, 3, 1, 4]}
+            className={[
+              'admin-sidebar-gooey',
+              themeMode === 'light' ? 'admin-sidebar-gooey-light' : 'admin-sidebar-gooey-dark',
+              expanded ? 'admin-sidebar-gooey-expanded' : 'admin-sidebar-gooey-collapsed',
+            ].join(' ')}
+            ariaLabel={t('管理导航', 'Admin navigation')}
+          />
+        </div>
       </div>
     </aside>
   );

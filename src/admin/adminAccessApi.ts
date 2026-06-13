@@ -13,7 +13,8 @@ import {
   type AdminPositionScopes,
   type AdminRole
 } from '../shared/adminAccess';
-import type { PositionRecord } from '../shared/positions';
+import { normalizePositionDepartment, normalizePositionTone, type PositionDepartment, type PositionRecord } from '../shared/positions';
+import type { LabelToneKey } from '../lib/labelTone';
 
 type RpcResult<T> = {
   data: T | null;
@@ -104,6 +105,8 @@ export const fetchAdminAccessContext = async (
 const normalizePositionRow = (row: Record<string, unknown>): PositionRecord => ({
   id: typeof row.id === 'string' || typeof row.id === 'number' ? row.id : undefined,
   name: String(row.name ?? '').trim(),
+  department: normalizePositionDepartment(row.department),
+  tone: normalizePositionTone(row.tone),
   is_active: Boolean(row.is_active ?? true),
   display_order: Number(row.display_order ?? 0),
   created_at: row.created_at ? String(row.created_at) : null,
@@ -124,18 +127,40 @@ export const listPositions = async (supabase: SupabaseClient): Promise<PositionR
 
 export const savePosition = async (
   supabase: SupabaseClient,
-  payload: { name: string; display_order: number; is_active: boolean; original_name?: string | null }
-): Promise<PositionRecord> =>
-  normalizePositionRow(
-    await expectRpcSuccess<Record<string, unknown>>(
+  payload: { name: string; display_order: number; is_active: boolean; department?: PositionDepartment; tone?: LabelToneKey; original_name?: string | null }
+): Promise<PositionRecord> => {
+  const params = {
+    p_name: payload.name,
+    p_display_order: payload.display_order,
+    p_is_active: payload.is_active,
+    p_department: normalizePositionDepartment(payload.department),
+    p_tone: normalizePositionTone(payload.tone),
+    p_original_name: payload.original_name ?? null
+  };
+
+  try {
+    return normalizePositionRow(
+      await expectRpcSuccess<Record<string, unknown>>(
+        supabase.rpc('save_position', params)
+      )
+    );
+  } catch (error) {
+    const message = String(error instanceof Error ? error.message : error).toLowerCase();
+    if (!message.includes('save_position') && !message.includes('p_tone') && !message.includes('p_department') && !message.includes('function')) {
+      throw error;
+    }
+    return normalizePositionRow(
+      await expectRpcSuccess<Record<string, unknown>>(
       supabase.rpc('save_position', {
         p_name: payload.name,
         p_display_order: payload.display_order,
         p_is_active: payload.is_active,
         p_original_name: payload.original_name ?? null
       })
-    )
-  );
+      )
+    );
+  }
+};
 
 const parseStringArray = (value: unknown): string[] => {
   if (Array.isArray(value)) {
@@ -375,4 +400,3 @@ export const normalizeAdminAccessModulesForSave = (
     .filter((module): module is { module_key: AdminModuleKey; access_level: AdminModuleAccessLevel } =>
       ADMIN_MODULE_KEYS.includes(module.module_key)
     );
-
