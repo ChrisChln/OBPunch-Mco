@@ -8,6 +8,7 @@ import { getLabelToneClass, loadLabelToneMap } from './lib/labelTone';
 import { isExactOperationalCutoffOut } from './shared/operationalPunches';
 import { isScheduleOnlyAgency } from './shared/agencyRules';
 import AppDialog from './components/AppDialog';
+import ElectricBorder from './components/ElectricBorder';
 import {
   DEFAULT_DASHBOARD_CARD_POSITIONS,
   buildDashboardCardPositions,
@@ -15,8 +16,8 @@ import {
   resolveDashboardPositionName
 } from './shared/dashboardPositions';
 import {
+  buildDashboardDepartmentAttendanceGroups,
   buildDashboardDepartmentCoverageCards,
-  createDashboardAttendanceStat,
   getDashboardDepartmentLabel,
   getDashboardDepartmentTonePosition
 } from './shared/dashboardAttendanceStats';
@@ -342,6 +343,22 @@ const getAttendanceCardValueClass = (position: string) => {
   if (pos === 'Inventory') return 'text-fuchsia-100';
   if (pos === 'FLEX TEAM') return 'text-slate-100';
   return 'text-stone-100';
+};
+
+const getAttendanceBorderColor = (position: string) => {
+  const pos = normalizePositionKey(position) || normalizePositionName(position);
+  if (pos === 'Pick') return '#38bdf8';
+  if (pos === 'Pack') return '#34d399';
+  if (pos === 'Rebin') return '#fbbf24';
+  if (pos === 'Preship') return '#fb7185';
+  if (pos === 'Shipping') return '#818cf8';
+  if (pos === 'Transfer') return '#a78bfa';
+  if (pos === 'Putaway') return '#fb923c';
+  if (pos === 'Receive') return '#a3e635';
+  if (pos === 'Load') return '#f472b6';
+  if (pos === 'Inventory') return '#e879f9';
+  if (pos === 'FLEX TEAM') return '#cbd5e1';
+  return '#e7e5e4';
 };
 
 const chunkArray = <T,>(list: T[], size: number): T[][] => {
@@ -1443,42 +1460,15 @@ export default function DashboardPage() {
       ),
     [accountUsageRows, dashboardPositionNames]
   );
-  const attendanceCards = useMemo(() => {
-    const cards: Array<{
-      position: string;
-      shift: 'early' | 'late';
-      expected: number;
-      present: number;
-      onClock: number;
-      offWorked: number;
-    }> = [];
-    for (const shift of ['early', 'late'] as const) {
-      for (const position of cardPositions) {
-        const positionShiftScope = rows.filter(
-          (row) =>
-            normalizePositionKey(row.position, dashboardPositionNames) === position &&
-            String(row.shift ?? '').trim().toLowerCase() === shift
-        );
-        const offWorkedScope = positionShiftScope.filter((row) => row.attendance === 'Off Worked');
-        const stat = cardStatsByKey[`${shift}:${position}`] ?? createDashboardAttendanceStat();
-        cards.push({ position, shift, expected: stat.expected, present: stat.present, onClock: stat.onClock, offWorked: stat.offWorked || offWorkedScope.length });
-      }
-    }
-    return cards;
-  }, [rows, cardPositions, cardStatsByKey, dashboardPositionNames]);
   const departmentAttendanceGroups = useMemo(
     () =>
-      POSITION_DEPARTMENTS.filter((department) => department !== 'hidden').map((department) => ({
-        department,
-        cards: (['early', 'late'] as const).flatMap((shift) =>
-          attendanceCards.filter(
-            (card) =>
-              card.shift === shift &&
-              normalizePositionDepartment(dashboardPositionDepartments[card.position]) === department
-          )
-        )
-      })).filter((group) => group.cards.length > 0),
-    [attendanceCards, dashboardPositionDepartments]
+      buildDashboardDepartmentAttendanceGroups({
+        positions: cardPositions,
+        departments: POSITION_DEPARTMENTS,
+        positionDepartments: dashboardPositionDepartments,
+        stats: cardStatsByKey
+      }),
+    [cardPositions, cardStatsByKey, dashboardPositionDepartments]
   );
   const departmentCoverageCards = useMemo(
     () =>
@@ -2090,8 +2080,12 @@ export default function DashboardPage() {
               const isOverPlan = card.present > card.expected;
               const tonePosition = getDashboardDepartmentTonePosition(card.department);
               return (
-                <div
+                <ElectricBorder
                   key={`${card.department}:${card.shift}`}
+                  color={getAttendanceBorderColor(tonePosition)}
+                  speed={0.85}
+                  chaos={0.1}
+                  borderRadius={24}
                   className={[
                     'rounded-[24px] border px-5 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
                     getAttendanceCardClass(tonePosition)
@@ -2121,7 +2115,7 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   </div>
-                </div>
+                </ElectricBorder>
               );
             })}
           </div>
@@ -2132,46 +2126,57 @@ export default function DashboardPage() {
                 <div className="text-[12px] font-semibold uppercase tracking-[0.18em] text-stone-400">
                   {getDashboardDepartmentLabel(group.department)}:
                 </div>
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                {group.cards.map((card) => {
-                  const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
-                  const isOverPlan = card.present > card.expected;
-                  return (
-                    <div key={`${card.position}:${card.shift}`} className={['rounded-[24px] border px-4 py-4', getAttendanceCardClass(card.position)].join(' ')}>
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <div className="text-sm font-semibold text-stone-100">
-                            {card.shift === 'early' ? 'Morning' : 'Night'} {card.position}
-                          </div>
-                          <div className="mt-2 text-xs text-stone-400">
-                            <span className={['font-bold', isOverPlan ? 'text-rose-300' : ''].join(' ')}>
-                              {card.present}/{card.expected}
-                            </span>
-                            <span
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
+                {group.columns.map((column) => (
+                  <div key={column.position} className="grid min-w-0 grid-rows-2 gap-3">
+                    {column.cards.map((card) => {
+                      const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
+                      const isOverPlan = card.present > card.expected;
+                      return (
+                        <ElectricBorder
+                          key={`${card.position}:${card.shift}`}
+                          color={getAttendanceBorderColor(card.position)}
+                          speed={0.85}
+                          chaos={0.1}
+                          borderRadius={24}
+                          className={['rounded-[24px] border px-4 py-4', getAttendanceCardClass(card.position)].join(' ')}
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div>
+                              <div className="text-sm font-semibold text-stone-100">
+                                {card.shift === 'early' ? 'Morning' : 'Night'} {card.position}
+                              </div>
+                              <div className="mt-2 text-xs text-stone-400">
+                                <span className={['font-bold', isOverPlan ? 'text-rose-300' : ''].join(' ')}>
+                                  {card.present}/{card.expected}
+                                </span>
+                                <span
+                                  className={[
+                                    'ml-2 font-semibold',
+                                    isOverPlan ? 'text-rose-300' : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'
+                                  ].join(' ')}
+                                >
+                                  {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
+                                </span>
+                              </div>
+                            </div>
+                            <div
                               className={[
-                                'ml-2 font-semibold',
-                                isOverPlan ? 'text-rose-300' : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'
+                                'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
+                                getAttendanceCardClass(card.position)
                               ].join(' ')}
                             >
-                              {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
-                            </span>
+                              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">On Clock</div>
+                              <div className={['mt-1 text-3xl font-semibold leading-none', getAttendanceCardValueClass(card.position)].join(' ')}>
+                                {card.onClock}
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                        <div
-                          className={[
-                            'min-w-[92px] rounded-[20px] border px-3 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
-                            getAttendanceCardClass(card.position)
-                          ].join(' ')}
-                        >
-                          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">On Clock</div>
-                          <div className={['mt-1 text-3xl font-semibold leading-none', getAttendanceCardValueClass(card.position)].join(' ')}>
-                            {card.onClock}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                        </ElectricBorder>
+                      );
+                    })}
+                  </div>
+                ))}
                 </div>
               </section>
             ))}

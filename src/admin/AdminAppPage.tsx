@@ -108,6 +108,13 @@ import {
 } from './scheduleWeek';
 import { buildTimecardExportDailyPeopleRow, formatRoundedHours, getTimecardExportDayCellText, getTimecardTerminatedByDay } from './timecardDisplay';
 import {
+  getDefaultPositionToneKey,
+  getPositionToneFromMap,
+  normalizePositionToneKey,
+  normalizePositionToneMap,
+  type PositionToneMap
+} from './positionTone';
+import {
   buildStaleLateAutoDeletePlan,
   evaluateLateDecision,
   formatClockMinutes,
@@ -968,17 +975,6 @@ const normalizeDeviceType = (value: string): DeviceType => {
   return raw;
 };
 
-const getDefaultPositionToneKey = (value: string): LabelToneKey => {
-  const pos = normalizeAllowedPosition(value);
-  if (pos === 'Pick') return 'sky';
-  if (pos === 'Pack') return 'emerald';
-  if (pos === 'Rebin') return 'amber';
-  if (pos === 'Preship') return 'rose';
-  if (pos === 'Transfer') return 'violet';
-  if (pos === 'FLEX TEAM') return 'slate';
-  return 'slate';
-};
-
 const POSITION_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
   sky: 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]',
   cyan: 'badge-elevated-dark border-cyan-300/30 text-cyan-100 bg-cyan-400/[0.13]',
@@ -1007,15 +1003,6 @@ const POSITION_TONE_CLASS_LIGHT: Record<LabelToneKey, string> = {
   violet: 'badge-elevated-light border-violet-300 bg-violet-50 text-violet-700',
   indigo: 'badge-elevated-light border-indigo-300 bg-indigo-50 text-indigo-700',
   slate: 'badge-elevated-light border-slate-300 bg-slate-100 text-slate-700'
-};
-
-type PositionToneMap = Record<string, LabelToneKey>;
-
-const normalizePositionToneKey = (value: string) => normalizeAllowedPosition(value) || String(value ?? '').trim().replace(/\s+/g, ' ');
-
-const getPositionToneFromMap = (value: string, toneMap?: Partial<PositionToneMap>) => {
-  const key = normalizePositionToneKey(value);
-  return (key ? toneMap?.[key] : undefined) ?? getDefaultPositionToneKey(value);
 };
 
 const getPositionBadgeClass = (value: string, toneMap?: Partial<PositionToneMap>) => {
@@ -2092,15 +2079,9 @@ export default function AdminAppPage() {
   const [schedulePosition, setSchedulePosition] = useState<string>('');
   const [scheduleDepartment, setScheduleDepartment] = useState<string[]>([]);
   const [scheduleEmploymentType, setScheduleEmploymentType] = useState<'' | EmploymentType>('');
-  const [schedulePositionToneByPosition, setSchedulePositionToneByPosition] = useState<PositionToneMap>({
-    Pick: 'sky',
-    Pack: 'emerald',
-    Rebin: 'amber',
-    Preship: 'rose',
-    Transfer: 'violet',
-    'Water Spider': 'sky',
-    'FLEX TEAM': 'slate'
-  });
+  const [schedulePositionToneByPosition, setSchedulePositionToneByPosition] = useState<PositionToneMap>(() =>
+    normalizePositionToneMap({})
+  );
   const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
   const [scheduleLabelSavingStaffId, setScheduleLabelSavingStaffId] = useState<string | null>(null);
   const [scheduleLabelToneByName, setScheduleLabelToneByName] = useState<Record<string, LabelToneKey>>(() =>
@@ -2538,27 +2519,6 @@ export default function AdminAppPage() {
       const tone = String(v ?? '').trim() as LabelToneKey;
       if (!name || !LABEL_TONE_KEYS.includes(tone)) continue;
       next[name] = tone;
-    }
-    return next;
-  };
-
-  const normalizePositionToneMap = (value: unknown): PositionToneMap => {
-    const raw = (value ?? {}) as Record<string, unknown>;
-    const next: PositionToneMap = {
-      Pick: 'sky',
-      Pack: 'emerald',
-      Rebin: 'amber',
-      Preship: 'rose',
-      Transfer: 'violet',
-      'Water Spider': 'sky',
-      'FLEX TEAM': 'slate'
-    };
-    for (const [rawPosition, rawTone] of Object.entries(raw)) {
-      const pos = normalizePositionToneKey(rawPosition);
-      const tone = String(rawTone ?? '').trim() as LabelToneKey;
-      if (!pos) continue;
-      if (!LABEL_TONE_KEYS.includes(tone)) continue;
-      next[pos] = tone;
     }
     return next;
   };
@@ -4138,7 +4098,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const labels: Record<string, string> = {
       employee_upsert: t('员工导入', 'Employee Upsert'),
       employee_update: t('员工更新', 'Employee Update'),
-      employee_delete: t('员工删除', 'Employee Delete'),
+      employee_delete: t('员工离职', 'Employee Departure'),
       employee_upload: t('批量上传', 'Employee Upload'),
       punch_manual_add: t('补打卡', 'Punch Add'),
       punch_manual_edit: t('改打卡', 'Punch Edit'),
@@ -6974,7 +6934,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const employeeSnapshot =
       employees.find((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) === normalizedStaff) ?? null;
     if (isScheduleOnlyAgency(String(employeeSnapshot?.agency ?? employeeSnapshot?.Agency ?? '').trim())) {
-      setEmployeesError(t('JDL员工不能删除。', 'JDL employees cannot be deleted.'));
+      setEmployeesError(t('JDL员工不能离职。', 'JDL employees cannot be departed.'));
       return;
     }
     const employeeName = employeeSnapshot?.name?.trim() || '';
@@ -6982,8 +6942,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     const ok = await askConfirm(
       t(
-        `确定要删除员工 ${displayName} 吗？此操作不可撤销。`,
-        `Are you sure you want to remove employee ${displayName}? This action cannot be undone.`
+        `确定要将员工 ${displayName} 标记为离职吗？此操作不可撤销。`,
+        `Are you sure you want to mark employee ${displayName} as departed? This action cannot be undone.`
       ),
       t('离职确认', 'Confirm Departure')
     );
@@ -8643,8 +8603,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     } else if (action === 'employee_delete') {
       const deletedName = String(payload?.name ?? '').trim();
       summary = deletedName
-        ? t(`删除员工：${deletedName}`, `Employee deleted: ${deletedName}`)
-        : t('删除员工', 'Employee deleted');
+        ? t(`员工离职：${deletedName}`, `Employee departed: ${deletedName}`)
+        : t('员工离职', 'Employee departed');
       push(t('姓名', 'Name'), payload?.name);
       push('Agency', payload?.agency);
       push(t('岗位', 'Position'), payload?.position);
@@ -8977,8 +8937,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const shift = resolved.shift as '' | 'early' | 'late';
       const ok = await askConfirm(
         t(
-          `确定撤销删除员工 ${staffFromPayload} 吗？将仅恢复员工信息（不恢复排班）。`,
-          `Undo delete for ${staffFromPayload}? This restores employee info only (not schedules).`
+          `确定撤销员工 ${staffFromPayload} 的离职状态吗？将仅恢复员工信息（不恢复排班）。`,
+          `Undo departure for ${staffFromPayload}? This restores employee info only (not schedules).`
         ),
         t('撤销确认', 'Undo Confirmation')
       );

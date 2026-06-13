@@ -8,14 +8,13 @@ import {
 } from '../../shared/dashboardPositions';
 import { DEFAULT_DASHBOARD_CARD_POSITIONS } from '../../shared/dashboardPositions';
 import {
+  buildDashboardDepartmentAttendanceGroups,
   buildDashboardDepartmentCoverageCards,
   buildDashboardAttendanceStats,
-  createDashboardAttendanceStat,
   getDashboardDepartmentLabel,
   getDashboardDepartmentTonePosition,
-  getDashboardAttendanceStatKey,
-  type DashboardAttendanceStat
 } from '../../shared/dashboardAttendanceStats';
+import ElectricBorder from '../../components/ElectricBorder';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -321,6 +320,21 @@ const getAttendanceCardValueClass = (position: string) => {
   return 'text-stone-100';
 };
 
+const getAttendanceBorderColor = (position: string, isLight: boolean) => {
+  const normalized = normalizePositionKey(position) || position;
+  if (normalized === 'Pick') return isLight ? '#0284c7' : '#38bdf8';
+  if (normalized === 'Pack') return isLight ? '#059669' : '#34d399';
+  if (normalized === 'Rebin') return isLight ? '#d97706' : '#fbbf24';
+  if (normalized === 'Preship') return isLight ? '#e11d48' : '#fb7185';
+  if (normalized === 'Shipping') return isLight ? '#4f46e5' : '#818cf8';
+  if (normalized === 'Transfer') return isLight ? '#7c3aed' : '#a78bfa';
+  if (normalized === 'Putaway') return isLight ? '#ea580c' : '#fb923c';
+  if (normalized === 'Receive') return isLight ? '#65a30d' : '#a3e635';
+  if (normalized === 'Load') return isLight ? '#db2777' : '#f472b6';
+  if (normalized === 'Inventory') return isLight ? '#c026d3' : '#e879f9';
+  return isLight ? '#64748b' : '#e7e5e4';
+};
+
 function HomeDashboardPage({
   t,
   themeMode: _themeMode,
@@ -399,31 +413,14 @@ function HomeDashboardPage({
   );
 
   const departmentAttendanceGroups = useMemo(
-    () => {
-      return POSITION_DEPARTMENTS.filter((department) => department !== 'hidden').map((department) => {
-        const departmentPositions = cardPositions.filter(
-          (position) => normalizePositionDepartment(positionDepartmentByPosition[position]) === department
-        );
-        return {
-          department,
-          cards: (['early', 'late'] as const).flatMap((shift) =>
-            departmentPositions.map((position) => {
-              const plan = summaryByPosition.get(position) ?? { early: 0, late: 0, total: 0 };
-              const key = getDashboardAttendanceStatKey(shift, position);
-              const stat: DashboardAttendanceStat = homeAttendanceStats[key] ?? createDashboardAttendanceStat();
-              return {
-                position,
-                shift,
-                expected: shift === 'early' ? plan.early : plan.late,
-                present: stat.present,
-                onClock: stat.onClock,
-                offWorked: stat.offWorked
-              };
-            })
-          )
-        };
-      }).filter((group) => group.cards.length > 0);
-    },
+    () =>
+      buildDashboardDepartmentAttendanceGroups({
+        positions: cardPositions,
+        departments: POSITION_DEPARTMENTS,
+        positionDepartments: positionDepartmentByPosition,
+        stats: homeAttendanceStats,
+        expectedByPosition: summaryByPosition
+      }),
     [cardPositions, homeAttendanceStats, positionDepartmentByPosition, summaryByPosition]
   );
 
@@ -550,13 +547,17 @@ function HomeDashboardPage({
               const isOverPlan = card.present > card.expected;
               const tonePosition = getDashboardDepartmentTonePosition(card.department);
               return (
-                <div
-                    key={`${card.department}:${card.shift}`}
-                    className={[
-                      'rounded-[24px] border px-5 py-4 shadow-none',
-                      isLight ? getAttendanceCardClassLight(tonePosition) : getAttendanceCardClass(tonePosition)
-                    ].join(' ')}
-                  >
+                <ElectricBorder
+                  key={`${card.department}:${card.shift}`}
+                  color={getAttendanceBorderColor(tonePosition, isLight)}
+                  speed={0.85}
+                  chaos={0.1}
+                  borderRadius={24}
+                  className={[
+                    'rounded-[24px] border px-5 py-4 shadow-none',
+                    isLight ? getAttendanceCardClassLight(tonePosition) : getAttendanceCardClass(tonePosition)
+                  ].join(' ')}
+                >
                   <div className="flex items-end justify-between gap-4">
                     <div>
                       <div className={['text-[11px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>{getDashboardDepartmentLabel(card.department)} {isMorning ? 'Morning' : 'Night'}</div>
@@ -568,7 +569,7 @@ function HomeDashboardPage({
                       </div>
                     </div>
                   </div>
-                </div>
+                </ElectricBorder>
               );
             })}
           </div>
@@ -580,44 +581,52 @@ function HomeDashboardPage({
                   {getDashboardDepartmentLabel(group.department)}:
                 </div>
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
-                  {group.cards.map((card) => {
-                    const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
-                    const isOverPlan = card.present > card.expected;
-                    return (
-                      <div
-                        key={`${card.position}:${card.shift}`}
-                        className={[
-                          'rounded-[24px] border px-4 py-4 shadow-none',
-                          isLight
-                            ? getAttendanceCardClassLight(card.position)
-                            : getAttendanceCardClass(card.position)
-                        ].join(' ')}
-                      >
-                        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className={['text-sm font-semibold', isLight ? 'text-slate-800' : 'text-stone-100'].join(' ')}>{card.shift === 'early' ? 'Morning' : 'Night'} {card.position}</div>
-                            <div className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>
-                              <span className={['font-bold', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : ''].join(' ')}>
-                                {card.present}/{card.expected}
-                              </span>
-                              <span className={['ml-2 font-semibold', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : isLight ? (ratio < 80 ? 'text-rose-500' : ratio >= 90 ? getAttendanceCardValueClassLight(card.position) : 'text-slate-500') : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'].join(' ')}>
-                                {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
-                              </span>
+                  {group.columns.map((column) => (
+                    <div key={column.position} className="grid min-w-0 grid-rows-2 gap-3">
+                      {column.cards.map((card) => {
+                        const ratio = card.expected > 0 ? (card.present / card.expected) * 100 : 0;
+                        const isOverPlan = card.present > card.expected;
+                        return (
+                          <ElectricBorder
+                            key={`${card.position}:${card.shift}`}
+                            color={getAttendanceBorderColor(card.position, isLight)}
+                            speed={0.85}
+                            chaos={0.1}
+                            borderRadius={24}
+                            className={[
+                              'rounded-[24px] border px-4 py-4 shadow-none',
+                              isLight
+                                ? getAttendanceCardClassLight(card.position)
+                                : getAttendanceCardClass(card.position)
+                            ].join(' ')}
+                          >
+                            <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className={['text-sm font-semibold', isLight ? 'text-slate-800' : 'text-stone-100'].join(' ')}>{card.shift === 'early' ? 'Morning' : 'Night'} {card.position}</div>
+                                <div className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>
+                                  <span className={['font-bold', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : ''].join(' ')}>
+                                    {card.present}/{card.expected}
+                                  </span>
+                                  <span className={['ml-2 font-semibold', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : isLight ? (ratio < 80 ? 'text-rose-500' : ratio >= 90 ? getAttendanceCardValueClassLight(card.position) : 'text-slate-500') : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? 'text-stone-100' : 'text-stone-300'].join(' ')}>
+                                    {card.expected > 0 ? `${ratio.toFixed(1)}%` : '0.0%'}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className={[
+                                'ml-auto w-[92px] max-w-full shrink-0 rounded-[20px] border px-3 py-2 text-center shadow-none',
+                                isLight
+                                  ? getAttendanceCardClassLight(card.position).replace('/85', '')
+                                  : getAttendanceCardClass(card.position)
+                              ].join(' ')}>
+                                <div className={['text-[10px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>On Clock</div>
+                                <div className={['mt-1 text-3xl font-semibold leading-none', isLight ? getAttendanceCardValueClassLight(card.position) : getAttendanceCardValueClass(card.position)].join(' ')}>{card.onClock}</div>
+                              </div>
                             </div>
-                          </div>
-                          <div className={[
-                            'ml-auto w-[92px] max-w-full shrink-0 rounded-[20px] border px-3 py-2 text-center shadow-none',
-                            isLight
-                              ? getAttendanceCardClassLight(card.position).replace('/85', '')
-                              : getAttendanceCardClass(card.position)
-                          ].join(' ')}>
-                            <div className={['text-[10px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>On Clock</div>
-                            <div className={['mt-1 text-3xl font-semibold leading-none', isLight ? getAttendanceCardValueClassLight(card.position) : getAttendanceCardValueClass(card.position)].join(' ')}>{card.onClock}</div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                          </ElectricBorder>
+                        );
+                      })}
+                    </div>
+                  ))}
                 </div>
               </section>
             ))}

@@ -444,10 +444,10 @@ export default function EmployeesTableSection({
                         evt.stopPropagation();
                         void deleteEmployeeRow(staff);
                       }}
-                      title={isProtectedAgencyEmployee ? t('JDL员工不能删除', 'JDL employees cannot be deleted') : undefined}
+                      title={isProtectedAgencyEmployee ? t('JDL员工不能离职', 'JDL employees cannot be departed') : undefined}
                       className="magic-button-surface magic-button-compact rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {t('删', 'Del')}
+                      {t('离职', 'Depart')}
                     </button>
                   </td>
                 </tr>

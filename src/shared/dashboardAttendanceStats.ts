@@ -33,6 +33,25 @@ export type DashboardDepartmentCoverageCard = {
   present: number;
 };
 
+export type DashboardPositionAttendanceCard = {
+  position: string;
+  shift: DashboardAttendanceShift;
+  expected: number;
+  present: number;
+  onClock: number;
+  offWorked: number;
+};
+
+export type DashboardPositionAttendanceColumn = {
+  position: string;
+  cards: [DashboardPositionAttendanceCard, DashboardPositionAttendanceCard];
+};
+
+export type DashboardDepartmentAttendanceGroup = {
+  department: Exclude<PositionDepartment, 'hidden'>;
+  columns: DashboardPositionAttendanceColumn[];
+};
+
 export const createDashboardAttendanceStat = (): DashboardAttendanceStat => ({
   expected: 0,
   present: 0,
@@ -137,4 +156,49 @@ export const buildDashboardDepartmentCoverageCards = ({
   }
 
   return Array.from(cards.values());
+};
+
+export const buildDashboardDepartmentAttendanceGroups = ({
+  positions,
+  departments,
+  positionDepartments,
+  stats,
+  expectedByPosition
+}: {
+  positions: readonly string[];
+  departments: readonly PositionDepartment[];
+  positionDepartments: Readonly<Record<string, unknown>>;
+  stats: DashboardAttendanceSummary;
+  expectedByPosition?: ReadonlyMap<string, Partial<Record<DashboardAttendanceShift, number>>>;
+}): DashboardDepartmentAttendanceGroup[] => {
+  return departments
+    .filter((department): department is Exclude<PositionDepartment, 'hidden'> => department !== 'hidden')
+    .map((department) => {
+      const departmentPositions = positions.filter(
+        (position) => normalizePositionDepartment(positionDepartments[position]) === department
+      );
+
+      return {
+        department,
+        columns: departmentPositions.map((position) => {
+          const expected = expectedByPosition?.get(position);
+          const cards: [DashboardPositionAttendanceCard, DashboardPositionAttendanceCard] = (['early', 'late'] as const).map((shift) => {
+            const stat = stats[getDashboardAttendanceStatKey(shift, position)] ?? createDashboardAttendanceStat();
+            return {
+              position,
+              shift,
+              expected: expected?.[shift] ?? stat.expected,
+              present: stat.present,
+              onClock: stat.onClock,
+              offWorked: stat.offWorked
+            };
+          }) as [DashboardPositionAttendanceCard, DashboardPositionAttendanceCard];
+          return {
+            position,
+            cards
+          };
+        })
+      };
+    })
+    .filter((group) => group.columns.length > 0);
 };
