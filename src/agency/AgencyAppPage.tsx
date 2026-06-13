@@ -567,7 +567,7 @@ const ScheduleCell = memo(function ScheduleCell({
         disabled={busy || !canEditCell}
         onClick={(event) => onCellClick(event, staffId, workDate, cellOptions, state)}
         className={[
-          'h-8 w-[74px] rounded-md px-1 text-[9px] font-semibold leading-none transition disabled:cursor-not-allowed disabled:opacity-100',
+          'h-8 w-[68px] rounded-md px-1 text-[9px] font-semibold leading-none transition disabled:cursor-not-allowed disabled:opacity-100',
           !canEditCell ? 'saturate-50 brightness-90' : '',
           showAbsent
             ? 'border border-slate-300 bg-white text-slate-900'
@@ -1416,7 +1416,8 @@ export default function AgencyAppPage() {
 
   const showIdColumn = !compactScheduleView;
   const showAgencyColumn = !compactScheduleView;
-  const showDriverGroupColumn = !compactScheduleView;
+  const showDriverGroupControls = false;
+  const showDriverGroupColumn = false;
   const showNoteColumn = !compactScheduleView;
   const showStartTimeColumn = !compactScheduleView;
   const selectedDateColumnToneClass = compactScheduleView ? selectedDateColumnClassMobile : selectedDateColumnClass;
@@ -1890,8 +1891,8 @@ export default function AgencyAppPage() {
   }
 
   return (
-    <div className="min-h-screen px-5 py-8 text-paper">
-      <div className="mx-auto flex max-w-[1480px] flex-col gap-6">
+    <div className="min-h-screen px-4 py-8 text-paper sm:px-5">
+      <div className="mx-auto flex w-full max-w-[calc(100vw-40px)] flex-col gap-6">
         <header className={cardClass}>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -2121,79 +2122,81 @@ export default function AgencyAppPage() {
                   <option value="late">Night</option>
                 </select>
               </div>
-              <div className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                    <Users className="h-4 w-4 text-cyan-200" />
-                    <span>Driver Groups</span>
+              {showDriverGroupControls ? (
+                <div className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                      <Users className="h-4 w-4 text-cyan-200" />
+                      <span>Driver Groups</span>
+                    </div>
+                    <button
+                      type="button"
+                      className={neonButtonClass}
+                      disabled={busy || !canOperateAgency || driverGroupEmployeeOptions.length < 2}
+                      onClick={() => openDriverGroupModal()}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      New
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className={neonButtonClass}
-                    disabled={busy || !canOperateAgency || driverGroupEmployeeOptions.length < 2}
-                    onClick={() => openDriverGroupModal()}
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    New
-                  </button>
-                </div>
-                {driverGroupWarnings.length > 0 ? (
-                  <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-                    {driverGroupWarnings.map((warning) => (
-                      <div key={warning.code}>{warning.message} {warning.staffIds.join(', ')}</div>
-                    ))}
+                  {driverGroupWarnings.length > 0 ? (
+                    <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                      {driverGroupWarnings.map((warning) => (
+                        <div key={warning.code}>{warning.message} {warning.staffIds.join(', ')}</div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {driverGroupSummaries.length > 0 ? (
+                      driverGroupSummaries.map((group) => (
+                        <div key={group.code} className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2">
+                          <button
+                            type="button"
+                            className="text-sm font-semibold text-white transition hover:text-cyan-100"
+                            disabled={!canOperateAgency}
+                            onClick={() => openDriverGroupModal(group.code)}
+                          >
+                            Group {group.code}
+                          </button>
+                          <span className="text-xs text-slate-400">{group.activeMemberCount}</span>
+                          <button
+                            type="button"
+                            className="rounded-lg p-1 text-slate-400 transition hover:bg-white/10 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={busy || !canOperateAgency}
+                            onClick={() => requestDeleteDriverGroup(group.code)}
+                            aria-label={`Delete driver group ${group.code}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-sm text-slate-400">No groups.</div>
+                    )}
                   </div>
-                ) : null}
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {driverGroupSummaries.length > 0 ? (
-                    driverGroupSummaries.map((group) => (
-                      <div key={group.code} className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2">
-                        <button
-                          type="button"
-                          className="text-sm font-semibold text-white transition hover:text-cyan-100"
-                          disabled={!canOperateAgency}
-                          onClick={() => openDriverGroupModal(group.code)}
-                        >
-                          Group {group.code}
-                        </button>
-                        <span className="text-xs text-slate-400">{group.activeMemberCount}</span>
-                        <button
-                          type="button"
-                          className="rounded-lg p-1 text-slate-400 transition hover:bg-white/10 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={busy || !canOperateAgency}
-                          onClick={() => requestDeleteDriverGroup(group.code)}
-                          aria-label={`Delete driver group ${group.code}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-sm text-slate-400">No groups.</div>
-                  )}
                 </div>
-              </div>
+              ) : null}
               <div className={[
-                'overflow-x-auto rounded-2xl border border-white/10 bg-black/30 py-1',
+                'overflow-x-auto rounded-2xl border border-white/10 bg-black/30 py-1 xl:overflow-x-visible',
                 compactScheduleView ? 'px-2' : ''
               ].join(' ')}>
-                <table className={[compactScheduleView ? 'min-w-full' : 'min-w-[1600px]', 'w-full table-fixed text-left text-xs leading-tight'].join(' ')}>
+                <table className="w-full min-w-full table-fixed text-left text-xs leading-tight">
                   <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                     <tr>
-                      {showIdColumn ? <th className="w-[104px] py-2 pl-4 pr-1">ID</th> : null}
-                      <th className={[compactScheduleView ? 'w-[206px]' : 'w-[184px]', 'px-1 py-2'].join(' ')}>Name</th>
-                      {showAgencyColumn ? <th className="w-[92px] px-1 py-2">Agency</th> : null}
+                      {showIdColumn ? <th className="w-[88px] py-2 pl-4 pr-1">ID</th> : null}
+                      <th className={[compactScheduleView ? 'w-[206px]' : 'w-[160px]', 'px-1 py-2'].join(' ')}>Name</th>
+                      {showAgencyColumn ? <th className="w-[76px] px-1 py-2">Agency</th> : null}
                       {showDriverGroupColumn ? <th className="w-[72px] px-1 py-2 text-center">Group</th> : null}
-                      {showNoteColumn ? <th className="w-[180px] px-1 py-2">Note</th> : null}
-                      <th className={[compactScheduleView ? 'w-[88px]' : 'w-[96px]', 'px-1 py-2'].join(' ')}>Position</th>
-                      <th className={[compactScheduleView ? 'w-[66px]' : 'w-[72px]', 'px-1 py-2 text-center'].join(' ')}>Shift</th>
-                      <th className={[compactScheduleView ? 'w-[128px]' : 'w-[152px]', 'px-1 py-2 text-center'].join(' ')}>Status</th>
-                      {showStartTimeColumn ? <th className="w-[86px] px-1 py-2 text-center">Start time</th> : null}
+                      {showNoteColumn ? <th className="w-[64px] px-1 py-2">Note</th> : null}
+                      <th className={[compactScheduleView ? 'w-[88px]' : 'w-[84px]', 'px-1 py-2'].join(' ')}>Position</th>
+                      <th className={[compactScheduleView ? 'w-[66px]' : 'w-[60px]', 'px-1 py-2 text-center'].join(' ')}>Shift</th>
+                      <th className={[compactScheduleView ? 'w-[128px]' : 'w-[116px]', 'px-1 py-2 text-center'].join(' ')}>Status</th>
+                      {showStartTimeColumn ? <th className="w-[68px] px-1 py-2 text-center">Start</th> : null}
                       {visibleWeekDates.map((workDate) => (
                         <th
                           key={workDate}
                           className={[
-                            compactScheduleView ? 'w-[78px] px-0.5 py-2 text-center' : 'w-[86px] px-0.5 py-2 text-center',
+                            compactScheduleView ? 'w-[78px] px-0.5 py-2 text-center' : 'w-[72px] px-0.5 py-2 text-center',
                             workDate === selectedDate
                               ? selectedDateHeaderColumnClass
                               : ''

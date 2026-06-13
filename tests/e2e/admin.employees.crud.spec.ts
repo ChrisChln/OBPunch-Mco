@@ -10,7 +10,7 @@ test.describe('admin employees CRUD flows', () => {
     requireEnv(['E2E_ADMIN_EMAIL', 'E2E_ADMIN_PASSWORD']);
   });
 
-  test('create -> edit -> delete employee', async ({ page }) => {
+  test('create -> edit -> depart employee', async ({ page }) => {
     await adminLogin(page);
     await gotoAdminTab(page, /Employees|员工信息/i);
 
@@ -39,6 +39,6 @@ test.describe('admin employees CRUD flows', () => {
     page.once('dialog', async (dialog) => {
       await dialog.accept();
     });
-    await page.getByRole('button', { name: /Delete|删除/i }).first().click();
+    await page.getByRole('button', { name: /Depart|离职/i }).first().click();
   });
 });

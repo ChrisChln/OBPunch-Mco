@@ -1,5 +1,5 @@
 import { createServiceSupabase, parseJsonBody } from './_forecastShared.js';
-import { submitPunchWithServiceRole, type PunchAction } from './_punchCore.js';
+import { submitPunchWithServiceRole, type PunchRequestAction } from './_punchCore.js';
 
 type PunchBody = {
   staff_id?: unknown;
@@ -28,7 +28,7 @@ export default async function handler(req: any, res: any) {
   const action = String(body.action ?? '').toUpperCase();
   const result = await submitPunchWithServiceRole(supabase, {
     staffId: String(body.staff_id ?? ''),
-    action: action as PunchAction,
+    action: action as PunchRequestAction,
     userAgent: String(req.headers?.['user-agent'] ?? '')
   });
 

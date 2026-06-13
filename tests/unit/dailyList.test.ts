@@ -4,6 +4,7 @@ import {
   filterDailyListDisplayRows,
   isDailyListCountedRow,
   isDailyListDisplayRow,
+  resolveDailyListPositionSource,
   selectDailyListCapacityRows
 } from '../../src/admin/dailyList';
 import type { DailyListRow } from '../../src/admin/types';
@@ -106,5 +107,19 @@ describe('dailyList', () => {
     ] as DailyListRow[];
 
     expect(filterDailyListCountedRows(rows, normalizePosition)).toEqual([]);
+  });
+
+  test('uses employee profile position before schedule row position', () => {
+    expect(resolveDailyListPositionSource('Pick', 'Receive')).toEqual({
+      position: 'Pick',
+      profilePosition: 'Pick',
+      schedulePosition: 'Receive'
+    });
+
+    expect(resolveDailyListPositionSource('', 'Receive')).toEqual({
+      position: 'Receive',
+      profilePosition: '',
+      schedulePosition: 'Receive'
+    });
   });
 });

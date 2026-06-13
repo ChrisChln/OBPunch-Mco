@@ -7,9 +7,6 @@ type EmployeeEditModalProps = {
   t: TranslateFn;
   themeMode: 'light' | 'dark';
   isLocked: boolean;
-  userEmail: string;
-  staffIdEditorEmail: string;
-  isNewHirePlaceholderStaffId: (staffId: string) => boolean;
   displayStaffId: (value: string) => string;
   employeeEditOriginalStaffId: string | null;
   employeeEditStaffId: string | null;
@@ -45,9 +42,6 @@ export default function EmployeeEditModal({
   t,
   themeMode,
   isLocked,
-  userEmail,
-  staffIdEditorEmail,
-  isNewHirePlaceholderStaffId,
   displayStaffId,
   employeeEditOriginalStaffId,
   employeeEditStaffId,
@@ -80,8 +74,6 @@ export default function EmployeeEditModal({
   if (!open || typeof document === 'undefined') return null;
 
   const isLight = themeMode === 'light';
-  const originalStaff = String(employeeEditOriginalStaffId ?? '').trim();
-  const canEditStaffId = isNewHirePlaceholderStaffId(originalStaff) || userEmail.trim().toLowerCase() === staffIdEditorEmail;
 
   const overlayClass = isLight ? 'bg-slate-900/35' : 'bg-black/60';
   const panelClass = isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950/90 backdrop-blur';
@@ -137,11 +129,10 @@ export default function EmployeeEditModal({
                 <input
                   value={employeeEditStaffId ?? ''}
                   onChange={(e) => setEmployeeEditStaffId(e.target.value)}
-                  disabled={isLocked || !canEditStaffId}
+                  disabled={isLocked}
                   placeholder={t('例如 US12345', 'e.g. US12345')}
                   className={monoFieldClass}
                 />
-                {!canEditStaffId && <p className={['mt-1 text-[11px]', noteClass].join(' ')}>Only {staffIdEditorEmail} can edit staff ID.</p>}
               </div>
               <div>
                 <label className={['text-xs uppercase tracking-[0.25em]', labelClass].join(' ')}>{t('姓名', 'Name')}</label>
@@ -276,7 +267,7 @@ export default function EmployeeEditModal({
           <button type="button" disabled={isLocked} onClick={closeEmployeeEdit} className={cancelBtnClass}>
             {t('取消', 'Cancel')}
           </button>
-          <button type="button" disabled={isLocked || !employeeEditStaffId} onClick={() => void saveEmployeeEdit()} className={saveBtnClass}>
+          <button type="button" disabled={isLocked} onClick={() => void saveEmployeeEdit()} className={saveBtnClass}>
             {t('保存', 'Save')}
           </button>
         </div>

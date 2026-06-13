@@ -119,10 +119,12 @@ export default function StyledDateInput({
   const triggerClass = isLight
     ? [
         triggerBaseClass,
+        'magic-button-surface',
         'border border-slate-300 bg-white text-slate-900 shadow-sm transition hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-lime-300/40 disabled:cursor-not-allowed disabled:opacity-60'
       ].join(' ')
     : [
         triggerBaseClass,
+        'magic-button-surface',
         'border border-white/10 bg-slate-950/75 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-white/20 focus:outline-none focus:ring-2 focus:ring-neon/30 disabled:cursor-not-allowed disabled:opacity-60'
       ].join(' ');
   const panelClass = isLight
@@ -162,6 +164,7 @@ export default function StyledDateInput({
         createPortal(
           <div
             ref={panelRef}
+            data-magic-button-skip="true"
             className={panelClass}
             style={{ position: 'fixed', top: `${panelPosition.top}px`, left: `${panelPosition.left}px`, zIndex: 140 }}
           >

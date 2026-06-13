@@ -43,6 +43,7 @@ describe('staffId', () => {
 
   test('allows schedule placeholder IDs without an agency', () => {
     expect(isValidScheduleStaffId('0606PICK001', '')).toBe(true);
+    expect(isValidScheduleStaffId('TUS0000001', '')).toBe(true);
     expect(isValidScheduleStaffId('NEWREQ-20260606-PICK-001', '')).toBe(true);
     expect(isValidScheduleStaffId('TEMP-USID-PICK-0001', '')).toBe(true);
     expect(isValidScheduleStaffId('TMPACC-60100001', '')).toBe(true);
@@ -50,6 +51,7 @@ describe('staffId', () => {
 
   test('allows official and temporary IDs for punch', () => {
     expect(isValidPunchStaffId('US010454')).toBe(true);
+    expect(isValidPunchStaffId('TUS0000001')).toBe(true);
     expect(isValidPunchStaffId('0606PICK001')).toBe(true);
     expect(isValidPunchStaffId('NEWREQ-20260606-PICK-001')).toBe(true);
     expect(isValidPunchStaffId('TEMP-USID-PICK-0001')).toBe(true);

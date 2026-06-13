@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { useCallback, type UIEvent } from 'react';
 import { isScheduleOnlyAgency } from '../../shared/agencyRules';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -16,6 +17,7 @@ type EmployeesTableSectionProps = {
   employeesError: string | null;
   employeesFiltered: any[];
   employeeSortByLastPunchDesc: boolean;
+  employeePunchMetaLoading: boolean;
   employeeSortByHireDateDesc: boolean;
   onToggleSort: () => void;
   onToggleHireDateSort: () => void;
@@ -29,7 +31,7 @@ type EmployeesTableSectionProps = {
   normalizeShiftValue: (value: string) => '' | 'early' | 'late';
   homeOperationalDayIndex: number;
   employeeLastPunchAtByStaffId: Record<string, string | null>;
-  serverTime: Date;
+  employeeLastPunchNowMs: number;
   shiftAnalysisDays: number;
   toDateOnly: (date: Date) => string;
   employeeBadgePrintingStaffId: string | null;
@@ -74,6 +76,7 @@ export default function EmployeesTableSection({
   employeesError,
   employeesFiltered,
   employeeSortByLastPunchDesc,
+  employeePunchMetaLoading,
   employeeSortByHireDateDesc,
   onToggleSort,
   onToggleHireDateSort,
@@ -87,7 +90,7 @@ export default function EmployeesTableSection({
   normalizeShiftValue,
   homeOperationalDayIndex,
   employeeLastPunchAtByStaffId,
-  serverTime,
+  employeeLastPunchNowMs,
   shiftAnalysisDays,
   toDateOnly,
   employeeBadgePrintingStaffId,
@@ -105,8 +108,15 @@ export default function EmployeesTableSection({
   const TABLE_COLS = 12;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [scrollTop, setScrollTop] = useState(0);
+  const visibleStartRef = useRef(0);
+  const pendingScrollTopRef = useRef(0);
+  const scrollRafRef = useRef<number | null>(null);
+  const [visibleStart, setVisibleStart] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(640);
+
+  const getVisibleStart = useCallback((nextScrollTop: number) => {
+    return Math.max(0, Math.floor(nextScrollTop / ROW_HEIGHT) - OVERSCAN);
+  }, []);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -122,20 +132,50 @@ export default function EmployeesTableSection({
     return () => window.removeEventListener('resize', sync);
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
+    };
+  }, []);
+
   const total = employeesFiltered.length;
+  useEffect(() => {
+    if (visibleStart < total) return;
+    visibleStartRef.current = 0;
+    setVisibleStart(0);
+    if (containerRef.current) containerRef.current.scrollTop = 0;
+  }, [total, visibleStart]);
+
   const visibleMeta = useMemo(() => {
     const safeHeight = Math.max(1, viewportHeight);
-    const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
     const visibleCount = Math.ceil(safeHeight / ROW_HEIGHT) + OVERSCAN * 2;
+    const start = Math.min(visibleStart, total);
     const end = Math.min(total, start + visibleCount);
     return { start, end };
-  }, [scrollTop, viewportHeight, total]);
+  }, [visibleStart, viewportHeight, total]);
 
   const topSpacerHeight = visibleMeta.start * ROW_HEIGHT;
   const bottomSpacerHeight = Math.max(0, (total - visibleMeta.end) * ROW_HEIGHT);
   const employeesVisible = useMemo(
     () => employeesFiltered.slice(visibleMeta.start, visibleMeta.end),
     [employeesFiltered, visibleMeta.start, visibleMeta.end]
+  );
+  const selectedStaffIds = useMemo(() => new Set(employeeBadgeBatchSelectedStaffIds), [employeeBadgeBatchSelectedStaffIds]);
+  const handleScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      pendingScrollTopRef.current = event.currentTarget.scrollTop;
+      if (scrollRafRef.current !== null) return;
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        const nextStart = getVisibleStart(pendingScrollTopRef.current);
+        if (nextStart === visibleStartRef.current) return;
+        visibleStartRef.current = nextStart;
+        setVisibleStart(nextStart);
+      });
+    },
+    [getVisibleStart]
   );
 
   return (
@@ -156,12 +196,13 @@ export default function EmployeesTableSection({
           'mt-5 max-h-[68vh] overflow-auto rounded-2xl border',
           isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/30'
         ].join(' ')}
-        onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+        style={{ contain: 'layout paint style' }}
+        onScroll={handleScroll}
       >
         <table className="min-w-[1500px] w-full table-fixed text-left text-sm">
           <thead
             className={[
-              'sticky top-0 z-20 border-b text-xs uppercase tracking-[0.2em] backdrop-blur',
+              'sticky top-0 z-20 border-b text-xs uppercase tracking-[0.2em]',
               isLight ? 'border-slate-200 bg-white/95 text-slate-500' : 'border-white/10 bg-slate-950/95 text-slate-400'
             ].join(' ')}
           >
@@ -192,14 +233,15 @@ export default function EmployeesTableSection({
               <th className="w-[96px] px-3 py-3 whitespace-nowrap">
                 <button
                   type="button"
+                  disabled={employeePunchMetaLoading}
                   onClick={onToggleSort}
                   className={[
-                    'inline-flex items-center gap-1 whitespace-nowrap text-xs uppercase tracking-[0.2em] transition',
+                    'inline-flex items-center gap-1 whitespace-nowrap text-xs uppercase tracking-[0.2em] transition disabled:cursor-wait disabled:opacity-60',
                     isLight ? 'text-slate-500 hover:text-slate-700' : 'text-slate-400 hover:text-slate-200'
                   ].join(' ')}
                   title={t('按天数从高到低排序', 'Sort by days high to low')}
                 >
-                  {t('最后打卡', 'Last punch')}
+                  {employeePunchMetaLoading ? t('加载中...', 'Loading...') : t('最后打卡', 'Last punch')}
                   {employeeSortByLastPunchDesc ? ' ↓' : ''}
                 </button>
               </th>
@@ -256,7 +298,7 @@ export default function EmployeesTableSection({
               if (lastPunchAt) {
                 const at = new Date(lastPunchAt);
                 if (!Number.isNaN(at.getTime())) {
-                  const days = Math.max(0, Math.floor((serverTime.getTime() - at.getTime()) / (24 * 60 * 60 * 1000)));
+                  const days = Math.max(0, Math.floor((employeeLastPunchNowMs - at.getTime()) / (24 * 60 * 60 * 1000)));
                   lastPunchDaysText = t(`${days}天前`, `${days}d ago`);
                 }
               }
@@ -272,7 +314,7 @@ export default function EmployeesTableSection({
                     )
                   : '';
               const displayEmployeeId = isProtectedAgencyEmployee ? '-' : displayStaffId(staff);
-              const isSelected = employeeBadgeBatchSelectedStaffIds.includes(staff);
+              const isSelected = selectedStaffIds.has(staff);
               const rowIsLocked = isLocked || !canOperateEmployeePosition(position);
               const selectedRowStyle = isSelected
                 ? themeMode === 'light'
@@ -358,12 +400,7 @@ export default function EmployeesTableSection({
                         evt.stopPropagation();
                         void openEmployeeAuditLog(staff, name);
                       }}
-                      className={[
-                        'mr-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60',
-                        themeMode === 'light'
-                          ? 'border border-cyan-300 bg-cyan-50 text-cyan-700 hover:bg-cyan-100'
-                          : 'bg-cyan-500/20 text-cyan-200 hover:bg-cyan-500/30'
-                      ].join(' ')}
+                      className="magic-button-surface magic-button-compact mr-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {t('日志', 'Log')}
                     </button>
@@ -374,7 +411,7 @@ export default function EmployeesTableSection({
                         evt.stopPropagation();
                         void printEmployeeTempBadge({ staff, name, agency, position, workAccount, workPassword });
                       }}
-                      className="mr-1.5 rounded-xl bg-neon px-3 py-1.5 text-xs font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                      className="magic-button-surface magic-button-compact mr-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {employeeBadgePrintingStaffId === staff ? t('生成中...', 'Generating...') : t('工牌', 'Badge')}
                     </button>
@@ -396,12 +433,7 @@ export default function EmployeesTableSection({
                           workPassword
                         });
                       }}
-                      className={[
-                        'mr-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60',
-                        themeMode === 'light'
-                          ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                          : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                      ].join(' ')}
+                      className="magic-button-surface magic-button-compact mr-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {t('编辑', 'Edit')}
                     </button>
@@ -412,10 +444,10 @@ export default function EmployeesTableSection({
                         evt.stopPropagation();
                         void deleteEmployeeRow(staff);
                       }}
-                      title={isProtectedAgencyEmployee ? t('JDL员工不能删除', 'JDL employees cannot be deleted') : undefined}
-                      className="rounded-xl bg-ember px-3 py-1.5 text-xs font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                      title={isProtectedAgencyEmployee ? t('JDL员工不能离职', 'JDL employees cannot be departed') : undefined}
+                      className="magic-button-surface magic-button-compact rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {t('删', 'Del')}
+                      {t('离职', 'Depart')}
                     </button>
                   </td>
                 </tr>

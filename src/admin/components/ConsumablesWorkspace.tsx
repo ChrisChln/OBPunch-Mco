@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { AlertTriangle, Boxes, CalendarDays, Edit2, PackagePlus, Plus, RefreshCcw, Save, Trash2, Undo2, X } from 'lucide-react';
 import AdminNoticeToast from './AdminNoticeToast';
 import {
@@ -784,6 +784,12 @@ export default function ConsumablesWorkspace({
                         : isWarning
                           ? 'bg-amber-300 shadow-[0_0_16px_rgba(252,211,77,0.72)]'
                           : 'bg-emerald-400 shadow-[0_0_16px_rgba(52,211,153,0.68)]';
+                      const effectClass = isCritical
+                        ? 'consumable-magic-critical'
+                        : isWarning
+                          ? 'consumable-magic-warning'
+                          : 'consumable-magic-normal';
+                      const glowColor = isCritical ? '251, 113, 133' : isWarning ? '252, 211, 77' : '52, 211, 153';
                       const tileClass = isCritical
                         ? isLight
                           ? 'border-rose-200 bg-rose-50 text-rose-900'
@@ -803,7 +809,12 @@ export default function ConsumablesWorkspace({
                       return (
                         <div
                           key={`status-lamp-${item.item_key}`}
-                          className={['flex h-12 items-center justify-between gap-3 rounded-2xl border px-3', tileClass].join(' ')}
+                          className={[
+                            'magic-bento-card magic-bento-card--compact magic-bento-card--border-glow particle-container consumable-magic-surface flex h-12 items-center justify-between gap-3 rounded-2xl border px-3',
+                            tileClass,
+                            effectClass
+                          ].join(' ')}
+                          style={{ '--glow-color': glowColor } as CSSProperties}
                           aria-label={`${item.item_label} ${statusLabel} ${daysLeftLabel}`}
                           title={`${item.item_label} · ${statusLabel} · ${daysLeftLabel}`}
                         >
@@ -848,8 +859,24 @@ export default function ConsumablesWorkspace({
                           ? 'border-amber-200 bg-amber-50/70'
                           : 'border-amber-500/20 bg-amber-500/10'
                         : surfaceClass;
+                  const effectClass =
+                    item.severity === 'critical'
+                      ? 'consumable-magic-critical'
+                      : item.severity === 'warning'
+                        ? 'consumable-magic-warning'
+                        : 'consumable-magic-normal';
+                  const glowColor =
+                    item.severity === 'critical'
+                      ? '251, 113, 133'
+                      : item.severity === 'warning'
+                        ? '252, 211, 77'
+                        : '52, 211, 153';
                   return (
-                    <div key={item.item_key} className={['rounded-[22px] p-4', toneClass].join(' ')}>
+                    <div
+                      key={item.item_key}
+                      className={['magic-bento-card magic-bento-card--border-glow particle-container consumable-magic-surface rounded-[22px] p-4', toneClass, effectClass].join(' ')}
+                      style={{ '--glow-color': glowColor } as CSSProperties}
+                    >
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0 truncate text-sm font-semibold">{item.item_label}</div>
                         <Boxes className={['h-4 w-4 shrink-0', mutedClass].join(' ')} />

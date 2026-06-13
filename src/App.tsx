@@ -53,6 +53,35 @@ type PunchSuccessAnimation = LastPunchSummary & {
   key: number;
 };
 
+type BlurRevealTextProps = {
+  label: string;
+  lines: string[][];
+  className: string;
+  delayStepMs?: number;
+};
+
+function BlurRevealText({ label, lines, className, delayStepMs = 240 }: BlurRevealTextProps) {
+  let wordIndex = 0;
+
+  return (
+    <span className={className} aria-label={label}>
+      {lines.map((line, lineIndex) => (
+        <span key={`${label}-${lineIndex}`} className="blur-reveal-line" aria-hidden="true">
+          {line.map((word) => {
+            const delay = wordIndex * delayStepMs;
+            wordIndex += 1;
+            return (
+              <span key={`${label}-${word}-${delay}`} className="blur-reveal-word" style={{ animationDelay: `${delay}ms` }}>
+                {word}
+              </span>
+            );
+          })}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 type DailyRosterItem = {
   staff_id: string;
   name: string;
@@ -127,6 +156,8 @@ const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | 
 const EMPLOYEE_REQUESTS_TABLE = (import.meta.env.VITE_EMPLOYEE_REQUESTS_TABLE as string | undefined) ?? 'ob_employee_requests';
 const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
+const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
+  (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
 const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
 const OBUP_REPORT_DETAILS_TABLE =
@@ -812,6 +843,17 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [punchSuccessAnimation]);
 
+  useEffect(() => {
+    if (lastPunchSummary?.status !== 'error') return;
+    const errorMessage = lastPunchSummary.message;
+    const timer = window.setTimeout(() => {
+      setLastPunchSummary((current) =>
+        current?.status === 'error' && current.message === errorMessage ? null : current
+      );
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [lastPunchSummary]);
+
   const rosterStaffIds = useMemo(
     () => Array.from(new Set(dailyRoster.map((row) => normalizeStaffId(row.staff_id)).filter(Boolean))),
     [dailyRoster]
@@ -856,6 +898,11 @@ export default function App() {
       busyRef.current = false;
       setBusy(null);
     }
+  };
+
+  const clearPunchInputAfterError = () => {
+    setStaffId('');
+    window.setTimeout(() => inputRef.current?.focus(), 0);
   };
 
   const loadPunchAvatarByEmail = async (emailRaw: string) => {
@@ -1021,21 +1068,65 @@ export default function App() {
     return { action, error: null as string | null };
   };
 
+  const isMissingTempAssignmentSchemaError = (message: string) => {
+    const text = String(message ?? '').toLowerCase();
+    return (
+      (text.includes(TEMP_ACCOUNT_ASSIGNMENT_TABLE.toLowerCase()) || text.includes('source_temp_staff_id')) &&
+      (text.includes('schema cache') || text.includes('does not exist'))
+    );
+  };
+
+  const resolvePunchStaffId = async (staff: string) => {
+    if (!supabase) {
+      return { staffId: staff, error: 'Missing Supabase configuration.' };
+    }
+
+    let current = normalizeStaffId(String(staff ?? '').trim());
+    const visited = new Set<string>();
+    for (let depth = 0; depth < 6; depth += 1) {
+      if (!current || visited.has(current)) break;
+      visited.add(current);
+
+      const res = await supabase
+        .from(TEMP_ACCOUNT_ASSIGNMENT_TABLE)
+        .select('staff_id, source_temp_staff_id, created_at')
+        .eq('source_temp_staff_id', current)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (res.error) {
+        if (isMissingTempAssignmentSchemaError(res.error.message)) break;
+        return { staffId: current, error: res.error.message };
+      }
+
+      const next = normalizeStaffId(String(((res.data as any[] | null) ?? [])[0]?.staff_id ?? '').trim());
+      if (!next || next === current) break;
+      current = next;
+    }
+
+    return { staffId: current || staff, error: null as string | null };
+  };
+
   const checkEmployeeRegistered = async (staff: string) => {
     if (!supabase) {
-      return { registered: false, scheduleOnly: false, terminated: false, error: 'Missing Supabase configuration.' };
+      return { staffId: staff, registered: false, scheduleOnly: false, terminated: false, error: 'Missing Supabase configuration.' };
     }
 
-    const mapRes = await fetchEmployeeMap([staff]);
+    const resolved = await resolvePunchStaffId(staff);
+    if (resolved.error) {
+      return { staffId: resolved.staffId, registered: false, scheduleOnly: false, terminated: false, error: resolved.error };
+    }
+
+    const mapRes = await fetchEmployeeMap([resolved.staffId]);
     if (mapRes.error) {
-      return { registered: false, scheduleOnly: false, terminated: false, error: mapRes.error };
+      return { staffId: resolved.staffId, registered: false, scheduleOnly: false, terminated: false, error: mapRes.error };
     }
 
-    const employee = mapRes.map[staff];
+    const employee = mapRes.map[resolved.staffId];
     return {
+      staffId: resolved.staffId,
       registered: Boolean(employee),
       scheduleOnly: isScheduleOnlyAgency(String(employee?.agency ?? '').trim()),
-      terminated: isEmployeeTerminated({ terminatedAt: employee?.terminatedAt }),
+      terminated: isEmployeeTerminated({ terminatedAt: employee?.terminatedAt }, { referenceAt: new Date(), allowTerminationDate: true }),
       error: null as string | null
     };
   };
@@ -1633,7 +1724,10 @@ export default function App() {
     const timer = window.setTimeout(() => {
       void (async () => {
         setLastPunchActionLoading(true);
-        const { action, error } = await fetchLastPunch(staff);
+        const resolved = await resolvePunchStaffId(staff);
+        const { action, error } = resolved.error
+          ? { action: null as PunchAction | null, error: resolved.error }
+          : await fetchLastPunch(resolved.staffId);
         if (!active) return;
         setLastPunchAction(action);
         setLastPunchActionError(error);
@@ -2762,7 +2856,7 @@ const fetchPunchBoardUph = async (
 
   const submitPunch = async (
     action: PunchAction,
-    options?: { latestAction?: PunchAction | null; skipLatestFetch?: boolean; clearInput?: boolean }
+    options?: { latestAction?: PunchAction | null; skipLatestFetch?: boolean; clearInput?: boolean; retryOutWhenAlreadyIn?: boolean }
   ) => {
     if (isLocked) {
       return;
@@ -2770,11 +2864,13 @@ const fetchPunchBoardUph = async (
     if (!isValidId) {
       setUiStatus({ tone: 'error', message: 'Invalid staff ID format.' });
       playError();
+      clearPunchInputAfterError();
       return;
     }
     if (!supabase) {
       setUiStatus({ tone: 'error', message: 'Missing Supabase configuration. Please check environment variables.' });
       playError();
+      clearPunchInputAfterError();
       return;
     }
 
@@ -2785,38 +2881,43 @@ const fetchPunchBoardUph = async (
       if (registered.error) {
         setUiStatus({ tone: 'error', message: `Failed to verify employee: ${registered.error}` });
         playError();
+        clearPunchInputAfterError();
         return;
       }
       if (!registered.registered) {
-        setUiStatus({ tone: 'error', message: `Employee not registered: ${normalizedId}` });
-        playError();
-        return;
+        setUiStatus({ tone: 'pending', message: `Verifying... (${action})` });
       }
-      if (registered.scheduleOnly) {
+      if (registered.registered && registered.scheduleOnly) {
         setUiStatus({ tone: 'error', message: `Employee does not use punch: ${normalizedId}` });
         playError();
+        clearPunchInputAfterError();
         return;
       }
-      if (registered.terminated) {
+      if (registered.registered && registered.terminated) {
         setUiStatus({ tone: 'error', message: `Employee is terminated and cannot punch: ${normalizedId}` });
         playError();
+        clearPunchInputAfterError();
         return;
       }
 
-      const latest = options?.skipLatestFetch
-        ? { action: options?.latestAction ?? null, error: null as string | null }
-        : await fetchLastPunch(normalizedId);
+      const canUseLocalPunchState = registered.registered;
+      const latest = canUseLocalPunchState
+        ? options?.skipLatestFetch
+          ? { action: options?.latestAction ?? null, error: null as string | null }
+          : await fetchLastPunch(registered.staffId)
+        : { action: null as PunchAction | null, error: null as string | null };
       if (latest.error) {
         setUiStatus({ tone: 'error', message: `Failed to load last punch: ${latest.error}` });
         setLastPunchSummary({ status: 'error', message: `Failed to load last punch`, at: new Date().toISOString() });
         playError();
+        clearPunchInputAfterError();
         return;
       }
 
       const allowed =
         (action === 'IN' && (latest.action === null || latest.action === 'OUT')) ||
         (action === 'OUT' && latest.action === 'IN');
-      if (!allowed) {
+      if (canUseLocalPunchState && !allowed) {
         const msg =
           latest.action === null
             ? 'No previous record found. First action must be IN.'
@@ -2826,6 +2927,7 @@ const fetchPunchBoardUph = async (
         setUiStatus({ tone: 'error', message: msg });
         setLastPunchSummary({ status: 'error', message: msg, at: new Date().toISOString() });
         playError();
+        clearPunchInputAfterError();
         setLastPunchAction(latest.action);
         setLastPunchActionError(null);
         return;
@@ -2834,46 +2936,52 @@ const fetchPunchBoardUph = async (
       const punchRes = await submitPunchToApi({ staffId: normalizedId, action });
 
       if (!punchRes.ok) {
+        if (options?.retryOutWhenAlreadyIn && action === 'IN' && /last action is in/i.test(punchRes.error)) {
+          await submitPunch('OUT', { skipLatestFetch: true, clearInput: options.clearInput });
+          return;
+        }
         setUiStatus({ tone: 'error', message: `Punch failed: ${punchRes.error}` });
         setLastPunchSummary({ status: 'error', message: formatPunchFailureSummary(punchRes.error), at: new Date().toISOString() });
         playError();
+        clearPunchInputAfterError();
         return;
       }
 
-      const staffName = await resolveStaffDisplayName(normalizedId);
+      const punchedStaffId = normalizeStaffId(punchRes.staffId || registered.staffId || normalizedId);
+      const staffName = await resolveStaffDisplayName(punchedStaffId);
       setUiStatus({
         tone: 'success',
-        message: `${action === 'IN' ? 'IN' : 'OUT'} · ${staffName || normalizedId}`
+        message: `${punchRes.action} · ${staffName || punchedStaffId}`
       });
-      playSuccess(action);
-      setLastPunchAction(action);
+      playSuccess(punchRes.action);
+      setLastPunchAction(punchRes.action);
       setLastPunchActionError(null);
       const punchedAt = new Date().toISOString();
       setLastPunchSummary({
         status: 'success',
-        staffId: normalizedId,
-        staffName: staffName || normalizedId,
-        action,
+        staffId: punchedStaffId,
+        staffName: staffName || punchedStaffId,
+        action: punchRes.action,
         at: punchedAt
       });
       setPunchSuccessAnimation({
         key: Date.now(),
-        staffId: normalizedId,
-        staffName: staffName || normalizedId,
-        action,
+        staffId: punchedStaffId,
+        staffName: staffName || punchedStaffId,
+        action: punchRes.action,
         at: punchedAt
       });
       if (options?.clearInput ?? true) {
         setStaffId('');
       }
-      if (action === 'OUT') {
+      if (punchRes.action === 'OUT') {
         const [outCountRes, outstanding] = await Promise.all([
-          fetchTodayOutCount(normalizedId),
-          fetchOutstandingDevicesByStaff(normalizedId)
+          fetchTodayOutCount(punchedStaffId),
+          fetchOutstandingDevicesByStaff(punchedStaffId)
         ]);
         if (!outCountRes.error && outCountRes.count >= 2 && !outstanding.error && outstanding.items.length > 0) {
-          const reminderName = staffName || (await resolveStaffDisplayName(normalizedId));
-          setDeviceReturnReminder({ staffId: normalizedId, staffName: reminderName, items: outstanding.items });
+          const reminderName = staffName || (await resolveStaffDisplayName(punchedStaffId));
+          setDeviceReturnReminder({ staffId: punchedStaffId, staffName: reminderName, items: outstanding.items });
         }
       }
       void fetchPunchBoard();
@@ -2890,25 +2998,72 @@ const fetchPunchBoardUph = async (
       setUiStatus({ tone: 'error', message: 'Invalid staff ID format.' });
       setLastPunchSummary({ status: 'error', message: 'Invalid staff ID', at: new Date().toISOString() });
       playError();
+      clearPunchInputAfterError();
       return;
     }
     if (!supabase) {
       setUiStatus({ tone: 'error', message: 'Missing Supabase configuration. Please check environment variables.' });
       setLastPunchSummary({ status: 'error', message: 'Missing system configuration', at: new Date().toISOString() });
       playError();
+      clearPunchInputAfterError();
       return;
     }
 
-    const latest = await fetchLastPunch(normalizedId);
-    if (latest.error) {
-      setUiStatus({ tone: 'error', message: `Failed to load last punch: ${latest.error}` });
-      setLastPunchSummary({ status: 'error', message: 'Failed to load last punch', at: new Date().toISOString() });
-      playError();
-      return;
-    }
+    setUiStatus({ tone: 'pending', message: 'Punching...' });
 
-    const nextAction: PunchAction = latest.action === 'IN' ? 'OUT' : 'IN';
-    await submitPunch(nextAction, { latestAction: latest.action, skipLatestFetch: true, clearInput: true });
+    await runLocked('punch', async () => {
+      const punchRes = await submitPunchToApi({ staffId: normalizedId, action: 'AUTO' });
+      if (!punchRes.ok) {
+        setUiStatus({ tone: 'error', message: `Punch failed: ${punchRes.error}` });
+        setLastPunchSummary({
+          status: 'error',
+          message: formatPunchFailureSummary(punchRes.error),
+          at: new Date().toISOString()
+        });
+        playError();
+        clearPunchInputAfterError();
+        return;
+      }
+
+      const punchedStaffId = normalizeStaffId(punchRes.staffId || normalizedId);
+      const staffName = await resolveStaffDisplayName(punchedStaffId);
+      setUiStatus({
+        tone: 'success',
+        message: `${punchRes.action} · ${staffName || punchedStaffId}`
+      });
+      playSuccess(punchRes.action);
+      setLastPunchAction(punchRes.action);
+      setLastPunchActionError(null);
+      const punchedAt = new Date().toISOString();
+      setLastPunchSummary({
+        status: 'success',
+        staffId: punchedStaffId,
+        staffName: staffName || punchedStaffId,
+        action: punchRes.action,
+        at: punchedAt
+      });
+      setPunchSuccessAnimation({
+        key: Date.now(),
+        staffId: punchedStaffId,
+        staffName: staffName || punchedStaffId,
+        action: punchRes.action,
+        at: punchedAt
+      });
+      setStaffId('');
+      if (punchRes.action === 'OUT') {
+        const [outCountRes, outstanding] = await Promise.all([
+          fetchTodayOutCount(punchedStaffId),
+          fetchOutstandingDevicesByStaff(punchedStaffId)
+        ]);
+        if (!outCountRes.error && outCountRes.count >= 2 && !outstanding.error && outstanding.items.length > 0) {
+          const reminderName = staffName || (await resolveStaffDisplayName(punchedStaffId));
+          setDeviceReturnReminder({ staffId: punchedStaffId, staffName: reminderName, items: outstanding.items });
+        }
+      }
+      void fetchPunchBoard();
+      void fetchAbsentRoster();
+      void fetchArrivalMetrics();
+    });
   };
 
   const onStaffIdKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -3146,11 +3301,11 @@ const fetchPunchBoardUph = async (
               <div className="flex min-h-[240px] flex-col justify-between rounded-[28px] border border-white/8 bg-white/[0.03] p-6 md:p-8">
                 <div>
                   <div className="text-[11px] uppercase tracking-[0.32em] text-slate-300/80">OBP Security</div>
-                  <h1 className="mt-6 max-w-[10ch] font-display text-5xl leading-[0.92] tracking-[0.03em] text-white md:text-6xl xl:text-7xl">
-                    Punch Screen
-                    <br />
-                    Unlock
-                  </h1>
+                  <BlurRevealText
+                    label="Punch Screen Unlock"
+                    lines={[['Punch', 'Screen'], ['Unlock']]}
+                    className="mt-6 block max-w-[10ch] font-display text-5xl leading-[0.92] tracking-[0.03em] text-white md:text-6xl xl:text-7xl"
+                  />
                 </div>
                 <div />
               </div>
@@ -3158,7 +3313,11 @@ const fetchPunchBoardUph = async (
               <div className="flex items-center">
                 <div className="w-full rounded-[30px] border border-white/10 bg-[linear-gradient(145deg,rgba(18,23,19,0.78),rgba(6,9,10,0.88))] p-6 shadow-[0_28px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl md:p-8">
                   <div className="text-[11px] uppercase tracking-[0.3em] text-slate-400">Sign In</div>
-                  <div className="mt-4 font-display text-4xl tracking-[0.03em] text-white md:text-5xl">Administrator Unlock</div>
+                  <BlurRevealText
+                    label="Administrator Unlock"
+                    lines={[['Administrator'], ['Unlock']]}
+                    className="mt-4 block font-display text-4xl leading-[1.05] tracking-[0.03em] text-white md:text-[2.75rem] xl:text-5xl"
+                  />
 
                   <div className="mt-8 grid gap-5">
                     <label className="grid gap-2">

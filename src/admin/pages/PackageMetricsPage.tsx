@@ -1076,7 +1076,7 @@ const loadPackageLaborSummaryByDate = async (supabase: any, metricsRows: Package
     const staffId = normalizeStaffId(String(row.staff_id ?? ''));
     if (!staffId) continue;
     if (!activeStaffIds.has(staffId)) continue;
-    const position = normalizeOutboundStaffingPosition(row.position ?? '') || (positionByStaff.get(staffId) ?? '');
+    const position = positionByStaff.get(staffId) ?? '';
     if (!shouldCountScheduledPackageMetricsStaff(position, row.note)) continue;
     if (!scheduledStaffByDate.has(metricDate)) scheduledStaffByDate.set(metricDate, new Set<string>());
     scheduledStaffByDate.get(metricDate)!.add(staffId);
@@ -1184,14 +1184,15 @@ export default function PackageMetricsPage({
     themeMode === 'light'
       ? 'rounded-2xl border border-slate-200 bg-slate-50'
       : 'rounded-2xl border border-slate-800 bg-slate-900';
+  const magicButtonClass = 'magic-button-surface';
   const buttonClass =
     themeMode === 'light'
-      ? 'rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-300'
-      : 'rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-950 disabled:bg-slate-700 disabled:text-slate-400';
+      ? [magicButtonClass, 'rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-300'].join(' ')
+      : [magicButtonClass, 'rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-950 disabled:bg-slate-700 disabled:text-slate-400'].join(' ');
   const secondaryButtonClass =
     themeMode === 'light'
-      ? 'rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50'
-      : 'rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800';
+      ? [magicButtonClass, 'rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50'].join(' ')
+      : [magicButtonClass, 'rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800'].join(' ');
   const tableHeadClass = themeMode === 'light' ? 'bg-slate-50 text-slate-500' : 'bg-slate-950/80 text-sky-100/60';
   const tableDividerClass = themeMode === 'light' ? 'border-slate-200/80' : 'border-slate-800/60';
   const rowBaseClass =
@@ -1827,6 +1828,7 @@ export default function PackageMetricsPage({
                   disabled={uploadDisabled}
                   onClick={() => redesignedFileInputRef.current?.click()}
                   className={[
+                    magicButtonClass,
                     'mt-4 flex min-h-[154px] w-full items-start justify-between gap-3 rounded-[22px] border px-4 py-4 text-left transition',
                     themeMode === 'light'
                       ? 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 disabled:bg-slate-100 disabled:text-slate-400'
@@ -2198,6 +2200,7 @@ export default function PackageMetricsPage({
                 disabled={isLocked || isReadOnly || loading}
                 onClick={() => fileInputRef.current?.click()}
                 className={[
+                  magicButtonClass,
                   'flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left text-sm transition xl:rounded-r-none xl:border-r-0',
                   themeMode === 'light'
                     ? 'border-slate-200 bg-white text-slate-900 hover:border-slate-300 hover:bg-slate-50 disabled:bg-slate-100 disabled:text-slate-400'
