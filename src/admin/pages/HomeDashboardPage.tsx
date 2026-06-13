@@ -756,9 +756,25 @@ function HomeDashboardPage({
                                         ? 'badge-elevated-dark border-emerald-300/30 bg-emerald-400/[0.13] text-emerald-100'
                                         : 'badge-elevated-dark border-sky-300/30 bg-sky-400/[0.13] text-sky-100';
                                 return (
-                                  <span key={`${row.staff_id}-${punchIndex}`} className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold uppercase', toneClass].join(' ')}>
+                                  <button
+                                    key={`${row.staff_id}-${punchIndex}`}
+                                    type="button"
+                                    disabled={!onOpenTimecardCalibration || !toLocalDateOnly(punch.created_at)}
+                                    onClick={() => {
+                                      if (!onOpenTimecardCalibration) return;
+                                      const workDate = toLocalDateOnly(punch.created_at);
+                                      if (!row.staff_id || !workDate) return;
+                                      void onOpenTimecardCalibration(row.staff_id, workDate);
+                                    }}
+                                    title={t('打开工时校正', 'Open timecard correction')}
+                                    className={[
+                                      'inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold uppercase transition focus:outline-none focus:ring-2 focus:ring-sky-400/60 disabled:cursor-default disabled:opacity-80',
+                                      onOpenTimecardCalibration ? 'hover:-translate-y-px' : '',
+                                      toneClass
+                                    ].join(' ')}
+                                  >
                                     {punch.action} {formatTimeOnly(punch.created_at)}
-                                  </span>
+                                  </button>
                                 );
                               })}
                               {row.punches.length > 4 ? (

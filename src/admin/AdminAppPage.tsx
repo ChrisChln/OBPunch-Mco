@@ -11656,7 +11656,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
                         setTimecardPunchDragOverId(null);
                       }}
                       className={[
-                        'relative rounded-2xl px-4 py-4 transition-[transform,box-shadow,opacity,background-color] duration-200 ease-out will-change-transform',
+                        'rounded-2xl px-3 py-3 transition-[transform,box-shadow,opacity,background-color] duration-200 ease-out will-change-transform',
                         themeMode === 'light' ? 'border border-slate-200 bg-slate-50' : 'bg-white/5',
                         !isLocked && !timecardPunchReadOnly ? 'cursor-grab active:cursor-grabbing' : '',
                         isDragSource ? 'opacity-70 scale-[0.985]' : '',
@@ -11667,18 +11667,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
                           : ''
                       ].join(' ')}
                     >
-                      {!timecardPunchReadOnly && (
-                        <button
-                          type="button"
-                          disabled={isLocked}
-                          onClick={() => void deleteTimecardPunchRow(row)}
-                          className="absolute right-3 top-3 h-7 w-7 rounded-full bg-ember/85 text-sm font-bold text-white transition hover:bg-ember disabled:cursor-not-allowed disabled:opacity-60"
-                          title={t('删除此条', 'Delete this row')}
-                        >
-                          ×
-                        </button>
-                      )}
-                      <div className="grid gap-3 md:grid-cols-[7rem_1fr] md:items-end">
+                      <div className="grid grid-cols-[7rem_minmax(0,1fr)_1.75rem] items-end gap-3">
                         <div>
                           <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Action</div>
                           <select
@@ -11730,6 +11719,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
                             ].join(' ')}
                           />
                         </div>
+                        {!timecardPunchReadOnly ? (
+                          <button
+                            type="button"
+                            disabled={isLocked}
+                            onClick={() => void deleteTimecardPunchRow(row)}
+                            className="mb-0.5 h-7 w-7 rounded-full bg-ember/85 text-sm font-bold text-white transition hover:bg-ember disabled:cursor-not-allowed disabled:opacity-60"
+                            title={t('删除此条', 'Delete this row')}
+                          >
+                            ×
+                          </button>
+                        ) : (
+                          <span className="hidden md:block" aria-hidden="true" />
+                        )}
                       </div>
                     </div>
                   );
@@ -16890,8 +16892,9 @@ ${rowsToHtml(late)}
                                     onChange={(event) => void updateScheduleEmployeeLabel(employee, event.target.value)}
                                     aria-label={t('修改 Label', 'Edit label')}
                                     title={labelSaving ? t('保存中...', 'Saving...') : t('修改 Label', 'Edit label')}
+                                    style={{ backgroundImage: 'none' }}
                                     className={[
-                                      'h-6 max-w-[78px] rounded-full border px-2 pr-6 text-[10px] font-semibold leading-none outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+                                      'h-[22px] w-[58px] appearance-none rounded-full border px-2 text-center text-[10px] font-semibold leading-none outline-none transition [text-align-last:center] focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
                                       label ? getScheduleTableLabelBadgeClass(label) : 'border-white/12 bg-white/[0.05] text-slate-200',
                                       themeMode === 'light' ? 'bg-white' : ''
                                     ].join(' ')}
@@ -18314,7 +18317,7 @@ ${rowsToHtml(late)}
                                     setTimecardPunchDragOverId(null);
                                   }}
                                   className={[
-                                    'relative rounded-2xl px-4 py-4 transition-[transform,box-shadow,opacity,background-color] duration-200 ease-out will-change-transform',
+                                    'rounded-2xl px-3 py-3 transition-[transform,box-shadow,opacity,background-color] duration-200 ease-out will-change-transform',
                                     themeMode === 'light' ? 'border border-slate-200 bg-slate-50' : 'bg-white/5',
                                     !isLocked && !timecardPunchReadOnly ? 'cursor-grab active:cursor-grabbing' : '',
                                     isDragSource ? 'opacity-70 scale-[0.985]' : '',
@@ -18325,18 +18328,7 @@ ${rowsToHtml(late)}
                                       : ''
                                   ].join(' ')}
                                 >
-                                  {!timecardPunchReadOnly && (
-                                    <button
-                                      type="button"
-                                      disabled={isLocked}
-                                      onClick={() => void deleteTimecardPunchRow(row)}
-                                      className="absolute right-3 top-3 h-7 w-7 rounded-full bg-ember/85 text-sm font-bold text-white transition hover:bg-ember disabled:cursor-not-allowed disabled:opacity-60"
-                                      title={t('删除此条', 'Delete this row')}
-                                    >
-                                      ×
-                                    </button>
-                                  )}
-                                  <div className="grid gap-3 md:grid-cols-[7rem_1fr] md:items-end">
+                                  <div className="grid grid-cols-[7rem_minmax(0,1fr)_1.75rem] items-end gap-3">
                                     <div>
                                       <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Action</div>
                                       <select
@@ -18388,6 +18380,19 @@ ${rowsToHtml(late)}
                                         ].join(' ')}
                                       />
                                     </div>
+                                    {!timecardPunchReadOnly ? (
+                                      <button
+                                        type="button"
+                                        disabled={isLocked}
+                                        onClick={() => void deleteTimecardPunchRow(row)}
+                                        className="mb-0.5 h-7 w-7 rounded-full bg-ember/85 text-sm font-bold text-white transition hover:bg-ember disabled:cursor-not-allowed disabled:opacity-60"
+                                        title={t('删除此条', 'Delete this row')}
+                                      >
+                                        ×
+                                      </button>
+                                    ) : (
+                                      <span className="hidden md:block" aria-hidden="true" />
+                                    )}
                                   </div>
                                 </div>
                               );
