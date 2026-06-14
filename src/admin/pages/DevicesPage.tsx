@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
+import { Pencil, Power, Printer } from 'lucide-react';
 import type { DeviceLabelPrintPayload, DeviceRow, DeviceType } from '../types';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -307,7 +308,7 @@ export default function DevicesPage({
 
             {devicesError && <p className="mt-3 text-sm text-ember">{devicesError}</p>}
             {!devicesError && (
-              <div className="mt-3 grid max-h-[70vh] grid-cols-4 gap-2 overflow-auto pr-1 md:grid-cols-5 xl:grid-cols-7 2xl:grid-cols-8">
+              <div className="mt-4 grid max-h-[70vh] grid-cols-1 gap-3 overflow-auto pr-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
                 {deviceRowsFiltered.map((row) => {
                   const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
                   const type = normalizeDeviceType(String(row.device_type ?? row.type ?? 'PDA'));
@@ -358,7 +359,7 @@ export default function DevicesPage({
                   return (
                     <div
                       key={String(row.id ?? sn)}
-                      className={['aspect-square rounded-xl border px-3 py-2 transition-colors', cardToneClass, selected ? 'ring-2 ring-neon/80' : ''].join(' ')}
+                      className={['min-h-[216px] rounded-xl border px-3 py-3 transition-colors', cardToneClass, selected ? 'ring-2 ring-neon/80' : ''].join(' ')}
                     >
                       <div className="flex h-full flex-col justify-between">
                         <div>
@@ -405,7 +406,7 @@ export default function DevicesPage({
                             </div>
                           )}
                         </div>
-                        <div className="mt-2 grid grid-cols-3 gap-1.5">
+                        <div className="mt-3 grid grid-cols-3 gap-2">
                           <button
                             type="button"
                             disabled={isLocked || deviceLabelPrintingSn === sn || deviceLabelBatchPrinting}
@@ -417,25 +418,31 @@ export default function DevicesPage({
                                 type
                               })
                             }
-                            className="rounded-xl bg-white/10 px-2 py-1 text-[11px] font-semibold text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                            aria-label={t('打印标签', 'Print label')}
+                            title={t('打印标签', 'Print label')}
+                            className="inline-flex h-9 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-white/10 text-slate-100 transition hover:border-emerald-300/40 hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-emerald-300/40 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            {deviceLabelPrintingSn === sn ? t('生成中...', 'Generating...') : t('打印标签', 'Print')}
+                            <Printer className="h-4 w-4" aria-hidden="true" />
                           </button>
                           <button
                             type="button"
                             disabled={writeLocked}
                             onClick={() => openDeviceEdit(row)}
-                            className="rounded-xl bg-white/10 px-2 py-1 text-[11px] font-semibold text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                            aria-label={t('更改', 'Edit')}
+                            title={t('更改', 'Edit')}
+                            className="inline-flex h-9 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-white/10 text-slate-100 transition hover:border-sky-300/40 hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-sky-300/40 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            {t('更改', 'Edit')}
+                            <Pencil className="h-4 w-4" aria-hidden="true" />
                           </button>
                           <button
                             type="button"
                             disabled={writeLocked}
                             onClick={() => void toggleDeviceActive(row)}
-                            className="rounded-xl bg-white/10 px-2 py-1 text-[11px] font-semibold text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                            aria-label={active ? t('停用', 'Disable') : t('启用', 'Enable')}
+                            title={active ? t('停用', 'Disable') : t('启用', 'Enable')}
+                            className="inline-flex h-9 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-white/10 text-slate-100 transition hover:border-amber-300/40 hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-amber-300/40 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            {active ? t('停用', 'Disable') : t('启用', 'Enable')}
+                            <Power className="h-4 w-4" aria-hidden="true" />
                           </button>
                         </div>
                       </div>

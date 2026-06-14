@@ -147,7 +147,8 @@ const ElectricBorder = ({
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
-    if (!canvas || !container || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    if (!canvas || !container || prefersReducedMotion) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;

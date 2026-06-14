@@ -10,9 +10,12 @@ type DepartedEmployeesModalProps = {
   rows: EmployeeRow[];
   loading: boolean;
   error: string | null;
+  canManageDeparted: boolean;
   canHardDelete: boolean;
   onClose: () => void;
   onRefresh: () => void | Promise<void>;
+  onToggleTerminationType: (staffId: string, nextType: TerminationType) => void | Promise<void>;
+  onRehire: (staffId: string) => void | Promise<void>;
   onHardDelete: (staffId: string) => void | Promise<void>;
   displayStaffId: (value: string) => string;
 };
@@ -39,9 +42,12 @@ export default function DepartedEmployeesModal({
   rows,
   loading,
   error,
+  canManageDeparted,
   canHardDelete,
   onClose,
   onRefresh,
+  onToggleTerminationType,
+  onRehire,
   onHardDelete,
   displayStaffId
 }: DepartedEmployeesModalProps) {
@@ -159,7 +165,7 @@ export default function DepartedEmployeesModal({
                 <th className="w-[130px] px-3 py-3">Agency</th>
                 <th className="w-[130px] px-3 py-3">Position</th>
                 <th className="w-[130px] px-3 py-3">{t('类型', 'Type')}</th>
-                {canHardDelete ? <th className="w-[120px] px-3 py-3 text-right">{t('操作', 'Action')}</th> : null}
+                {canManageDeparted || canHardDelete ? <th className="w-[190px] px-3 py-3 text-right">{t('操作', 'Action')}</th> : null}
               </tr>
             </thead>
             <tbody>
@@ -178,27 +184,45 @@ export default function DepartedEmployeesModal({
                     <td className="px-3 py-3">{normalizeText(row.agency ?? row.Agency) || '-'}</td>
                     <td className="px-3 py-3">{normalizeText(row.position ?? row.Position) || '-'}</td>
                     <td className="px-3 py-3">
-                      <span
+                      <button
+                        type="button"
+                        disabled={loading || !staffId || !canManageDeparted}
+                        onClick={() => void onToggleTerminationType(staffId, type === 'blacklist' ? 'normal' : 'blacklist')}
+                        title={t('点击切换类型', 'Click to switch type')}
                         className={[
-                          'inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold',
+                          'inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
                           type === 'blacklist'
-                            ? 'border-rose-300/35 bg-rose-500/10 text-rose-100'
-                            : 'border-emerald-300/35 bg-emerald-500/10 text-emerald-100'
+                            ? 'border-rose-300/35 bg-rose-500/10 text-rose-100 hover:bg-rose-500/20'
+                            : 'border-emerald-300/35 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20'
                         ].join(' ')}
                       >
                         {type === 'blacklist' ? t('黑名单', 'Blacklist') : t('正常离职', 'Normal')}
-                      </span>
+                      </button>
                     </td>
-                    {canHardDelete ? (
-                      <td className="px-3 py-3 text-right">
-                        <button
-                          type="button"
-                          disabled={loading || !staffId}
-                          onClick={() => void onHardDelete(staffId)}
-                          className="rounded-xl border border-rose-300/25 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {t('彻底删除', 'Delete')}
-                        </button>
+                    {canManageDeparted || canHardDelete ? (
+                      <td className="px-3 py-3">
+                        <div className="flex justify-end gap-2">
+                          {canManageDeparted ? (
+                            <button
+                              type="button"
+                              disabled={loading || !staffId}
+                              onClick={() => void onRehire(staffId)}
+                              className="rounded-xl border border-sky-300/25 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-100 transition hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {t('返聘', 'Rehire')}
+                            </button>
+                          ) : null}
+                          {canHardDelete ? (
+                            <button
+                              type="button"
+                              disabled={loading || !staffId}
+                              onClick={() => void onHardDelete(staffId)}
+                              className="rounded-xl border border-rose-300/25 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {t('彻底删除', 'Delete')}
+                            </button>
+                          ) : null}
+                        </div>
                       </td>
                     ) : null}
                   </tr>

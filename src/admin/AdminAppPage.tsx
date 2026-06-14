@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
@@ -15,10 +15,12 @@ import {
   loadLabelToneMap,
   saveLabelToneMap
 } from '../lib/labelTone';
+import { matchesAuditSearch } from './auditSearch';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import AdminHeader from './components/AdminHeader';
 import AdminNav from './components/AdminNav';
+import BorderGlow from './components/BorderGlow';
 import BusyOverlay from './components/BusyOverlay';
 import AdminLoginPanel from './components/AdminLoginPanel';
 import ScheduleToolbar from './components/ScheduleToolbar';
@@ -112,6 +114,7 @@ import { buildTimecardExportDailyPeopleRow, formatRoundedHours, getTimecardExpor
 import {
   getDefaultPositionToneKey,
   getPositionToneFromMap,
+  normalizeExplicitPositionToneMap,
   normalizePositionToneKey,
   normalizePositionToneMap,
   type PositionToneMap
@@ -979,18 +982,18 @@ const normalizeDeviceType = (value: string): DeviceType => {
 };
 
 const POSITION_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
-  sky: 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]',
-  cyan: 'badge-elevated-dark border-cyan-300/30 text-cyan-100 bg-cyan-400/[0.13]',
-  teal: 'badge-elevated-dark border-teal-300/30 text-teal-100 bg-teal-400/[0.13]',
-  emerald: 'badge-elevated-dark border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]',
-  lime: 'badge-elevated-dark border-lime-300/30 text-lime-100 bg-lime-400/[0.13]',
-  amber: 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]',
-  orange: 'badge-elevated-dark border-orange-300/30 text-orange-100 bg-orange-400/[0.13]',
-  rose: 'badge-elevated-dark border-rose-300/30 text-rose-100 bg-rose-400/[0.13]',
-  fuchsia: 'badge-elevated-dark border-fuchsia-300/30 text-fuchsia-100 bg-fuchsia-400/[0.13]',
-  violet: 'badge-elevated-dark border-violet-300/30 text-violet-100 bg-violet-400/[0.13]',
-  indigo: 'badge-elevated-dark border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]',
-  slate: 'badge-elevated-dark border-white/12 text-slate-200 bg-white/[0.05]'
+  sky: 'badge-elevated-dark label-glow-chip border-sky-300/30 text-sky-100 bg-sky-400/[0.13]',
+  cyan: 'badge-elevated-dark label-glow-chip border-cyan-300/30 text-cyan-100 bg-cyan-400/[0.13]',
+  teal: 'badge-elevated-dark label-glow-chip border-teal-300/30 text-teal-100 bg-teal-400/[0.13]',
+  emerald: 'badge-elevated-dark label-glow-chip border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]',
+  lime: 'badge-elevated-dark label-glow-chip border-lime-300/30 text-lime-100 bg-lime-400/[0.13]',
+  amber: 'badge-elevated-dark label-glow-chip border-amber-300/30 text-amber-100 bg-amber-400/[0.13]',
+  orange: 'badge-elevated-dark label-glow-chip border-orange-300/30 text-orange-100 bg-orange-400/[0.13]',
+  rose: 'badge-elevated-dark label-glow-chip border-rose-300/30 text-rose-100 bg-rose-400/[0.13]',
+  fuchsia: 'badge-elevated-dark label-glow-chip border-fuchsia-300/30 text-fuchsia-100 bg-fuchsia-400/[0.13]',
+  violet: 'badge-elevated-dark label-glow-chip border-violet-300/30 text-violet-100 bg-violet-400/[0.13]',
+  indigo: 'badge-elevated-dark label-glow-chip border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]',
+  slate: 'badge-elevated-dark label-glow-chip border-white/12 text-slate-200 bg-white/[0.05]'
 };
 
 const POSITION_TONE_CLASS_LIGHT: Record<LabelToneKey, string> = {
@@ -1006,6 +1009,36 @@ const POSITION_TONE_CLASS_LIGHT: Record<LabelToneKey, string> = {
   violet: 'badge-elevated-light border-violet-300 bg-violet-50 text-violet-700',
   indigo: 'badge-elevated-light border-indigo-300 bg-indigo-50 text-indigo-700',
   slate: 'badge-elevated-light border-slate-300 bg-slate-100 text-slate-700'
+};
+
+const POSITION_GLOW_THEME: Record<LabelToneKey, { glowColor: string; colors: [string, string, string] }> = {
+  sky: { glowColor: '199 95 74', colors: ['#38bdf8', '#7dd3fc', '#0ea5e9'] },
+  cyan: { glowColor: '188 90 70', colors: ['#22d3ee', '#67e8f9', '#0891b2'] },
+  teal: { glowColor: '174 80 64', colors: ['#2dd4bf', '#5eead4', '#0f766e'] },
+  emerald: { glowColor: '151 78 62', colors: ['#34d399', '#86efac', '#059669'] },
+  lime: { glowColor: '84 86 66', colors: ['#a3e635', '#bef264', '#65a30d'] },
+  amber: { glowColor: '43 96 66', colors: ['#fbbf24', '#fde68a', '#d97706'] },
+  orange: { glowColor: '28 96 65', colors: ['#fb923c', '#fdba74', '#ea580c'] },
+  rose: { glowColor: '347 92 70', colors: ['#fb7185', '#fda4af', '#e11d48'] },
+  fuchsia: { glowColor: '292 86 72', colors: ['#e879f9', '#f0abfc', '#c026d3'] },
+  violet: { glowColor: '258 90 74', colors: ['#a78bfa', '#c4b5fd', '#7c3aed'] },
+  indigo: { glowColor: '239 86 74', colors: ['#818cf8', '#a5b4fc', '#4f46e5'] },
+  slate: { glowColor: '215 28 74', colors: ['#94a3b8', '#cbd5e1', '#64748b'] }
+};
+
+const POSITION_GLOW_BACKGROUND: Record<LabelToneKey, string> = {
+  sky: '#071421',
+  cyan: '#06161d',
+  teal: '#061917',
+  emerald: '#06180f',
+  lime: '#111707',
+  amber: '#1b1305',
+  orange: '#1b1007',
+  rose: '#1b0a12',
+  fuchsia: '#190b1b',
+  violet: '#120d1f',
+  indigo: '#0d1022',
+  slate: '#111827'
 };
 
 const getPositionBadgeClass = (value: string, toneMap?: Partial<PositionToneMap>) => {
@@ -1761,26 +1794,7 @@ export default function AdminAppPage() {
   const scheduleBadgeBaseClass =
     themeMode === 'light'
       ? 'badge-elevated-light inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold'
-      : 'badge-elevated-dark inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold';
-  const getScheduleWorkDaysBadgeClass = (value: number) => {
-    const tone =
-      value > 5
-        ? themeMode === 'light'
-          ? 'border-rose-300 bg-rose-50 text-rose-700'
-          : 'border-rose-400/35 bg-rose-500/14 text-rose-100'
-        : value >= 5
-          ? themeMode === 'light'
-            ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-            : 'border-emerald-400/35 bg-emerald-500/14 text-emerald-100'
-          : value >= 1
-            ? themeMode === 'light'
-              ? 'border-amber-300 bg-amber-50 text-amber-700'
-              : 'border-amber-400/35 bg-amber-500/14 text-amber-100'
-            : themeMode === 'light'
-              ? 'border-slate-300 bg-slate-100 text-slate-600'
-              : 'border-slate-400/35 bg-slate-500/12 text-slate-200';
-    return `${scheduleBadgeBaseClass} min-w-[32px] justify-center px-2.5 py-[5px] tabular-nums ${tone}`;
-  };
+      : 'badge-elevated-dark label-glow-chip inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold';
   const getScheduleTablePositionBadgeClass = (position: string) => {
     const toneClass =
       themeMode === 'light'
@@ -1814,6 +1828,57 @@ export default function AdminAppPage() {
           : 'border-slate-400/35 bg-slate-500/12 text-slate-200';
     }
     return `${scheduleBadgeBaseClass} min-w-[52px] justify-center px-2.5 py-[5px] tracking-[0.04em] ${toneClass}`;
+  };
+  const getScheduleWorkDaysToneKey = (value: number): LabelToneKey => {
+    if (value > 5) return 'rose';
+    if (value >= 5) return 'emerald';
+    if (value >= 1) return 'amber';
+    return 'slate';
+  };
+  const getScheduleCountToneKey = (value: number): LabelToneKey => {
+    if (value <= 0) return 'emerald';
+    if (value <= 2) return 'amber';
+    return 'rose';
+  };
+  const getScheduleShiftToneKey = (value: '' | 'early' | 'late'): LabelToneKey => {
+    if (value === 'early') return 'amber';
+    if (value === 'late') return 'indigo';
+    return 'slate';
+  };
+  const renderScheduleGlowBadge = (
+    content: ReactNode,
+    toneKey: LabelToneKey,
+    innerClassName: string,
+    title?: string
+  ) => {
+    const glowTheme = POSITION_GLOW_THEME[toneKey];
+    return (
+      <BorderGlow
+        className="admin-position-badge-glow admin-schedule-badge-glow"
+        edgeSensitivity={30}
+        glowColor={glowTheme.glowColor}
+        backgroundColor={POSITION_GLOW_BACKGROUND[toneKey] ?? '#120F17'}
+        borderRadius={999}
+        glowRadius={18}
+        glowIntensity={1}
+        coneSpread={25}
+        interactive={false}
+        rotateDuration={4200}
+        colors={glowTheme.colors}
+        fillOpacity={0.5}
+      >
+        <span
+          className={[
+            'inline-flex items-center justify-center rounded-full text-[10px] font-semibold leading-none',
+            themeMode === 'light' ? 'text-white' : 'text-slate-100',
+            innerClassName
+          ].join(' ')}
+          title={title}
+        >
+          {content}
+        </span>
+      </BorderGlow>
+    );
   };
 
   const [, setStatus] = useState<Status>({ tone: 'idle', message: '请登录后台' });
@@ -2202,7 +2267,7 @@ export default function AdminAppPage() {
   const [schedulePickerShowMore, setSchedulePickerShowMore] = useState(false);
   const [scheduleSortByUphDesc, setScheduleSortByUphDesc] = useState(false);
   const [scheduleWorkDayFilter, setScheduleWorkDayFilter] = useState<number | null>(null);
-  const [scheduleRenderCount, setScheduleRenderCount] = useState(120);
+  const [scheduleRenderCount, setScheduleRenderCount] = useState(24);
   const [scheduleRecommendedByDate, setScheduleRecommendedByDate] = useState<ScheduleRecommendedByDate>({});
   const [schedulePicker, setSchedulePicker] = useState<SchedulePickerState>({
     open: false,
@@ -2701,7 +2766,7 @@ export default function AdminAppPage() {
       const row = (((res.data as any[]) ?? [])[0] ?? null) as AppSettingRow | null;
       if (!row) return;
       const value = (row.value ?? {}) as Record<string, unknown>;
-      const next = normalizePositionToneMap(value.tones ?? {});
+      const next = normalizeExplicitPositionToneMap(value.tones ?? {});
       setSchedulePositionToneByPosition((current) => {
         const positionToneKeys = new Set(
           positions
@@ -2886,9 +2951,9 @@ const getShiftBucket = (inAtIso: string) => {
 };
 
 const getShiftBadgeClass = (value: '' | 'early' | 'late') => {
-  if (value === 'early') return 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
-  if (value === 'late') return 'badge-elevated-dark border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]';
-  return 'badge-elevated-dark border-white/12 text-slate-200 bg-white/[0.05]';
+  if (value === 'early') return 'badge-elevated-dark label-glow-chip border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
+  if (value === 'late') return 'badge-elevated-dark label-glow-chip border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]';
+  return 'badge-elevated-dark label-glow-chip border-white/12 text-slate-200 bg-white/[0.05]';
 };
 const normalizeShiftValue = (value: string): '' | 'early' | 'late' => {
   const v = value.trim().toLowerCase();
@@ -4215,13 +4280,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         .neq('action', 'admin_page_switch')
         .neq('action', 'schedule_open_daily_list')
         .order('created_at', { ascending: false })
-        .limit(searchValue ? 500 : 200);
-      if (searchValue) {
-        const term = `%${searchValue}%`;
-        q = q.or(`staff_id.ilike.${term},actor.ilike.${term},action.ilike.${term}`);
-      }
-      const [res, nameRes] = await Promise.all([
+        .limit(searchValue ? 1200 : 200);
+      const directSearchTerm = searchValue.replace(/[,%]/g, ' ').trim();
+      const directSearchQuery =
+        searchValue && directSearchTerm
+          ? supabase
+              .from(AUDIT_TABLE)
+              .select('id, created_at, actor, action, staff_id, target, payload')
+              .or(`staff_id.ilike.%${directSearchTerm}%,actor.ilike.%${directSearchTerm}%,action.ilike.%${directSearchTerm}%,target.ilike.%${directSearchTerm}%`)
+              .neq('action', 'admin_page_switch')
+              .neq('action', 'schedule_open_daily_list')
+              .order('created_at', { ascending: false })
+              .limit(500)
+          : Promise.resolve({ data: [], error: null } as any);
+      const [res, directRes, nameRes] = await Promise.all([
         q,
+        directSearchQuery,
         matchedStaffIds.length > 0
           ? supabase
               .from(AUDIT_TABLE)
@@ -4233,12 +4307,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               .limit(500)
           : Promise.resolve({ data: [], error: null } as any)
       ]);
-      if (res.error || nameRes?.error) {
-        setAuditError(res.error?.message ?? nameRes?.error?.message ?? 'Failed to load audit records.');
+      if (res.error || directRes?.error || nameRes?.error) {
+        setAuditError(res.error?.message ?? directRes?.error?.message ?? nameRes?.error?.message ?? 'Failed to load audit records.');
         return;
       }
       const byId = new Map<string, AuditRow>();
       for (const row of (((res.data as any[]) ?? []) as AuditRow[])) {
+        byId.set(String(row.id ?? `${row.created_at}_${row.staff_id}_${row.action}`), row);
+      }
+      for (const row of (((directRes.data as any[]) ?? []) as AuditRow[])) {
         byId.set(String(row.id ?? `${row.created_at}_${row.staff_id}_${row.action}`), row);
       }
       for (const row of (((nameRes.data as any[]) ?? []) as AuditRow[])) {
@@ -4259,10 +4336,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           if (!searchValue) return true;
           const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
           const employeeName = staff ? String(employeeNameByAuditStaffId.get(staff) ?? '').trim() : '';
-          const haystack = [staff, employeeName, String(row.actor ?? '').trim(), String(row.action ?? '').trim(), String(row.target ?? '').trim()].join(
-            ' '
-          );
-          return matchesLooseSearch(haystack, searchValue);
+          const detail = formatAuditDetail(row);
+          return matchesAuditSearch(row, searchValue, {
+            employeeName,
+            actionLabel: formatAuditActionLabel(String(row.action ?? '').trim()),
+            detailSummary: detail.summary,
+            detailValues: detail.details.map((item) => `${item.label} ${item.value}`)
+          });
         })
         .slice(0, 200);
       setAuditRows(nextAuditRows);
@@ -6976,6 +7056,118 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       setDepartedEmployees((prev) => prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== staff));
       setStatus({ tone: 'success', message: t(`已彻底删除：${staff}`, `Hard deleted: ${staff}`) });
+    });
+  };
+
+  const updateDepartedEmployeeTerminationType = async (staffId: string, nextType: TerminationType) => {
+    if (!employeesCanOperate) {
+      setDepartedEmployeesError(t('员工模块当前为只读。', 'Employees is read-only.'));
+      return;
+    }
+    if (!supabase) {
+      setDepartedEmployeesError('Missing Supabase configuration.');
+      return;
+    }
+    const staff = normalizeStaffId(String(staffId ?? '').trim());
+    if (!staff) return;
+    await runLocked('employee_departed_type_update', async () => {
+      setDepartedEmployeesError(null);
+      const res = await supabase
+        .from(EMPLOYEE_TABLE)
+        .update({ termination_type: nextType } as any)
+        .eq('staff_id', staff)
+        .not('terminated_at', 'is', null);
+      if (res.error) {
+        setDepartedEmployeesError(
+          /termination_type/i.test(String(res.error.message ?? ''))
+            ? `Update failed: ${res.error.message}. Please run sql/2026-06-14_add_employee_termination_type.sql`
+            : res.error.message
+        );
+        return;
+      }
+      setDepartedEmployees((prev) =>
+        prev.map((row) =>
+          normalizeStaffId(String(row.staff_id ?? '').trim()) === staff ? { ...row, termination_type: nextType } : row
+        )
+      );
+      await writeAudit({
+        action: 'employee_termination_type_update',
+        staffId: staff,
+        target: EMPLOYEE_TABLE,
+        payload: {
+          staff_id: staff,
+          termination_type: nextType
+        }
+      });
+      setStatus({
+        tone: 'success',
+        message: nextType === 'blacklist' ? t(`已设为黑名单：${staff}`, `Marked blacklist: ${staff}`) : t(`已设为正常离职：${staff}`, `Marked normal: ${staff}`)
+      });
+    });
+  };
+
+  const rehireDepartedEmployee = async (staffId: string) => {
+    if (!employeesCanOperate) {
+      setDepartedEmployeesError(t('员工模块当前为只读。', 'Employees is read-only.'));
+      return;
+    }
+    if (!supabase) {
+      setDepartedEmployeesError('Missing Supabase configuration.');
+      return;
+    }
+    const staff = normalizeStaffId(String(staffId ?? '').trim());
+    if (!staff) return;
+    const rowSnapshot =
+      departedEmployees.find((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) === staff) ?? null;
+    const displayName = String(rowSnapshot?.name ?? '').trim() ? `${String(rowSnapshot?.name ?? '').trim()} (${staff})` : staff;
+    const ok = await askConfirm(
+      t(`确认返聘 ${displayName} 吗？`, `Rehire ${displayName}?`),
+      t('返聘', 'Rehire')
+    );
+    if (!ok) return;
+    await runLocked('employee_rehire', async () => {
+      setDepartedEmployeesError(null);
+      const rehirePayload = {
+        active: true,
+        terminated_at: null,
+        termination_type: null
+      };
+      const res = await supabase.from(EMPLOYEE_TABLE).update(rehirePayload as any).eq('staff_id', staff);
+      if (res.error) {
+        setDepartedEmployeesError(
+          /active|terminated_at|termination_type/i.test(String(res.error.message ?? ''))
+            ? `Rehire failed: ${res.error.message}. Please run sql/2026-06-14_add_employee_termination_type.sql`
+            : res.error.message
+        );
+        return;
+      }
+      const restoredRow: EmployeeRow = {
+        ...(rowSnapshot ?? {}),
+        staff_id: staff,
+        active: true,
+        terminated_at: null,
+        termination_type: null
+      };
+      setDepartedEmployees((prev) => prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== staff));
+      setEmployees((prev) => {
+        const next = [...prev];
+        const index = next.findIndex((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) === staff);
+        if (index >= 0) next[index] = { ...next[index], ...restoredRow };
+        else next.push(restoredRow);
+        next.sort((a, b) => String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US'));
+        return next;
+      });
+      await writeAudit({
+        action: 'employee_rehire',
+        staffId: staff,
+        target: EMPLOYEE_TABLE,
+        payload: {
+          staff_id: staff,
+          previous_terminated_at: rowSnapshot?.terminated_at ?? null,
+          previous_termination_type: rowSnapshot?.termination_type ?? null
+        }
+      });
+      setStatus({ tone: 'success', message: t(`已返聘：${displayName}`, `Rehired: ${displayName}`) });
     });
   };
 
@@ -16439,7 +16631,7 @@ ${rowsToHtml(late)}
                 homeExpectedPositionSummaryCards={homeExpectedPositionSummaryCards}
                 getHomeCardToneClass={getHomeCardToneClass}
                 getHomeChipToneClass={getHomeChipToneClass}
-                getScheduleLabelToneClass={getScheduleLabelToneClass}
+                getScheduleLabelTone={getScheduleLabelTone}
                 getScheduleTableLabelBadgeClass={getScheduleTableLabelBadgeClass}
                 getHomePanelToneClass={getHomePanelToneClass}
                 getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
@@ -17010,17 +17202,17 @@ ${rowsToHtml(late)}
                 {!scheduleError && scheduleEmployeesFiltered.length > 0 && (
                   <div
                     ref={scheduleTableScrollRef}
-                    className="mt-4 min-h-[320px] max-h-[68vh] overflow-x-hidden overflow-y-auto rounded-2xl border border-white/10 bg-black/30 pr-3 pb-2"
+                    className="mx-auto mt-4 min-h-[320px] max-h-[68vh] overflow-x-hidden overflow-y-auto rounded-2xl border border-white/10 bg-black/30 pr-3 pb-2"
                   >
-                    <table className="w-full table-fixed text-left text-xs leading-tight">
+                    <table className="mx-auto w-full table-fixed text-center text-xs leading-tight">
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
-                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 pl-4 pr-1 py-2 backdrop-blur">{t('工号', 'ID')}</th>
-                          <th className="sticky top-0 z-20 w-[124px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('姓名', 'Name')}</th>
+                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 pl-4 pr-1 py-2 text-left backdrop-blur">{t('工号', 'ID')}</th>
+                          <th className="sticky top-0 z-20 w-[124px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('姓名', 'Name')}</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">{t('工作天数', 'Work Days')}</th>
-                          <th className="sticky top-0 z-20 w-[82px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('中介', 'Agency')}</th>
+                          <th className="sticky top-0 z-20 w-[82px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('中介', 'Agency')}</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">Driver</th>
-                          <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('岗位', 'Position')}</th>
+                          <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('岗位', 'Position')}</th>
                           <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('标签', 'Label')}</th>
                           <th className="sticky top-0 z-20 w-[64px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('班次', 'Shift')}</th>
                           <th className="sticky top-0 z-20 w-[56px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
@@ -17168,6 +17360,10 @@ ${rowsToHtml(late)}
                               ? 'text-slate-700'
                               : 'text-slate-300'
                             : 'text-slate-200';
+                          const positionTone = getPositionToneFromMap(position, schedulePositionToneByPosition);
+                          const positionGlowTheme = POSITION_GLOW_THEME[positionTone];
+                          const positionGlowBackground = POSITION_GLOW_BACKGROUND[positionTone] ?? '#120F17';
+                          const positionGlowDuration = 3800 + (staff.charCodeAt(staff.length - 1) % 9) * 180;
 
                           return (
                             <tr className={scheduleRowClass} key={staff}>
@@ -17202,9 +17398,11 @@ ${rowsToHtml(late)}
                                 )}
                               </td>
                               <td className="px-1.5 py-2 text-center">
-                                <span className={getScheduleWorkDaysBadgeClass(effectiveWorkDays)}>
-                                  {effectiveWorkDays}
-                                </span>
+                                {renderScheduleGlowBadge(
+                                  effectiveWorkDays,
+                                  getScheduleWorkDaysToneKey(effectiveWorkDays),
+                                  'min-w-[32px] px-2.5 py-[5px] tabular-nums'
+                                )}
                               </td>
                               <td className={['px-1 py-2 truncate', scheduleBodyTextClass].join(' ')}>{agency || '-'}</td>
                               <td className="px-1 py-2 text-center">
@@ -17225,36 +17423,72 @@ ${rowsToHtml(late)}
                                 )}
                               </td>
                               <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
-                                <span className={getScheduleTablePositionBadgeClass(position)}>
-                                  {position || '-'}
-                                </span>
+                                <BorderGlow
+                                  className="admin-position-badge-glow admin-schedule-badge-glow"
+                                  edgeSensitivity={30}
+                                  glowColor={positionGlowTheme.glowColor}
+                                  backgroundColor={positionGlowBackground}
+                                  borderRadius={999}
+                                  glowRadius={18}
+                                  glowIntensity={1}
+                                  coneSpread={25}
+                                  interactive={false}
+                                  rotateDuration={positionGlowDuration}
+                                  colors={positionGlowTheme.colors}
+                                  fillOpacity={0.5}
+                                >
+                                  <span
+                                    className={[
+                                      'inline-flex min-w-[54px] items-center justify-center rounded-full px-2.5 py-[5px] text-[10px] font-semibold uppercase tracking-[0.12em]',
+                                      themeMode === 'light' ? 'text-white' : 'text-slate-100'
+                                    ].join(' ')}
+                                  >
+                                    {position || '-'}
+                                  </span>
+                                </BorderGlow>
                               </td>
                               <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
                                 {canEditScheduleLabel ? (
-                                  <select
-                                    value={labelOptions.includes(label) ? label : ''}
-                                    disabled={labelSaving || isLocked}
-                                    onChange={(event) => void updateScheduleEmployeeLabel(employee, event.target.value)}
-                                    aria-label={t('修改 Label', 'Edit label')}
-                                    title={labelSaving ? t('保存中...', 'Saving...') : t('修改 Label', 'Edit label')}
-                                    style={{ backgroundImage: 'none' }}
-                                    className={[
-                                      'h-[22px] w-[58px] appearance-none rounded-full border px-2 text-center text-[10px] font-semibold leading-none outline-none transition [text-align-last:center] focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                                      label ? getScheduleTableLabelBadgeClass(label) : 'border-white/12 bg-white/[0.05] text-slate-200',
-                                      themeMode === 'light' ? 'bg-white' : ''
-                                    ].join(' ')}
+                                  <BorderGlow
+                                    className="admin-position-badge-glow admin-schedule-badge-glow"
+                                    edgeSensitivity={30}
+                                    glowColor={POSITION_GLOW_THEME[label ? getScheduleLabelTone(label) : 'slate'].glowColor}
+                                    backgroundColor={POSITION_GLOW_BACKGROUND[label ? getScheduleLabelTone(label) : 'slate'] ?? '#120F17'}
+                                    borderRadius={999}
+                                    glowRadius={18}
+                                    glowIntensity={1}
+                                    coneSpread={25}
+                                    interactive={false}
+                                    rotateDuration={4200}
+                                    colors={POSITION_GLOW_THEME[label ? getScheduleLabelTone(label) : 'slate'].colors}
+                                    fillOpacity={0.5}
                                   >
-                                    {!labelOptions.includes(label) ? <option value="">-</option> : null}
-                                    {labelOptions.map((item) => (
-                                      <option key={`${staff}-label-${item}`} value={item}>
-                                        {item}
-                                      </option>
-                                    ))}
-                                  </select>
+                                    <select
+                                      value={labelOptions.includes(label) ? label : ''}
+                                      disabled={labelSaving || isLocked}
+                                      onChange={(event) => void updateScheduleEmployeeLabel(employee, event.target.value)}
+                                      aria-label={t('修改 Label', 'Edit label')}
+                                      title={labelSaving ? t('保存中...', 'Saving...') : t('修改 Label', 'Edit label')}
+                                      style={{ backgroundImage: 'none' }}
+                                      className={[
+                                        'h-[22px] w-[58px] appearance-none rounded-full border-0 bg-transparent px-2 text-center text-[10px] font-semibold leading-none outline-none transition [text-align-last:center] disabled:cursor-not-allowed disabled:opacity-60',
+                                        themeMode === 'light' ? 'text-white' : 'text-slate-100'
+                                      ].join(' ')}
+                                    >
+                                      {!labelOptions.includes(label) ? <option value="">-</option> : null}
+                                      {labelOptions.map((item) => (
+                                        <option key={`${staff}-label-${item}`} value={item}>
+                                          {item}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </BorderGlow>
                                 ) : label ? (
-                                  <span className={getScheduleTableLabelBadgeClass(label)}>
-                                    <span className="truncate">{label}</span>
-                                  </span>
+                                  renderScheduleGlowBadge(
+                                    <span className="truncate">{label}</span>,
+                                    getScheduleLabelTone(label),
+                                    'max-w-[64px] px-2.5 py-[5px]'
+                                  )
                                 ) : (
                                   '-'
                                 )}
@@ -17264,51 +17498,33 @@ ${rowsToHtml(late)}
                                   const dbShift = normalizeShiftValue(String(employee.shift ?? '').trim());
                                   const shift = dbShift || '';
                                   const shiftLabel = shift === 'early' ? t('早班', 'Morning') : shift === 'late' ? t('晚班', 'Night') : '-';
-                                  return <span className={getScheduleTableShiftBadgeClass(shift)}>{shiftLabel}</span>;
+                                  return renderScheduleGlowBadge(
+                                    shiftLabel,
+                                    getScheduleShiftToneKey(shift),
+                                    'min-w-[52px] px-2.5 py-[5px] tracking-[0.04em]'
+                                  );
                                 })()}
                               </td>
                               <td className={['px-1 py-2 text-center font-mono', scheduleBodyTextClass].join(' ')}>{formatUph(scheduleUphByStaffId[staff])}</td>
                               <td className="px-1 py-2 text-center">
                                 {(() => {
                                   const count = Number(scheduleMonthlyAbsentByStaffId[staff] ?? 0);
-                                  const toneClass =
-                                    count <= 0
-                                      ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
-                                      : count <= 2
-                                        ? 'border-amber-400/60 bg-amber-500/15 text-amber-200'
-                                        : 'border-rose-400/60 bg-rose-500/15 text-rose-200';
-                                  return (
-                                    <span
-                                      className={[
-                                        'inline-flex min-w-[38px] items-center justify-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
-                                        toneClass
-                                      ].join(' ')}
-                                      title={t(`${scheduleMonthLabel} 累计缺勤`, `Absent in ${scheduleMonthLabel}`)}
-                                    >
-                                      {count}
-                                    </span>
+                                  return renderScheduleGlowBadge(
+                                    count,
+                                    getScheduleCountToneKey(count),
+                                    'min-w-[38px] px-1.5 py-0.5 tabular-nums',
+                                    t(`${scheduleMonthLabel} 累计缺勤`, `Absent in ${scheduleMonthLabel}`)
                                   );
                                 })()}
                               </td>
                               <td className="px-1 py-2 text-center">
                                 {(() => {
                                   const count = Number(scheduleLateCountByStaffId[staff] ?? 0);
-                                  const toneClass =
-                                    count <= 0
-                                      ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
-                                      : count <= 2
-                                        ? 'border-amber-400/60 bg-amber-500/15 text-amber-200'
-                                        : 'border-rose-400/60 bg-rose-500/15 text-rose-200';
-                                  return (
-                                    <span
-                                      className={[
-                                        'inline-flex min-w-[38px] items-center justify-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
-                                        toneClass
-                                      ].join(' ')}
-                                      title={t('本周迟到次数', 'Late count this week')}
-                                    >
-                                      {count}
-                                    </span>
+                                  return renderScheduleGlowBadge(
+                                    count,
+                                    getScheduleCountToneKey(count),
+                                    'min-w-[38px] px-1.5 py-0.5 tabular-nums',
+                                    t('本周迟到次数', 'Late count this week')
                                   );
                                 })()}
                               </td>
@@ -17321,29 +17537,40 @@ ${rowsToHtml(late)}
                                     ...(scheduleAutoMistakeDetailsByStaffId[staff] ?? []),
                                     ...(scheduleMistakeDetailsByStaffId[staff] ?? [])
                                   ];
-                                  const toneClass =
-                                    count <= 0
-                                      ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200'
-                                      : count <= 2
-                                        ? 'border-amber-400/60 bg-amber-500/15 text-amber-200'
-                                        : 'border-rose-400/60 bg-rose-500/15 text-rose-200';
+                                  const toneKey = getScheduleCountToneKey(count);
+                                  const glowTheme = POSITION_GLOW_THEME[toneKey];
                                   return (
                                     <div className="group relative inline-flex">
-                                      <button
-                                        type="button"
-                                        disabled={isLocked}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          openScheduleMistakeCreate(employee);
-                                        }}
-                                        className={[
-                                          'inline-flex min-w-[38px] items-center justify-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition hover:brightness-110 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.18)] disabled:cursor-not-allowed disabled:opacity-60',
-                                          toneClass
-                                        ].join(' ')}
-                                        title="Add mistake for this employee"
+                                      <BorderGlow
+                                        className="admin-position-badge-glow admin-schedule-badge-glow"
+                                        edgeSensitivity={30}
+                                        glowColor={glowTheme.glowColor}
+                                        backgroundColor={POSITION_GLOW_BACKGROUND[toneKey] ?? '#120F17'}
+                                        borderRadius={999}
+                                        glowRadius={18}
+                                        glowIntensity={1}
+                                        coneSpread={25}
+                                        interactive={false}
+                                        rotateDuration={4200}
+                                        colors={glowTheme.colors}
+                                        fillOpacity={0.5}
                                       >
-                                        {count}
-                                      </button>
+                                        <button
+                                          type="button"
+                                          disabled={isLocked}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            openScheduleMistakeCreate(employee);
+                                          }}
+                                          className={[
+                                            'inline-flex min-w-[38px] items-center justify-center rounded-full border-0 bg-transparent px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60',
+                                            themeMode === 'light' ? 'text-white' : 'text-slate-100'
+                                          ].join(' ')}
+                                          title="Add mistake for this employee"
+                                        >
+                                          {count}
+                                        </button>
+                                      </BorderGlow>
                                       <div className="pointer-events-none absolute left-1/2 top-full z-20 h-2 w-[420px] -translate-x-1/2" />
                                       <div className="pointer-events-auto invisible absolute left-1/2 top-full z-30 mt-1 w-[420px] -translate-x-1/2 overflow-hidden rounded-xl border border-white/15 bg-slate-950/95 text-left opacity-0 shadow-2xl backdrop-blur transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
                                         <div className="border-b border-white/10 px-3 py-2 text-[11px] font-semibold tracking-[0.12em] text-slate-300">
@@ -18292,6 +18519,7 @@ ${rowsToHtml(late)}
                   onToggleHireDateSort={toggleEmployeeHireDateSort}
                   displayStaffId={displayStaffId}
                   getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
+                  getScheduleLabelTone={getScheduleLabelTone}
                   getScheduleLabelToneClass={getScheduleLabelToneClass}
                   getShiftBadgeClass={getShiftBadgeClass}
                   employeeShiftByStaffId={employeeShiftByStaffId}
@@ -18320,9 +18548,12 @@ ${rowsToHtml(late)}
                   rows={departedEmployees}
                   loading={departedEmployeesLoading}
                   error={departedEmployeesError}
+                  canManageDeparted={employeesCanOperate}
                   canHardDelete={adminAccessContext?.role === 'level1'}
                   onClose={() => setDepartedEmployeesOpen(false)}
                   onRefresh={() => fetchDepartedEmployees({ lockUi: false })}
+                  onToggleTerminationType={updateDepartedEmployeeTerminationType}
+                  onRehire={rehireDepartedEmployee}
                   onHardDelete={hardDeleteDepartedEmployee}
                   displayStaffId={displayStaffId}
                 />

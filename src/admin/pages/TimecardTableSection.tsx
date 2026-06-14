@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import GlowLabelChip, { getGlowToneForPosition, getGlowToneForShift } from '../../components/GlowLabelChip';
 import AdminUserAvatar from '../components/AdminUserAvatar';
 import type { AdminUserIdentityView } from '../adminIdentity';
 import { getTimecardCellHoursText, getTimecardTotalHoursText } from '../timecardDisplay';
@@ -198,24 +199,42 @@ export default function TimecardTableSection({
       <td className="px-2 py-1.5 truncate text-slate-200">{row.name || '-'}</td>
       <td className="px-2 py-1.5 truncate text-slate-200">{row.agency || '-'}</td>
       <td className="px-2 py-1.5 truncate text-slate-200">
-        <span
-          className={[
-            'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
-            getSchedulePositionBadgeClass(row.position)
-          ].join(' ')}
-        >
-          {row.position || '-'}
-        </span>
+        {isLight ? (
+          <span
+            className={[
+              'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
+              getSchedulePositionBadgeClass(row.position)
+            ].join(' ')}
+          >
+            {row.position || '-'}
+          </span>
+        ) : (
+          <GlowLabelChip tone={getGlowToneForPosition(row.position)} className="min-w-[54px] uppercase tracking-[0.12em]">
+            {row.position || '-'}
+          </GlowLabelChip>
+        )}
       </td>
       <td className="px-2 py-1.5 text-center text-slate-200">
         {row.shift === 'early' ? (
-          <span className="inline-flex items-center rounded-full border border-amber-300/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
-            {t('早班', 'Morning')}
-          </span>
+          isLight ? (
+            <span className="inline-flex items-center rounded-full border border-amber-300/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
+              {t('早班', 'Morning')}
+            </span>
+          ) : (
+            <GlowLabelChip tone={getGlowToneForShift(row.shift)} className="min-w-[52px] uppercase tracking-[0.12em]">
+              {t('早班', 'Morning')}
+            </GlowLabelChip>
+          )
         ) : row.shift === 'late' ? (
-          <span className="inline-flex items-center rounded-full border border-indigo-300/30 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-semibold text-indigo-200">
-            {t('晚班', 'Night')}
-          </span>
+          isLight ? (
+            <span className="inline-flex items-center rounded-full border border-indigo-300/30 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-semibold text-indigo-200">
+              {t('晚班', 'Night')}
+            </span>
+          ) : (
+            <GlowLabelChip tone={getGlowToneForShift(row.shift)} className="min-w-[52px] uppercase tracking-[0.12em]">
+              {t('晚班', 'Night')}
+            </GlowLabelChip>
+          )
         ) : (
           <span className="text-slate-500">-</span>
         )}
