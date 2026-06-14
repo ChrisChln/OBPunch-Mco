@@ -1,0 +1,217 @@
+import { useMemo, useState } from 'react';
+import type { EmployeeRow, TerminationType } from '../types';
+
+type TranslateFn = (zh: string, en: string) => string;
+
+type DepartedEmployeesModalProps = {
+  open: boolean;
+  t: TranslateFn;
+  themeMode: 'dark' | 'light';
+  rows: EmployeeRow[];
+  loading: boolean;
+  error: string | null;
+  canHardDelete: boolean;
+  onClose: () => void;
+  onRefresh: () => void | Promise<void>;
+  onHardDelete: (staffId: string) => void | Promise<void>;
+  displayStaffId: (value: string) => string;
+};
+
+const normalizeText = (value: unknown) => String(value ?? '').trim();
+
+const normalizeTerminationType = (value: unknown): TerminationType => {
+  const text = normalizeText(value).toLowerCase();
+  return text === 'blacklist' ? 'blacklist' : 'normal';
+};
+
+const formatDate = (value: unknown) => {
+  const text = normalizeText(value);
+  if (!text) return '-';
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text.slice(0, 10) || '-';
+  return date.toISOString().slice(0, 10);
+};
+
+export default function DepartedEmployeesModal({
+  open,
+  t,
+  themeMode,
+  rows,
+  loading,
+  error,
+  canHardDelete,
+  onClose,
+  onRefresh,
+  onHardDelete,
+  displayStaffId
+}: DepartedEmployeesModalProps) {
+  const [search, setSearch] = useState('');
+  const [agency, setAgency] = useState('');
+  const [position, setPosition] = useState('');
+  const [typeFilter, setTypeFilter] = useState<'all' | TerminationType>('all');
+  const isLight = themeMode === 'light';
+
+  const agencyOptions = useMemo(
+    () =>
+      Array.from(new Set(rows.map((row) => normalizeText(row.agency ?? row.Agency)).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b)
+      ),
+    [rows]
+  );
+  const positionOptions = useMemo(
+    () =>
+      Array.from(new Set(rows.map((row) => normalizeText(row.position ?? row.Position)).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b)
+      ),
+    [rows]
+  );
+
+  const filteredRows = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return rows.filter((row) => {
+      const rowAgency = normalizeText(row.agency ?? row.Agency);
+      const rowPosition = normalizeText(row.position ?? row.Position);
+      const rowType = normalizeTerminationType(row.termination_type);
+      if (agency && rowAgency !== agency) return false;
+      if (position && rowPosition !== position) return false;
+      if (typeFilter !== 'all' && rowType !== typeFilter) return false;
+      if (!needle) return true;
+      const haystack = [
+        row.staff_id,
+        row.name,
+        rowAgency,
+        rowPosition,
+        rowType === 'blacklist' ? 'blacklist 黑名单' : 'normal 正常离职',
+        row.terminated_at
+      ]
+        .map((item) => normalizeText(item).toLowerCase())
+        .join(' ');
+      return haystack.includes(needle);
+    });
+  }, [agency, position, rows, search, typeFilter]);
+
+  if (!open) return null;
+
+  const panelClass = isLight
+    ? 'border-slate-200 bg-white text-slate-900 shadow-[0_24px_80px_rgba(15,23,42,0.22)]'
+    : 'border-white/10 bg-slate-950 text-white shadow-[0_24px_80px_rgba(0,0,0,0.55)]';
+  const inputClass = [
+    'h-11 rounded-xl border px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+    isLight
+      ? 'border-slate-200 bg-white text-slate-900 focus:border-slate-400'
+      : 'border-white/10 bg-black/30 text-white focus:border-neon'
+  ].join(' ');
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm">
+      <div className={['flex max-h-[88vh] w-full max-w-6xl flex-col rounded-2xl border', panelClass].join(' ')}>
+        <div className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
+          <h3 className="font-display text-xl tracking-[0.08em]">{t('离职员工', 'Departed')}</h3>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => void onRefresh()} disabled={loading} className="admin-btn admin-btn-toolbar admin-btn-secondary px-4 disabled:opacity-60">
+              {t('刷新', 'Refresh')}
+            </button>
+            <button type="button" onClick={onClose} className="admin-btn admin-btn-toolbar admin-btn-secondary px-4">
+              {t('关闭', 'Close')}
+            </button>
+          </div>
+        </div>
+
+        <div className="grid gap-3 px-5 py-4 md:grid-cols-5">
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={t('搜索名字 / USID', 'Search name / USID')}
+            className={[inputClass, 'md:col-span-2'].join(' ')}
+          />
+          <select value={agency} onChange={(event) => setAgency(event.target.value)} className={inputClass}>
+            <option value="">{t('全部 Agency', 'All agencies')}</option>
+            {agencyOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+          <select value={position} onChange={(event) => setPosition(event.target.value)} className={inputClass}>
+            <option value="">{t('全部岗位', 'All positions')}</option>
+            {positionOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+          <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as 'all' | TerminationType)} className={inputClass}>
+            <option value="all">{t('全部类型', 'All types')}</option>
+            <option value="normal">{t('正常离职', 'Normal')}</option>
+            <option value="blacklist">{t('黑名单', 'Blacklist')}</option>
+          </select>
+        </div>
+
+        {error ? <div className="px-5 pb-3 text-sm text-ember">{error}</div> : null}
+
+        <div className="min-h-0 flex-1 overflow-auto px-5 pb-5">
+          <table className="w-full min-w-[900px] table-fixed text-left text-sm">
+            <thead className={['sticky top-0 z-10 border-b text-xs uppercase tracking-[0.18em]', isLight ? 'border-slate-200 bg-white text-slate-500' : 'border-white/10 bg-slate-950 text-slate-400'].join(' ')}>
+              <tr>
+                <th className="w-[130px] px-3 py-3">{t('离职日期', 'Date')}</th>
+                <th className="w-[180px] px-3 py-3">{t('名字', 'Name')}</th>
+                <th className="w-[150px] px-3 py-3">USID</th>
+                <th className="w-[130px] px-3 py-3">Agency</th>
+                <th className="w-[130px] px-3 py-3">Position</th>
+                <th className="w-[130px] px-3 py-3">{t('类型', 'Type')}</th>
+                {canHardDelete ? <th className="w-[120px] px-3 py-3 text-right">{t('操作', 'Action')}</th> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((row) => {
+                const staffId = normalizeText(row.staff_id);
+                const type = normalizeTerminationType(row.termination_type);
+                return (
+                  <tr key={`${staffId}:${row.terminated_at}`} className="border-b border-white/5 last:border-0">
+                    <td className="px-3 py-3 font-mono">{formatDate(row.terminated_at)}</td>
+                    <td className="px-3 py-3">
+                      <span className="block truncate" title={normalizeText(row.name) || '-'}>
+                        {normalizeText(row.name) || '-'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3 font-mono">{staffId ? displayStaffId(staffId) : '-'}</td>
+                    <td className="px-3 py-3">{normalizeText(row.agency ?? row.Agency) || '-'}</td>
+                    <td className="px-3 py-3">{normalizeText(row.position ?? row.Position) || '-'}</td>
+                    <td className="px-3 py-3">
+                      <span
+                        className={[
+                          'inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold',
+                          type === 'blacklist'
+                            ? 'border-rose-300/35 bg-rose-500/10 text-rose-100'
+                            : 'border-emerald-300/35 bg-emerald-500/10 text-emerald-100'
+                        ].join(' ')}
+                      >
+                        {type === 'blacklist' ? t('黑名单', 'Blacklist') : t('正常离职', 'Normal')}
+                      </span>
+                    </td>
+                    {canHardDelete ? (
+                      <td className="px-3 py-3 text-right">
+                        <button
+                          type="button"
+                          disabled={loading || !staffId}
+                          onClick={() => void onHardDelete(staffId)}
+                          className="rounded-xl border border-rose-300/25 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {t('彻底删除', 'Delete')}
+                        </button>
+                      </td>
+                    ) : null}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {!loading && filteredRows.length === 0 ? (
+            <div className="py-8 text-sm text-slate-400">{t('暂无数据', 'No records')}</div>
+          ) : null}
+          {loading ? <div className="py-8 text-sm text-slate-400">{t('加载中...', 'Loading...')}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}

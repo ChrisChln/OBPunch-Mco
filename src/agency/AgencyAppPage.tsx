@@ -1179,7 +1179,11 @@ export default function AgencyAppPage() {
         const isDriverChange = value.startsWith('driver:');
         const code = value === 'new' ? nextDriverGroupCode : value.replace(/^(group|driver):/, '').trim();
         if (!code) throw new Error('Driver group is required.');
-        const groupRows = employeeRows.filter((row) => row.driver_group_code === code);
+        const employeeAgency = normalizeAgencyValue(employee.agency);
+        const groupRows = employeeRows.filter((row) => row.driver_group_code === code && normalizeAgencyValue(row.agency) === employeeAgency);
+        if (value !== 'new' && groupRows.length === 0) {
+          throw new Error('Driver group is out of agency scope.');
+        }
         const driver = isDriverChange ? employee : groupRows.find((row) => row.driver_group_role === 'driver') ?? groupRows[0] ?? employee;
         const memberStaffIds = Array.from(
           new Set([...groupRows.map((row) => row.staff_id), staffId, driver.staff_id].map((item) => String(item ?? '').trim()).filter(Boolean))
@@ -1416,7 +1420,7 @@ export default function AgencyAppPage() {
 
   const showIdColumn = !compactScheduleView;
   const showAgencyColumn = !compactScheduleView;
-  const showDriverGroupControls = !compactScheduleView;
+  const showDriverGroupControls = false;
   const showDriverGroupColumn = !compactScheduleView;
   const showNoteColumn = !compactScheduleView;
   const showStartTimeColumn = !compactScheduleView;
@@ -1506,6 +1510,27 @@ export default function AgencyAppPage() {
   );
 
   const driverGroupSummaries = useMemo(() => weekSchedule?.driver_groups ?? [], [weekSchedule]);
+
+  const driverGroupSummariesByAgency = useMemo(() => {
+    const groupByCode = new Map(driverGroupSummaries.map((group) => [String(group.code ?? '').trim(), group]));
+    const next = new Map<string, typeof driverGroupSummaries>();
+    for (const employee of employeeRows) {
+      const code = String(employee.driver_group_code ?? '').trim();
+      const agency = normalizeAgencyValue(employee.agency);
+      if (!code || !agency) continue;
+      const group = groupByCode.get(code);
+      if (!group) continue;
+      const current = next.get(agency) ?? [];
+      if (!current.some((item) => item.code === group.code)) {
+        current.push(group);
+        next.set(agency, current);
+      }
+    }
+    for (const [agency, groups] of next.entries()) {
+      next.set(agency, [...groups].sort((left, right) => String(left.code).localeCompare(String(right.code), 'en-US', { numeric: true })));
+    }
+    return next;
+  }, [driverGroupSummaries, employeeRows]);
 
   const nextDriverGroupCode = useMemo(
     () => String(weekSchedule?.next_driver_group_code ?? '').trim() || getNextDriverGroupCode(driverGroupSummaries),
@@ -2231,6 +2256,7 @@ export default function AgencyAppPage() {
                       const rowClass = isPendingTermination
                         ? 'border-b border-white/5 bg-slate-800/60 transition-colors hover:bg-slate-800/70 last:border-b-0'
                         : 'border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-b-0';
+                      const employeeDriverGroupSummaries = driverGroupSummariesByAgency.get(normalizeAgencyValue(employee.agency)) ?? [];
                       return (
                       <tr key={employee.staff_id} className={rowClass}>
                         {showIdColumn ? <td className="py-2 pl-4 pr-1 font-mono text-slate-200">{employee.staff_id}</td> : null}
@@ -2289,7 +2315,7 @@ export default function AgencyAppPage() {
                               {employee.driver_group_code && employee.driver_group_role !== 'driver' ? (
                                 <option value={`driver:${employee.driver_group_code}`}>Make driver</option>
                               ) : null}
-                              {driverGroupSummaries.filter((group) => group.code !== employee.driver_group_code).map((group) => (
+                              {employeeDriverGroupSummaries.filter((group) => group.code !== employee.driver_group_code).map((group) => (
                                 <option key={group.code} value={`group:${group.code}`}>
                                   Group {group.code}
                                 </option>

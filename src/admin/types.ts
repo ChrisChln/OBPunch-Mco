@@ -27,6 +27,7 @@ export type Status = {
 
 export type AllowedPosition = 'Pick' | 'Pack' | 'Rebin' | 'Preship' | 'Transfer' | 'Water Spider' | 'FLEX TEAM';
 export type EmploymentType = 'FT' | 'PT';
+export type TerminationType = 'normal' | 'blacklist';
 
 // DeviceType 现在支持任意自定义值，允许用户在导入时定义新类型
 // 不再限制为固定的 'PDA' | 'CART'
@@ -66,6 +67,7 @@ export type EmployeeRow = {
   ShiftTime?: string | null;
   active?: boolean | null;
   terminated_at?: string | null;
+  termination_type?: TerminationType | string | null;
   created_at?: string | null;
 };
 

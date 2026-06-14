@@ -35,6 +35,7 @@ import EmployeesTableSection from './pages/EmployeesTableSection';
 import EmployeeAuditModal from './pages/EmployeeAuditModal';
 import EmployeeEditModal from './pages/EmployeeEditModal';
 import EmployeeBadgePreviewModal from './pages/EmployeeBadgePreviewModal';
+import DepartedEmployeesModal from './pages/DepartedEmployeesModal';
 import TimecardControls from './pages/TimecardControls';
 import TimecardTableSection from './pages/TimecardTableSection';
 import HomeDashboardPage from './pages/HomeDashboardPage';
@@ -167,6 +168,7 @@ import type {
   DeviceType,
   EmploymentType,
   EmployeeRow,
+  TerminationType,
   PunchRow,
   ScheduleBaseState,
   ScheduleDisplayState,
@@ -2073,6 +2075,16 @@ export default function AdminAppPage() {
   const [employeeBadgeBatchSelectedRowsByStaff, setEmployeeBadgeBatchSelectedRowsByStaff] = useState<
     Record<string, { staff: string; name: string; agency: string; position: string; workAccount?: string; workPassword?: string }>
   >({});
+  const [departedEmployeesOpen, setDepartedEmployeesOpen] = useState(false);
+  const [departedEmployees, setDepartedEmployees] = useState<EmployeeRow[]>([]);
+  const [departedEmployeesLoading, setDepartedEmployeesLoading] = useState(false);
+  const [departedEmployeesError, setDepartedEmployeesError] = useState<string | null>(null);
+  const [departureConfirm, setDepartureConfirm] = useState<{
+    staff: string;
+    displayName: string;
+    employeeSnapshot: EmployeeRow | null;
+    type: TerminationType;
+  } | null>(null);
   const [employeeBadgePreview, setEmployeeBadgePreview] = useState<{
     staff: string;
     name: string;
@@ -6896,6 +6908,77 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return fetchedEmployees;
   };
 
+  const fetchDepartedEmployees = async ({ lockUi = false }: { lockUi?: boolean } = {}) => {
+    if (!supabase) {
+      setDepartedEmployees([]);
+      setDepartedEmployeesError('Missing Supabase configuration.');
+      return;
+    }
+    const exec = async () => {
+      setDepartedEmployeesLoading(true);
+      setDepartedEmployeesError(null);
+      try {
+        const run = async (selectExpr: string) =>
+          await supabase
+            .from(EMPLOYEE_TABLE)
+            .select(selectExpr)
+            .not('terminated_at', 'is', null)
+            .order('terminated_at', { ascending: false })
+            .limit(1000);
+        const res = await run('*');
+        if (res.error) {
+          setDepartedEmployees([]);
+          setDepartedEmployeesError(res.error.message);
+          return;
+        }
+        setDepartedEmployees(((res.data as EmployeeRow[] | null) ?? []).filter((row) => String(row.terminated_at ?? '').trim()));
+      } finally {
+        setDepartedEmployeesLoading(false);
+      }
+    };
+    if (lockUi) {
+      await runLocked('departed_employees', exec);
+    } else {
+      await exec();
+    }
+  };
+
+  const openDepartedEmployees = async () => {
+    setDepartedEmployeesOpen(true);
+    await fetchDepartedEmployees({ lockUi: false });
+  };
+
+  const hardDeleteDepartedEmployee = async (staffId: string) => {
+    if (!supabase) {
+      setDepartedEmployeesError('Missing Supabase configuration.');
+      return;
+    }
+    if (adminAccessContext?.role !== 'level1') {
+      setDepartedEmployeesError(t('只有一级管理员可以彻底删除。', 'Only level1 admins can hard delete.'));
+      return;
+    }
+    const staff = normalizeStaffId(String(staffId ?? '').trim());
+    if (!staff) return;
+    const ok = await askConfirm(
+      t(
+        `彻底删除 ${staff} 吗？此操作会从数据库移除该员工记录，不能撤销。`,
+        `Permanently delete ${staff}? This removes the employee record from the database and cannot be undone.`
+      ),
+      t('彻底删除', 'Hard Delete')
+    );
+    if (!ok) return;
+    await runLocked('employee_hard_delete', async () => {
+      setDepartedEmployeesError(null);
+      const res = await supabase.rpc('admin_hard_delete_departed_employee', { p_staff_id: staff });
+      if (res.error) {
+        setDepartedEmployeesError(res.error.message);
+        return;
+      }
+      setDepartedEmployees((prev) => prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== staff));
+      setStatus({ tone: 'success', message: t(`已彻底删除：${staff}`, `Hard deleted: ${staff}`) });
+    });
+  };
+
   const fetchTempAccounts = async ({ lockUi = false }: { lockUi?: boolean } = {}) => {
     if (!supabase) {
       setTempAccounts([]);
@@ -7104,6 +7187,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     const employeeName = employeeSnapshot?.name?.trim() || '';
     const displayName = employeeName ? `${employeeName} (${staff})` : staff;
+    setDepartureConfirm({
+      staff,
+      displayName,
+      employeeSnapshot,
+      type: 'normal'
+    });
+    return;
 
     const ok = await askConfirm(
       t(
@@ -7116,7 +7206,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     await runLocked('employee_delete', async () => {
       setEmployeesError(null);
-      const scheduleDeleteRes = await supabase.from(SCHEDULE_TABLE).delete().eq('staff_id', staff).select('id');
+      const scheduleDeleteRes = await supabase!.from(SCHEDULE_TABLE).delete().eq('staff_id', staff).select('id');
       if (scheduleDeleteRes.error) {
         setEmployeesError(scheduleDeleteRes.error.message);
         return;
@@ -7127,7 +7217,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         active: false,
         terminated_at: new Date(serverTime).toISOString()
       };
-      const employeeDeleteRes = await supabase.from(EMPLOYEE_TABLE).update(departPayload as any).eq('staff_id', staff);
+      const employeeDeleteRes = await supabase!.from(EMPLOYEE_TABLE).update(departPayload as any).eq('staff_id', staff);
       if (employeeDeleteRes.error) {
         setEmployeesError(
           /active|terminated_at/i.test(String(employeeDeleteRes.error.message ?? ''))
@@ -7166,6 +7256,79 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         delete next[normalizedStaff];
         return next;
       });
+    });
+  };
+
+  const confirmEmployeeDeparture = async () => {
+    if (!departureConfirm || !supabase) return;
+    const { staff, displayName, employeeSnapshot } = departureConfirm;
+    const terminationType = departureConfirm.type;
+    const normalizedStaff = normalizeStaffId(staff);
+    await runLocked('employee_delete', async () => {
+      setEmployeesError(null);
+      const scheduleDeleteRes = await supabase.from(SCHEDULE_TABLE).delete().eq('staff_id', staff).select('id');
+      if (scheduleDeleteRes.error) {
+        setEmployeesError(scheduleDeleteRes.error.message);
+        return;
+      }
+      const deletedScheduleCount = ((scheduleDeleteRes.data as any[] | null) ?? []).length;
+
+      const departPayload = {
+        active: false,
+        terminated_at: new Date(serverTime).toISOString(),
+        termination_type: terminationType
+      };
+      const employeeDeleteRes = await supabase.from(EMPLOYEE_TABLE).update(departPayload as any).eq('staff_id', staff);
+      if (employeeDeleteRes.error) {
+        setEmployeesError(
+          /active|terminated_at|termination_type/i.test(String(employeeDeleteRes.error.message ?? ''))
+            ? `Departure failed: ${employeeDeleteRes.error.message}. Please run sql/2026-06-14_add_employee_termination_type.sql`
+            : employeeDeleteRes.error.message
+        );
+        return;
+      }
+      setStatus({ tone: 'success', message: `Employee departed: ${displayName}` });
+      await writeAudit({
+        action: 'employee_delete',
+        staffId: staff,
+        target: EMPLOYEE_TABLE,
+        payload: {
+          deleted_schedule_rows: deletedScheduleCount,
+          soft_deleted: true,
+          termination_type: terminationType,
+          staff_id: staff,
+          name: String(employeeSnapshot?.name ?? '').trim() || null,
+          agency: String(employeeSnapshot?.agency ?? employeeSnapshot?.Agency ?? '').trim() || null,
+          position: String(employeeSnapshot?.position ?? employeeSnapshot?.Position ?? '').trim() || null,
+          shift: normalizeShiftValue(String(employeeSnapshot?.shift ?? '').trim()) || null
+        }
+      });
+      setEmployees((prev) =>
+        prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== normalizedStaff)
+      );
+      setEmployeeShiftByStaffId((prev) => {
+        if (!(normalizedStaff in prev)) return prev;
+        const next = { ...prev };
+        delete next[normalizedStaff];
+        return next;
+      });
+      setEmployeeLastPunchAtByStaffId((prev) => {
+        if (!(normalizedStaff in prev)) return prev;
+        const next = { ...prev };
+        delete next[normalizedStaff];
+        return next;
+      });
+      setDepartedEmployees((prev) => [
+        {
+          ...(employeeSnapshot ?? {}),
+          staff_id: staff,
+          active: false,
+          terminated_at: departPayload.terminated_at,
+          termination_type: terminationType
+        },
+        ...prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== normalizedStaff)
+      ]);
+      setDepartureConfirm(null);
     });
   };
 
@@ -7523,11 +7686,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     window.setTimeout(() => iframe.remove(), 2500);
   };
 
-  const printEmployeeTempBadgeSheet = async (payload: { staff: string; name: string; position: string }) => {
+  const printEmployeeTempBadgeSheet = async (payload: {
+    staff: string;
+    name: string;
+    position: string;
+    workAccount?: string;
+    workPassword?: string;
+  }) => {
     const staff = normalizeStaffId(String(payload.staff ?? '').trim());
     if (!staff) return;
     const name = String(payload.name ?? '').trim() || '-';
     const position = String(payload.position ?? '').trim() || '-';
+    const workAccount = String(payload.workAccount ?? '').trim();
+    const workPassword = resolveDefaultWorkPassword(workAccount, String(payload.workPassword ?? '').trim());
     const safe = (v: string) =>
       String(v ?? '')
         .replace(/&/g, '&amp;')
@@ -7536,19 +7707,64 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
 
-    const qrDataUrl = await QRCode.toDataURL(staff, {
-      errorCorrectionLevel: 'M',
-      margin: 1,
-      width: 560,
-      color: { dark: '#0b1220', light: '#ffffff' }
-    });
+    const [qrDataUrl, qrAcc, qrPwd] = await Promise.all([
+      QRCode.toDataURL(staff, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 560,
+        color: { dark: '#0b1220', light: '#ffffff' }
+      }),
+      workAccount
+        ? QRCode.toDataURL(workAccount, {
+            errorCorrectionLevel: 'M',
+            margin: 1,
+            width: 560,
+            color: { dark: '#0b1220', light: '#ffffff' }
+          })
+        : Promise.resolve(''),
+      workAccount && workPassword
+        ? QRCode.toDataURL(workPassword, {
+            errorCorrectionLevel: 'M',
+            margin: 1,
+            width: 560,
+            color: { dark: '#0b1220', light: '#ffffff' }
+          })
+        : Promise.resolve('')
+    ]);
+    const accountPageHtml =
+      workAccount && workPassword
+        ? `
+    <div class="page-break"></div>
+    <div class="sheet">
+      <div>
+        <div class="name">${safe(name)}</div>
+        <div class="sub">User: ${safe(name)}</div>
+      </div>
+      <div class="pair">
+        <div class="box">
+          <div class="qrsq"><img src="${safe(qrAcc)}" alt="QR account ${safe(staff)}" /></div>
+          <div class="meta">
+            <div class="k">Account</div>
+            <div class="v">${safe(workAccount)}</div>
+          </div>
+        </div>
+        <div class="box">
+          <div class="qrsq"><img src="${safe(qrPwd)}" alt="QR password ${safe(staff)}" /></div>
+          <div class="meta">
+            <div class="k">Password</div>
+            <div class="v">${safe(workPassword)}</div>
+          </div>
+        </div>
+      </div>
+    </div>`
+        : '';
     const html = `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
     <style>
       @page { size: 4in 2in; margin: 0; }
-      html, body { margin: 0; padding: 0; width: 4in; height: 2in; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      html, body { margin: 0; padding: 0; width: 4in; min-height: 2in; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
       body { background: #ffffff; font-family: Arial, "Microsoft YaHei", sans-serif; color: #0f172a; }
       .sheet { width: 4in; height: 2in; box-sizing: border-box; padding: 0.12in; border: 0; border-radius: 0; display: grid; grid-template-rows: auto 1fr; gap: 0.05in; background: #ffffff; }
       .name { font-size: 14pt; line-height: 1.1; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #0f172a; padding: 0; }
@@ -7560,6 +7776,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       .meta { min-width: 0; }
       .k { font-size: 7.5pt; letter-spacing: 0.1em; font-weight: 700; color: #334155; text-transform: uppercase; }
       .v { margin-top: 0.04in; font-size: 9pt; font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .page-break { break-before: page; page-break-before: always; }
     </style>
   </head>
   <body>
@@ -7579,6 +7796,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         <div></div>
       </div>
     </div>
+    ${accountPageHtml}
   </body>
 </html>`;
 
@@ -7741,7 +7959,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       await printEmployeeTempBadgeSheet({
         staff,
         name: payload.name || '-',
-        position: payload.position || '-'
+        position: payload.position || '-',
+        workAccount: payload.workAccount,
+        workPassword: payload.workPassword
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err ?? 'unknown error');
@@ -18003,6 +18223,7 @@ ${rowsToHtml(late)}
                   uploadEmployees={uploadEmployees}
                   exportEmployees={exportEmployees}
                   setEmployeeAddOpen={setEmployeeAddOpen}
+                  openDepartedEmployees={openDepartedEmployees}
                   fetchEmployees={fetchEmployees}
                   setEmployeeSearch={setEmployeeSearch}
                   setEmployeeAgency={setEmployeeAgency}
@@ -18091,6 +18312,61 @@ ${rowsToHtml(late)}
                   openEmployeeEdit={openEmployeeEdit}
                   deleteEmployeeRow={deleteEmployeeRow}
                 />
+
+                <DepartedEmployeesModal
+                  open={departedEmployeesOpen}
+                  t={t}
+                  themeMode={themeMode}
+                  rows={departedEmployees}
+                  loading={departedEmployeesLoading}
+                  error={departedEmployeesError}
+                  canHardDelete={adminAccessContext?.role === 'level1'}
+                  onClose={() => setDepartedEmployeesOpen(false)}
+                  onRefresh={() => fetchDepartedEmployees({ lockUi: false })}
+                  onHardDelete={hardDeleteDepartedEmployee}
+                  displayStaffId={displayStaffId}
+                />
+
+                {departureConfirm ? (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm">
+                    <div className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-950 p-5 text-white shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
+                      <div className="font-display text-xl tracking-[0.08em]">{t('离职确认', 'Departure')}</div>
+                      <div className="mt-4 text-sm text-slate-300">{departureConfirm.displayName}</div>
+                      <div className="mt-5 grid gap-3">
+                        <label className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                          <span className="flex items-center gap-3 text-sm font-semibold">
+                            <input
+                              type="radio"
+                              name="termination_type"
+                              checked={departureConfirm.type === 'normal'}
+                              onChange={() => setDepartureConfirm((prev) => (prev ? { ...prev, type: 'normal' } : prev))}
+                            />
+                            {t('正常离职', 'Normal')}
+                          </span>
+                        </label>
+                        <label className="rounded-2xl border border-rose-300/20 bg-rose-500/[0.06] p-3">
+                          <span className="flex items-center gap-3 text-sm font-semibold text-rose-100">
+                            <input
+                              type="radio"
+                              name="termination_type"
+                              checked={departureConfirm.type === 'blacklist'}
+                              onChange={() => setDepartureConfirm((prev) => (prev ? { ...prev, type: 'blacklist' } : prev))}
+                            />
+                            {t('黑名单', 'Blacklist')}
+                          </span>
+                        </label>
+                      </div>
+                      <div className="mt-5 flex justify-end gap-2">
+                        <button type="button" className="admin-btn admin-btn-toolbar admin-btn-secondary px-4" onClick={() => setDepartureConfirm(null)} disabled={isLocked}>
+                          {t('取消', 'Cancel')}
+                        </button>
+                        <button type="button" className="admin-btn admin-btn-toolbar admin-btn-primary px-4" onClick={() => void confirmEmployeeDeparture()} disabled={isLocked}>
+                          {t('确认', 'Confirm')}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 <EmployeeAuditModal
                   open={employeeAuditOpen}
