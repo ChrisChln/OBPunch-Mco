@@ -1,0 +1,2 @@
+-- Remote migration version exists in Supabase history but was missing locally.
+-- Keep this placeholder so future `supabase db push` runs can compare histories.

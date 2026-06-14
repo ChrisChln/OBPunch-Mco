@@ -1416,8 +1416,8 @@ export default function AgencyAppPage() {
 
   const showIdColumn = !compactScheduleView;
   const showAgencyColumn = !compactScheduleView;
-  const showDriverGroupControls = false;
-  const showDriverGroupColumn = false;
+  const showDriverGroupControls = !compactScheduleView;
+  const showDriverGroupColumn = !compactScheduleView;
   const showNoteColumn = !compactScheduleView;
   const showStartTimeColumn = !compactScheduleView;
   const selectedDateColumnToneClass = compactScheduleView ? selectedDateColumnClassMobile : selectedDateColumnClass;
@@ -1507,7 +1507,10 @@ export default function AgencyAppPage() {
 
   const driverGroupSummaries = useMemo(() => weekSchedule?.driver_groups ?? [], [weekSchedule]);
 
-  const nextDriverGroupCode = useMemo(() => getNextDriverGroupCode(driverGroupSummaries), [driverGroupSummaries]);
+  const nextDriverGroupCode = useMemo(
+    () => String(weekSchedule?.next_driver_group_code ?? '').trim() || getNextDriverGroupCode(driverGroupSummaries),
+    [driverGroupSummaries, weekSchedule?.next_driver_group_code]
+  );
 
   const driverGroupWarnings = useMemo(
     () => buildDriverGroupWarnings(weekSchedule?.employees ?? []),
