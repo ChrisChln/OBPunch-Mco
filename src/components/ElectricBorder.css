@@ -13,6 +13,38 @@
   }
 }
 
+.electric-border.eb-fill {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 1 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.electric-border.eb-fill .eb-content {
+  width: 100%;
+  height: 100%;
+}
+
+.electric-border.eb-card {
+  width: 100%;
+  height: 100%;
+}
+
+.electric-border.eb-card .eb-content {
+  width: 100%;
+  height: 100%;
+}
+
+.electric-border.eb-chip {
+  display: inline-flex;
+  border-radius: inherit;
+}
+
+.electric-border.eb-chip .eb-content {
+  display: inline-flex;
+}
+
 .eb-canvas-container {
   position: absolute;
   top: 50%;
