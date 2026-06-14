@@ -17667,7 +17667,9 @@ ${rowsToHtml(late)}
                               </span>
                               {dailyListVisiblePositions.map((position) => {
                                 const filterKey = normalizeDailyListPositionKey(position) || position;
-                                const isFilterSelected = Boolean(dailyListFilterPositions[filterKey] || dailyListFilterPositions[position]);
+                                const isFilterSelected = selectedDailyFilterPositions.some(
+                                  (selectedPosition) => (normalizeDailyListPositionKey(selectedPosition) || selectedPosition) === filterKey
+                                );
                                 const filterButton = (
                                   <button
                                     key={`filter-button-${position}`}
