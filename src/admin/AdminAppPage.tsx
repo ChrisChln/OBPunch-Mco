@@ -48,6 +48,7 @@ import WorkHourComparisonPage from './pages/WorkHourComparisonPage';
 import LeaveApprovalPage from './pages/LeaveApprovalPage';
 import TodoPage from './pages/TodoPage';
 import AppDialog from '../components/AppDialog';
+import ElectricBorder from '../components/ElectricBorder';
 import {
   canManageAdminAccess,
   canReviewTerminationRequests,
@@ -1062,6 +1063,104 @@ const getHomeChipToneClass = (value: string, toneMap?: Partial<PositionToneMap>)
   HOME_CHIP_TONE_CLASS[getHomeToneKey(value, toneMap)] ?? HOME_CHIP_TONE_CLASS.slate;
 const getHomePanelToneClass = (value: string, toneMap?: Partial<PositionToneMap>) =>
   HOME_PANEL_TONE_CLASS[getHomeToneKey(value, toneMap)] ?? HOME_PANEL_TONE_CLASS.slate;
+
+const ELECTRIC_BORDER_COLOR_BY_TONE: Record<LabelToneKey, string> = {
+  sky: '#38bdf8',
+  cyan: '#22d3ee',
+  teal: '#2dd4bf',
+  emerald: '#34d399',
+  lime: '#a3e635',
+  amber: '#fbbf24',
+  orange: '#fb923c',
+  rose: '#fb7185',
+  fuchsia: '#e879f9',
+  violet: '#a78bfa',
+  indigo: '#818cf8',
+  slate: '#cbd5e1'
+};
+const getElectricBorderColor = (value: string, toneMap?: Partial<PositionToneMap>) =>
+  ELECTRIC_BORDER_COLOR_BY_TONE[getHomeToneKey(value, toneMap)] ?? ELECTRIC_BORDER_COLOR_BY_TONE.slate;
+const MAGIC_BENTO_GLOW_RGB_BY_TONE: Record<LabelToneKey, string> = {
+  sky: '56, 189, 248',
+  cyan: '34, 211, 238',
+  teal: '45, 212, 191',
+  emerald: '52, 211, 153',
+  lime: '163, 230, 53',
+  amber: '251, 191, 36',
+  orange: '251, 146, 60',
+  rose: '251, 113, 133',
+  fuchsia: '232, 121, 249',
+  violet: '167, 139, 250',
+  indigo: '129, 140, 248',
+  slate: '203, 213, 225'
+};
+const getMagicBentoGlowRgb = (value: string, toneMap?: Partial<PositionToneMap>) =>
+  MAGIC_BENTO_GLOW_RGB_BY_TONE[getHomeToneKey(value, toneMap)] ?? MAGIC_BENTO_GLOW_RGB_BY_TONE.slate;
+
+const DAILY_LIST_LIGHTS_LOCAL_CACHE_KEY = 'obpunch_daily_list_position_lights_cache_v1';
+
+type DailyListLightsLocalCacheEntry = {
+  flags: DailyListLightFlags;
+  updatedAt: string;
+};
+
+const readDailyListLightFlagsFromUnknown = (value: unknown): DailyListLightFlags => {
+  const next = createEmptyDailyListLightFlags();
+  if (!value || typeof value !== 'object') return next;
+  for (const [key, enabled] of Object.entries(value as Record<string, unknown>)) {
+    const position = normalizeDailyListLightPosition(key);
+    if (!position) continue;
+    next[position] = Boolean(enabled);
+  }
+  return next;
+};
+
+const readDailyListLightsLocalCache = (): Record<string, DailyListLightsLocalCacheEntry> => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(DAILY_LIST_LIGHTS_LOCAL_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const cache: Record<string, DailyListLightsLocalCacheEntry> = {};
+    for (const [dateKey, entryRaw] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!isDateOnlyValue(dateKey) || !entryRaw || typeof entryRaw !== 'object') continue;
+      const entry = entryRaw as Record<string, unknown>;
+      cache[dateKey] = {
+        flags: readDailyListLightFlagsFromUnknown(entry.flags),
+        updatedAt: String(entry.updatedAt ?? '')
+      };
+    }
+    return cache;
+  } catch {
+    return {};
+  }
+};
+
+const readDailyListLightsLocalCacheForDate = (targetDate: string): DailyListLightsLocalCacheEntry | null => {
+  if (!isDateOnlyValue(targetDate)) return null;
+  return readDailyListLightsLocalCache()[targetDate] ?? null;
+};
+
+const writeDailyListLightsLocalCacheForDate = (
+  targetDate: string,
+  flags: DailyListLightFlags,
+  updatedAt: string
+) => {
+  if (typeof window === 'undefined' || !isDateOnlyValue(targetDate)) return;
+  try {
+    const cache = readDailyListLightsLocalCache();
+    cache[targetDate] = { flags: { ...flags }, updatedAt };
+    window.localStorage.setItem(DAILY_LIST_LIGHTS_LOCAL_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // Local cache is best-effort; Supabase remains the source of truth.
+  }
+};
+
+const getDailyListLightsUpdatedMs = (value: unknown) => {
+  const ms = new Date(String(value ?? '')).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+};
 
 const ORDINAL_CN = ['第一次', '第二次', '第三次', '第四次', '第五次', '第六次', '第七次', '第八次', '第九次', '第十次'];
 
@@ -2122,6 +2221,13 @@ export default function AdminAppPage() {
   const [dailyListFilterPositions, setDailyListFilterPositions] = useState<DailyListLightFlags>(
     createEmptyDailyListLightFlags
   );
+  const dailyListSelectedPositionsRef = useRef<DailyListLightFlags>(createEmptyDailyListLightFlags());
+  const dailyListLightsSaveSeqRef = useRef(0);
+  const dailyListLightsPendingRef = useRef<{
+    targetDate: string;
+    flags: DailyListLightFlags;
+    seq: number;
+  } | null>(null);
   const dailyListTargetDateKey = useMemo(() => {
     const parsedTarget =
       /^\d{4}-\d{2}-\d{2}$/.test(dailyListDateInput)
@@ -3010,22 +3116,36 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return () => window.clearTimeout(timer);
   }, [busy]);
 
+  const resolveDailyListLightsTargetDate = (targetDateOverride?: string) => {
+    const fallbackDate = toDateOnly(addDays(new Date(serverTime), 1));
+    const targetDateRaw = targetDateOverride ?? dailyListDateInput;
+    return isDateOnlyValue(targetDateRaw) ? targetDateRaw : fallbackDate;
+  };
+
+  const applyDailyListSelectedPositions = (next: DailyListLightFlags) => {
+    dailyListSelectedPositionsRef.current = next;
+    setDailyListSelectedPositions(next);
+  };
+
   const saveDailyListSelectedPositionsGlobal = async (
     next: DailyListLightFlags,
     targetDateOverride?: string
   ) => {
+    const targetDate = resolveDailyListLightsTargetDate(targetDateOverride);
+    const updatedAt = new Date(serverTime).toISOString();
+    writeDailyListLightsLocalCacheForDate(targetDate, next, updatedAt);
+    const seq = dailyListLightsSaveSeqRef.current + 1;
+    dailyListLightsSaveSeqRef.current = seq;
+    dailyListLightsPendingRef.current = { targetDate, flags: next, seq };
     if (!supabase) return;
-    const fallbackDate = toDateOnly(addDays(new Date(serverTime), 1));
-    const targetDateRaw = targetDateOverride ?? dailyListDateInput;
-    const targetDate = isDateOnlyValue(targetDateRaw) ? targetDateRaw : fallbackDate;
     const baseRes = await supabase
       .from(APP_SETTINGS_TABLE)
       .select('id, key, value, updated_at')
       .eq('key', DAILY_LIST_LIGHTS_KEY)
       .order('updated_at', { ascending: false })
       .limit(1);
+    if (dailyListLightsPendingRef.current?.seq !== seq) return;
     const currentValue = ((((baseRes.data as any[]) ?? [])[0] as AppSettingRow | undefined)?.value ?? {}) as Record<string, unknown>;
-    const updatedAt = new Date(serverTime).toISOString();
     const payload = {
       key: DAILY_LIST_LIGHTS_KEY,
       value: buildDailyListLightsSettingValue(currentValue, targetDate, next, {
@@ -3034,18 +3154,36 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }),
       updated_at: updatedAt
     };
+    if (dailyListLightsPendingRef.current?.seq !== seq) return;
     const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
-    if (!upsertRes.error) return;
+    if (!upsertRes.error) {
+      if (dailyListLightsPendingRef.current?.seq === seq) dailyListLightsPendingRef.current = null;
+      return;
+    }
+    if (dailyListLightsPendingRef.current?.seq !== seq) return;
     const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', DAILY_LIST_LIGHTS_KEY);
-    if (!updateRes.error) return;
-    await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
+    if (!updateRes.error) {
+      if (dailyListLightsPendingRef.current?.seq === seq) dailyListLightsPendingRef.current = null;
+      return;
+    }
+    if (dailyListLightsPendingRef.current?.seq !== seq) return;
+    const insertRes = await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
+    if (!insertRes.error && dailyListLightsPendingRef.current?.seq === seq) dailyListLightsPendingRef.current = null;
   };
 
   const loadDailyListSelectedPositionsGlobal = async (options?: { targetDateOverride?: string }) => {
+    const targetDate = resolveDailyListLightsTargetDate(options?.targetDateOverride);
+    const loadStartedAtSeq = dailyListLightsSaveSeqRef.current;
+    const localCache = readDailyListLightsLocalCacheForDate(targetDate);
+    const pending = dailyListLightsPendingRef.current;
+    if (pending?.targetDate === targetDate) {
+      applyDailyListSelectedPositions(pending.flags);
+      return;
+    }
+    if (localCache) {
+      applyDailyListSelectedPositions(localCache.flags);
+    }
     if (!supabase) return;
-    const fallbackDate = toDateOnly(addDays(new Date(serverTime), 1));
-    const targetDateRaw = options?.targetDateOverride ?? dailyListDateInput;
-    const targetDate = isDateOnlyValue(targetDateRaw) ? targetDateRaw : fallbackDate;
     const res = await supabase
       .from(APP_SETTINGS_TABLE)
       .select('id, key, value, updated_at')
@@ -3054,21 +3192,48 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       .limit(1);
     if (res.error) return;
 
+    if (dailyListLightsSaveSeqRef.current !== loadStartedAtSeq) {
+      const changedWhileLoading = dailyListLightsPendingRef.current;
+      if (changedWhileLoading?.targetDate === targetDate) {
+        applyDailyListSelectedPositions(changedWhileLoading.flags);
+      }
+      return;
+    }
+
+    const latestPending = dailyListLightsPendingRef.current;
+    if (latestPending?.targetDate === targetDate) {
+      applyDailyListSelectedPositions(latestPending.flags);
+      return;
+    }
+
     const row = (((res.data as any[]) ?? [])[0] ?? null) as AppSettingRow | null;
-    setDailyListSelectedPositions(
-      row ? readDailyListLightsForDate(row.value, targetDate) : createEmptyDailyListLightFlags()
+    const remoteValue = (row?.value ?? null) as Record<string, unknown> | null;
+    const remoteUpdatedMs = Math.max(
+      getDailyListLightsUpdatedMs(row?.updated_at),
+      getDailyListLightsUpdatedMs(remoteValue?.updated_at)
     );
+    const localUpdatedMs = getDailyListLightsUpdatedMs(localCache?.updatedAt);
+    if (localCache && localUpdatedMs >= remoteUpdatedMs) {
+      applyDailyListSelectedPositions(localCache.flags);
+      return;
+    }
+
+    const remoteFlags = row ? readDailyListLightsForDate(row.value, targetDate) : createEmptyDailyListLightFlags();
+    applyDailyListSelectedPositions(remoteFlags);
+    if (row && remoteUpdatedMs > 0) {
+      writeDailyListLightsLocalCacheForDate(targetDate, remoteFlags, new Date(remoteUpdatedMs).toISOString());
+    }
   };
 
-  const toggleDailyListSelectedPosition = (position: DailyListLightPosition) => {
-    setDailyListSelectedPositions((prev) => {
-      const next = {
-        ...prev,
-        [position]: !prev[position]
-      };
-      void saveDailyListSelectedPositionsGlobal(next, tomorrowDailyList.targetDate);
-      return next;
-    });
+  const toggleDailyListSelectedPosition = (position: DailyListLightPosition, isCurrentlySelected: boolean) => {
+    const current = dailyListSelectedPositionsRef.current;
+    const next = {
+      ...current,
+      [position]: !isCurrentlySelected
+    };
+    applyDailyListSelectedPositions(next);
+    writeDailyListLightsLocalCacheForDate(tomorrowDailyList.targetDate, next, new Date(serverTime).toISOString());
+    void saveDailyListSelectedPositionsGlobal(next, tomorrowDailyList.targetDate);
   };
 
   useEffect(() => {
@@ -14179,7 +14344,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }, [tomorrowDailyList, dailyListVisiblePositions]);
   const tomorrowPositionSummaryCards = useMemo(
     () =>
-      dailyListVisiblePositions.map((position) => {
+      dailyListVisiblePositions.filter((position) => normalizeDailyListPositionKey(position) !== 'JDL').map((position) => {
         const early = tomorrowAttendanceCards.find((c) => c.shift === 'early' && c.position === position)?.count ?? 0;
         const late = tomorrowAttendanceCards.find((c) => c.shift === 'late' && c.position === position)?.count ?? 0;
         const recommendedRows = scheduleRecommendedAdjustedByDate[tomorrowDailyList.targetDate] ?? [];
@@ -17323,27 +17488,37 @@ ${rowsToHtml(late)}
                             </div>
                           </div>
                           <div className="min-w-[420px] flex-1">
-                            <div className="grid grid-cols-[repeat(auto-fit,minmax(136px,1fr))] gap-2">
-                              {tomorrowPositionSummaryCards.map((card) => (
-                                <button
-                                  type="button"
-                                  onClick={() => toggleDailyListSelectedPosition(card.position)}
-                                  key={card.position}
-                                  className={[
-                                    'flex min-h-[104px] w-full min-w-0 flex-col justify-between rounded-md border px-2.5 py-2 text-left transition',
-                                    dailyListSelectedPositions[card.position]
-                                      ? themeMode === 'light'
-                                        ? getHomeCardToneClass(card.position, schedulePositionToneByPosition)
-                                        : getHomeCardToneClass(card.position, schedulePositionToneByPosition)
-                                      : themeMode === 'light'
-                                        ? 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
-                                        : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
-                                  ].join(' ')}
-                                >
-                                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em]">
+                            <div className="grid auto-rows-[106px] grid-cols-[repeat(auto-fit,minmax(136px,1fr))] gap-2">
+                              {tomorrowPositionSummaryCards.map((card) => {
+                                const isSelected = Boolean(dailyListSelectedPositions[card.position]);
+                                const cardSurfaceClassName = [
+                                  'magic-bento-card relative isolate flex h-full min-h-0 w-full min-w-0 flex-col justify-between overflow-visible rounded-md border px-2 py-1.5 text-left transition',
+                                  isSelected
+                                    ? themeMode === 'light'
+                                      ? 'border-transparent bg-white/80 text-slate-950'
+                                      : 'border-transparent bg-[#101421]/70 text-white'
+                                    : themeMode === 'light'
+                                      ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                                      : 'border-white/10 bg-[#101421] text-slate-300 hover:bg-[#151a2a]',
+                                  isSelected ? (themeMode === 'light' ? 'text-slate-950' : 'text-white') : ''
+                                ].join(' ');
+                                const cardSurfaceStyle = {
+                                  '--glow-color': getMagicBentoGlowRgb(card.position, schedulePositionToneByPosition),
+                                  '--magic-card-bg': themeMode === 'light' ? '#ffffff' : '#120f17',
+                                  '--magic-card-border': themeMode === 'light' ? '#cbd5e1' : '#2f293a',
+                                  '--glow-intensity': 0,
+                                  aspectRatio: 'auto',
+                                  minHeight: 0,
+                                  padding: '0.375rem 0.5rem',
+                                  borderRadius: '0.375rem',
+                                  overflow: 'visible'
+                                } as React.CSSProperties;
+                                const cardBody = (
+                                  <>
+                                  <div className="relative z-10 text-[10px] font-semibold uppercase leading-tight tracking-[0.12em]">
                                     {card.position}
                                   </div>
-                                  <div className="mt-1 whitespace-nowrap text-[11px] leading-tight opacity-90 tabular-nums">
+                                  <div className="relative z-10 mt-0.5 whitespace-nowrap text-[10px] leading-tight opacity-90 tabular-nums">
                                     <span className="inline-flex items-center gap-1">
                                       <svg
                                         viewBox="0 0 24 24"
@@ -17351,7 +17526,7 @@ ${rowsToHtml(late)}
                                         stroke="currentColor"
                                         strokeWidth="1.8"
                                         className={[
-                                          'h-3.5 w-3.5',
+                                          'h-3 w-3',
                                           themeMode === 'light' ? 'text-amber-600' : 'text-amber-300'
                                         ].join(' ')}
                                         aria-hidden="true"
@@ -17361,14 +17536,14 @@ ${rowsToHtml(late)}
                                       </svg>
                                       <span>{card.early}/{card.earlyRecommended ?? '-'}</span>
                                     </span>
-                                    <span className="ml-3 inline-flex items-center gap-1">
+                                    <span className="ml-2 inline-flex items-center gap-1">
                                       <svg
                                         viewBox="0 0 24 24"
                                         fill="none"
                                         stroke="currentColor"
                                         strokeWidth="1.8"
                                         className={[
-                                          'h-3.5 w-3.5',
+                                          'h-3 w-3',
                                           themeMode === 'light' ? 'text-indigo-600' : 'text-indigo-300'
                                         ].join(' ')}
                                         aria-hidden="true"
@@ -17378,10 +17553,10 @@ ${rowsToHtml(late)}
                                       <span>{card.late}/{card.lateRecommended ?? '-'}</span>
                                     </span>
                                   </div>
-                                  <div className="mt-1 whitespace-nowrap text-[11px] font-semibold leading-tight opacity-95">
-                                    {t('推荐', 'Rec')}: {card.totalRecommended ?? '-'}<span className="ml-3">{t('排班', 'Sch')}: {card.total}</span>
+                                  <div className="relative z-10 mt-0.5 whitespace-nowrap text-[10px] font-semibold leading-tight opacity-95">
+                                    {t('推荐', 'Rec')}: {card.totalRecommended ?? '-'}<span className="ml-2">{t('排班', 'Sch')}: {card.total}</span>
                                   </div>
-                                  <div className="mt-1 whitespace-nowrap text-[10px] leading-tight opacity-90 tabular-nums">
+                                  <div className="relative z-10 mt-0.5 whitespace-nowrap text-[10px] leading-tight opacity-90 tabular-nums">
                                     <span className="inline-flex items-center gap-1">
                                       <svg
                                         viewBox="0 0 24 24"
@@ -17389,7 +17564,7 @@ ${rowsToHtml(late)}
                                         stroke="currentColor"
                                         strokeWidth="1.8"
                                         className={[
-                                          'h-3.5 w-3.5',
+                                          'h-3 w-3',
                                           themeMode === 'light' ? 'text-amber-600' : 'text-amber-300'
                                         ].join(' ')}
                                         aria-hidden="true"
@@ -17399,14 +17574,14 @@ ${rowsToHtml(late)}
                                       </svg>
                                       <span>{dailyCapacityLoading ? '...' : formatCapacityValue(card.earlyCapacity)}</span>
                                     </span>
-                                    <span className="ml-3 inline-flex items-center gap-1">
+                                    <span className="ml-2 inline-flex items-center gap-1">
                                       <svg
                                         viewBox="0 0 24 24"
                                         fill="none"
                                         stroke="currentColor"
                                         strokeWidth="1.8"
                                         className={[
-                                          'h-3.5 w-3.5',
+                                          'h-3 w-3',
                                           themeMode === 'light' ? 'text-indigo-600' : 'text-indigo-300'
                                         ].join(' ')}
                                         aria-hidden="true"
@@ -17416,11 +17591,41 @@ ${rowsToHtml(late)}
                                       <span>{dailyCapacityLoading ? '...' : formatCapacityValue(card.lateCapacity)}</span>
                                     </span>
                                   </div>
-                                  <div className="mt-1 whitespace-nowrap text-[11px] font-semibold leading-tight opacity-95">
+                                  <div className="relative z-10 mt-0.5 whitespace-nowrap text-[10px] font-semibold leading-tight opacity-95">
                                     总产能: {dailyCapacityLoading ? '...' : formatCapacityValue(card.totalCapacity)}
                                   </div>
+                                  </>
+                                );
+                                return (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleDailyListSelectedPosition(card.position, isSelected)}
+                                  key={card.position}
+                                  className={[
+                                    'relative h-full min-h-0 w-full min-w-0 overflow-visible rounded-md bg-transparent p-0 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-white/30'
+                                  ].join(' ')}
+                                >
+                                  {isSelected ? (
+                                    <ElectricBorder
+                                      color={getElectricBorderColor(card.position, schedulePositionToneByPosition)}
+                                      speed={0.9}
+                                      chaos={0.12}
+                                      thickness={1.25}
+                                      borderRadius={6}
+                                      className="eb-card rounded-md"
+                                    >
+                                      <div className={cardSurfaceClassName} style={cardSurfaceStyle}>
+                                        {cardBody}
+                                      </div>
+                                    </ElectricBorder>
+                                  ) : (
+                                    <div className={cardSurfaceClassName} style={cardSurfaceStyle}>
+                                      {cardBody}
+                                    </div>
+                                  )}
                                 </button>
-                              ))}
+                                );
+                              })}
                             </div>
                           </div>
                           <div className="flex shrink-0 flex-wrap items-start justify-end gap-2">
@@ -17460,33 +17665,54 @@ ${rowsToHtml(late)}
                               <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
                                 {t('筛选', 'Filter')}
                               </span>
-                              {dailyListVisiblePositions.map((position) => (
-                                <button
-                                  key={`filter-${position}`}
-                                  type="button"
-                                  onClick={() =>
-                                    setDailyListFilterPositions((prev) => {
-                                      const key = normalizeDailyListPositionKey(position) || position;
-                                      return {
+                              {dailyListVisiblePositions.map((position) => {
+                                const filterKey = normalizeDailyListPositionKey(position) || position;
+                                const isFilterSelected = selectedDailyFilterPositions.some(
+                                  (selectedPosition) => (normalizeDailyListPositionKey(selectedPosition) || selectedPosition) === filterKey
+                                );
+                                const filterButton = (
+                                  <button
+                                    key={`filter-button-${position}`}
+                                    type="button"
+                                    onClick={() =>
+                                      setDailyListFilterPositions((prev) => ({
                                         ...prev,
-                                        [key]: !prev[key]
-                                      };
-                                    })
-                                  }
-                                  className={[
-                                    'rounded-lg border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] transition',
-                                    dailyListFilterPositions[normalizeDailyListPositionKey(position) || position]
-                                      ? themeMode === 'light'
-                                        ? getSchedulePositionBadgeClassLight(position)
-                                        : getSchedulePositionBadgeClass(position)
-                                      : themeMode === 'light'
-                                        ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
-                                        : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
-                                  ].join(' ')}
-                                >
-                                  {position}
-                                </button>
-                              ))}
+                                        [filterKey]: !prev[filterKey]
+                                      }))
+                                    }
+                                    className={[
+                                      'rounded-lg border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] transition',
+                                      isFilterSelected
+                                        ? themeMode === 'light'
+                                          ? 'border-transparent bg-white/80 text-slate-950'
+                                          : 'border-transparent bg-white/[0.06] text-white'
+                                        : themeMode === 'light'
+                                          ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                                          : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
+                                    ].join(' ')}
+                                  >
+                                    {position}
+                                  </button>
+                                );
+
+                                return isFilterSelected ? (
+                                  <ElectricBorder
+                                    key={`filter-${position}`}
+                                    color={getElectricBorderColor(position, schedulePositionToneByPosition)}
+                                    speed={0.9}
+                                    chaos={0.1}
+                                    thickness={1}
+                                    borderRadius={8}
+                                    className="eb-chip rounded-lg"
+                                  >
+                                    {filterButton}
+                                  </ElectricBorder>
+                                ) : (
+                                  <span key={`filter-${position}`} className="inline-flex">
+                                    {filterButton}
+                                  </span>
+                                );
+                              })}
                               <button
                                 type="button"
                                 onClick={() =>

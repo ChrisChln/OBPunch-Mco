@@ -6,6 +6,7 @@ type ElectricBorderProps = {
   color?: string;
   speed?: number;
   chaos?: number;
+  thickness?: number;
   borderRadius?: number;
   className?: string;
   style?: CSSProperties;
@@ -16,6 +17,7 @@ const ElectricBorder = ({
   color = '#5227FF',
   speed = 1,
   chaos = 0.12,
+  thickness = 1,
   borderRadius = 24,
   className,
   style
@@ -195,7 +197,9 @@ const ElectricBorder = ({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
       ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = thickness;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = Math.max(0, thickness * 4);
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
 
@@ -244,7 +248,7 @@ const ElectricBorder = ({
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
       resizeObserver.disconnect();
     };
-  }, [color, speed, chaos, borderRadius, octavedNoise, getRoundedRectPoint]);
+  }, [color, speed, chaos, thickness, borderRadius, octavedNoise, getRoundedRectPoint]);
 
   const vars = {
     '--electric-border-color': color,
