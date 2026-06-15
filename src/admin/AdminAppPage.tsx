@@ -16859,6 +16859,7 @@ ${rowsToHtml(late)}
                 serverTime={serverTime}
                 userEmail={String(user?.email ?? '')}
                 userDisplayName={String(userDisplayName ?? '')}
+                positionNames={allPositionNames}
                 positionDepartmentByPosition={positionDepartmentRecord}
                 onOpenTimecardCalibration={openTimecardPunchModalForDate}
               />

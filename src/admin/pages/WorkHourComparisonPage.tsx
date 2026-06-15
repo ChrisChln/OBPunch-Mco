@@ -9,7 +9,7 @@ import {
   mergeSystemHoursEntry,
   type CachedSystemHoursEntry
 } from '../workHourStats';
-import { getTrackedStaffIds } from '../workHourGlobalStats';
+import { buildWorkHourPositionList, getTrackedStaffIds } from '../workHourGlobalStats';
 import { buildComparisonRows } from '../workHourComparisonData';
 import { POSITION_DEPARTMENTS, normalizePositionDepartment, type PositionDepartment } from '../../shared/positions';
 
@@ -24,6 +24,7 @@ type WorkHourComparisonPageProps = {
   serverTime: Date;
   userEmail?: string;
   userDisplayName?: string;
+  positionNames?: readonly string[];
   positionDepartmentByPosition?: Record<string, PositionDepartment>;
   onOpenTimecardCalibration?: (staffId: string, workDate: string) => void | Promise<void>;
 };
@@ -113,25 +114,24 @@ const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? Math.max(0, Math.
 const FILTER_STORAGE_KEY = 'ob_work_hour_comparison_filters_v1';
 const CSV_ACCEPT_TYPES =
   '.csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
-const TRACKED_UNRESOLVED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
+const LEGACY_POSITION_DISPLAY_ORDER = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
 const TIMECARD_PUNCH_SAVED_EVENT = 'ob-timecard-punch-saved';
 const IAMS_IMPORT_UPSERT_BATCH_SIZE = 500;
 const GLOBAL_IMPORT_FETCH_STAFF_BATCH_SIZE = 500;
 const ALL_SYSTEM_HOURS_COVERAGE_TOKEN = '__ALL_SYSTEM_HOURS__';
-const POSITION_DISPLAY_ORDER: readonly string[] = TRACKED_UNRESOLVED_POSITIONS;
+const buildEmptyUnresolvedByPosition = (positions: readonly string[] = []): PositionCardStat[] =>
+  positions.map((position) => ({ position, count: 0, targets: [] }));
 
-const buildEmptyUnresolvedByPosition = (): PositionCardStat[] =>
-  TRACKED_UNRESOLVED_POSITIONS.map((position) => ({ position, count: 0, targets: [] }));
-
-const sortPositionsByDisplayOrder = (positions: string[]) => {
-  const rank = new Map(POSITION_DISPLAY_ORDER.map((position, index) => [position, index] as const));
+const sortPositionsByDisplayOrder = (positions: string[], configuredPositions: readonly string[] = []) => {
+  const rankSource = configuredPositions.length > 0 ? configuredPositions : LEGACY_POSITION_DISPLAY_ORDER;
+  const rank = new Map(rankSource.map((position, index) => [String(position).trim().toLowerCase(), index] as const));
   return [...positions].sort((a, b) => {
-    const aRank = rank.get(a);
-    const bRank = rank.get(b);
+    const aRank = rank.get(a.toLowerCase());
+    const bRank = rank.get(b.toLowerCase());
     if (aRank != null && bRank != null) return aRank - bRank;
     if (aRank != null) return -1;
     if (bRank != null) return 1;
-    return a.localeCompare(b);
+    return a.localeCompare(b, 'en-US');
   });
 };
 
@@ -515,6 +515,7 @@ export default function WorkHourComparisonPage({
   serverTime,
   userEmail = '',
   userDisplayName = '',
+  positionNames = [],
   positionDepartmentByPosition = {},
   onOpenTimecardCalibration
 }: WorkHourComparisonPageProps) {
@@ -537,8 +538,8 @@ export default function WorkHourComparisonPage({
   const [uploadSummary, setUploadSummary] = useState<UploadSummary | null>(null);
   const [skipExamples, setSkipExamples] = useState<string[]>([]);
   const [rows, setRows] = useState<ComparisonRow[]>([]);
-  const [globalUnresolvedByPosition, setGlobalUnresolvedByPosition] = useState(buildEmptyUnresolvedByPosition);
-  const [globalLargeDiffByPosition, setGlobalLargeDiffByPosition] = useState(buildEmptyUnresolvedByPosition);
+  const [globalUnresolvedByPosition, setGlobalUnresolvedByPosition] = useState<PositionCardStat[]>([]);
+  const [globalLargeDiffByPosition, setGlobalLargeDiffByPosition] = useState<PositionCardStat[]>([]);
   const [unresolvedJumpCursor, setUnresolvedJumpCursor] = useState<Record<string, number>>({});
   const [largeGapJumpCursor, setLargeGapJumpCursor] = useState<Record<string, number>>({});
   const [hasUploadedData, setHasUploadedData] = useState(false);
@@ -670,7 +671,8 @@ export default function WorkHourComparisonPage({
   const fetchTrackedImportedRows = async (employeeMap: Record<string, EmployeeLite>) => {
     if (!supabase) return [] as any[];
 
-    const trackedStaffIds = getTrackedStaffIds(employeeMap, TRACKED_UNRESOLVED_POSITIONS);
+    const positionsForEmployeeMap = buildWorkHourPositionList(employeeMap, positionNames, positionDepartmentByPosition, 'hidden');
+    const trackedStaffIds = getTrackedStaffIds(employeeMap, positionsForEmployeeMap);
     if (!trackedStaffIds.length) return [] as any[];
 
     const fetchByColumns = async (columns: string) => {
@@ -855,6 +857,7 @@ export default function WorkHourComparisonPage({
         : Object.keys(employeesByStaffId).length > 0
           ? employeesByStaffId
           : await loadEmployees();
+    const positionsForEmployeeMap = buildWorkHourPositionList(employeeMap, positionNames, positionDepartmentByPosition, 'hidden');
 
     try {
       const importedRows = await fetchTrackedImportedRows(employeeMap);
@@ -874,7 +877,7 @@ export default function WorkHourComparisonPage({
         .filter((row) => row.staffId && isValidDateOnly(row.workDate) && Number.isFinite(row.iamsHours) && row.iamsHours >= 0 && !row.fixedBy);
 
       if (!unresolvedImports.length) {
-        setGlobalUnresolvedByPosition(buildEmptyUnresolvedByPosition());
+        setGlobalUnresolvedByPosition(buildEmptyUnresolvedByPosition(positionsForEmployeeMap));
       }
 
       const allImports = ((importedRows ?? []) as Array<{
@@ -892,7 +895,7 @@ export default function WorkHourComparisonPage({
         .filter((row) => row.staffId && isValidDateOnly(row.workDate) && Number.isFinite(row.iamsHours) && row.iamsHours >= 0);
 
       if (!allImports.length) {
-        setGlobalLargeDiffByPosition(buildEmptyUnresolvedByPosition());
+        setGlobalLargeDiffByPosition(buildEmptyUnresolvedByPosition(positionsForEmployeeMap));
         return;
       }
 
@@ -900,18 +903,19 @@ export default function WorkHourComparisonPage({
       const validWorkDates = Array.from(staffIdsByDate.keys()).filter((workDate) => Boolean(getOperationalDayRange(workDate)));
 
       if (!validWorkDates.length) {
-        setGlobalUnresolvedByPosition(buildEmptyUnresolvedByPosition());
+        setGlobalUnresolvedByPosition(buildEmptyUnresolvedByPosition(positionsForEmployeeMap));
         return;
       }
       const hoursByDate = await loadSystemHoursByDate(staffIdsByDate);
 
-      const counts = Object.fromEntries(TRACKED_UNRESOLVED_POSITIONS.map((position) => [position, 0])) as Record<string, number>;
-      const unresolvedTargets = Object.fromEntries(TRACKED_UNRESOLVED_POSITIONS.map((position) => [position, [] as PositionJumpTarget[]])) as Record<string, PositionJumpTarget[]>;
-      const largeDiffCounts = Object.fromEntries(TRACKED_UNRESOLVED_POSITIONS.map((position) => [position, 0])) as Record<string, number>;
-      const largeDiffTargets = Object.fromEntries(TRACKED_UNRESOLVED_POSITIONS.map((position) => [position, [] as PositionJumpTarget[]])) as Record<string, PositionJumpTarget[]>;
+      const trackedPositionSet = new Set(positionsForEmployeeMap.map((position) => position.toLowerCase()));
+      const counts = Object.fromEntries(positionsForEmployeeMap.map((position) => [position, 0])) as Record<string, number>;
+      const unresolvedTargets = Object.fromEntries(positionsForEmployeeMap.map((position) => [position, [] as PositionJumpTarget[]])) as Record<string, PositionJumpTarget[]>;
+      const largeDiffCounts = Object.fromEntries(positionsForEmployeeMap.map((position) => [position, 0])) as Record<string, number>;
+      const largeDiffTargets = Object.fromEntries(positionsForEmployeeMap.map((position) => [position, [] as PositionJumpTarget[]])) as Record<string, PositionJumpTarget[]>;
       for (const row of unresolvedImports) {
         const position = String(employeeMap[row.staffId]?.position ?? '').trim();
-        if (!TRACKED_UNRESOLVED_POSITIONS.includes(position as (typeof TRACKED_UNRESOLVED_POSITIONS)[number])) continue;
+        if (!trackedPositionSet.has(position.toLowerCase())) continue;
         const systemHours = Number(hoursByDate.get(row.workDate)?.get(row.staffId) ?? 0);
         const diffHours = Math.round((systemHours - row.iamsHours) * 100) / 100;
         const globalRow: ComparisonRow = {
@@ -935,7 +939,7 @@ export default function WorkHourComparisonPage({
 
       for (const row of allImports) {
         const position = String(employeeMap[row.staffId]?.position ?? '').trim();
-        if (!TRACKED_UNRESOLVED_POSITIONS.includes(position as (typeof TRACKED_UNRESOLVED_POSITIONS)[number])) continue;
+        if (!trackedPositionSet.has(position.toLowerCase())) continue;
         const systemHours = Number(hoursByDate.get(row.workDate)?.get(row.staffId) ?? 0);
         const diffHours = Math.round((systemHours - row.iamsHours) * 100) / 100;
         if (Math.abs(diffHours) + EPSILON < DISCREPANCY_THRESHOLD) continue;
@@ -943,28 +947,28 @@ export default function WorkHourComparisonPage({
         largeDiffTargets[position].push({ workDate: row.workDate, staffId: row.staffId });
       }
 
-      for (const position of TRACKED_UNRESOLVED_POSITIONS) {
+      for (const position of positionsForEmployeeMap) {
         unresolvedTargets[position].sort((a, b) => (a.workDate === b.workDate ? a.staffId.localeCompare(b.staffId) : b.workDate.localeCompare(a.workDate)));
         largeDiffTargets[position].sort((a, b) => (a.workDate === b.workDate ? a.staffId.localeCompare(b.staffId) : b.workDate.localeCompare(a.workDate)));
       }
 
       setGlobalUnresolvedByPosition(
-        TRACKED_UNRESOLVED_POSITIONS.map((position) => ({
+        positionsForEmployeeMap.map((position) => ({
           position,
           count: counts[position] ?? 0,
           targets: unresolvedTargets[position] ?? []
         }))
       );
       setGlobalLargeDiffByPosition(
-        TRACKED_UNRESOLVED_POSITIONS.map((position) => ({
+        positionsForEmployeeMap.map((position) => ({
           position,
           count: largeDiffCounts[position] ?? 0,
           targets: largeDiffTargets[position] ?? []
         }))
       );
     } catch {
-      setGlobalUnresolvedByPosition(buildEmptyUnresolvedByPosition());
-      setGlobalLargeDiffByPosition(buildEmptyUnresolvedByPosition());
+      setGlobalUnresolvedByPosition(buildEmptyUnresolvedByPosition(positionsForEmployeeMap));
+      setGlobalLargeDiffByPosition(buildEmptyUnresolvedByPosition(positionsForEmployeeMap));
     }
   };
 
@@ -1211,9 +1215,10 @@ export default function WorkHourComparisonPage({
       Array.from(new Set(rows.map((row) => row.position).filter((v) => String(v).trim()))).filter((position) => {
         if (!departmentFilter) return true;
         return normalizePositionDepartment(positionDepartmentByPosition[String(position).trim()]) === normalizePositionDepartment(departmentFilter);
-      })
+      }),
+      positionNames
     );
-  }, [departmentFilter, positionDepartmentByPosition, rows]);
+  }, [departmentFilter, positionDepartmentByPosition, positionNames, rows]);
 
   const departmentOptions = useMemo(
     () =>
