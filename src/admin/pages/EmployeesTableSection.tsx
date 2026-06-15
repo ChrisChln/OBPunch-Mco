@@ -1,6 +1,8 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useCallback, type UIEvent } from 'react';
+import GlowLabelChip, { getGlowToneForPosition, getGlowToneForShift } from '../../components/GlowLabelChip';
+import type { LabelToneKey } from '../../lib/labelTone';
 import { isScheduleOnlyAgency } from '../../shared/agencyRules';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -23,6 +25,7 @@ type EmployeesTableSectionProps = {
   onToggleHireDateSort: () => void;
   displayStaffId: (value: string) => string;
   getSchedulePositionBadgeClass: (position: string) => string;
+  getScheduleLabelTone: (label: string) => LabelToneKey;
   getScheduleLabelToneClass: (label: string) => string;
   getShiftBadgeClass: (shift: '' | 'early' | 'late') => string;
   employeeShiftByStaffId: Record<string, any>;
@@ -82,6 +85,7 @@ export default function EmployeesTableSection({
   onToggleHireDateSort,
   displayStaffId,
   getSchedulePositionBadgeClass,
+  getScheduleLabelTone,
   getScheduleLabelToneClass,
   getShiftBadgeClass,
   employeeShiftByStaffId,
@@ -351,26 +355,38 @@ export default function EmployeesTableSection({
                   </td>
                   <td className={['w-[92px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{agency || '-'}</td>
                   <td className={['w-[112px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
-                    <span
-                      className={[
-                        'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
-                        getSchedulePositionBadgeClass(position)
-                      ].join(' ')}
-                    >
-                      {position || '-'}
-                    </span>
+                    {isLight ? (
+                      <span
+                        className={[
+                          'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
+                          getSchedulePositionBadgeClass(position)
+                        ].join(' ')}
+                      >
+                        {position || '-'}
+                      </span>
+                    ) : (
+                      <GlowLabelChip tone={getGlowToneForPosition(position)} className="min-w-[54px] uppercase tracking-[0.12em]">
+                        {position || '-'}
+                      </GlowLabelChip>
+                    )}
                   </td>
                   <td className={['w-[72px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{employmentType}</td>
                   <td className={['w-[120px] px-3 py-3', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
                     {label ? (
-                      <span
-                        className={[
-                          'inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold',
-                          getScheduleLabelToneClass(label)
-                        ].join(' ')}
-                      >
-                        <span className="truncate">{label}</span>
-                      </span>
+                      isLight ? (
+                        <span
+                          className={[
+                            'inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+                            getScheduleLabelToneClass(label)
+                          ].join(' ')}
+                        >
+                          <span className="truncate">{label}</span>
+                        </span>
+                      ) : (
+                        <GlowLabelChip tone={getScheduleLabelTone(label)} className="max-w-[90px]">
+                          <span className="truncate">{label}</span>
+                        </GlowLabelChip>
+                      )
                     ) : (
                       '-'
                     )}
@@ -380,15 +396,21 @@ export default function EmployeesTableSection({
                   </td>
                   <td className={['w-[112px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{hireDate}</td>
                   <td className={['w-[86px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
-                    <span
-                      title={shiftTitle}
-                      className={[
-                        'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
-                        getShiftBadgeClass(shift)
-                      ].join(' ')}
-                    >
-                      {shiftLabel}
-                    </span>
+                    {isLight ? (
+                      <span
+                        title={shiftTitle}
+                        className={[
+                          'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
+                          getShiftBadgeClass(shift)
+                        ].join(' ')}
+                      >
+                        {shiftLabel}
+                      </span>
+                    ) : (
+                      <GlowLabelChip tone={getGlowToneForShift(shift)} className="min-w-[52px] uppercase tracking-[0.12em]" title={shiftTitle}>
+                        {shiftLabel}
+                      </GlowLabelChip>
+                    )}
                   </td>
                   <td className={['w-[96px] px-3 py-3 font-mono whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{shiftTime || '-'}</td>
                   <td className={['w-[96px] px-3 py-3 whitespace-nowrap', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{lastPunchDaysText}</td>

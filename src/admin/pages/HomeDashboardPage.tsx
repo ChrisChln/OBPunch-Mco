@@ -6,6 +6,7 @@ import {
   buildDashboardPositionOptions,
   resolveDashboardPositionName
 } from '../../shared/dashboardPositions';
+import GlowLabelChip, { getGlowToneForPosition, getGlowToneForPunch, getGlowToneForShift } from '../../components/GlowLabelChip';
 import { DEFAULT_DASHBOARD_CARD_POSITIONS } from '../../shared/dashboardPositions';
 import {
   buildDashboardDepartmentAttendanceGroups,
@@ -39,7 +40,7 @@ type HomeDashboardPageProps = {
   homeExpectedPositionSummaryCards: Array<{ position: string; early: number; late: number; total: number }>;
   getHomeCardToneClass: (value: string, toneMap?: Partial<Record<string, LabelToneKey>>) => string;
   getHomeChipToneClass: (value: string, toneMap?: Partial<Record<string, LabelToneKey>>) => string;
-  getScheduleLabelToneClass: (label: string) => string;
+  getScheduleLabelTone: (label: string) => LabelToneKey;
   getScheduleTableLabelBadgeClass: (label: string) => string;
   getHomePanelToneClass: (value: string, toneMap?: Partial<Record<string, LabelToneKey>>) => string;
   getSchedulePositionBadgeClass: (position: string) => string;
@@ -227,9 +228,9 @@ function DashboardMultiSelect<Value extends string>({
 }
 
 const getHomeShiftBadgeClass = (value: '' | 'early' | 'late') => {
-  if (value === 'early') return 'badge-elevated-dark border-amber-300/30 bg-amber-400/[0.13] text-amber-100';
-  if (value === 'late') return 'badge-elevated-dark border-indigo-300/30 bg-indigo-400/[0.13] text-indigo-100';
-  return 'badge-elevated-dark border-white/12 bg-white/[0.05] text-slate-200';
+  if (value === 'early') return 'badge-elevated-dark label-glow-chip border-amber-300/30 bg-amber-400/[0.13] text-amber-100';
+  if (value === 'late') return 'badge-elevated-dark label-glow-chip border-indigo-300/30 bg-indigo-400/[0.13] text-indigo-100';
+  return 'badge-elevated-dark label-glow-chip border-white/12 bg-white/[0.05] text-slate-200';
 };
 
 const formatTimeOnly = (iso: string) => {
@@ -342,7 +343,7 @@ function HomeDashboardPage({
   homeExpectedPositionSummaryCards,
   getHomeCardToneClass: _getHomeCardToneClass,
   getHomeChipToneClass: _getHomeChipToneClass,
-  getScheduleLabelToneClass,
+  getScheduleLabelTone,
   getScheduleTableLabelBadgeClass,
   getHomePanelToneClass: _getHomePanelToneClass,
   getSchedulePositionBadgeClass,
@@ -735,17 +736,35 @@ function HomeDashboardPage({
                       <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-800' : 'text-stone-100'].join(' ')}>{row.name || '-'}</td>
                       <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-600' : 'text-stone-300'].join(' ')}>{row.agency || '-'}</td>
                       <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-600' : 'text-stone-300'].join(' ')}>
-                        <span className={['inline-flex items-center rounded-full border px-2.5 py-1', isLight ? getScheduleTablePositionBadgeClass(row.position) : getSchedulePositionBadgeClass(row.position)].join(' ')}>
-                          {row.position || '-'}
-                        </span>
+                        {isLight ? (
+                          <span className={['inline-flex items-center rounded-full border px-2.5 py-1', getScheduleTablePositionBadgeClass(row.position)].join(' ')}>
+                            {row.position || '-'}
+                          </span>
+                        ) : (
+                          <GlowLabelChip tone={getGlowToneForPosition(row.position)} className="min-w-[54px] uppercase tracking-[0.12em]">
+                            {row.position || '-'}
+                          </GlowLabelChip>
+                        )}
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-600' : 'text-stone-300'].join(' ')}>
-                        <span className={['inline-flex items-center rounded-full border px-2.5 py-1', isLight ? getScheduleTableLabelBadgeClass(row.label || '-') : getScheduleLabelToneClass(row.label || '-')].join(' ')}>{row.label || '-'}</span>
+                        {isLight ? (
+                          <span className={['inline-flex items-center rounded-full border px-2.5 py-1', getScheduleTableLabelBadgeClass(row.label || '-')].join(' ')}>{row.label || '-'}</span>
+                        ) : (
+                          <GlowLabelChip tone={row.label ? getScheduleLabelTone(row.label) : 'slate'} className="min-w-[34px]">
+                            {row.label || '-'}
+                          </GlowLabelChip>
+                        )}
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-600' : 'text-stone-300'].join(' ')}>
-                        <span className={['inline-flex items-center rounded-full border px-2.5 py-1', isLight ? getScheduleTableShiftBadgeClass(normalizeShiftValue(row.shift)) : getHomeShiftBadgeClass(normalizeShiftValue(row.shift))].join(' ')}>
-                          {formatShiftLabel(row.shift)}
-                        </span>
+                        {isLight ? (
+                          <span className={['inline-flex items-center rounded-full border px-2.5 py-1', getScheduleTableShiftBadgeClass(normalizeShiftValue(row.shift))].join(' ')}>
+                            {formatShiftLabel(row.shift)}
+                          </span>
+                        ) : (
+                          <GlowLabelChip tone={getGlowToneForShift(row.shift)} className="min-w-[68px]">
+                            {formatShiftLabel(row.shift)}
+                          </GlowLabelChip>
+                        )}
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3', isLight ? 'text-slate-600' : 'text-stone-300'].join(' ')}>
                         <div className="flex flex-wrap gap-1.5">
@@ -753,17 +772,13 @@ function HomeDashboardPage({
                             <>
                               {row.punches.slice(0, 4).map((punch, punchIndex) => {
                                 const shortGapIndices = getShortGapPunchIndices(row.punches);
-                                  const toneClass = isLight
+                                const toneClass = isLight
                                     ? shortGapIndices.has(punchIndex)
                                       ? 'badge-elevated-light border-rose-300 bg-rose-50 text-rose-700'
                                       : punch.action === 'IN'
                                         ? 'badge-elevated-light border-emerald-300 bg-emerald-50 text-emerald-700'
                                         : 'badge-elevated-light border-sky-300 bg-sky-50 text-sky-700'
-                                    : shortGapIndices.has(punchIndex)
-                                      ? 'badge-elevated-dark border-rose-300/30 bg-rose-400/[0.13] text-rose-100'
-                                      : punch.action === 'IN'
-                                        ? 'badge-elevated-dark border-emerald-300/30 bg-emerald-400/[0.13] text-emerald-100'
-                                        : 'badge-elevated-dark border-sky-300/30 bg-sky-400/[0.13] text-sky-100';
+                                    : '';
                                 return (
                                   <button
                                     key={`${row.staff_id}-${punchIndex}`}
@@ -777,12 +792,23 @@ function HomeDashboardPage({
                                     }}
                                     title={t('打开工时校正', 'Open timecard correction')}
                                     className={[
-                                      'inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold uppercase transition focus:outline-none focus:ring-2 focus:ring-sky-400/60 disabled:cursor-default disabled:opacity-80',
+                                      isLight
+                                        ? 'inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold uppercase transition focus:outline-none focus:ring-2 focus:ring-sky-400/60 disabled:cursor-default disabled:opacity-80'
+                                        : 'inline-flex rounded-full transition focus:outline-none focus:ring-2 focus:ring-sky-400/60 disabled:cursor-default disabled:opacity-80',
                                       onOpenTimecardCalibration ? 'hover:-translate-y-px' : '',
                                       toneClass
                                     ].join(' ')}
                                   >
-                                    {punch.action} {formatTimeOnly(punch.created_at)}
+                                    {isLight ? (
+                                      <>{punch.action} {formatTimeOnly(punch.created_at)}</>
+                                    ) : (
+                                      <GlowLabelChip
+                                        tone={shortGapIndices.has(punchIndex) ? 'rose' : getGlowToneForPunch(punch.action)}
+                                        className="min-w-[72px] py-1 text-[10px] uppercase"
+                                      >
+                                        {punch.action} {formatTimeOnly(punch.created_at)}
+                                      </GlowLabelChip>
+                                    )}
                                   </button>
                                 );
                               })}
@@ -798,18 +824,29 @@ function HomeDashboardPage({
                                     void onOpenTimecardCalibration(row.staff_id, workDate);
                                   }}
                                   className={[
-                                    'inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold transition',
                                     isLight
-                                      ? 'badge-elevated-light border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
-                                      : 'badge-elevated-dark border-amber-300/30 bg-amber-400/[0.13] text-amber-100 hover:bg-amber-400/[0.2]'
+                                      ? 'inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold transition badge-elevated-light border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                      : 'inline-flex rounded-full transition'
                                   ].join(' ')}
                                 >
-                                  +{row.punches.length - 4}
+                                  {isLight ? (
+                                    <>+{row.punches.length - 4}</>
+                                  ) : (
+                                    <GlowLabelChip tone="amber" className="min-w-[38px] py-1 text-[10px]">
+                                      +{row.punches.length - 4}
+                                    </GlowLabelChip>
+                                  )}
                                 </button>
                               ) : null}
                             </>
                           ) : (
-                            <span className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px]', isLight ? 'badge-elevated-light border-slate-200 bg-white text-slate-400' : 'badge-elevated-dark border-white/12 bg-white/[0.05]'].join(' ')}>--</span>
+                            isLight ? (
+                              <span className="inline-flex items-center rounded-full border px-2 py-1 text-[10px] badge-elevated-light border-slate-200 bg-white text-slate-400">--</span>
+                            ) : (
+                              <GlowLabelChip tone="slate" className="min-w-[34px] py-1 text-[10px]">
+                                --
+                              </GlowLabelChip>
+                            )
                           )}
                         </div>
                       </td>

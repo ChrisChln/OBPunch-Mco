@@ -6,6 +6,7 @@ import { submitPunchToApi } from './lib/punchApi';
 import { formatPunchFailureSummary } from './lib/punchDisplay';
 import { LABEL_TONE_KEYS, type LabelToneKey, loadLabelToneMap } from './lib/labelTone';
 import { getBarcodePromptGroupKey, getBarcodePrompts, getRandomBarcodePromptIndex } from './lib/barcodePrompt';
+import { appSound, type AppSoundKind } from './lib/sound';
 import { isScheduleOnlyAgency } from './shared/agencyRules';
 import { canUnlockPunchScreen, normalizeAdminAccessContext } from './shared/adminAccess';
 import { isEmployeeTerminated } from './shared/employeeStatus';
@@ -507,8 +508,6 @@ function getBestTimeField(row: Record<string, unknown>) {
 }
 
 export default function App() {
-  type SoundKind = 'successIn' | 'successOut' | 'error';
-
   const busyRef = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const isLocked = Boolean(busy);
@@ -520,15 +519,6 @@ export default function App() {
   const deviceBorrowSnRef = useRef<HTMLInputElement | null>(null);
   const deviceReturnSnRef = useRef<HTMLInputElement | null>(null);
   const statusToastTimerRef = useRef<number | null>(null);
-  const successInAudioRef = useRef<HTMLAudioElement | null>(null);
-  const successOutAudioRef = useRef<HTMLAudioElement | null>(null);
-  const errorAudioRef = useRef<HTMLAudioElement | null>(null);
-  const soundSourceIndexRef = useRef<Record<SoundKind, number>>({
-    successIn: 0,
-    successOut: 0,
-    error: 0
-  });
-  const audioUnlockedRef = useRef(false);
   const punchBoardUphFetchSeqRef = useRef(0);
   const punchBoardUphCacheRef = useRef<{ at: number; key: string; map: Record<string, number | null> }>({
     at: 0,
@@ -594,121 +584,21 @@ export default function App() {
   const unlockPasswordRef = useRef<HTMLInputElement | null>(null);
   const preservePunchUnlockOnNextSignOutRef = useRef(false);
 
-  const getSoundSourceCandidates = (kind: SoundKind) => {
-    if (kind === 'successIn') {
-      return ['/sound/success in.mp3', '/sound/success.mp3'];
-    }
-    if (kind === 'successOut') {
-      return ['/sound/success out.mp3', encodeURI('/sound/success out.mp3')];
-    }
-    return ['/sound/error.mp3'];
-  };
-
-  const rotateSoundSource = (kind: SoundKind) => {
-    const sources = getSoundSourceCandidates(kind);
-    const current = soundSourceIndexRef.current[kind] ?? 0;
-    const next = sources.length > 1 ? (current + 1) % sources.length : 0;
-    soundSourceIndexRef.current[kind] = next;
-  };
-
-  const createSoundAudio = (kind: SoundKind) => {
-    if (typeof Audio === 'undefined') return null;
-    const sources = getSoundSourceCandidates(kind);
-    const index = soundSourceIndexRef.current[kind] ?? 0;
-    const src = sources[Math.min(index, Math.max(0, sources.length - 1))] ?? sources[0];
-    const audio = new Audio(src);
-    audio.preload = 'auto';
-    audio.volume = 1;
-    return audio;
-  };
-
-  const getSoundAudio = (kind: SoundKind) => {
-    if (kind === 'successIn') return successInAudioRef.current;
-    if (kind === 'successOut') return successOutAudioRef.current;
-    return errorAudioRef.current;
-  };
-
-  const setSoundAudio = (kind: SoundKind, audio: HTMLAudioElement | null) => {
-    if (kind === 'successIn') {
-      successInAudioRef.current = audio;
-      return;
-    }
-    if (kind === 'successOut') {
-      successOutAudioRef.current = audio;
-      return;
-    }
-    errorAudioRef.current = audio;
-  };
-
-  const rebuildSoundAudio = (kind: SoundKind) => {
-    const next = createSoundAudio(kind);
-    setSoundAudio(kind, next);
-    return next;
-  };
-
   useEffect(() => {
-    if (typeof Audio === 'undefined') return;
-    successInAudioRef.current = createSoundAudio('successIn');
-    successOutAudioRef.current = createSoundAudio('successOut');
-    errorAudioRef.current = createSoundAudio('error');
-
-    return () => {
-      successInAudioRef.current = null;
-      successOutAudioRef.current = null;
-      errorAudioRef.current = null;
-      audioUnlockedRef.current = false;
-    };
+    appSound.preload();
+    return () => appSound.reset();
   }, []);
 
-  const unlockAudio = async () => {
-    if (audioUnlockedRef.current) return true;
-    const audios = [successInAudioRef.current, successOutAudioRef.current, errorAudioRef.current].filter(
-      (a): a is HTMLAudioElement => !!a
-    );
-    if (audios.length === 0) return false;
-    const results = await Promise.all(
-      audios.map(async (audio) => {
-        const prevMuted = audio.muted;
-        audio.muted = true;
-        try {
-          const promise = audio.play();
-          if (promise && typeof promise.then === 'function') {
-            await promise;
-          }
-          audio.pause();
-          audio.currentTime = 0;
-          return true;
-        } catch {
-          return false;
-        } finally {
-          audio.muted = prevMuted;
-        }
-      })
-    );
-    const unlocked = results.some(Boolean);
-    audioUnlockedRef.current = unlocked;
-    return unlocked;
-  };
+  const unlockAudio = () => appSound.unlock();
 
   useEffect(() => {
-    const onFirstUserGesture = () => {
-      void unlockAudio();
-    };
-    window.addEventListener('keydown', onFirstUserGesture, { passive: true });
-    window.addEventListener('pointerdown', onFirstUserGesture, { passive: true });
-    return () => {
-      window.removeEventListener('keydown', onFirstUserGesture);
-      window.removeEventListener('pointerdown', onFirstUserGesture);
-    };
+    return appSound.attachUserGestureUnlock(window);
   }, []);
 
   useEffect(() => {
     const onVisible = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      rebuildSoundAudio('successIn');
-      rebuildSoundAudio('successOut');
-      rebuildSoundAudio('error');
-      audioUnlockedRef.current = false;
+      appSound.refresh();
     };
     window.addEventListener('focus', onVisible);
     document.addEventListener('visibilitychange', onVisible);
@@ -718,35 +608,8 @@ export default function App() {
     };
   }, []);
 
-  const playSound = (kind: SoundKind) => {
-    const tryPlayOnce = async (audio: HTMLAudioElement | null) => {
-      if (!audio) return false;
-      try {
-        audio.currentTime = 0;
-        const promise = audio.play();
-        if (promise && typeof promise.then === 'function') {
-          await promise;
-        }
-        return true;
-      } catch {
-        return false;
-      }
-    };
-
-    const run = async () => {
-      if (!audioUnlockedRef.current) {
-        await unlockAudio();
-      }
-      const ok = await tryPlayOnce(getSoundAudio(kind));
-      if (ok) return;
-
-      audioUnlockedRef.current = false;
-      rotateSoundSource(kind);
-      rebuildSoundAudio(kind);
-      await unlockAudio();
-      await tryPlayOnce(getSoundAudio(kind));
-    };
-    void run();
+  const playSound = (kind: AppSoundKind) => {
+    void appSound.play(kind);
   };
 
   const playSuccess = (action: PunchAction) =>
@@ -1433,6 +1296,9 @@ export default function App() {
         setDeviceBorrowStaffId('');
         setDeviceBorrowSn('');
         window.setTimeout(() => deviceBorrowStaffRef.current?.focus(), 0);
+      } else {
+        setDeviceReturnSn('');
+        window.setTimeout(() => deviceReturnSnRef.current?.focus(), 0);
       }
       playError();
     };
@@ -1517,6 +1383,84 @@ export default function App() {
     });
     void fetchDeviceQuickLogs();
     void fetchPunchBoardDeviceStatus(punchBoard.map((row) => row.staff_id));
+  };
+
+  const submitDeviceReturnFromPunchInput = async (snRaw: string) => {
+    if (isLocked || deviceQuickBusy) {
+      return true;
+    }
+    const sn = normalizeDeviceSn(snRaw);
+    if (!sn || !supabase) {
+      return false;
+    }
+    const client = supabase;
+
+    const holder = await resolveBorrowerBySn(sn);
+    if (holder.error) {
+      if (/no active borrowed record/i.test(holder.error)) {
+        return false;
+      }
+      setUiStatus({ tone: 'error', message: holder.error });
+      setLastPunchSummary({ status: 'error', message: holder.error, at: new Date().toISOString() });
+      playError();
+      clearPunchInputAfterError();
+      return true;
+    }
+
+    await unlockAudio();
+    setDeviceQuickError(null);
+    setDeviceQuickBusy('return');
+    try {
+      await runLocked('device_return', async () => {
+        const insertRes = await client.from(DEVICE_LOANS_TABLE).insert([
+          {
+            staff_id: holder.staffId,
+            action: 'return',
+            device_sn: sn
+          }
+        ]);
+
+        if (insertRes.error) {
+          const message = insertRes.error.message;
+          setDeviceQuickError(message);
+          setDeviceActionFeedback({
+            id: Date.now(),
+            at: new Date().toISOString(),
+            mode: 'return',
+            status: 'error',
+            title: 'Return failed',
+            detail: message
+          });
+          setUiStatus({ tone: 'error', message });
+          setLastPunchSummary({ status: 'error', message, at: new Date().toISOString() });
+          playError();
+          clearPunchInputAfterError();
+          return;
+        }
+
+        setStaffId('');
+        window.setTimeout(() => inputRef.current?.focus(), 0);
+        playSound('successOut');
+        setUiStatus({ tone: 'success', message: `Returned 路 ${sn}` });
+        const [staffName, deviceName] = await Promise.all([
+          resolveStaffDisplayName(holder.staffId),
+          resolveDeviceDisplayName(sn)
+        ]);
+        setDeviceActionFeedback({
+          id: Date.now(),
+          at: new Date().toISOString(),
+          mode: 'return',
+          status: 'success',
+          title: 'Return success',
+          detail: `${staffName} 路 ${deviceName}`
+        });
+        void fetchDeviceQuickLogs();
+        void fetchPunchBoardDeviceStatus(punchBoard.map((row) => row.staff_id));
+      });
+    } finally {
+      setDeviceQuickBusy('');
+    }
+    return true;
   };
 
   const doUnlockPunchScreen = async () => {
@@ -3069,8 +3013,13 @@ const fetchPunchBoardUph = async (
   const onStaffIdKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
       event.preventDefault();
-      unlockAudio();
-      void submitAutoPunch();
+      void (async () => {
+        const handledAsDeviceReturn = await submitDeviceReturnFromPunchInput(staffId);
+        if (!handledAsDeviceReturn) {
+          await unlockAudio();
+          await submitAutoPunch();
+        }
+      })();
     }
   };
 

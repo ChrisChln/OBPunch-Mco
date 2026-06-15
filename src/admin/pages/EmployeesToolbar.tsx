@@ -16,6 +16,7 @@ type EmployeesToolbarProps = {
   uploadEmployees: () => void | Promise<void>;
   exportEmployees: () => void | Promise<void>;
   setEmployeeAddOpen: (next: boolean | ((prev: boolean) => boolean)) => void;
+  openDepartedEmployees: () => void | Promise<void>;
   fetchEmployees: (arg: { reset: boolean; search?: string; agency?: string; position?: string; labels?: string[] }) => void | Promise<unknown>;
   setEmployeeSearch: (value: string) => void;
   setEmployeeAgency: (value: string[] | ((prev: string[]) => string[])) => void;
@@ -209,6 +210,7 @@ export default function EmployeesToolbar({
   uploadEmployees,
   exportEmployees,
   setEmployeeAddOpen,
+  openDepartedEmployees,
   fetchEmployees,
   setEmployeeSearch,
   setEmployeeAgency,
@@ -309,6 +311,14 @@ export default function EmployeesToolbar({
             className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('导出', 'Export')}
+          </button>
+          <button
+            type="button"
+            disabled={isLocked}
+            onClick={() => void openDepartedEmployees()}
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {t('离职员工', 'Departed')}
           </button>
           <button
             type="button"

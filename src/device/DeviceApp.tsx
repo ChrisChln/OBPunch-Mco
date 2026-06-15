@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createSupabaseClient } from '../lib/supabase';
 import { isValidPunchStaffId, normalizeStaffId } from '../lib/staffId';
+import { appSound, type AppSoundKind } from '../lib/sound';
 
 type DeviceType = string; // 现在支持任意自定义设备类型值
 type LoanAction = 'borrow' | 'return';
@@ -81,27 +82,8 @@ const upsertCountedAtNote = (note: unknown, iso: string) => {
   return `${base} ${marker}`.trim();
 };
 
-const playDeviceSound = (kind: 'successIn' | 'successOut' | 'error') => {
-  if (typeof Audio === 'undefined') return;
-  const src =
-    kind === 'successIn'
-      ? encodeURI('/sound/success in.mp3')
-      : kind === 'successOut'
-        ? encodeURI('/sound/success out.mp3')
-        : '/sound/error.mp3';
-  try {
-    const audio = new Audio(src);
-    audio.preload = 'auto';
-    audio.currentTime = 0;
-    const p = audio.play();
-    if (p && typeof p.catch === 'function') {
-      void p.catch(() => {
-        // ignore autoplay/permission errors
-      });
-    }
-  } catch {
-    // ignore autoplay/permission errors
-  }
+const playDeviceSound = (kind: AppSoundKind) => {
+  void appSound.play(kind);
 };
 
 const getDevicePositionToneClass = (value: string) => {
@@ -668,6 +650,24 @@ export default function DeviceApp() {
     if (mode === 'borrow') staffRef.current?.focus();
     else snRef.current?.focus();
   };
+
+  useEffect(() => {
+    appSound.preload();
+    return appSound.attachUserGestureUnlock(window);
+  }, []);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      appSound.refresh();
+    };
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
 
   useEffect(() => {
     void fetchAll();

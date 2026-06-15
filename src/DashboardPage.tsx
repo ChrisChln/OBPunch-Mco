@@ -4,11 +4,12 @@ import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import { createSupabaseClient } from './lib/supabase';
 import { normalizeStaffId } from './lib/staffId';
-import { getLabelToneClass, loadLabelToneMap } from './lib/labelTone';
+import { loadLabelToneMap } from './lib/labelTone';
 import { isExactOperationalCutoffOut } from './shared/operationalPunches';
 import { isScheduleOnlyAgency } from './shared/agencyRules';
 import AppDialog from './components/AppDialog';
 import ElectricBorder from './components/ElectricBorder';
+import GlowLabelChip, { getGlowToneForPosition, getGlowToneForPunch, getGlowToneForShift } from './components/GlowLabelChip';
 import {
   DEFAULT_DASHBOARD_CARD_POSITIONS,
   buildDashboardCardPositions,
@@ -300,19 +301,13 @@ export const resolveDashboardStaffPosition = (
 };
 const getPositionBadgeClass = (value: string) => {
   const pos = normalizePositionKey(value);
-  if (pos === 'Pick') return 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]';
-  if (pos === 'Pack') return 'badge-elevated-dark border-rose-300/30 text-rose-100 bg-rose-400/[0.13]';
-  if (pos === 'Rebin') return 'badge-elevated-dark border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]';
-  if (pos === 'Preship') return 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
-  if (pos === 'Transfer') return 'badge-elevated-dark border-violet-300/30 text-violet-100 bg-violet-400/[0.13]';
-  if (pos === 'FLEX TEAM') return 'badge-elevated-dark border-slate-300/30 text-slate-100 bg-slate-400/[0.13]';
-  return 'badge-elevated-dark border-white/12 text-stone-100 bg-white/[0.05]';
-};
-const getShiftBadgeClass = (value: string) => {
-  const v = String(value ?? '').trim().toLowerCase();
-  if (v === 'early') return 'badge-elevated-dark border-amber-300/24 text-amber-100 bg-amber-400/[0.10]';
-  if (v === 'late') return 'badge-elevated-dark border-indigo-300/24 text-indigo-100 bg-indigo-400/[0.10]';
-  return 'badge-elevated-dark border-white/12 text-stone-100 bg-white/[0.05]';
+  if (pos === 'Pick') return 'badge-elevated-dark label-glow-chip border-sky-300/30 text-sky-100 bg-sky-400/[0.13]';
+  if (pos === 'Pack') return 'badge-elevated-dark label-glow-chip border-rose-300/30 text-rose-100 bg-rose-400/[0.13]';
+  if (pos === 'Rebin') return 'badge-elevated-dark label-glow-chip border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]';
+  if (pos === 'Preship') return 'badge-elevated-dark label-glow-chip border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
+  if (pos === 'Transfer') return 'badge-elevated-dark label-glow-chip border-violet-300/30 text-violet-100 bg-violet-400/[0.13]';
+  if (pos === 'FLEX TEAM') return 'badge-elevated-dark label-glow-chip border-slate-300/30 text-slate-100 bg-slate-400/[0.13]';
+  return 'badge-elevated-dark label-glow-chip border-white/12 text-stone-100 bg-white/[0.05]';
 };
 const getAttendanceCardClass = (position: string) => {
   const pos = normalizePositionKey(position) || normalizePositionName(position);
@@ -2379,24 +2374,14 @@ export default function DashboardPage() {
                         {row.name || '-'}
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
-                        <span
-                          className={[
-                            'inline-flex items-center rounded-full border px-2.5 py-1',
-                            getPositionBadgeClass(row.position)
-                          ].join(' ')}
-                        >
+                        <GlowLabelChip tone={getGlowToneForPosition(row.position)} className="min-w-[54px] uppercase tracking-[0.12em]">
                           {row.position || '-'}
-                        </span>
+                        </GlowLabelChip>
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
-                        <span
-                          className={[
-                            'inline-flex items-center rounded-full border px-2.5 py-1',
-                            getLabelToneClass(row.label || '', labelToneMap)
-                          ].join(' ')}
-                        >
+                        <GlowLabelChip tone={(labelToneMap[String(row.label || '').trim().toLowerCase()] ?? 'slate')} className="min-w-[34px]">
                           {row.label || '-'}
-                        </span>
+                        </GlowLabelChip>
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
                         <span
@@ -2439,14 +2424,9 @@ export default function DashboardPage() {
                         )}
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
-                        <span
-                          className={[
-                            'inline-flex items-center rounded-full border px-2.5 py-1',
-                            getShiftBadgeClass(row.shift)
-                          ].join(' ')}
-                        >
+                        <GlowLabelChip tone={getGlowToneForShift(row.display_shift || row.shift)} className="min-w-[68px]">
                           {formatShiftLabel(row.display_shift || row.shift)}
-                        </span>
+                        </GlowLabelChip>
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
                         {(() => {
@@ -2496,20 +2476,14 @@ export default function DashboardPage() {
                               }
                               const isShortGapPunch = shortGapPunchIndices.has(idx);
                               return (
-                                <span
+                                <GlowLabelChip
                                   key={punch.id || `${row.staff_id}-p-${idx}`}
-                                  className={[
-                                    'inline-flex min-w-[72px] items-center justify-center rounded-full border px-2 py-1 text-[11px] font-semibold',
-                                    isShortGapPunch
-                                      ? 'border-rose-400 bg-rose-600/40 text-rose-100 shadow-[0_0_0_1px_rgba(251,113,133,0.45)]'
-                                      : punch.action === 'IN'
-                                        ? 'border-stone-200/20 bg-stone-100/[0.08] text-stone-50'
-                                        : 'border-white/12 bg-white/[0.04] text-stone-300'
-                                  ].join(' ')}
+                                  tone={isShortGapPunch ? 'rose' : getGlowToneForPunch(punch.action)}
+                                  className="min-w-[72px] py-1 text-[11px]"
                                   title={formatDateTime(punch.created_at)}
                                 >
                                   {`${punch.action} ${formatTimeOnly(punch.created_at)}`}
-                                </span>
+                                </GlowLabelChip>
                               );
                             })}
                             {hasOverPunch && (
@@ -2857,16 +2831,9 @@ export default function DashboardPage() {
                       {punchDetailRows.map((punch, idx) => (
                         <tr key={punch.id || `${punch.staff_id}-${punch.created_at}-${idx}`} className="border-t border-white/5 odd:bg-white/[0.03]">
                           <td className="px-3 py-2 align-top">
-                            <span
-                              className={[
-                                'inline-flex min-w-[72px] items-center justify-center rounded-md border px-2 py-0.5 text-xs font-semibold',
-                                punch.action === 'IN'
-                                  ? 'border-stone-200/20 bg-stone-100/[0.08] text-stone-50'
-                                  : 'border-white/12 bg-white/[0.04] text-stone-300'
-                              ].join(' ')}
-                            >
+                            <GlowLabelChip tone={getGlowToneForPunch(punch.action)} className="min-w-[72px] py-1 text-xs">
                               {punch.action}
-                            </span>
+                            </GlowLabelChip>
                           </td>
                           <td className="whitespace-nowrap px-3 py-2 align-top text-stone-100">{formatTimeOnly(punch.created_at)}</td>
                           <td className="whitespace-nowrap px-3 py-2 align-top text-stone-300">{formatDateTime(punch.created_at)}</td>

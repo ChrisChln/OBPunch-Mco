@@ -2,6 +2,7 @@
 import type { User } from '@supabase/supabase-js';
 import { Check, Hourglass, Plus, Save, Trash2, Users } from 'lucide-react';
 import { createPortal } from 'react-dom';
+import GlowLabelChip, { getGlowToneForPosition, getGlowToneForShift } from '../components/GlowLabelChip';
 import { createSupabaseClient } from '../lib/supabase';
 import { hasModuleAccess, getModuleMapFromContext, type AdminAccessContext } from '../shared/adminAccess';
 import { addDays, startOfWeekMonday, toDateOnly, type AgencyShift } from '../shared/agencyShared';
@@ -284,12 +285,6 @@ const shiftLabel = (shift: AgencyEmployeeRow['shift']) => {
 
 const normalizeAgencyShift = (shift: string): AgencyShift => (shift === 'late' ? 'late' : 'early');
 
-const shiftChipClass = (shift: AgencyEmployeeRow['shift']) => {
-  if (shift === 'early') return 'badge-elevated-dark border-amber-300/30 bg-amber-400/[0.13] text-amber-100';
-  if (shift === 'late') return 'badge-elevated-dark border-violet-300/30 bg-violet-400/[0.13] text-violet-100';
-  return 'badge-elevated-dark border-white/12 bg-white/[0.05] text-slate-200';
-};
-
 const agencyStatusLabel = (status: AgencyEmployeeRow['agencyStatus']) =>
   status === 'ready' ? 'Ready' : 'Wait for Confirm';
 
@@ -329,16 +324,6 @@ const normalizeAgencyValue = (value: unknown) => {
     return String(candidate ?? '').trim();
   }
   return '';
-};
-
-const positionChipClass = (position: string) => {
-  const key = String(position ?? '').trim().toLowerCase();
-  if (key === 'pick') return 'badge-elevated-dark border-sky-300/30 bg-sky-400/[0.13] text-sky-100';
-  if (key === 'rebin') return 'badge-elevated-dark border-emerald-300/30 bg-emerald-400/[0.13] text-emerald-100';
-  if (key === 'pack') return 'badge-elevated-dark border-rose-300/30 bg-rose-400/[0.13] text-rose-100';
-  if (key === 'preship') return 'badge-elevated-dark border-amber-300/30 bg-amber-400/[0.13] text-amber-100';
-  if (key === 'transfer') return 'badge-elevated-dark border-violet-300/30 bg-violet-400/[0.13] text-violet-100';
-  return 'badge-elevated-dark border-white/12 bg-white/[0.05] text-slate-200';
 };
 
 const summaryCardStatusClass = (
@@ -1179,7 +1164,11 @@ export default function AgencyAppPage() {
         const isDriverChange = value.startsWith('driver:');
         const code = value === 'new' ? nextDriverGroupCode : value.replace(/^(group|driver):/, '').trim();
         if (!code) throw new Error('Driver group is required.');
-        const groupRows = employeeRows.filter((row) => row.driver_group_code === code);
+        const employeeAgency = normalizeAgencyValue(employee.agency);
+        const groupRows = employeeRows.filter((row) => row.driver_group_code === code && normalizeAgencyValue(row.agency) === employeeAgency);
+        if (value !== 'new' && groupRows.length === 0) {
+          throw new Error('Driver group is out of agency scope.');
+        }
         const driver = isDriverChange ? employee : groupRows.find((row) => row.driver_group_role === 'driver') ?? groupRows[0] ?? employee;
         const memberStaffIds = Array.from(
           new Set([...groupRows.map((row) => row.staff_id), staffId, driver.staff_id].map((item) => String(item ?? '').trim()).filter(Boolean))
@@ -1417,7 +1406,7 @@ export default function AgencyAppPage() {
   const showIdColumn = !compactScheduleView;
   const showAgencyColumn = !compactScheduleView;
   const showDriverGroupControls = false;
-  const showDriverGroupColumn = false;
+  const showDriverGroupColumn = !compactScheduleView;
   const showNoteColumn = !compactScheduleView;
   const showStartTimeColumn = !compactScheduleView;
   const selectedDateColumnToneClass = compactScheduleView ? selectedDateColumnClassMobile : selectedDateColumnClass;
@@ -1507,7 +1496,31 @@ export default function AgencyAppPage() {
 
   const driverGroupSummaries = useMemo(() => weekSchedule?.driver_groups ?? [], [weekSchedule]);
 
-  const nextDriverGroupCode = useMemo(() => getNextDriverGroupCode(driverGroupSummaries), [driverGroupSummaries]);
+  const driverGroupSummariesByAgency = useMemo(() => {
+    const groupByCode = new Map(driverGroupSummaries.map((group) => [String(group.code ?? '').trim(), group]));
+    const next = new Map<string, typeof driverGroupSummaries>();
+    for (const employee of employeeRows) {
+      const code = String(employee.driver_group_code ?? '').trim();
+      const agency = normalizeAgencyValue(employee.agency);
+      if (!code || !agency) continue;
+      const group = groupByCode.get(code);
+      if (!group) continue;
+      const current = next.get(agency) ?? [];
+      if (!current.some((item) => item.code === group.code)) {
+        current.push(group);
+        next.set(agency, current);
+      }
+    }
+    for (const [agency, groups] of next.entries()) {
+      next.set(agency, [...groups].sort((left, right) => String(left.code).localeCompare(String(right.code), 'en-US', { numeric: true })));
+    }
+    return next;
+  }, [driverGroupSummaries, employeeRows]);
+
+  const nextDriverGroupCode = useMemo(
+    () => String(weekSchedule?.next_driver_group_code ?? '').trim() || getNextDriverGroupCode(driverGroupSummaries),
+    [driverGroupSummaries, weekSchedule?.next_driver_group_code]
+  );
 
   const driverGroupWarnings = useMemo(
     () => buildDriverGroupWarnings(weekSchedule?.employees ?? []),
@@ -1977,12 +1990,12 @@ export default function AgencyAppPage() {
                               <div className="text-sm font-semibold text-white">Need Replacement</div>
                               <div className="mt-1 text-sm text-slate-300">{gap.agency}</div>
                               <div className="mt-2 flex flex-wrap gap-2">
-                                <span className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]', positionChipClass(gap.position)].join(' ')}>
+                                <GlowLabelChip tone={getGlowToneForPosition(gap.position)} className="min-w-[54px] uppercase tracking-[0.12em]">
                                   {gap.position}
-                                </span>
-                                <span className={['inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold', shiftChipClass(normalizeAgencyShift(String(gap.shift ?? 'early')))].join(' ')}>
+                                </GlowLabelChip>
+                                <GlowLabelChip tone={getGlowToneForShift(normalizeAgencyShift(String(gap.shift ?? 'early')))} className="min-w-[52px]">
                                   {shiftLabel(normalizeAgencyShift(String(gap.shift ?? 'early')))}
-                                </span>
+                                </GlowLabelChip>
                               </div>
                               <div className="mt-2 text-xs text-slate-400">Needed: {gap.count}</div>
                             </div>
@@ -2023,20 +2036,14 @@ export default function AgencyAppPage() {
                               </span>
                             </div>
                             <div>
-                              <span className={[
-                                'inline-flex items-center rounded-full border px-3 py-1 text-sm',
-                                positionChipClass(row.position)
-                              ].join(' ')}>
+                              <GlowLabelChip tone={getGlowToneForPosition(row.position)} className="min-w-[54px] uppercase tracking-[0.12em]">
                                 {row.position || '-'}
-                              </span>
+                              </GlowLabelChip>
                             </div>
                             <div>
-                              <span className={[
-                                'inline-flex items-center rounded-full border px-3 py-1 text-sm',
-                                shiftChipClass(row.shift)
-                              ].join(' ')}>
+                              <GlowLabelChip tone={getGlowToneForShift(row.shift)} className="min-w-[52px]">
                                 {shiftLabel(row.shift)}
-                              </span>
+                              </GlowLabelChip>
                             </div>
                             <div className="text-center font-mono text-sm text-slate-300">
                               {formatNewHireStartTime(row.start_time)}
@@ -2228,6 +2235,7 @@ export default function AgencyAppPage() {
                       const rowClass = isPendingTermination
                         ? 'border-b border-white/5 bg-slate-800/60 transition-colors hover:bg-slate-800/70 last:border-b-0'
                         : 'border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-b-0';
+                      const employeeDriverGroupSummaries = driverGroupSummariesByAgency.get(normalizeAgencyValue(employee.agency)) ?? [];
                       return (
                       <tr key={employee.staff_id} className={rowClass}>
                         {showIdColumn ? <td className="py-2 pl-4 pr-1 font-mono text-slate-200">{employee.staff_id}</td> : null}
@@ -2286,7 +2294,7 @@ export default function AgencyAppPage() {
                               {employee.driver_group_code && employee.driver_group_role !== 'driver' ? (
                                 <option value={`driver:${employee.driver_group_code}`}>Make driver</option>
                               ) : null}
-                              {driverGroupSummaries.filter((group) => group.code !== employee.driver_group_code).map((group) => (
+                              {employeeDriverGroupSummaries.filter((group) => group.code !== employee.driver_group_code).map((group) => (
                                 <option key={group.code} value={`group:${group.code}`}>
                                   Group {group.code}
                                 </option>
@@ -2314,14 +2322,14 @@ export default function AgencyAppPage() {
                           </td>
                         ) : null}
                         <td className="px-1 py-2">
-                          <span className={['inline-flex max-w-full items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]', positionChipClass(employee.position)].join(' ')}>
+                          <GlowLabelChip tone={getGlowToneForPosition(employee.position)} className="max-w-full min-w-[54px] uppercase tracking-[0.12em]">
                             <span className="truncate">{employee.position || '-'}</span>
-                          </span>
+                          </GlowLabelChip>
                         </td>
                         <td className="px-1 py-2 text-center">
-                          <span className={['inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold', shiftChipClass(employee.shift)].join(' ')}>
+                          <GlowLabelChip tone={getGlowToneForShift(employee.shift)} className="min-w-[52px]">
                             {shiftLabel(employee.shift)}
-                          </span>
+                          </GlowLabelChip>
                         </td>
                         <td className="px-1 py-2 text-center">
                           <span

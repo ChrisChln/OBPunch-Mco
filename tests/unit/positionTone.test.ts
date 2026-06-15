@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'vitest';
 
-import { getPositionToneFromMap, normalizePositionToneKey, normalizePositionToneMap } from '../../src/admin/positionTone';
+import {
+  getPositionToneFromMap,
+  normalizeExplicitPositionToneMap,
+  normalizePositionToneKey,
+  normalizePositionToneMap
+} from '../../src/admin/positionTone';
 
 describe('positionTone', () => {
   test('normalizes custom position keys without case sensitivity', () => {
@@ -27,5 +32,12 @@ describe('positionTone', () => {
     expect(getPositionToneFromMap('Pick', toneMap)).toBe('sky');
     expect(getPositionToneFromMap('pick', toneMap)).toBe('sky');
     expect(getPositionToneFromMap('Water Spider', toneMap)).toBe('sky');
+  });
+
+  test('parses only explicitly saved tones for global config merges', () => {
+    expect(normalizeExplicitPositionToneMap({})).toEqual({});
+    expect(normalizeExplicitPositionToneMap({ Receive: 'cyan', Pack: 'invalid' })).toEqual({
+      receive: 'cyan'
+    });
   });
 });

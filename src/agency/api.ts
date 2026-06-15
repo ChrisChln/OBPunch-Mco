@@ -46,6 +46,7 @@ export const fetchAgencyScheduleWeek = async (supabase: SupabaseClient, workDate
     expectRpcSuccess<{
       assignments?: Array<{ staff_id?: string | null; code?: string | null; role?: string | null; label?: string | null }>;
       groups?: Array<Record<string, unknown>>;
+      next_code?: string | number | null;
     }>(supabase.rpc('agency_get_driver_groups')),
     expectRpcSuccess<Array<{ staff_id?: string | null; note?: string | null }>>(supabase.rpc('agency_get_employee_notes'))
   ]);
@@ -119,7 +120,8 @@ export const fetchAgencyScheduleWeek = async (supabase: SupabaseClient, workDate
           driverCount: Number(row?.driverCount ?? row?.driver_count ?? 0) || 0,
           labels: Array.isArray(row?.labels) ? row.labels.map((item) => String(item ?? '').trim()).filter(Boolean) : []
         }))
-      : []
+      : [],
+    next_driver_group_code: String(driverPayload.next_code ?? '').trim()
   };
 };
 

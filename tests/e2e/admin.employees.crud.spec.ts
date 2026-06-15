@@ -36,9 +36,8 @@ test.describe('admin employees CRUD flows', () => {
 
     await expect(page.getByText(/e2e\.account\.updated/i)).toBeVisible();
 
-    page.once('dialog', async (dialog) => {
-      await dialog.accept();
-    });
     await page.getByRole('button', { name: /Depart|离职/i }).first().click();
+    await page.getByRole('radio', { name: /Normal|正常离职/i }).check();
+    await page.getByRole('button', { name: /^Confirm$|^确认$/i }).click();
   });
 });
