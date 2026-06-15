@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import type { LabelToneKey } from '../../lib/labelTone';
 import { POSITION_DEPARTMENTS, normalizePositionDepartment, type PositionDepartment } from '../../shared/positions';
 import {
@@ -16,6 +16,7 @@ import {
   getDashboardDepartmentTonePosition,
 } from '../../shared/dashboardAttendanceStats';
 import ElectricBorder from '../../components/ElectricBorder';
+import { MagicMultiSelect } from '../../components/MagicSelectControls';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -108,12 +109,6 @@ type DashboardMultiSelectOption<Value extends string = string> = {
   badgeClass?: string;
 };
 
-const buildDashboardMultiSelectLabel = (allLabel: string, selected: string[]) => {
-  if (selected.length === 0) return allLabel;
-  if (selected.length === 1) return selected[0];
-  return `${selected.length} selected`;
-};
-
 function DashboardMultiSelect<Value extends string>({
   allLabel,
   selected,
@@ -127,110 +122,13 @@ function DashboardMultiSelect<Value extends string>({
   onChange: (value: Value[]) => void;
   isLight: boolean;
 }) {
-  const detailsRef = useRef<HTMLDetailsElement | null>(null);
-  const selectedSet = new Set(selected);
-
-  useEffect(() => {
-    const onPointerDown = (event: MouseEvent | TouchEvent) => {
-      const root = detailsRef.current;
-      if (!root || !root.open) return;
-      const target = event.target as Node | null;
-      if (target && root.contains(target)) return;
-      root.open = false;
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      const root = detailsRef.current;
-      if (root?.open) root.open = false;
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('touchstart', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('touchstart', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, []);
-
-  const toggleValue = (value: Value) => {
-    onChange(selectedSet.has(value) ? selected.filter((item) => item !== value) : [...selected, value]);
-  };
-
-  const optionClass = (active: boolean) =>
-    [
-      'flex w-full cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm transition',
-      active
-        ? isLight
-          ? 'border-emerald-700/50 bg-emerald-100 text-emerald-900'
-          : 'border-neon/50 bg-neon/10 text-neon'
-        : isLight
-          ? 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
-          : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
-    ].join(' ');
-
-  return (
-    <details ref={detailsRef} className="relative">
-      <summary
-        className={[
-          'flex h-12 cursor-pointer list-none items-center justify-between rounded-[20px] border px-4 text-sm outline-none transition',
-          isLight ? 'border-slate-200 bg-white text-slate-800 hover:border-slate-300' : 'border-white/10 bg-white/[0.04] text-stone-100 hover:border-white/20'
-        ].join(' ')}
-      >
-        <span className="truncate">{buildDashboardMultiSelectLabel(allLabel, selected)}</span>
-        <span className={['ml-3 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{selected.length}</span>
-      </summary>
-      <div
-        className={[
-          'absolute z-40 mt-2 w-full rounded-2xl border p-3',
-          isLight
-            ? 'border-slate-200 bg-white shadow-[0_18px_40px_rgba(15,23,42,0.16)]'
-            : 'border-slate-700 bg-slate-900 shadow-[0_18px_40px_rgba(0,0,0,0.45)]'
-        ].join(' ')}
-      >
-        <div className={['mb-2 flex items-center justify-between text-[11px]', isLight ? 'text-slate-500' : 'text-slate-300'].join(' ')}>
-          <span>Multi-select</span>
-          <button
-            type="button"
-            disabled={selected.length === 0}
-            onClick={(event) => {
-              event.preventDefault();
-              onChange([]);
-            }}
-            className={[
-              'min-w-[52px] rounded-md border px-2 py-1 text-[12px] font-medium leading-none transition disabled:cursor-not-allowed disabled:opacity-50',
-              isLight
-                ? 'border-slate-300 bg-white text-slate-600 shadow-sm hover:border-slate-400 hover:bg-slate-50'
-                : 'border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700'
-            ].join(' ')}
-          >
-            Clear
-          </button>
-        </div>
-        <div className="max-h-56 space-y-1 overflow-auto pr-1">
-          <button type="button" className={optionClass(selected.length === 0)} onClick={() => onChange([])}>
-            <span className="inline-flex max-w-[80%] items-center truncate rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">{allLabel}</span>
-          </button>
-          {options.map((option) => {
-            const active = selectedSet.has(option.value);
-            return (
-              <button key={option.value} type="button" className={optionClass(active)} onClick={() => toggleValue(option.value)}>
-                <span className={['inline-flex max-w-[80%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold', option.badgeClass ?? 'border-white/20'].join(' ')}>
-                  {option.label}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </details>
-  );
+  return <MagicMultiSelect selected={selected} options={options} onChange={onChange} allLabel={allLabel} tone={isLight ? 'light' : 'dark'} />;
 }
 
 const getHomeShiftBadgeClass = (value: '' | 'early' | 'late') => {
-  if (value === 'early') return 'badge-elevated-dark label-glow-chip border-amber-300/30 bg-amber-400/[0.13] text-amber-100';
-  if (value === 'late') return 'badge-elevated-dark label-glow-chip border-indigo-300/30 bg-indigo-400/[0.13] text-indigo-100';
-  return 'badge-elevated-dark label-glow-chip border-white/12 bg-white/[0.05] text-slate-200';
+  if (value === 'early') return 'badge-elevated-dark border-amber-300/30 bg-amber-400/[0.13] text-amber-100';
+  if (value === 'late') return 'badge-elevated-dark border-indigo-300/30 bg-indigo-400/[0.13] text-indigo-100';
+  return 'badge-elevated-dark border-white/12 bg-white/[0.05] text-slate-200';
 };
 
 const formatTimeOnly = (iso: string) => {
