@@ -25,15 +25,15 @@ create policy ob_schedule_label_tones_schedule_operate_insert
   on public.ob_schedule_label_tones
   for insert
   to authenticated
-  with check (public.has_admin_access(auth.uid(), 'schedule', 'operate'));
+  with check (public.user_has_module_access('schedule', 'operate'));
 
 drop policy if exists ob_schedule_label_tones_schedule_operate_update on public.ob_schedule_label_tones;
 create policy ob_schedule_label_tones_schedule_operate_update
   on public.ob_schedule_label_tones
   for update
   to authenticated
-  using (public.has_admin_access(auth.uid(), 'schedule', 'operate'))
-  with check (public.has_admin_access(auth.uid(), 'schedule', 'operate'));
+  using (public.user_has_module_access('schedule', 'operate'))
+  with check (public.user_has_module_access('schedule', 'operate'));
 
 do $$
 begin
