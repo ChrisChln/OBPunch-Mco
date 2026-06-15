@@ -12,7 +12,10 @@ import { matchesLooseSearch } from '../lib/textSearch';
 import {
   LABEL_TONE_KEYS,
   type LabelToneKey,
+  buildLabelToneRows,
   loadLabelToneMap,
+  normalizeLabelToneMap,
+  readLabelToneMapFromRows,
   saveLabelToneMap
 } from '../lib/labelTone';
 import { matchesAuditSearch } from './auditSearch';
@@ -257,6 +260,8 @@ const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefine
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
 const DAILY_LIST_LIGHTS_TABLE =
   (import.meta.env.VITE_DAILY_LIST_LIGHTS_TABLE as string | undefined) ?? 'ob_daily_list_position_lights';
+const SCHEDULE_LABEL_TONES_TABLE =
+  (import.meta.env.VITE_SCHEDULE_LABEL_TONES_TABLE as string | undefined) ?? 'ob_schedule_label_tones';
 const SCHEDULE_JOB_RUNS_TABLE =
   (import.meta.env.VITE_SCHEDULE_JOB_RUNS_TABLE as string | undefined) ?? 'ob_schedule_job_runs';
 const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
@@ -2741,35 +2746,15 @@ export default function AdminAppPage() {
     });
   }, [deviceRowsFiltered]);
 
-  const normalizeLabelToneMap = (value: unknown): Record<string, LabelToneKey> => {
-    const raw = (value ?? {}) as Record<string, unknown>;
-    const next: Record<string, LabelToneKey> = {};
-    for (const [k, v] of Object.entries(raw)) {
-      const name = String(k ?? '').trim().toLowerCase();
-      const tone = String(v ?? '').trim() as LabelToneKey;
-      if (!name || !LABEL_TONE_KEYS.includes(tone)) continue;
-      next[name] = tone;
-    }
-    return next;
-  };
-
   const saveScheduleLabelToneGlobal = async (next: Record<string, LabelToneKey>) => {
     if (!supabase) return;
     const nowIso = new Date(serverTime).toISOString();
-    const payload = {
-      key: SCHEDULE_LABEL_TONES_KEY,
-      value: {
-        tones: next,
-        updated_at: nowIso,
-        operator: user?.email ?? null
-      },
-      updated_at: nowIso
-    };
-    const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
-    if (!upsertRes.error) return;
-    const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', SCHEDULE_LABEL_TONES_KEY);
-    if (!updateRes.error) return;
-    await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
+    const rows = buildLabelToneRows(next, {
+      updatedAt: nowIso,
+      operator: user?.email ?? null
+    });
+    if (rows.length === 0) return;
+    await supabase.from(SCHEDULE_LABEL_TONES_TABLE).upsert(rows as any[], { onConflict: 'label' });
   };
 
   const loadScheduleLabelToneGlobal = async () => {
@@ -2778,6 +2763,21 @@ export default function AdminAppPage() {
       return;
     }
     try {
+      const tableRes = await supabase
+        .from(SCHEDULE_LABEL_TONES_TABLE)
+        .select('label, tone, updated_at, operator')
+        .order('updated_at', { ascending: false });
+      if (!tableRes.error && Array.isArray(tableRes.data) && tableRes.data.length > 0) {
+        const next = readLabelToneMapFromRows(tableRes.data);
+        const nextJson = JSON.stringify(next);
+        if (nextJson === scheduleLabelToneLastSavedJsonRef.current) return;
+        scheduleLabelToneHydratingRef.current = true;
+        scheduleLabelToneLastSavedJsonRef.current = nextJson;
+        saveLabelToneMap(next);
+        setScheduleLabelToneByName(next);
+        return;
+      }
+
       const res = await supabase
         .from(APP_SETTINGS_TABLE)
         .select('id, key, value, updated_at')
@@ -3109,7 +3109,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return;
       }
       for (const r of firstPunchRowsRes.rows) {
-        const staff = String(r.staff_id ?? '').trim();
+        const staff = normalizeStaffId(String(r.staff_id ?? '').trim());
         if (!staff || firstInByStaff.has(staff)) continue;
         const at = String(r.created_at ?? '').trim();
         if (!at) continue;
@@ -3146,7 +3146,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           return;
         }
         for (const r of (res.data as any[] | null) ?? []) {
-          const staff = String(r.staff_id ?? '').trim();
+          const staff = normalizeStaffId(String(r.staff_id ?? '').trim());
           const posRaw = String(r.position ?? r.Position ?? '').trim();
           if (!staff || !posRaw) continue;
           const key = normalizePositionKey(posRaw);
@@ -5367,6 +5367,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       .eq('period_key', periodKey);
   };
 
+  const hasCompletedScheduleJobRun = async (jobKey: string, periodKey: string): Promise<boolean | null> => {
+    if (!supabase) return null;
+    const res = await supabase
+      .from(SCHEDULE_JOB_RUNS_TABLE)
+      .select('status')
+      .eq('job_key', jobKey)
+      .eq('period_key', periodKey)
+      .eq('status', 'done')
+      .limit(1);
+    if (res.error) return null;
+    return ((res.data as Array<{ status?: string }> | null) ?? []).length > 0;
+  };
+
   const scheduleWeekResetInFlightRef = useRef(false);
   const scheduleWeekResetDoneKeyRef = useRef('');
   const resetScheduleTransientStatesForWeek = async (options?: { lockUi?: boolean }) => {
@@ -5385,19 +5398,24 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const weekStart = toDateOnly(thisMonday);
     const lockUi = options?.lockUi ?? true;
 
-    const settingRes = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('key, value, updated_at')
-      .eq('key', SCHEDULE_WEEK_RESET_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    if (settingRes.error) {
-      scheduleWeekResetInFlightRef.current = false;
-      return;
+    let existingWeek = '';
+    const completedJob = await hasCompletedScheduleJobRun('schedule_week_reset', weekStart);
+    if (completedJob === true) {
+      existingWeek = weekStart;
+    } else if (completedJob === null) {
+      const settingRes = await supabase
+        .from(APP_SETTINGS_TABLE)
+        .select('key, value, updated_at')
+        .eq('key', SCHEDULE_WEEK_RESET_KEY)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      if (settingRes.error) {
+        scheduleWeekResetInFlightRef.current = false;
+        return;
+      }
+      const existing = (((settingRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
+      existingWeek = String(existing?.value?.week_start ?? '');
     }
-
-    const existing = (((settingRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-    const existingWeek = String(existing?.value?.week_start ?? '');
     const gate = shouldRunWeeklyScheduleReset({
       now: gateNow,
       inFlight: scheduleWeekResetInFlightRef.current,
@@ -5496,20 +5514,27 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const activationTemplateDateKey = getTemplateDateByDayIndex(operationalDayIndex, 0);
     const lockUi = options?.lockUi ?? true;
 
-    const markerRes = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('key, value, updated_at')
-      .eq('key', SCHEDULE_DAILY_PLAN_ACTIVATION_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    if (markerRes.error) {
-      scheduleDailyPlanActivationInFlightRef.current = false;
-      return;
+    let existingDate = '';
+    let existingStatus = '';
+    const completedJob = await hasCompletedScheduleJobRun('schedule_daily_plan_activation', dateKey);
+    if (completedJob === true) {
+      existingDate = dateKey;
+      existingStatus = 'done';
+    } else if (completedJob === null) {
+      const markerRes = await supabase
+        .from(APP_SETTINGS_TABLE)
+        .select('key, value, updated_at')
+        .eq('key', SCHEDULE_DAILY_PLAN_ACTIVATION_KEY)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      if (markerRes.error) {
+        scheduleDailyPlanActivationInFlightRef.current = false;
+        return;
+      }
+      const existing = (((markerRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
+      existingDate = String(existing?.value?.date ?? '');
+      existingStatus = String(existing?.value?.status ?? '').trim();
     }
-
-    const existing = (((markerRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-    const existingDate = String(existing?.value?.date ?? '');
-    const existingStatus = String(existing?.value?.status ?? '').trim();
     const gate = shouldActivateDailyPlannedStates({
       now,
       inFlight: scheduleDailyPlanActivationInFlightRef.current,
@@ -5707,16 +5732,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const now = new Date(Date.now() + offsetMs);
     const thisMonday = startOfWeekMonday(now);
     try {
-      const markerRes = await supabase
-        .from(APP_SETTINGS_TABLE)
-        .select('value')
-        .eq('key', SCHEDULE_WEEK_ROLLOVER_KEY)
-        .order('updated_at', { ascending: false })
-        .limit(1);
-      if (markerRes.error) return;
-      const marker = (((markerRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-      const doneWeek = String(marker?.value?.week_start ?? '').trim();
       const weekKey = toDateOnly(thisMonday);
+      let doneWeek = '';
+      const completedJob = await hasCompletedScheduleJobRun('schedule_week_rollover', weekKey);
+      if (completedJob === true) {
+        doneWeek = weekKey;
+      } else if (completedJob === null) {
+        const markerRes = await supabase
+          .from(APP_SETTINGS_TABLE)
+          .select('value')
+          .eq('key', SCHEDULE_WEEK_ROLLOVER_KEY)
+          .order('updated_at', { ascending: false })
+          .limit(1);
+        if (markerRes.error) return;
+        const marker = (((markerRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
+        doneWeek = String(marker?.value?.week_start ?? '').trim();
+      }
       const gate = shouldRunWeeklyScheduleRollover({
         now,
         inFlight: scheduleWeekRolloverInFlightRef.current,
@@ -15580,6 +15611,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       };
     };
 
+    const onClockShiftByStaff = new Map<string, 'early' | 'late'>();
+    for (const [staffRaw, shiftRaw] of Object.entries(homeOnClockShiftByStaffId)) {
+      const staff = normalizeStaffId(String(staffRaw ?? '').trim());
+      if (!staff || (shiftRaw !== 'early' && shiftRaw !== 'late')) continue;
+      onClockShiftByStaff.set(staff, shiftRaw);
+    }
+
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff || seen.has(staff)) continue;
@@ -15590,7 +15628,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       const baseState = row ? getScheduleBaseStateFromNote(row.note) : 'rest';
       const hasPunch = schedulePunchPresenceKeys.has(`${staff}__${homeOperationalDayIndex}`);
-      const currentOnClockShift = homeOnClockShiftByStaffId[staff];
+      const currentOnClockShift = onClockShiftByStaff.get(staff);
       const isCurrentlyOnClock = currentOnClockShift === 'early' || currentOnClockShift === 'late';
       const shift = employeeShiftByStaffId[staff]?.shift || 'early';
       const profile = employeeProfileByStaffId.get(staff);
@@ -15624,9 +15662,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     absent.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     restWorked.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     completed.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
-    for (const [staffRaw, shiftRaw] of Object.entries(homeOnClockShiftByStaffId)) {
-      const staff = normalizeStaffId(String(staffRaw ?? '').trim());
-      if (!staff) continue;
+    for (const [staff, shiftRaw] of onClockShiftByStaff.entries()) {
       const profile = employeeProfileByStaffId.get(staff);
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
       const fallbackEmp = homeEmployeeByStaffId.get(staff);
