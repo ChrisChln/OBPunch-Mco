@@ -15732,12 +15732,37 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }, [page, homeRosterRows, homeRosterPositionFilter, activePositionNames, hiddenPositionNameSet]);
   const homeRosterRowsCurrent = useMemo(() => {
     if (page !== 'home') return [];
-    return [
+    const rows = [
       ...homeRosterRowsFiltered.absent,
       ...homeRosterRowsFiltered.restWorked,
       ...homeRosterRowsFiltered.completed,
       ...homeRosterRowsFiltered.onClock
     ];
+    const priorityByAttendance = {
+      Absent: 0,
+      'Off Worked': 1,
+      Completed: 2,
+      Normal: 3
+    } as const;
+    const bestByStaff = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) continue;
+      const current = bestByStaff.get(staff);
+      const rowPriority = priorityByAttendance[row.attendance] ?? 0;
+      const currentPriority = current ? (priorityByAttendance[current.attendance] ?? 0) : -1;
+      if (!current || rowPriority >= currentPriority) {
+        bestByStaff.set(staff, row);
+      }
+    }
+    const emitted = new Set<string>();
+    return rows.filter((row) => {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff || emitted.has(staff)) return false;
+      if (bestByStaff.get(staff) !== row) return false;
+      emitted.add(staff);
+      return true;
+    });
   }, [page, homeRosterRowsFiltered]);
   const formatDailyListStaffId = (row: DailyListRow) => {
     const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
