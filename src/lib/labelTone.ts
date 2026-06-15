@@ -15,6 +15,13 @@ export const LABEL_TONE_KEYS = [
 ] as const;
 export type LabelToneKey = (typeof LABEL_TONE_KEYS)[number];
 
+export type LabelToneRow = {
+  label?: string | null;
+  tone?: string | null;
+  updated_at?: string | null;
+  operator?: string | null;
+};
+
 export const LABEL_TONE_CLASS_BY_KEY: Record<LabelToneKey, string> = {
   sky: 'badge-elevated-dark border-sky-400/60 bg-sky-500/10 text-sky-200',
   cyan: 'badge-elevated-dark border-cyan-400/60 bg-cyan-500/10 text-cyan-200',
@@ -46,6 +53,51 @@ export const loadLabelToneMap = (): Record<string, LabelToneKey> => {
   } catch {
     return {};
   }
+};
+
+export const normalizeLabelToneMap = (value: unknown): Record<string, LabelToneKey> => {
+  const out: Record<string, LabelToneKey> = {};
+  if (!value || typeof value !== 'object') return out;
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const key = String(k ?? '').trim();
+    const tone = String(v ?? '').trim() as LabelToneKey;
+    if (!key || !LABEL_TONE_KEYS.includes(tone)) continue;
+    out[key.toLowerCase()] = tone;
+  }
+  return out;
+};
+
+export const readLabelToneMapFromRows = (rows: readonly LabelToneRow[] | null | undefined): Record<string, LabelToneKey> => {
+  const out: Record<string, LabelToneKey> = {};
+  for (const row of rows ?? []) {
+    const label = String(row.label ?? '').trim();
+    const tone = String(row.tone ?? '').trim() as LabelToneKey;
+    if (!label || !LABEL_TONE_KEYS.includes(tone)) continue;
+    out[label.toLowerCase()] = tone;
+  }
+  return out;
+};
+
+export const buildLabelToneRows = (
+  map: Record<string, LabelToneKey>,
+  meta?: {
+    updatedAt?: string | null;
+    operator?: string | null;
+  }
+): LabelToneRow[] => {
+  const rows: LabelToneRow[] = [];
+  for (const [labelRaw, toneRaw] of Object.entries(map)) {
+    const label = String(labelRaw ?? '').trim();
+    const tone = String(toneRaw ?? '').trim() as LabelToneKey;
+    if (!label || !LABEL_TONE_KEYS.includes(tone)) continue;
+    rows.push({
+      label: label.toLowerCase(),
+      tone,
+      updated_at: meta?.updatedAt ?? null,
+      operator: meta?.operator ?? null
+    });
+  }
+  return rows;
 };
 
 export const saveLabelToneMap = (map: Record<string, LabelToneKey>) => {
