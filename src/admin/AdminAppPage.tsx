@@ -982,18 +982,18 @@ const normalizeDeviceType = (value: string): DeviceType => {
 };
 
 const POSITION_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
-  sky: 'badge-elevated-dark label-glow-chip border-sky-300/30 text-sky-100 bg-sky-400/[0.13]',
-  cyan: 'badge-elevated-dark label-glow-chip border-cyan-300/30 text-cyan-100 bg-cyan-400/[0.13]',
-  teal: 'badge-elevated-dark label-glow-chip border-teal-300/30 text-teal-100 bg-teal-400/[0.13]',
-  emerald: 'badge-elevated-dark label-glow-chip border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]',
-  lime: 'badge-elevated-dark label-glow-chip border-lime-300/30 text-lime-100 bg-lime-400/[0.13]',
-  amber: 'badge-elevated-dark label-glow-chip border-amber-300/30 text-amber-100 bg-amber-400/[0.13]',
-  orange: 'badge-elevated-dark label-glow-chip border-orange-300/30 text-orange-100 bg-orange-400/[0.13]',
-  rose: 'badge-elevated-dark label-glow-chip border-rose-300/30 text-rose-100 bg-rose-400/[0.13]',
-  fuchsia: 'badge-elevated-dark label-glow-chip border-fuchsia-300/30 text-fuchsia-100 bg-fuchsia-400/[0.13]',
-  violet: 'badge-elevated-dark label-glow-chip border-violet-300/30 text-violet-100 bg-violet-400/[0.13]',
-  indigo: 'badge-elevated-dark label-glow-chip border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]',
-  slate: 'badge-elevated-dark label-glow-chip border-white/12 text-slate-200 bg-white/[0.05]'
+  sky: 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]',
+  cyan: 'badge-elevated-dark border-cyan-300/30 text-cyan-100 bg-cyan-400/[0.13]',
+  teal: 'badge-elevated-dark border-teal-300/30 text-teal-100 bg-teal-400/[0.13]',
+  emerald: 'badge-elevated-dark border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]',
+  lime: 'badge-elevated-dark border-lime-300/30 text-lime-100 bg-lime-400/[0.13]',
+  amber: 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]',
+  orange: 'badge-elevated-dark border-orange-300/30 text-orange-100 bg-orange-400/[0.13]',
+  rose: 'badge-elevated-dark border-rose-300/30 text-rose-100 bg-rose-400/[0.13]',
+  fuchsia: 'badge-elevated-dark border-fuchsia-300/30 text-fuchsia-100 bg-fuchsia-400/[0.13]',
+  violet: 'badge-elevated-dark border-violet-300/30 text-violet-100 bg-violet-400/[0.13]',
+  indigo: 'badge-elevated-dark border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]',
+  slate: 'badge-elevated-dark border-white/12 text-slate-200 bg-white/[0.05]'
 };
 
 const POSITION_TONE_CLASS_LIGHT: Record<LabelToneKey, string> = {
@@ -1794,7 +1794,7 @@ export default function AdminAppPage() {
   const scheduleBadgeBaseClass =
     themeMode === 'light'
       ? 'badge-elevated-light inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold'
-      : 'badge-elevated-dark label-glow-chip inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold';
+      : 'badge-elevated-dark inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold';
   const getScheduleTablePositionBadgeClass = (position: string) => {
     const toneClass =
       themeMode === 'light'
@@ -2951,9 +2951,9 @@ const getShiftBucket = (inAtIso: string) => {
 };
 
 const getShiftBadgeClass = (value: '' | 'early' | 'late') => {
-  if (value === 'early') return 'badge-elevated-dark label-glow-chip border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
-  if (value === 'late') return 'badge-elevated-dark label-glow-chip border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]';
-  return 'badge-elevated-dark label-glow-chip border-white/12 text-slate-200 bg-white/[0.05]';
+  if (value === 'early') return 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
+  if (value === 'late') return 'badge-elevated-dark border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]';
+  return 'badge-elevated-dark border-white/12 text-slate-200 bg-white/[0.05]';
 };
 const normalizeShiftValue = (value: string): '' | 'early' | 'late' => {
   const v = value.trim().toLowerCase();
@@ -17207,7 +17207,8 @@ ${rowsToHtml(late)}
                     <table className="mx-auto w-full table-fixed text-center text-xs leading-tight">
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
-                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 pl-4 pr-1 py-2 text-left backdrop-blur">{t('工号', 'ID')}</th>
+                          <th className="sticky top-0 z-20 w-[44px] bg-slate-950/95 pl-4 pr-1 py-2 text-left backdrop-blur">NO.</th>
+                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('工号', 'ID')}</th>
                           <th className="sticky top-0 z-20 w-[124px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('姓名', 'Name')}</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">{t('工作天数', 'Work Days')}</th>
                           <th className="sticky top-0 z-20 w-[82px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('中介', 'Agency')}</th>
@@ -17280,7 +17281,7 @@ ${rowsToHtml(late)}
                         </tr>
                       </thead>
                       <tbody>
-                        {scheduleEmployeesRendered.map((employee) => {
+                        {scheduleEmployeesRendered.map((employee, renderedIndex) => {
                           const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
                           const name = String(employee.name ?? '').trim();
                           const agency = String(employee.agency ?? employee.Agency ?? '').trim();
@@ -17297,6 +17298,18 @@ ${rowsToHtml(late)}
                           const labelSaving = scheduleLabelSavingStaffId === staff;
                           const pendingTerminationRequest = pendingTerminationRequestsByStaffId.get(staff) ?? null;
                           const hasPendingTermination = Boolean(pendingTerminationRequest);
+                          const canDepartFromSchedule =
+                            employeesCanOperate &&
+                            Boolean(normalizedPosition) &&
+                            canOperatePosition('employees', resolveEmployeeOperatePosition(normalizedPosition || position)) &&
+                            !isScheduleOnlyAgency(agency);
+                          const departFromScheduleTitle = !employeesCanOperate
+                            ? t('员工模块当前为只读。', 'Employees is read-only.')
+                            : !normalizedPosition || !canOperatePosition('employees', resolveEmployeeOperatePosition(normalizedPosition || position))
+                              ? t('当前账号不能操作该 Position。', 'This account cannot operate this position.')
+                              : isScheduleOnlyAgency(agency)
+                                ? t('JDL员工不能离职', 'JDL employees cannot be departed')
+                                : undefined;
                           const scheduleDriverInfo = scheduleDriverGroupByStaffId[staff] ?? null;
                           const scheduleAgencyNote = String(scheduleAgencyNoteByStaffId[staff] ?? '').trim();
                           if (!staff) return null;
@@ -17367,7 +17380,8 @@ ${rowsToHtml(late)}
 
                           return (
                             <tr className={scheduleRowClass} key={staff}>
-                              <td className={['pl-4 pr-1 py-2 font-mono', scheduleBodyTextClass].join(' ')}>{staff}</td>
+                              <td className="pl-4 pr-1 py-2 font-mono text-[10px] tabular-nums text-slate-400">{renderedIndex + 1}</td>
+                              <td className={['px-1 py-2 font-mono', scheduleBodyTextClass].join(' ')}>{staff}</td>
                               <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
                                 <div className="relative inline-flex max-w-full items-start">
                                   <span
@@ -17808,11 +17822,17 @@ ${rowsToHtml(late)}
                                 ) : (
                                   <button
                                     type="button"
-                                    disabled={isLocked}
-                                    onClick={() => {
+                                    disabled={isLocked || !canDepartFromSchedule}
+                                    title={departFromScheduleTitle}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
                                       void deleteEmployeeRow(staff);
                                     }}
-                                    className="rounded-md bg-ember px-1.5 py-1 text-[9px] font-semibold leading-none text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                                    className={[
+                                      'magic-button-surface magic-button-compact inline-flex min-w-[42px] items-center justify-center whitespace-nowrap',
+                                      'rounded-md border border-rose-300/35 bg-rose-500/18 px-1.5 py-1 text-[9px] font-semibold leading-none text-rose-50 transition',
+                                      'disabled:cursor-not-allowed disabled:opacity-60'
+                                    ].join(' ')}
                                   >
                                     {t('离职', 'Depart')}
                                   </button>
@@ -18558,47 +18578,6 @@ ${rowsToHtml(late)}
                   displayStaffId={displayStaffId}
                 />
 
-                {departureConfirm ? (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm">
-                    <div className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-950 p-5 text-white shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
-                      <div className="font-display text-xl tracking-[0.08em]">{t('离职确认', 'Departure')}</div>
-                      <div className="mt-4 text-sm text-slate-300">{departureConfirm.displayName}</div>
-                      <div className="mt-5 grid gap-3">
-                        <label className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                          <span className="flex items-center gap-3 text-sm font-semibold">
-                            <input
-                              type="radio"
-                              name="termination_type"
-                              checked={departureConfirm.type === 'normal'}
-                              onChange={() => setDepartureConfirm((prev) => (prev ? { ...prev, type: 'normal' } : prev))}
-                            />
-                            {t('正常离职', 'Normal')}
-                          </span>
-                        </label>
-                        <label className="rounded-2xl border border-rose-300/20 bg-rose-500/[0.06] p-3">
-                          <span className="flex items-center gap-3 text-sm font-semibold text-rose-100">
-                            <input
-                              type="radio"
-                              name="termination_type"
-                              checked={departureConfirm.type === 'blacklist'}
-                              onChange={() => setDepartureConfirm((prev) => (prev ? { ...prev, type: 'blacklist' } : prev))}
-                            />
-                            {t('黑名单', 'Blacklist')}
-                          </span>
-                        </label>
-                      </div>
-                      <div className="mt-5 flex justify-end gap-2">
-                        <button type="button" className="admin-btn admin-btn-toolbar admin-btn-secondary px-4" onClick={() => setDepartureConfirm(null)} disabled={isLocked}>
-                          {t('取消', 'Cancel')}
-                        </button>
-                        <button type="button" className="admin-btn admin-btn-toolbar admin-btn-primary px-4" onClick={() => void confirmEmployeeDeparture()} disabled={isLocked}>
-                          {t('确认', 'Confirm')}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
-
                 <EmployeeAuditModal
                   open={employeeAuditOpen}
                   t={t}
@@ -19113,6 +19092,47 @@ ${rowsToHtml(late)}
                 uploadError={uploadError}
               />
             )}
+
+            {departureConfirm ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm">
+                <div className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-950 p-5 text-white shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
+                  <div className="font-display text-xl tracking-[0.08em]">{t('离职确认', 'Departure')}</div>
+                  <div className="mt-4 text-sm text-slate-300">{departureConfirm.displayName}</div>
+                  <div className="mt-5 grid gap-3">
+                    <label className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                      <span className="flex items-center gap-3 text-sm font-semibold">
+                        <input
+                          type="radio"
+                          name="termination_type"
+                          checked={departureConfirm.type === 'normal'}
+                          onChange={() => setDepartureConfirm((prev) => (prev ? { ...prev, type: 'normal' } : prev))}
+                        />
+                        {t('正常离职', 'Normal')}
+                      </span>
+                    </label>
+                    <label className="rounded-2xl border border-rose-300/20 bg-rose-500/[0.06] p-3">
+                      <span className="flex items-center gap-3 text-sm font-semibold text-rose-100">
+                        <input
+                          type="radio"
+                          name="termination_type"
+                          checked={departureConfirm.type === 'blacklist'}
+                          onChange={() => setDepartureConfirm((prev) => (prev ? { ...prev, type: 'blacklist' } : prev))}
+                        />
+                        {t('黑名单', 'Blacklist')}
+                      </span>
+                    </label>
+                  </div>
+                  <div className="mt-5 flex justify-end gap-2">
+                    <button type="button" className="admin-btn admin-btn-toolbar admin-btn-secondary px-4" onClick={() => setDepartureConfirm(null)} disabled={isLocked}>
+                      {t('取消', 'Cancel')}
+                    </button>
+                    <button type="button" className="admin-btn admin-btn-toolbar admin-btn-primary px-4" onClick={() => void confirmEmployeeDeparture()} disabled={isLocked}>
+                      {t('确认', 'Confirm')}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
                 </div>
               </main>
             </div>

@@ -10,6 +10,7 @@ import { isScheduleOnlyAgency } from './shared/agencyRules';
 import AppDialog from './components/AppDialog';
 import ElectricBorder from './components/ElectricBorder';
 import GlowLabelChip, { getGlowToneForPosition, getGlowToneForPunch, getGlowToneForShift } from './components/GlowLabelChip';
+import { MagicMultiSelect, MagicSingleSelect } from './components/MagicSelectControls';
 import {
   DEFAULT_DASHBOARD_CARD_POSITIONS,
   buildDashboardCardPositions,
@@ -301,13 +302,13 @@ export const resolveDashboardStaffPosition = (
 };
 const getPositionBadgeClass = (value: string) => {
   const pos = normalizePositionKey(value);
-  if (pos === 'Pick') return 'badge-elevated-dark label-glow-chip border-sky-300/30 text-sky-100 bg-sky-400/[0.13]';
-  if (pos === 'Pack') return 'badge-elevated-dark label-glow-chip border-rose-300/30 text-rose-100 bg-rose-400/[0.13]';
-  if (pos === 'Rebin') return 'badge-elevated-dark label-glow-chip border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]';
-  if (pos === 'Preship') return 'badge-elevated-dark label-glow-chip border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
-  if (pos === 'Transfer') return 'badge-elevated-dark label-glow-chip border-violet-300/30 text-violet-100 bg-violet-400/[0.13]';
-  if (pos === 'FLEX TEAM') return 'badge-elevated-dark label-glow-chip border-slate-300/30 text-slate-100 bg-slate-400/[0.13]';
-  return 'badge-elevated-dark label-glow-chip border-white/12 text-stone-100 bg-white/[0.05]';
+  if (pos === 'Pick') return 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]';
+  if (pos === 'Pack') return 'badge-elevated-dark border-rose-300/30 text-rose-100 bg-rose-400/[0.13]';
+  if (pos === 'Rebin') return 'badge-elevated-dark border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]';
+  if (pos === 'Preship') return 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
+  if (pos === 'Transfer') return 'badge-elevated-dark border-violet-300/30 text-violet-100 bg-violet-400/[0.13]';
+  if (pos === 'FLEX TEAM') return 'badge-elevated-dark border-slate-300/30 text-slate-100 bg-slate-400/[0.13]';
+  return 'badge-elevated-dark border-white/12 text-stone-100 bg-white/[0.05]';
 };
 const getAttendanceCardClass = (position: string) => {
   const pos = normalizePositionKey(position) || normalizePositionName(position);
@@ -582,7 +583,6 @@ export default function DashboardPage() {
   const [search, setSearch] = useState('');
   const [departmentFilters, setDepartmentFilters] = useState<string[]>([]);
   const [positionFilters, setPositionFilters] = useState<string[]>([]);
-  const [positionFilterOpen, setPositionFilterOpen] = useState(false);
   const [shiftFilter, setShiftFilter] = useState('');
   const [absentOnly, setAbsentOnly] = useState(false);
   const [onClockOnly, setOnClockOnly] = useState(false);
@@ -624,7 +624,6 @@ export default function DashboardPage() {
   };
   const [accountUsageRows, setAccountUsageRows] = useState<TempAccountUsageRow[]>([]);
   const inFlightRef = useRef(false);
-  const positionFilterRef = useRef<HTMLDivElement | null>(null);
   const mistakeEmployeePickerRef = useRef<HTMLDivElement | null>(null);
   const fetchSeqRef = useRef(0);
   const employeeCacheRef = useRef<Map<string, EmployeeRow>>(new Map());
@@ -1365,28 +1364,6 @@ export default function DashboardPage() {
   );
   const selectedDepartmentSet = useMemo(() => new Set(departmentFilters), [departmentFilters]);
   const selectedPositionSet = useMemo(() => new Set(positionFilters), [positionFilters]);
-  const positionFilterLabel = useMemo(() => {
-    if (positionFilters.length === 0) return 'All positions';
-    if (positionFilters.length === 1) return positionFilters[0];
-    return `${positionFilters.length} positions`;
-  }, [positionFilters]);
-  const togglePositionFilter = (position: string) => {
-    setPositionFilters((current) =>
-      current.includes(position)
-        ? current.filter((item) => item !== position)
-        : [...current, position]
-    );
-  };
-  useEffect(() => {
-    if (!positionFilterOpen) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!positionFilterRef.current?.contains(event.target as Node)) {
-        setPositionFilterOpen(false);
-      }
-    };
-    document.addEventListener('pointerdown', handlePointerDown);
-    return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, [positionFilterOpen]);
   const shiftOptions = useMemo(
     () =>
       Array.from(new Set(rows.map((row) => String(row.display_shift ?? row.shift ?? '').trim().toLowerCase()).filter(Boolean))).sort((a, b) =>
@@ -2187,101 +2164,28 @@ export default function DashboardPage() {
                 className="h-full w-full bg-transparent text-sm text-stone-100 outline-none placeholder:text-stone-500"
               />
             </label>
-            <div className="relative">
-              <select
-                value={departmentFilters[0] ?? ''}
-                onChange={(e) => setDepartmentFilters(e.target.value ? [e.target.value] : [])}
-                className="h-12 w-full appearance-none rounded-[20px] border border-white/10 bg-white/[0.04] px-4 pr-10 text-sm text-stone-100 outline-none transition focus:border-white/20"
-              >
-                <option value="">All dept</option>
-                {departmentOptions.map((department) => (
-                  <option key={department} value={department}>
-                    {department === 'hidden' ? 'Hidden' : department}
-                  </option>
-                ))}
-              </select>
-              <ChevronDownIcon className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
-            </div>
-            <div ref={positionFilterRef} className="relative">
-              <button
-                type="button"
-                onClick={() => setPositionFilterOpen((open) => !open)}
-                aria-haspopup="listbox"
-                aria-expanded={positionFilterOpen}
-                className="flex h-12 w-full items-center justify-between gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4 text-left text-sm text-stone-100 outline-none transition hover:bg-white/[0.06] focus:border-white/20"
-              >
-                <span className="min-w-0 truncate">{positionFilterLabel}</span>
-                <ChevronDownIcon className="h-4 w-4 shrink-0 text-stone-400" />
-              </button>
-              {positionFilterOpen && (
-                <div
-                  role="listbox"
-                  aria-multiselectable="true"
-                  className="absolute left-0 top-[calc(100%+8px)] z-40 w-full rounded-2xl border border-slate-700 bg-slate-900 p-3 shadow-[0_18px_40px_rgba(0,0,0,0.45)]"
-                >
-                  <div className="mb-2 flex items-center justify-between text-[11px] text-slate-300">
-                    <span>Multi-select</span>
-                    <button
-                      type="button"
-                      disabled={positionFilters.length === 0}
-                      onClick={() => setPositionFilters([])}
-                      className="min-w-[52px] rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-[12px] font-medium leading-none text-slate-100 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Clear
-                    </button>
-                  </div>
-                  <div className="max-h-56 space-y-1 overflow-auto pr-1">
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={positionFilters.length === 0}
-                    onClick={() => setPositionFilters([])}
-                    className={[
-                      'flex w-full cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm transition',
-                      positionFilters.length === 0 ? 'border-neon/50 bg-neon/10 text-neon' : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
-                    ].join(' ')}
-                  >
-                    <span className="inline-flex max-w-[80%] items-center truncate rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">All positions</span>
-                  </button>
-                  {positionOptions.map((position) => {
-                    const selected = selectedPositionSet.has(position);
-                    return (
-                      <button
-                        key={position}
-                        type="button"
-                        role="option"
-                        aria-selected={selected}
-                        onClick={() => togglePositionFilter(position)}
-                        className={[
-                          'flex w-full cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm transition',
-                          selected ? 'border-neon/50 bg-neon/10 text-neon' : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
-                        ].join(' ')}
-                      >
-                        <span className={['inline-flex max-w-[80%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold', getPositionBadgeClass(position)].join(' ')}>
-                          {position}
-                        </span>
-                      </button>
-                    );
-                  })}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="relative">
-              <select
-                value={shiftFilter}
-                onChange={(e) => setShiftFilter(e.target.value)}
-                className="h-12 w-full appearance-none rounded-[20px] border border-white/10 bg-white/[0.04] px-4 pr-10 text-sm text-stone-100 outline-none transition focus:border-white/20"
-              >
-                <option value="">All shifts</option>
-                {shiftOptions.map((shift) => (
-                  <option key={shift} value={shift}>
-                    {formatShiftLabel(shift)}
-                  </option>
-                ))}
-              </select>
-              <ChevronDownIcon className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
-            </div>
+            <MagicSingleSelect
+              value={departmentFilters[0] ?? ''}
+              onChange={(value) => setDepartmentFilters(value ? [value] : [])}
+              allLabel="All dept"
+              options={departmentOptions.map((department) => ({ value: department, label: department === 'hidden' ? 'Hidden' : department }))}
+            />
+            <MagicMultiSelect
+              selected={positionFilters}
+              onChange={setPositionFilters}
+              allLabel="All positions"
+              options={positionOptions.map((position) => ({
+                value: position,
+                label: position,
+                badgeClass: getPositionBadgeClass(position)
+              }))}
+            />
+            <MagicSingleSelect
+              value={shiftFilter}
+              onChange={setShiftFilter}
+              allLabel="All shifts"
+              options={shiftOptions.map((shift) => ({ value: shift, label: formatShiftLabel(shift) }))}
+            />
             <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-200">
               <input
                 type="checkbox"
