@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
   getPositionToneFromMap,
+  mergeLegacyPositionToneMap,
   normalizeExplicitPositionToneMap,
   normalizePositionToneKey,
   normalizePositionToneMap
@@ -37,6 +38,27 @@ describe('positionTone', () => {
   test('parses only explicitly saved tones for global config merges', () => {
     expect(normalizeExplicitPositionToneMap({})).toEqual({});
     expect(normalizeExplicitPositionToneMap({ Receive: 'cyan', Pack: 'invalid' })).toEqual({
+      receive: 'cyan'
+    });
+  });
+
+  test('keeps authoritative position tones ahead of legacy global tones', () => {
+    expect(
+      mergeLegacyPositionToneMap(
+        { receive: 'lime', pack: 'emerald' },
+        { receive: 'cyan', shipping: 'rose' },
+        ['Receive', 'Pack']
+      )
+    ).toEqual({
+      receive: 'lime',
+      shipping: 'rose',
+      pack: 'emerald'
+    });
+  });
+
+  test('uses legacy position tones as fallback before positions load', () => {
+    expect(mergeLegacyPositionToneMap({ pack: 'emerald' }, { pack: 'rose', receive: 'cyan' }, [])).toEqual({
+      pack: 'rose',
       receive: 'cyan'
     });
   });

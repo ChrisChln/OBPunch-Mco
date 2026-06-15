@@ -10,6 +10,7 @@ import {
   DAILY_LIST_LIGHTS_KEY,
   createEmptyDailyListLightFlags,
   normalizeDailyListLightPosition,
+  readDailyListLightsFromRows,
   readDailyListLightsForDate,
   type DailyListLightFlags
 } from '../shared/dailyListLights';
@@ -90,6 +91,8 @@ type SchedulePickerOption = {
 const EMPLOYEE_RENDER_PAGE_SIZE = 80;
 const MOBILE_SCHEDULE_MAX_WIDTH = 900;
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
+const DAILY_LIST_LIGHTS_TABLE =
+  (import.meta.env.VITE_DAILY_LIST_LIGHTS_TABLE as string | undefined) ?? 'ob_daily_list_position_lights';
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? Math.min(Math.max(DAY_CUTOFF_HOUR_RAW, 0), 23) : 5;
 const TIMECARD_ABSENT_VISIBLE_HOUR_RAW = Number(import.meta.env.VITE_TIMECARD_ABSENT_VISIBLE_HOUR ?? 12);
@@ -814,6 +817,16 @@ export default function AgencyAppPage() {
         setDailyListLightFlags(createEmptyDailyListLightFlags());
         return;
       }
+      const tableRes = await supabase
+        .from(DAILY_LIST_LIGHTS_TABLE)
+        .select('work_date, position, enabled, updated_at, operator')
+        .eq('work_date', selectedDate);
+      if (!active) return;
+      if (!tableRes.error && Array.isArray(tableRes.data) && tableRes.data.length > 0) {
+        setDailyListLightFlags(readDailyListLightsFromRows(tableRes.data));
+        return;
+      }
+
       const res = await supabase
         .from(APP_SETTINGS_TABLE)
         .select('value')

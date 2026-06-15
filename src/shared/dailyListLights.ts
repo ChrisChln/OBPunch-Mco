@@ -6,6 +6,14 @@ export type DailyListLightPosition = string;
 
 export type DailyListLightFlags = Record<DailyListLightPosition, boolean>;
 
+export type DailyListLightRow = {
+  work_date?: string | null;
+  position?: string | null;
+  enabled?: boolean | null;
+  updated_at?: string | null;
+  operator?: string | null;
+};
+
 export const createEmptyDailyListLightFlags = (): DailyListLightFlags => ({
   Pick: false,
   Pack: false,
@@ -99,4 +107,37 @@ export const buildDailyListLightsSettingValue = (
     updated_at: meta?.updatedAt ?? null,
     operator: meta?.operator ?? null
   };
+};
+
+export const readDailyListLightsFromRows = (rows: readonly DailyListLightRow[] | null | undefined): DailyListLightFlags => {
+  const next = createEmptyDailyListLightFlags();
+  for (const row of rows ?? []) {
+    const position = normalizeDailyListLightPosition(row.position);
+    if (!position) continue;
+    next[position] = Boolean(row.enabled);
+  }
+  return next;
+};
+
+export const buildDailyListLightRows = (
+  targetDate: string,
+  flags: DailyListLightFlags,
+  meta?: {
+    updatedAt?: string | null;
+    operator?: string | null;
+  }
+): DailyListLightRow[] => {
+  const rows: DailyListLightRow[] = [];
+  for (const [positionRaw, enabled] of Object.entries(flags)) {
+    const position = normalizeDailyListLightPosition(positionRaw);
+    if (!position) continue;
+    rows.push({
+      work_date: targetDate,
+      position,
+      enabled: Boolean(enabled),
+      updated_at: meta?.updatedAt ?? null,
+      operator: meta?.operator ?? null
+    });
+  }
+  return rows;
 };

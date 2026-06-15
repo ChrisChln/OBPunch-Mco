@@ -87,7 +87,8 @@ export const safeJson = (value: unknown) => {
 };
 
 export const loadForecastSetting = async (supabase: any, key: string) => {
-  const res = await supabase.from('ob_app_settings').select('value').eq('key', key).limit(1).maybeSingle();
+  const settingsTable = process.env.APP_SETTINGS_TABLE ?? process.env.VITE_APP_SETTINGS_TABLE ?? 'ob_app_settings';
+  const res = await supabase.from(settingsTable).select('value').eq('key', key).limit(1).maybeSingle();
   if (res.error) return null;
   return res.data?.value ?? null;
 };

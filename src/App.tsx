@@ -4,7 +4,6 @@ import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib
 import { isValidPunchStaffId, normalizeStaffId } from './lib/staffId';
 import { submitPunchToApi } from './lib/punchApi';
 import { formatPunchFailureSummary } from './lib/punchDisplay';
-import { LABEL_TONE_KEYS, type LabelToneKey, loadLabelToneMap } from './lib/labelTone';
 import { getBarcodePromptGroupKey, getBarcodePrompts, getRandomBarcodePromptIndex } from './lib/barcodePrompt';
 import { appSound, type AppSoundKind } from './lib/sound';
 import { isScheduleOnlyAgency } from './shared/agencyRules';
@@ -159,13 +158,10 @@ const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | 
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
   (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
-const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
 const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
 const OBUP_REPORT_DETAILS_TABLE =
   (import.meta.env.VITE_OBUP_REPORT_DETAILS_TABLE as string | undefined) ?? 'report_details';
 const OBUP_ACCOUNT_LINKS_TABLE = (import.meta.env.VITE_OBUP_ACCOUNT_LINKS_TABLE as string | undefined) ?? 'account_links';
-const SCHEDULE_LABEL_TONES_KEY = 'schedule_label_tones_v1';
-const SCHEDULE_POSITION_TONES_KEY = 'schedule_position_tones_v1';
 const SCHEDULE_REST_NOTE = '__rest__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
 const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
@@ -638,15 +634,6 @@ export default function App() {
   >({});
   const [, setPunchBoardDeviceStatusByStaffId] = useState<Record<string, PunchBoardDeviceStatus>>({});
   const [, setPunchBoardUphByStaffId] = useState<Record<string, number | null>>({});
-  const [, setLabelToneByName] = useState<Record<string, LabelToneKey>>(() => loadLabelToneMap());
-  const [, setSchedulePositionToneByPosition] = useState<Record<string, LabelToneKey>>({
-    Pick: 'sky',
-    Pack: 'emerald',
-    Rebin: 'amber',
-    Preship: 'rose',
-    Transfer: 'violet',
-    'FLEX TEAM': 'slate'
-  });
   const [dailyRoster, setDailyRoster] = useState<DailyRosterItem[]>([]);
   const [, setDailyRosterError] = useState<string | null>(null);
   const [, setRosterShiftByStaffId] = useState<Record<string, '' | 'early' | 'late'>>({});
@@ -667,11 +654,6 @@ export default function App() {
       return fallback;
     }
   });
-  useEffect(() => {
-    const sync = () => setLabelToneByName(loadLabelToneMap());
-    window.addEventListener('storage', sync);
-    return () => window.removeEventListener('storage', sync);
-  }, []);
   const [lastPunchAction, setLastPunchAction] = useState<PunchAction | null>(null);
   const [lastPunchActionError, setLastPunchActionError] = useState<string | null>(null);
   const [lastPunchSummary, setLastPunchSummary] = useState<PunchDisplaySummary | null>(null);
@@ -2413,62 +2395,6 @@ const fetchPunchBoardUph = async (
       // ignore local persistence failures
     }
   };
-  const normalizeLabelToneMap = (value: unknown): Record<string, LabelToneKey> => {
-    const raw = (value ?? {}) as Record<string, unknown>;
-    const next: Record<string, LabelToneKey> = {};
-    for (const [k, v] of Object.entries(raw)) {
-      const name = String(k ?? '').trim().toLowerCase();
-      const tone = String(v ?? '').trim() as LabelToneKey;
-      if (!name || !LABEL_TONE_KEYS.includes(tone)) continue;
-      next[name] = tone;
-    }
-    return next;
-  };
-  const normalizePositionToneMap = (value: unknown): Record<string, LabelToneKey> => {
-    const raw = (value ?? {}) as Record<string, unknown>;
-    const next: Record<string, LabelToneKey> = {
-      Pick: 'sky',
-      Pack: 'emerald',
-      Rebin: 'amber',
-      Preship: 'rose',
-      Transfer: 'violet',
-      'FLEX TEAM': 'slate'
-    };
-    for (const [pos, rawTone] of Object.entries(raw)) {
-      const key = String(pos ?? '').trim();
-      const tone = String(rawTone ?? '').trim() as LabelToneKey;
-      if (!key) continue;
-      if (!LABEL_TONE_KEYS.includes(tone)) continue;
-      next[key] = tone;
-    }
-    return next;
-  };
-  const fetchSchedulePositionToneSetting = async () => {
-    if (!supabase) return;
-    const res = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('key, value, updated_at')
-      .eq('key', SCHEDULE_POSITION_TONES_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    if (res.error) return;
-    const row = (((res.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-    const value = (row?.value ?? {}) as Record<string, unknown>;
-    setSchedulePositionToneByPosition(normalizePositionToneMap(value.tones ?? {}));
-  };
-  const fetchScheduleLabelToneSetting = async () => {
-    if (!supabase) return;
-    const res = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('key, value, updated_at')
-      .eq('key', SCHEDULE_LABEL_TONES_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    if (res.error) return;
-    const row = (((res.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-    const value = (row?.value ?? {}) as Record<string, unknown>;
-    setLabelToneByName(normalizeLabelToneMap(value.tones ?? {}));
-  };
   const fetchRosterShiftByPunches = async (staffIds: string[]) => {
     if (!supabase || staffIds.length === 0) {
       setRosterShiftByStaffId({});
@@ -2705,8 +2631,6 @@ const fetchPunchBoardUph = async (
       void fetchAbsentRoster();
       void fetchPunchBoard();
       void fetchDeviceQuickLogs();
-      void fetchScheduleLabelToneSetting();
-      void fetchSchedulePositionToneSetting();
       void fetchDailyRoster();
     };
 

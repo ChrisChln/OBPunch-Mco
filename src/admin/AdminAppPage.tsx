@@ -63,9 +63,10 @@ import {
 } from '../shared/adminAccess';
 import {
   DAILY_LIST_LIGHTS_KEY,
-  buildDailyListLightsSettingValue,
+  buildDailyListLightRows,
   createEmptyDailyListLightFlags,
   normalizeDailyListLightPosition,
+  readDailyListLightsFromRows,
   readDailyListLightsForDate,
   type DailyListLightFlags,
   type DailyListLightPosition
@@ -114,6 +115,7 @@ import { buildTimecardExportDailyPeopleRow, formatRoundedHours, getTimecardExpor
 import {
   getDefaultPositionToneKey,
   getPositionToneFromMap,
+  mergeLegacyPositionToneMap,
   normalizeExplicitPositionToneMap,
   normalizePositionToneKey,
   normalizePositionToneMap,
@@ -253,6 +255,10 @@ const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 
 const HIDDEN_AUDIT_ACTIONS = new Set(['admin_page_switch', 'schedule_open_daily_list']);
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
+const DAILY_LIST_LIGHTS_TABLE =
+  (import.meta.env.VITE_DAILY_LIST_LIGHTS_TABLE as string | undefined) ?? 'ob_daily_list_position_lights';
+const SCHEDULE_JOB_RUNS_TABLE =
+  (import.meta.env.VITE_SCHEDULE_JOB_RUNS_TABLE as string | undefined) ?? 'ob_schedule_job_runs';
 const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 const PROFILE_AVATAR_BUCKET = (import.meta.env.VITE_PROFILE_AVATAR_BUCKET as string | undefined) ?? 'profile-avatars';
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
@@ -2814,7 +2820,7 @@ export default function AdminAppPage() {
             .map((position) => normalizePositionToneKey(position.name))
             .filter(Boolean)
         );
-        const merged = { ...current, ...next };
+        const merged = mergeLegacyPositionToneMap(current, next, positions.map((position) => position.name));
         for (const key of positionToneKeys) {
           merged[key] = current[key] ?? merged[key] ?? getDefaultPositionToneKey(key);
         }
@@ -3256,37 +3262,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     dailyListLightsSaveSeqRef.current = seq;
     dailyListLightsPendingRef.current = { targetDate, flags: next, seq };
     if (!supabase) return;
-    const baseRes = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('id, key, value, updated_at')
-      .eq('key', DAILY_LIST_LIGHTS_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
+    const rows = buildDailyListLightRows(targetDate, next, {
+      updatedAt,
+      operator: user?.email ?? null
+    });
     if (dailyListLightsPendingRef.current?.seq !== seq) return;
-    const currentValue = ((((baseRes.data as any[]) ?? [])[0] as AppSettingRow | undefined)?.value ?? {}) as Record<string, unknown>;
-    const payload = {
-      key: DAILY_LIST_LIGHTS_KEY,
-      value: buildDailyListLightsSettingValue(currentValue, targetDate, next, {
-        updatedAt,
-        operator: user?.email ?? null
-      }),
-      updated_at: updatedAt
-    };
-    if (dailyListLightsPendingRef.current?.seq !== seq) return;
-    const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
+    const upsertRes = await supabase.from(DAILY_LIST_LIGHTS_TABLE).upsert(rows as any[], { onConflict: 'work_date,position' });
     if (!upsertRes.error) {
       if (dailyListLightsPendingRef.current?.seq === seq) dailyListLightsPendingRef.current = null;
-      return;
     }
-    if (dailyListLightsPendingRef.current?.seq !== seq) return;
-    const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', DAILY_LIST_LIGHTS_KEY);
-    if (!updateRes.error) {
-      if (dailyListLightsPendingRef.current?.seq === seq) dailyListLightsPendingRef.current = null;
-      return;
-    }
-    if (dailyListLightsPendingRef.current?.seq !== seq) return;
-    const insertRes = await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
-    if (!insertRes.error && dailyListLightsPendingRef.current?.seq === seq) dailyListLightsPendingRef.current = null;
   };
 
   const loadDailyListSelectedPositionsGlobal = async (options?: { targetDateOverride?: string }) => {
@@ -3302,6 +3286,32 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       applyDailyListSelectedPositions(localCache.flags);
     }
     if (!supabase) return;
+    const tableRes = await supabase
+      .from(DAILY_LIST_LIGHTS_TABLE)
+      .select('work_date, position, enabled, updated_at, operator')
+      .eq('work_date', targetDate);
+    if (!tableRes.error && Array.isArray(tableRes.data) && tableRes.data.length > 0) {
+      if (dailyListLightsSaveSeqRef.current !== loadStartedAtSeq) {
+        const changedWhileLoading = dailyListLightsPendingRef.current;
+        if (changedWhileLoading?.targetDate === targetDate) {
+          applyDailyListSelectedPositions(changedWhileLoading.flags);
+        }
+        return;
+      }
+      const latestPending = dailyListLightsPendingRef.current;
+      if (latestPending?.targetDate === targetDate) {
+        applyDailyListSelectedPositions(latestPending.flags);
+        return;
+      }
+      const remoteFlags = readDailyListLightsFromRows(tableRes.data);
+      applyDailyListSelectedPositions(remoteFlags);
+      const remoteUpdatedMs = Math.max(...tableRes.data.map((row: any) => getDailyListLightsUpdatedMs(row?.updated_at)), 0);
+      if (remoteUpdatedMs > 0) {
+        writeDailyListLightsLocalCacheForDate(targetDate, remoteFlags, new Date(remoteUpdatedMs).toISOString());
+      }
+      return;
+    }
+
     const res = await supabase
       .from(APP_SETTINGS_TABLE)
       .select('id, key, value, updated_at')
@@ -5324,6 +5334,39 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   };
 
+  const acquireScheduleJobRun = async (jobKey: string, periodKey: string, operator: string | null) => {
+    if (!supabase) return false;
+    const res = await supabase.from(SCHEDULE_JOB_RUNS_TABLE).insert([
+      {
+        job_key: jobKey,
+        period_key: periodKey,
+        status: 'running',
+        operator,
+        updated_at: new Date(serverTime).toISOString()
+      }
+    ] as any[]);
+    if (!res.error) return true;
+    const message = String(res.error.message ?? '').toLowerCase();
+    if (String((res.error as any).code ?? '') === '23505' || message.includes('duplicate') || message.includes('unique')) return false;
+    setScheduleError(res.error.message);
+    return false;
+  };
+
+  const completeScheduleJobRun = async (jobKey: string, periodKey: string, metadata?: Record<string, unknown>) => {
+    if (!supabase) return;
+    const nowIso = new Date(serverTime).toISOString();
+    await supabase
+      .from(SCHEDULE_JOB_RUNS_TABLE)
+      .update({
+        status: 'done',
+        metadata: metadata ?? {},
+        completed_at: nowIso,
+        updated_at: nowIso
+      } as any)
+      .eq('job_key', jobKey)
+      .eq('period_key', periodKey);
+  };
+
   const scheduleWeekResetInFlightRef = useRef(false);
   const scheduleWeekResetDoneKeyRef = useRef('');
   const resetScheduleTransientStatesForWeek = async (options?: { lockUi?: boolean }) => {
@@ -5365,6 +5408,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (existingWeek === weekStart) scheduleWeekResetDoneKeyRef.current = weekStart;
       return;
     }
+    const acquired = await acquireScheduleJobRun('schedule_week_reset', weekStart, user?.email ?? null);
+    if (!acquired) {
+      scheduleWeekResetDoneKeyRef.current = weekStart;
+      return;
+    }
     scheduleWeekResetInFlightRef.current = true;
 
     const exec = async () => {
@@ -5393,27 +5441,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const tempRestToWorkCount = Array.isArray(toWorkRes.data) ? toWorkRes.data.length : 0;
       const tempWorkToRestCount = Array.isArray(toRestRes.data) ? toRestRes.data.length : 0;
 
-      const payload = {
-        key: SCHEDULE_WEEK_RESET_KEY,
-        value: {
-          week_start: weekStart,
-          updated_at: nowIso,
-          operator: user?.email ?? null
-        },
-        updated_at: nowIso
-      };
-      const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
-      if (upsertRes.error) {
-        const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', SCHEDULE_WEEK_RESET_KEY);
-        if (updateRes.error) {
-          const insertRes = await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
-          if (insertRes.error) {
-            setScheduleError(insertRes.error.message);
-            return;
-          }
-        }
-      }
-
       setScheduleRows((prev) =>
         prev.map((row) => {
           const nextNote = normalizeScheduleNoteForWeeklyReset(
@@ -5433,6 +5460,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           temp_rest_to_work_count: tempRestToWorkCount,
           temp_work_to_rest_count: tempWorkToRestCount
         }
+      });
+      await completeScheduleJobRun('schedule_week_reset', weekStart, {
+        temp_rest_to_work_count: tempRestToWorkCount,
+        temp_work_to_rest_count: tempWorkToRestCount
       });
       scheduleWeekResetDoneKeyRef.current = weekStart;
     };
@@ -5490,49 +5521,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (existingStatus === 'done' && existingDate === dateKey) scheduleDailyPlanActivationDoneDateRef.current = dateKey;
       return;
     }
+    const acquired = await acquireScheduleJobRun('schedule_daily_plan_activation', dateKey, 'system');
+    if (!acquired) {
+      scheduleDailyPlanActivationDoneDateRef.current = dateKey;
+      return;
+    }
     scheduleDailyPlanActivationInFlightRef.current = true;
 
     const exec = async () => {
       setScheduleError(null);
       const nowIso = new Date(serverTime).toISOString();
       const op = 'system';
-      const lockToken = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-      const lockPayload = {
-        key: SCHEDULE_DAILY_PLAN_ACTIVATION_KEY,
-        value: {
-          date: dateKey,
-          status: 'running',
-          lock_token: lockToken,
-          updated_at: nowIso,
-          operator: op
-        },
-        updated_at: nowIso
-      };
-      const lockRes = await supabase.from(APP_SETTINGS_TABLE).upsert([lockPayload as any], { onConflict: 'key' });
-      if (lockRes.error) {
-        setScheduleError(lockRes.error.message);
-        return;
-      }
-
-      const lockCheckRes = await supabase
-        .from(APP_SETTINGS_TABLE)
-        .select('value')
-        .eq('key', SCHEDULE_DAILY_PLAN_ACTIVATION_KEY)
-        .order('updated_at', { ascending: false })
-        .limit(1);
-      if (lockCheckRes.error) {
-        setScheduleError(lockCheckRes.error.message);
-        return;
-      }
-      const lockRow = (((lockCheckRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-      const lockValue = (lockRow?.value ?? {}) as Record<string, unknown>;
-      if (
-        String(lockValue.date ?? '') !== dateKey ||
-        String(lockValue.status ?? '') !== 'running' ||
-        String(lockValue.lock_token ?? '') !== lockToken
-      ) {
-        return;
-      }
 
       const planRowsRes = await supabase
         .from(SCHEDULE_TABLE)
@@ -5552,6 +5551,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         note?: string | null;
         operator?: string | null;
       }>);
+      let activatedCount = 0;
       if (rows.length > 0) {
         const payload = buildDailyPlannedActivationUpserts(
           rows,
@@ -5569,6 +5569,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           staff_id: normalizeStaffId(row.staff_id),
           operator: op
         }));
+        activatedCount = payload.length;
         const employeeNameByStaffId = new Map(
           employees.map((employee) => [normalizeStaffId(String(employee.staff_id ?? '').trim()), String(employee.name ?? '').trim()] as const)
         );
@@ -5603,28 +5604,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         });
       }
 
-      const markerPayload = {
-        key: SCHEDULE_DAILY_PLAN_ACTIVATION_KEY,
-        value: {
-          date: dateKey,
-          status: 'done',
-          lock_token: lockToken,
-          updated_at: new Date(serverTime).toISOString(),
-          operator: op
-        },
-        updated_at: new Date(serverTime).toISOString()
-      };
-      const markerUpsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([markerPayload as any], { onConflict: 'key' });
-      if (markerUpsertRes.error) {
-        const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(markerPayload as any).eq('key', SCHEDULE_DAILY_PLAN_ACTIVATION_KEY);
-        if (updateRes.error) {
-          const insertRes = await supabase.from(APP_SETTINGS_TABLE).insert([markerPayload as any]);
-          if (insertRes.error) {
-            setScheduleError(insertRes.error.message);
-            return;
-          }
-        }
-      }
+      await completeScheduleJobRun('schedule_daily_plan_activation', dateKey, {
+        activated_count: activatedCount,
+        activation_template_date: activationTemplateDateKey
+      });
 
       if (rows.length > 0) {
         setScheduleRows((prev) =>
@@ -5744,6 +5727,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (doneWeek === weekKey) scheduleWeekRolloverDoneKeyRef.current = weekKey;
         return;
       }
+      const acquired = await acquireScheduleJobRun('schedule_week_rollover', weekKey, user?.email ?? null);
+      if (!acquired) {
+        scheduleWeekRolloverDoneKeyRef.current = weekKey;
+        return;
+      }
       scheduleWeekRolloverInFlightRef.current = true;
 
       const nextStart = getTemplateDateByDayIndex(0, 1);
@@ -5770,17 +5758,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       // 不删除下周数据，仅复制到本周，下周保持不变，实现永久循环
       // Do NOT delete next week; only copy to this week; next week stays for permanent cycle
 
-      await supabase.from(APP_SETTINGS_TABLE).upsert(
-        [
-          {
-            key: SCHEDULE_WEEK_ROLLOVER_KEY,
-            value: { week_start: weekKey, rolled_at: now.toISOString() },
-            operator: user?.email ?? null,
-            updated_at: now.toISOString()
-          }
-        ] as any[],
-        { onConflict: 'key' }
-      );
+      await completeScheduleJobRun('schedule_week_rollover', weekKey, {
+        migrated_count: migrated.length,
+        rolled_at: now.toISOString()
+      });
       scheduleWeekRolloverDoneKeyRef.current = weekKey;
       await fetchSchedule();
     } finally {
