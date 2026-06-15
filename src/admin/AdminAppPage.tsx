@@ -1495,6 +1495,7 @@ export default function AdminAppPage() {
       predictionModel: hasModuleAccess(adminModuleMap, 'prediction_model', 'operate'),
       efficiency: hasModuleAccess(adminModuleMap, 'efficiency', 'operate'),
       leaveApproval: hasModuleAccess(adminModuleMap, 'leave_approval', 'operate'),
+      workHourComparison: hasModuleAccess(adminModuleMap, 'work_hour_comparison', 'operate'),
       todo: hasModuleAccess(adminModuleMap, 'todo', 'operate'),
       audit: hasModuleAccess(adminModuleMap, 'audit', 'operate')
     }),
@@ -1512,6 +1513,7 @@ export default function AdminAppPage() {
     predictionModel: predictionModelCanOperate,
     efficiency: efficiencyCanOperate,
     leaveApproval: leaveApprovalCanOperate,
+    workHourComparison: workHourComparisonCanOperate,
     todo: todoCanOperate,
     audit: auditCanOperate
   } = canOperateFlags;
@@ -16786,7 +16788,7 @@ ${rowsToHtml(late)}
               <WorkHourComparisonPage
                 t={t}
                 isLocked={isLocked}
-                isReadOnly={!efficiencyCanOperate}
+                isReadOnly={!workHourComparisonCanOperate}
                 supabase={supabase}
                 themeMode={themeMode}
                 serverTime={serverTime}
