@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ElectricBorder from '../../components/ElectricBorder';
 import GlowLabelChip, { getGlowToneForPosition, getGlowToneForShift } from '../../components/GlowLabelChip';
 import AdminUserAvatar from '../components/AdminUserAvatar';
 import type { AdminUserIdentityView } from '../adminIdentity';
@@ -256,12 +257,14 @@ export default function TimecardTableSection({
             return (
               <div className="group relative inline-flex items-center justify-center">
                 {hoursText ? (
-                  <button
-                    type="button"
-                    disabled={isLocked}
-                    onClick={() => void openTimecardPunchModal(row.staff_id, dayIndex)}
-                    className={(() => {
-                      const over8 = hours > 8.5;
+                  (() => {
+                    const over8 = hours > 8.5;
+                    const button = (
+                      <button
+                        type="button"
+                        disabled={isLocked}
+                        onClick={() => void openTimecardPunchModal(row.staff_id, dayIndex)}
+                        className={(() => {
                       const inProgress = row.inProgressByDay[dayIndex];
                       const manual = row.manualByDay[dayIndex];
                       const punchCountMismatch = row.punchCountMismatchByDay[dayIndex];
@@ -280,11 +283,26 @@ export default function TimecardTableSection({
                       if (over8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
                       if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
                       return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
-                    })()}
-                    title={[t('查看/编辑打卡流水', 'View/Edit Punch Log'), lateTitle].filter(Boolean).join(' | ')}
-                  >
-                    {hoursText}
-                  </button>
+                        })()}
+                        title={[t('查看/编辑打卡流水', 'View/Edit Punch Log'), lateTitle].filter(Boolean).join(' | ')}
+                      >
+                        {hoursText}
+                      </button>
+                    );
+                    if (!over8) return button;
+                    return (
+                      <ElectricBorder
+                        className="eb-chip rounded"
+                        color="#fb365d"
+                        speed={1.25}
+                        chaos={0.09}
+                        thickness={1.2}
+                        borderRadius={6}
+                      >
+                        {button}
+                      </ElectricBorder>
+                    );
+                  })()
                 ) : late ? (
                   <span
                     className="inline-flex rounded border border-amber-300/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-amber-200"
