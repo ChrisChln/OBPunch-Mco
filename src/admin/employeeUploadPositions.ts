@@ -51,6 +51,11 @@ export type EmployeeImportIdentityConflicts = {
   duplicateWorkAccounts: string[];
 };
 
+export type TemporaryEmployeeUploadMatch = {
+  incomingStaffId: string;
+  temporaryStaffId: string;
+};
+
 const EMPLOYEE_KEY_ALIASES: Record<string, keyof EmployeeUploadRow | 'staff_id'> = {
   employee_id: 'staff_id',
   employeeid: 'staff_id',
@@ -134,10 +139,13 @@ const normalizeShiftTimeValue = (value: unknown) => {
   return formatClockMinutes(parsed as number);
 };
 
-const buildTemporaryStaffId = (prefix: string, index: number) => `${prefix}-${String(index + 1).padStart(4, '0')}`;
+const buildTemporaryStaffId = (prefix: string, index: number) => {
+  if (prefix === 'TUS') return `TUS${String(index + 1).padStart(7, '0')}`;
+  return `${prefix}-${String(index + 1).padStart(4, '0')}`;
+};
 
 export const isGeneratedEmployeeUploadStaffId = (value: unknown) =>
-  /^TEMP-USID-[A-Z0-9]+-\d{4,}$/i.test(String(value ?? '').trim());
+  /^(?:TUS\d{7,}|TEMP-USID-[A-Z0-9]+-\d{4,})$/i.test(String(value ?? '').trim());
 
 export const detectEmployeeImportIdentityConflicts = (
   rows: EmployeeUploadRow[],
@@ -145,7 +153,6 @@ export const detectEmployeeImportIdentityConflicts = (
 ): EmployeeImportIdentityConflicts => {
   const existingByStaff = new Set<string>();
   const existingByAccount = new Map<string, string>();
-  const existingByNameAgency = new Map<string, string>();
 
   for (const row of existingRows) {
     const staff = String(row.staff_id ?? '').trim().toUpperCase();
@@ -153,12 +160,6 @@ export const detectEmployeeImportIdentityConflicts = (
     existingByStaff.add(staff);
     const account = String(row.work_account ?? '').trim().toLowerCase();
     if (account && !existingByAccount.has(account)) existingByAccount.set(account, staff);
-    const name = String(row.name ?? '').trim().toLowerCase();
-    const agency = String(row.agency ?? row.Agency ?? '').trim().toLowerCase();
-    if (name && agency) {
-      const key = `${name}__${agency}`;
-      if (!existingByNameAgency.has(key)) existingByNameAgency.set(key, staff);
-    }
   }
 
   const modifiedStaffIds: string[] = [];
@@ -170,24 +171,54 @@ export const detectEmployeeImportIdentityConflicts = (
     const account = String(row.work_account ?? '').trim().toLowerCase();
     const accountOwner = account ? existingByAccount.get(account) ?? '' : '';
     if (accountOwner && accountOwner !== incomingStaff) {
-      if (isGeneratedEmployeeUploadStaffId(incomingStaff)) {
-        duplicateWorkAccounts.push(`${incomingStaff} -> ${accountOwner} (work_account)`);
-      } else {
-        modifiedStaffIds.push(`${incomingStaff} -> ${accountOwner} (work_account)`);
-      }
-      continue;
-    }
-
-    const name = String(row.name ?? '').trim().toLowerCase();
-    const agency = String(row.agency ?? '').trim().toLowerCase();
-    const key = name && agency ? `${name}__${agency}` : '';
-    const matchedStaff = key ? existingByNameAgency.get(key) ?? '' : '';
-    if (matchedStaff && matchedStaff !== incomingStaff && !isGeneratedEmployeeUploadStaffId(incomingStaff)) {
-      modifiedStaffIds.push(`${incomingStaff} -> ${matchedStaff} (${name}/${agency})`);
+      duplicateWorkAccounts.push(`${incomingStaff} -> ${accountOwner} (work_account)`);
     }
   }
 
   return { modifiedStaffIds, duplicateWorkAccounts };
+};
+
+export const findTemporaryEmployeeUploadMatches = (
+  rows: EmployeeUploadRow[],
+  existingRows: ExistingEmployeeIdentityRow[]
+): TemporaryEmployeeUploadMatch[] => {
+  const existingByStaff = new Set<string>();
+  const temporaryByNameAgency = new Map<string, string[]>();
+
+  for (const row of existingRows) {
+    const staff = String(row.staff_id ?? '').trim().toUpperCase();
+    if (!staff) continue;
+    existingByStaff.add(staff);
+    if (!isGeneratedEmployeeUploadStaffId(staff)) continue;
+
+    const name = String(row.name ?? '').trim().toLowerCase();
+    const agency = String(row.agency ?? row.Agency ?? '').trim().toLowerCase();
+    if (!name || !agency) continue;
+
+    const key = `${name}__${agency}`;
+    const current = temporaryByNameAgency.get(key) ?? [];
+    current.push(staff);
+    temporaryByNameAgency.set(key, current);
+  }
+
+  return rows
+    .map((row) => {
+      const incomingStaffId = String(row.staff_id ?? '').trim().toUpperCase();
+      if (!incomingStaffId || existingByStaff.has(incomingStaffId) || isGeneratedEmployeeUploadStaffId(incomingStaffId)) {
+        return null;
+      }
+
+      const name = String(row.name ?? '').trim().toLowerCase();
+      const agency = String(row.agency ?? '').trim().toLowerCase();
+      const candidates = name && agency ? temporaryByNameAgency.get(`${name}__${agency}`) ?? [] : [];
+      if (candidates.length !== 1) return null;
+
+      return {
+        incomingStaffId,
+        temporaryStaffId: candidates[0]
+      };
+    })
+    .filter((match): match is TemporaryEmployeeUploadMatch => Boolean(match));
 };
 
 export const normalizeEmployeeUploadPosition = (
@@ -231,8 +262,7 @@ export const buildEmployeeUploadRows = (
   const uniqueByStaff = new Map<string, EmployeeUploadRow>();
   let duplicateInFileCount = 0;
   let temporaryStaffIdIndex = 0;
-  const temporaryIdPrefix =
-    options?.temporaryIdPrefix ?? `TEMP-USID-${Date.now().toString(36).toUpperCase()}`;
+  const temporaryIdPrefix = options?.temporaryIdPrefix ?? 'TUS';
 
   for (const sourceRow of parsedRows) {
     const canonical: Partial<Record<keyof EmployeeUploadRow, string>> = {};

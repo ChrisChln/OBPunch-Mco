@@ -83,6 +83,7 @@ export type AgencyWeekSchedule = {
   employees: AgencyWeekScheduleRow[];
   new_hire_requests: AgencyWeekNewHireRequest[];
   driver_groups: AgencyDriverGroupSummary[];
+  next_driver_group_code: string;
 };
 
 export type AgencyDriverGroupRole = 'driver' | 'member';

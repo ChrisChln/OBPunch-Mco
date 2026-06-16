@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ElectricBorder from '../../components/ElectricBorder';
+import GlowLabelChip, { getGlowToneForPosition, getGlowToneForShift } from '../../components/GlowLabelChip';
 import AdminUserAvatar from '../components/AdminUserAvatar';
 import type { AdminUserIdentityView } from '../adminIdentity';
 import { getTimecardCellHoursText, getTimecardTotalHoursText } from '../timecardDisplay';
@@ -198,24 +200,42 @@ export default function TimecardTableSection({
       <td className="px-2 py-1.5 truncate text-slate-200">{row.name || '-'}</td>
       <td className="px-2 py-1.5 truncate text-slate-200">{row.agency || '-'}</td>
       <td className="px-2 py-1.5 truncate text-slate-200">
-        <span
-          className={[
-            'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
-            getSchedulePositionBadgeClass(row.position)
-          ].join(' ')}
-        >
-          {row.position || '-'}
-        </span>
+        {isLight ? (
+          <span
+            className={[
+              'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em]',
+              getSchedulePositionBadgeClass(row.position)
+            ].join(' ')}
+          >
+            {row.position || '-'}
+          </span>
+        ) : (
+          <GlowLabelChip tone={getGlowToneForPosition(row.position)} className="min-w-[54px] uppercase tracking-[0.12em]">
+            {row.position || '-'}
+          </GlowLabelChip>
+        )}
       </td>
       <td className="px-2 py-1.5 text-center text-slate-200">
         {row.shift === 'early' ? (
-          <span className="inline-flex items-center rounded-full border border-amber-300/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
-            {t('早班', 'Morning')}
-          </span>
+          isLight ? (
+            <span className="inline-flex items-center rounded-full border border-amber-300/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
+              {t('早班', 'Morning')}
+            </span>
+          ) : (
+            <GlowLabelChip tone={getGlowToneForShift(row.shift)} className="min-w-[52px] uppercase tracking-[0.12em]">
+              {t('早班', 'Morning')}
+            </GlowLabelChip>
+          )
         ) : row.shift === 'late' ? (
-          <span className="inline-flex items-center rounded-full border border-indigo-300/30 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-semibold text-indigo-200">
-            {t('晚班', 'Night')}
-          </span>
+          isLight ? (
+            <span className="inline-flex items-center rounded-full border border-indigo-300/30 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-semibold text-indigo-200">
+              {t('晚班', 'Night')}
+            </span>
+          ) : (
+            <GlowLabelChip tone={getGlowToneForShift(row.shift)} className="min-w-[52px] uppercase tracking-[0.12em]">
+              {t('晚班', 'Night')}
+            </GlowLabelChip>
+          )
         ) : (
           <span className="text-slate-500">-</span>
         )}
@@ -237,12 +257,14 @@ export default function TimecardTableSection({
             return (
               <div className="group relative inline-flex items-center justify-center">
                 {hoursText ? (
-                  <button
-                    type="button"
-                    disabled={isLocked}
-                    onClick={() => void openTimecardPunchModal(row.staff_id, dayIndex)}
-                    className={(() => {
-                      const over8 = hours > 8.5;
+                  (() => {
+                    const over8 = hours > 8.5;
+                    const button = (
+                      <button
+                        type="button"
+                        disabled={isLocked}
+                        onClick={() => void openTimecardPunchModal(row.staff_id, dayIndex)}
+                        className={(() => {
                       const inProgress = row.inProgressByDay[dayIndex];
                       const manual = row.manualByDay[dayIndex];
                       const punchCountMismatch = row.punchCountMismatchByDay[dayIndex];
@@ -261,11 +283,26 @@ export default function TimecardTableSection({
                       if (over8) return [base, 'bg-rose-500/15 text-rose-200 hover:bg-rose-500/25'].join(' ');
                       if (inProgress) return [base, 'bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'].join(' ');
                       return [base, 'bg-teal-500/15 text-teal-200 hover:bg-teal-500/25'].join(' ');
-                    })()}
-                    title={[t('查看/编辑打卡流水', 'View/Edit Punch Log'), lateTitle].filter(Boolean).join(' | ')}
-                  >
-                    {hoursText}
-                  </button>
+                        })()}
+                        title={[t('查看/编辑打卡流水', 'View/Edit Punch Log'), lateTitle].filter(Boolean).join(' | ')}
+                      >
+                        {hoursText}
+                      </button>
+                    );
+                    if (!over8) return button;
+                    return (
+                      <ElectricBorder
+                        className="eb-chip rounded"
+                        color="#fb365d"
+                        speed={1.25}
+                        chaos={0.09}
+                        thickness={1.2}
+                        borderRadius={6}
+                      >
+                        {button}
+                      </ElectricBorder>
+                    );
+                  })()
                 ) : late ? (
                   <span
                     className="inline-flex rounded border border-amber-300/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-amber-200"

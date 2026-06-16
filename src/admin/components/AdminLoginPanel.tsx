@@ -1,3 +1,5 @@
+import { LoaderCircle, LogIn } from 'lucide-react';
+
 type TranslateFn = (zh: string, en: string) => string;
 
 type AdminLoginPanelProps = {
@@ -43,8 +45,11 @@ export default function AdminLoginPanel({
     ? 'h-14 w-full rounded-[20px] border border-slate-300/80 bg-white/80 px-5 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:shadow-[0_0_0_2px_rgba(120,130,141,0.12)] disabled:cursor-not-allowed disabled:opacity-60'
     : 'h-14 w-full rounded-[20px] border border-white/12 bg-black/30 px-5 text-base text-white outline-none transition placeholder:text-slate-500 focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60';
   const buttonClass = isLight
-    ? 'mt-2 h-14 w-full rounded-[20px] bg-slate-900 text-base font-semibold text-white shadow-[0_14px_28px_rgba(35,40,45,0.18)] transition hover:-translate-y-0.5 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60'
-    : 'mt-2 h-14 w-full rounded-[20px] bg-neon text-base font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-60';
+    ? 'mt-2 inline-flex h-14 w-full items-center justify-center gap-2 rounded-[20px] bg-slate-950 px-5 text-base font-semibold text-white shadow-[0_18px_36px_rgba(15,23,42,0.16)] transition hover:-translate-y-0.5 hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-500 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:bg-slate-950'
+    : 'mt-2 inline-flex h-14 w-full items-center justify-center gap-2 rounded-[20px] bg-neon px-5 text-base font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neon disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-glow';
+  const loginDisabled = isLocked || email.trim() === '' || password === '';
+  const buttonIcon = isLocked ? <LoaderCircle className="h-4 w-4 animate-spin" strokeWidth={2.2} /> : <LogIn className="h-4 w-4" strokeWidth={2.2} />;
+  const buttonLabel = isLocked ? 'Signing In' : 'Admin Login';
   return (
     <section className={shellClass}>
       <div className="pointer-events-none absolute inset-0">
@@ -104,12 +109,9 @@ export default function AdminLoginPanel({
                 />
               </label>
 
-              <button
-                type="submit"
-                disabled={isLocked || email.trim() === '' || password === ''}
-                className={buttonClass}
-              >
-                Admin Login
+              <button type="submit" disabled={loginDisabled} className={buttonClass}>
+                {buttonIcon}
+                <span>{buttonLabel}</span>
               </button>
             </div>
 
@@ -119,4 +121,3 @@ export default function AdminLoginPanel({
     </section>
   );
 }
-

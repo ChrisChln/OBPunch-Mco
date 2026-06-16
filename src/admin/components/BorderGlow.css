@@ -1,0 +1,375 @@
+@property --cursor-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 45deg;
+}
+
+.border-glow-card {
+  --edge-proximity: 0;
+  --cursor-angle: 45deg;
+  --edge-sensitivity: 30;
+  --color-sensitivity: calc(var(--edge-sensitivity) + 20);
+  --border-radius: 28px;
+  --glow-padding: 40px;
+  --cone-spread: 25;
+
+  position: relative;
+  border-radius: var(--border-radius);
+  isolation: isolate;
+  transform: translate3d(0, 0, 0.01px);
+  display: grid;
+  border: 1px solid rgb(255 255 255 / 15%);
+  background: var(--card-bg, #120F17);
+  overflow: visible;
+  box-shadow:
+    rgba(0, 0, 0, 0.1) 0px 1px 2px,
+    rgba(0, 0, 0, 0.1) 0px 2px 4px,
+    rgba(0, 0, 0, 0.1) 0px 4px 8px,
+    rgba(0, 0, 0, 0.1) 0px 8px 16px,
+    rgba(0, 0, 0, 0.1) 0px 16px 32px,
+    rgba(0, 0, 0, 0.1) 0px 32px 64px;
+}
+
+.border-glow-css-rotate {
+  --edge-proximity: 100;
+  animation: borderGlowCssRotate var(--border-glow-rotate-duration, 4200ms) linear infinite;
+  animation-delay: var(--border-glow-rotate-delay, 0ms);
+}
+
+@keyframes borderGlowCssRotate {
+  to {
+    --cursor-angle: 405deg;
+  }
+}
+
+.border-glow-card::before,
+.border-glow-card::after,
+.border-glow-card > .edge-light {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  transition: opacity 0.25s ease-out;
+  z-index: -1;
+}
+
+.border-glow-card:not(:hover):not(.sweep-active)::before,
+.border-glow-card:not(:hover):not(.sweep-active)::after,
+.border-glow-card:not(:hover):not(.sweep-active) > .edge-light {
+  opacity: 0;
+  transition: opacity 0.75s ease-in-out;
+}
+
+/* colored mesh-gradient border */
+.border-glow-card::before {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--card-bg, #120F17) 0 100%) padding-box,
+    linear-gradient(rgb(255 255 255 / 0%) 0% 100%) border-box,
+    var(--gradient-one, radial-gradient(at 80% 55%, hsla(268, 100%, 76%, 1) 0px, transparent 50%)) border-box,
+    var(--gradient-two, radial-gradient(at 69% 34%, hsla(349, 100%, 74%, 1) 0px, transparent 50%)) border-box,
+    var(--gradient-three, radial-gradient(at 8% 6%, hsla(136, 100%, 78%, 1) 0px, transparent 50%)) border-box,
+    var(--gradient-four, radial-gradient(at 41% 38%, hsla(192, 100%, 64%, 1) 0px, transparent 50%)) border-box,
+    var(--gradient-five, radial-gradient(at 86% 85%, hsla(186, 100%, 74%, 1) 0px, transparent 50%)) border-box,
+    var(--gradient-six, radial-gradient(at 82% 18%, hsla(52, 100%, 65%, 1) 0px, transparent 50%)) border-box,
+    var(--gradient-seven, radial-gradient(at 51% 4%, hsla(12, 100%, 72%, 1) 0px, transparent 50%)) border-box,
+    var(--gradient-base, linear-gradient(#c299ff 0 100%)) border-box;
+
+  opacity: calc((var(--edge-proximity) - var(--color-sensitivity)) / (100 - var(--color-sensitivity)));
+
+  mask-image:
+    conic-gradient(
+      from var(--cursor-angle) at center,
+      black calc(var(--cone-spread) * 1%),
+      transparent calc((var(--cone-spread) + 15) * 1%),
+      transparent calc((100 - var(--cone-spread) - 15) * 1%),
+      black calc((100 - var(--cone-spread)) * 1%)
+    );
+}
+
+/* colored mesh-gradient background fill near edges */
+.border-glow-card::after {
+  border: 1px solid transparent;
+  background:
+    var(--gradient-one, radial-gradient(at 80% 55%, hsla(268, 100%, 76%, 1) 0px, transparent 50%)) padding-box,
+    var(--gradient-two, radial-gradient(at 69% 34%, hsla(349, 100%, 74%, 1) 0px, transparent 50%)) padding-box,
+    var(--gradient-three, radial-gradient(at 8% 6%, hsla(136, 100%, 78%, 1) 0px, transparent 50%)) padding-box,
+    var(--gradient-four, radial-gradient(at 41% 38%, hsla(192, 100%, 64%, 1) 0px, transparent 50%)) padding-box,
+    var(--gradient-five, radial-gradient(at 86% 85%, hsla(186, 100%, 74%, 1) 0px, transparent 50%)) padding-box,
+    var(--gradient-six, radial-gradient(at 82% 18%, hsla(52, 100%, 65%, 1) 0px, transparent 50%)) padding-box,
+    var(--gradient-seven, radial-gradient(at 51% 4%, hsla(12, 100%, 72%, 1) 0px, transparent 50%)) padding-box,
+    var(--gradient-base, linear-gradient(#c299ff 0 100%)) padding-box;
+
+  mask-image:
+    linear-gradient(to bottom, black, black),
+    radial-gradient(ellipse at 50% 50%, black 40%, transparent 65%),
+    radial-gradient(ellipse at 66% 66%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 33% 33%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 66% 33%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 33% 66%, black 5%, transparent 40%),
+    conic-gradient(from var(--cursor-angle) at center, transparent 5%, black 15%, black 85%, transparent 95%);
+
+  mask-composite: subtract, add, add, add, add, add;
+  opacity: calc(var(--fill-opacity, 0.5) * (var(--edge-proximity) - var(--color-sensitivity)) / (100 - var(--color-sensitivity)));
+  mix-blend-mode: soft-light;
+}
+
+/* outer glow layer */
+.border-glow-card > .edge-light {
+  inset: calc(var(--glow-padding) * -1);
+  pointer-events: none;
+  z-index: 1;
+
+  mask-image:
+    conic-gradient(
+      from var(--cursor-angle) at center, black 2.5%, transparent 10%, transparent 90%, black 97.5%
+    );
+
+  opacity: calc((var(--edge-proximity) - var(--edge-sensitivity)) / (100 - var(--edge-sensitivity)));
+  mix-blend-mode: plus-lighter;
+}
+
+.border-glow-card > .edge-light::before {
+  content: "";
+  position: absolute;
+  inset: var(--glow-padding);
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 1px var(--glow-color, hsl(40deg 80% 80% / 100%)),
+    inset 0 0 1px 0 var(--glow-color-60, hsl(40deg 80% 80% / 60%)),
+    inset 0 0 3px 0 var(--glow-color-50, hsl(40deg 80% 80% / 50%)),
+    inset 0 0 6px 0 var(--glow-color-40, hsl(40deg 80% 80% / 40%)),
+    inset 0 0 15px 0 var(--glow-color-30, hsl(40deg 80% 80% / 30%)),
+    inset 0 0 25px 2px var(--glow-color-20, hsl(40deg 80% 80% / 20%)),
+    inset 0 0 50px 2px var(--glow-color-10, hsl(40deg 80% 80% / 10%)),
+    0 0 1px 0 var(--glow-color-60, hsl(40deg 80% 80% / 60%)),
+    0 0 3px 0 var(--glow-color-50, hsl(40deg 80% 80% / 50%)),
+    0 0 6px 0 var(--glow-color-40, hsl(40deg 80% 80% / 40%)),
+    0 0 15px 0 var(--glow-color-30, hsl(40deg 80% 80% / 30%)),
+    0 0 25px 2px var(--glow-color-20, hsl(40deg 80% 80% / 20%)),
+    0 0 50px 2px var(--glow-color-10, hsl(40deg 80% 80% / 10%));
+}
+
+.border-glow-inner {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: auto;
+  z-index: 1;
+}
+
+.admin-position-badge-glow {
+  display: inline-grid;
+  vertical-align: middle;
+  box-shadow:
+    rgba(0, 0, 0, 0.14) 0 1px 2px,
+    rgba(0, 0, 0, 0.12) 0 4px 10px;
+}
+
+.admin-position-badge-glow .border-glow-inner {
+  overflow: visible;
+}
+
+.admin-position-badge-glow > .edge-light::before {
+  box-shadow:
+    inset 0 0 0 1px var(--glow-color, hsl(40deg 80% 80% / 100%)),
+    inset 0 0 4px 0 var(--glow-color-50, hsl(40deg 80% 80% / 50%)),
+    inset 0 0 12px 0 var(--glow-color-30, hsl(40deg 80% 80% / 30%)),
+    0 0 4px 0 var(--glow-color-50, hsl(40deg 80% 80% / 50%)),
+    0 0 14px 1px var(--glow-color-20, hsl(40deg 80% 80% / 20%));
+}
+
+.admin-schedule-badge-glow {
+  --edge-proximity: 100;
+  --cursor-angle: var(--border-glow-static-angle, 96deg);
+  --schedule-spark: var(--border-glow-static-spark, 1);
+  --schedule-arc: var(--border-glow-static-arc, 58deg);
+
+  contain: layout style;
+  border-color: color-mix(in srgb, var(--glow-color, hsl(40deg 80% 80% / 100%)) 42%, rgb(255 255 255 / 10%));
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 4%),
+    inset 0 0 8px 0 rgb(0 0 0 / 24%),
+    rgba(0, 0, 0, 0.18) 0 1px 2px,
+    0 0 calc(6px * var(--schedule-spark)) 0 var(--glow-color-20, hsl(40deg 80% 80% / 20%));
+}
+
+.border-glow-card.admin-schedule-badge-glow:not(:hover):not(.sweep-active)::before {
+  opacity: 1;
+}
+
+.border-glow-card.admin-schedule-badge-glow:not(:hover):not(.sweep-active)::after {
+  opacity: 0.16;
+}
+
+.border-glow-card.admin-schedule-badge-glow:not(:hover):not(.sweep-active) > .edge-light {
+  opacity: calc(0.9 * var(--schedule-spark));
+}
+
+.admin-schedule-badge-glow:hover {
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 6%),
+    inset 0 0 10px 0 rgb(0 0 0 / 20%),
+    rgba(0, 0, 0, 0.18) 0 1px 2px,
+    0 0 calc(9px * var(--schedule-spark)) 0 var(--glow-color-30, hsl(40deg 80% 80% / 30%));
+}
+
+.admin-schedule-badge-glow::before {
+  background:
+    linear-gradient(var(--card-bg, #120F17) 0 100%) padding-box,
+    linear-gradient(rgb(255 255 255 / 0%) 0% 100%) border-box,
+    conic-gradient(
+      from var(--cursor-angle) at center,
+      transparent 0deg,
+      transparent 50deg,
+      var(--glow-color-50, hsl(40deg 80% 80% / 50%)) 64deg,
+      rgb(255 255 255 / calc(92% * var(--schedule-spark))) 78deg,
+      var(--glow-color, hsl(40deg 80% 80% / 100%)) 88deg,
+      rgb(255 255 255 / calc(76% * var(--schedule-spark))) 98deg,
+      var(--glow-color-60, hsl(40deg 80% 80% / 60%)) calc(76deg + var(--schedule-arc)),
+      transparent calc(94deg + var(--schedule-arc)),
+      transparent 360deg
+    ) border-box;
+  opacity: calc((var(--edge-proximity) - var(--color-sensitivity)) / (100 - var(--color-sensitivity)));
+  mask-image:
+    conic-gradient(
+      from var(--cursor-angle) at center,
+      black 0deg,
+      black 38deg,
+      transparent calc(56deg + var(--schedule-arc)),
+      transparent calc(304deg - var(--schedule-arc)),
+      black 322deg,
+      black 360deg
+    );
+}
+
+.admin-schedule-badge-glow::after {
+  display: block;
+  background:
+    radial-gradient(circle at 72% 72%, var(--glow-color-20, hsl(40deg 80% 80% / 20%)) 0, transparent 42%),
+    linear-gradient(135deg, rgb(255 255 255 / 5%), transparent 58%) padding-box;
+  mask-image:
+    linear-gradient(to bottom, black, black),
+    radial-gradient(ellipse at 50% 50%, black 34%, transparent 70%),
+    conic-gradient(from var(--cursor-angle) at center, transparent 2%, black 12%, black 88%, transparent 98%);
+  mask-composite: subtract, add;
+  mix-blend-mode: soft-light;
+}
+
+.admin-schedule-badge-glow > .edge-light {
+  inset: -22px;
+  mix-blend-mode: plus-lighter;
+  mask-image:
+    conic-gradient(
+      from var(--cursor-angle) at center,
+      black 0deg,
+      transparent calc(34deg + var(--schedule-arc)),
+      transparent calc(326deg - var(--schedule-arc)),
+      black 360deg
+    );
+}
+
+.admin-schedule-badge-glow > .edge-light::before {
+  inset: 22px;
+  box-shadow:
+    inset 0 0 0 1px var(--glow-color, hsl(40deg 80% 80% / 100%)),
+    inset 0 0 4px 0 var(--glow-color-60, hsl(40deg 80% 80% / 60%)),
+    inset 0 0 calc(13px * var(--schedule-spark)) 0 var(--glow-color-40, hsl(40deg 80% 80% / 40%)),
+    0 0 calc(5px * var(--schedule-spark)) 0 rgb(255 255 255 / 62%),
+    0 0 calc(9px * var(--schedule-spark)) 0 var(--glow-color-60, hsl(40deg 80% 80% / 60%)),
+    0 0 calc(20px * var(--schedule-spark)) 1px var(--glow-color-30, hsl(40deg 80% 80% / 30%)),
+    0 0 calc(34px * var(--schedule-spark)) 2px var(--glow-color-20, hsl(40deg 80% 80% / 20%));
+}
+
+.admin-schedule-glow-badge {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background-image:
+    radial-gradient(circle at 18% 18%, color-mix(in srgb, currentColor 22%, transparent), transparent 42%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 58%);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, currentColor 38%, transparent),
+    inset 0 0 10px color-mix(in srgb, currentColor 18%, transparent),
+    0 0 8px color-mix(in srgb, currentColor 24%, transparent),
+    0 0 18px color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.admin-schedule-glow-badge::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background:
+    conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      transparent 52deg,
+      rgba(255, 255, 255, 0.96) 72deg,
+      currentColor 94deg,
+      rgba(255, 255, 255, 0.86) 112deg,
+      transparent 142deg,
+      transparent 360deg
+    );
+  opacity: 0.95;
+  animation: adminScheduleBadgeSweep 3.8s linear infinite;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.admin-schedule-glow-badge::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  z-index: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(
+      105deg,
+      transparent 0%,
+      transparent 35%,
+      rgba(255, 255, 255, 0.34) 48%,
+      transparent 62%,
+      transparent 100%
+    );
+  mix-blend-mode: screen;
+  opacity: 0.5;
+  pointer-events: none;
+  transform: translateX(-150%);
+  animation: adminScheduleBadgeGlint 3.8s ease-in-out infinite;
+}
+
+@keyframes adminScheduleBadgeSweep {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@keyframes adminScheduleBadgeGlint {
+  0%,
+  42% {
+    transform: translateX(-150%);
+  }
+
+  68%,
+  100% {
+    transform: translateX(150%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-schedule-glow-badge::before,
+  .admin-schedule-glow-badge::after {
+    animation: none;
+  }
+}

@@ -1,5 +1,4 @@
 import { createClient } from '@supabase/supabase-js';
-import { isEmployeeTerminated } from '../src/shared/employeeStatus';
 
 const supabaseUrl = process.env.SUPABASE_URL as string | undefined;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY as string | undefined;
@@ -12,10 +11,6 @@ type CorrectionPayload = {
   action: 'IN' | 'OUT';
   effective_at?: string | null;
   note?: string | null;
-};
-
-type EmployeeStatusRow = {
-  terminated_at?: string | null;
 };
 
 export default async function handler(req: any, res: any) {
@@ -55,20 +50,10 @@ export default async function handler(req: any, res: any) {
   const note = body.note ? String(body.note) : null;
 
   try {
-    const employeeRes = await supabase
-      .from('ob_employees')
-      .select('terminated_at')
-      .eq('staff_id', staffId)
-      .limit(1);
+    const employeeRes = await supabase.from('ob_employees').select('staff_id').eq('staff_id', staffId).limit(1);
 
     if (employeeRes.error) {
       res.status(500).json({ error: employeeRes.error.message });
-      return;
-    }
-
-    const employee = ((employeeRes.data as EmployeeStatusRow[] | null) ?? [])[0] ?? null;
-    if (isEmployeeTerminated({ terminatedAt: employee?.terminated_at })) {
-      res.status(409).json({ error: 'Terminated employee cannot punch.' });
       return;
     }
 
@@ -94,8 +79,6 @@ export default async function handler(req: any, res: any) {
     res.status(500).json({ error: err?.message ?? String(err) });
   }
 }
-
-
 
 
 

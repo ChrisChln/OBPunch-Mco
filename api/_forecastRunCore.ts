@@ -1,5 +1,5 @@
-import { buildPredictionWorkbenchData, MAIN_LEADERBOARD_CUTOFF } from '../src/admin/forecasting/predictionWorkbenchShared';
-import { DEFAULT_CODE_VERSION, addDaysDateOnly, readEnabledModels } from './_forecastShared';
+import { buildPredictionWorkbenchData, MAIN_LEADERBOARD_CUTOFF } from '../src/admin/forecasting/predictionWorkbenchShared.js';
+import { DEFAULT_CODE_VERSION, addDaysDateOnly, readEnabledModels } from './_forecastShared.js';
 
 type RunType = 'official' | 'manual' | 'backfill';
 type FeedbackRegimeKey = 'transition_down' | 'promotion';

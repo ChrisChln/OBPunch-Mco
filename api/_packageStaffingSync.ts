@@ -1,5 +1,5 @@
-import { getDateOnlyInTimeZone } from '../src/shared/packageMetrics';
-import { shouldCountScheduledPackageMetricsStaff } from '../src/shared/packageStaffing';
+import { getDateOnlyInTimeZone } from '../src/shared/packageMetrics.js';
+import { shouldCountScheduledPackageMetricsStaff } from '../src/shared/packageStaffing.js';
 
 type ScheduleSnapshotRow = {
   staff_id?: string | null;
@@ -10,6 +10,8 @@ type ScheduleSnapshotRow = {
 
 type EmployeeSnapshotRow = {
   staff_id?: string | null;
+  position?: string | null;
+  Position?: string | null;
   active?: boolean | null;
   terminated_at?: string | null;
 };
@@ -106,17 +108,26 @@ export const computeScheduledHeadcountForDate = async (supabase: any, metricDate
     )
   );
   const activeStaffIds = new Set<string>();
+  const positionByStaffId = new Map<string, string>();
   if (scheduledStaffIds.length > 0) {
-    const employeeRows = (await fetchAllRows(
-      (from, to) =>
-        supabase
-          .from('ob_employees')
-          .select('staff_id, active, terminated_at')
-          .in('staff_id', scheduledStaffIds)
-          .order('staff_id', { ascending: true })
-          .range(from, to),
-      1000
-    )) as EmployeeSnapshotRow[];
+    const loadEmployeeRows = async (selectColumns: string) =>
+      (await fetchAllRows(
+        (from, to) =>
+          supabase
+            .from('ob_employees')
+            .select(selectColumns)
+            .in('staff_id', scheduledStaffIds)
+            .order('staff_id', { ascending: true })
+            .range(from, to),
+        1000
+      )) as EmployeeSnapshotRow[];
+
+    let employeeRows: EmployeeSnapshotRow[] = [];
+    try {
+      employeeRows = await loadEmployeeRows('staff_id, position, active, terminated_at');
+    } catch {
+      employeeRows = await loadEmployeeRows('staff_id, "Position", active, terminated_at');
+    }
 
     for (const row of employeeRows) {
       const staffId = String(row.staff_id ?? '').trim();
@@ -125,6 +136,7 @@ export const computeScheduledHeadcountForDate = async (supabase: any, metricDate
       if (terminatedAt) continue;
       if (row.active === false) continue;
       activeStaffIds.add(staffId);
+      positionByStaffId.set(staffId, String(row.position ?? row.Position ?? '').trim());
     }
   }
 
@@ -133,7 +145,7 @@ export const computeScheduledHeadcountForDate = async (supabase: any, metricDate
     const staffId = String(row.staff_id ?? '').trim();
     if (!staffId) continue;
     if (!activeStaffIds.has(staffId)) continue;
-    if (!shouldCountScheduledPackageMetricsStaff(row.position, row.note)) continue;
+    if (!shouldCountScheduledPackageMetricsStaff(positionByStaffId.get(staffId) ?? '', row.note)) continue;
     scheduledStaff.add(staffId);
   }
 

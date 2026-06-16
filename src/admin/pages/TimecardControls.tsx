@@ -1,6 +1,12 @@
+import { useEffect, useRef } from 'react';
 import StyledDateInput from '../components/StyledDateInput';
 
 type TranslateFn = (zh: string, en: string) => string;
+type TimecardShiftFilter = 'early' | 'late';
+type MultiSelectOption<Value extends string = string> = {
+  value: Value;
+  label: string;
+};
 
 type TimecardControlsProps = {
   t: TranslateFn;
@@ -14,28 +20,163 @@ type TimecardControlsProps = {
   changeTimecardWeek: (value: number, source: string) => void | Promise<void>;
   timecardWeekInput: string;
   setTimecardWeekInput: (value: string) => void;
-  fetchTimecard: (payload: { reset: boolean; weekOffset?: number; search?: string; agency?: string; position?: string; lockUi?: boolean }) => void | Promise<any>;
+  fetchTimecard: (payload: { reset: boolean; weekOffset?: number; search?: string; agency?: string[]; department?: string[]; position?: string[]; lockUi?: boolean }) => void | Promise<any>;
   refreshTimecardWithAudit: (source: string) => void | Promise<void>;
   timecardRowsFilteredCount: number;
   exportTimecard: () => void | Promise<void>;
   exportDailyPunches: () => void | Promise<void>;
   timecardMissingEmployeeOnly: boolean;
   setTimecardMissingEmployeeOnly: (value: boolean | ((prev: boolean) => boolean)) => void;
-  setTimecardAgency: (value: string) => void;
-  setTimecardPosition: (value: string) => void;
+  setTimecardAgency: (value: string[]) => void;
+  setTimecardDepartment: (value: string[]) => void;
+  setTimecardPosition: (value: string[]) => void;
   setTimecardSearch: (value: string) => void;
-  setTimecardShift: (value: '' | 'early' | 'late') => void;
+  setTimecardShift: (value: TimecardShiftFilter[]) => void;
   setTimecardInProgressOnly: (value: boolean) => void;
   setTimecardPresentDayFilter: (value: number | null) => void;
   timecardSearch: string;
-  timecardAgency: string;
+  timecardAgency: string[];
   timecardAgencyOptions: string[];
-  timecardPosition: string;
+  timecardDepartment: string[];
+  timecardDepartmentOptions: Array<{ value: string; label: string }>;
+  timecardPosition: string[];
   timecardPositionOptions: readonly string[];
-  timecardShift: '' | 'early' | 'late';
+  timecardShift: TimecardShiftFilter[];
   timecardInProgressOnly: boolean;
   timecardError: string | null;
 };
+
+function buildMultiSelectLabel(allLabel: string, selected: string[]) {
+  if (selected.length === 0) return allLabel;
+  if (selected.length === 1) return selected[0];
+  return `${selected.length} selected`;
+}
+
+function TimecardMultiSelect<Value extends string>({
+  label,
+  allLabel,
+  selected,
+  options,
+  onChange,
+  disabled,
+  isLight,
+  controlClass
+}: {
+  label: string;
+  allLabel: string;
+  selected: Value[];
+  options: readonly MultiSelectOption<Value>[];
+  onChange: (value: Value[]) => void;
+  disabled: boolean;
+  isLight: boolean;
+  controlClass: string;
+}) {
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
+  const selectedSet = new Set(selected);
+  const menuClass = [
+    'absolute z-30 mt-2 w-full rounded-2xl border p-3',
+    isLight ? 'border-slate-200 bg-white text-slate-900 shadow-[0_18px_40px_rgba(15,23,42,0.16)]' : 'border-slate-700 bg-slate-900 text-slate-100 shadow-[0_18px_40px_rgba(0,0,0,0.45)]'
+  ].join(' ');
+  const optionClass = (active: boolean) =>
+    [
+      'flex w-full cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm transition',
+      active
+        ? isLight
+          ? 'border-emerald-700/50 bg-emerald-100 text-emerald-900'
+          : 'border-neon/50 bg-neon/10 text-neon'
+        : isLight
+          ? 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
+          : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+    ].join(' ');
+
+  const toggleValue = (value: Value) => {
+    onChange(selectedSet.has(value) ? selected.filter((item) => item !== value) : [...selected, value]);
+  };
+
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      const root = detailsRef.current;
+      if (!root || !root.open) return;
+      const target = event.target as Node | null;
+      if (target && root.contains(target)) return;
+      root.open = false;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const root = detailsRef.current;
+      if (root?.open) root.open = false;
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
+  return (
+    <div className="relative">
+      <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{label}</label>
+      <details ref={detailsRef} className="group">
+        <summary
+          className={[
+            controlClass,
+            'flex cursor-pointer list-none items-center justify-between gap-3 truncate text-left',
+            disabled ? 'pointer-events-none cursor-not-allowed opacity-60' : ''
+          ].join(' ')}
+        >
+          <span className="min-w-0 truncate">{buildMultiSelectLabel(allLabel, selected)}</span>
+          <span className={['ml-3 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{selected.length}</span>
+        </summary>
+        <div className={menuClass}>
+          <div className={['mb-2 flex items-center justify-between text-[11px]', isLight ? 'text-slate-500' : 'text-slate-300'].join(' ')}>
+            <span>Multi-select</span>
+            <button
+              type="button"
+              disabled={disabled || selected.length === 0}
+              onClick={(event) => {
+                event.preventDefault();
+                onChange([]);
+              }}
+              className={[
+                'min-w-[52px] rounded-md border px-2 py-1 text-[12px] font-medium leading-none transition disabled:cursor-not-allowed disabled:opacity-50',
+                isLight
+                  ? 'border-slate-300 bg-white text-slate-600 shadow-sm hover:border-slate-400 hover:bg-slate-50'
+                  : 'border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700'
+              ].join(' ')}
+            >
+              Clear
+            </button>
+          </div>
+          <div className="max-h-56 space-y-1 overflow-auto pr-1">
+          <button
+            type="button"
+            className={optionClass(selected.length === 0)}
+            onClick={() => onChange([])}
+          >
+            <span className="inline-flex max-w-[80%] items-center truncate rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">{allLabel}</span>
+          </button>
+          {options.map((option) => {
+            const active = selectedSet.has(option.value);
+            return (
+              <button
+                type="button"
+                key={option.value}
+                className={optionClass(active)}
+                onClick={() => toggleValue(option.value)}
+              >
+                <span className="inline-flex max-w-[80%] items-center truncate rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">{option.label}</span>
+              </button>
+            );
+          })}
+          </div>
+        </div>
+      </details>
+    </div>
+  );
+}
 
 export default function TimecardControls({
   t,
@@ -57,6 +198,7 @@ export default function TimecardControls({
   timecardMissingEmployeeOnly,
   setTimecardMissingEmployeeOnly,
   setTimecardAgency,
+  setTimecardDepartment,
   setTimecardPosition,
   setTimecardSearch,
   setTimecardShift,
@@ -65,6 +207,8 @@ export default function TimecardControls({
   timecardSearch,
   timecardAgency,
   timecardAgencyOptions,
+  timecardDepartment,
+  timecardDepartmentOptions,
   timecardPosition,
   timecardPositionOptions,
   timecardShift,
@@ -86,6 +230,17 @@ export default function TimecardControls({
   const baseWeekStart = startOfWeekMonday(serverTime);
   const visibleWeekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
   const visibleWeekEnd = addDays(visibleWeekStart, 6);
+  const handleWeekInputChange = (raw: string) => {
+    setTimecardWeekInput(raw);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return;
+    const dt = new Date(`${raw}T00:00:00`);
+    if (Number.isNaN(dt.getTime())) return;
+    const targetWeekStart = startOfWeekMonday(dt);
+    const nextOffset = Math.round((targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
+    void Promise.resolve(changeTimecardWeek(nextOffset, 'date_input')).then(() => {
+      setTimecardWeekInput(raw);
+    });
+  };
 
   return (
     <>
@@ -108,15 +263,7 @@ export default function TimecardControls({
               size="compact"
               disabled={isLocked}
               value={timecardWeekInput}
-              onChange={(raw) => {
-                setTimecardWeekInput(raw);
-                if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return;
-                const dt = new Date(`${raw}T00:00:00`);
-                if (Number.isNaN(dt.getTime())) return;
-                const targetWeekStart = startOfWeekMonday(dt);
-                const nextOffset = Math.round((targetWeekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
-                void changeTimecardWeek(nextOffset, 'date_input');
-              }}
+              onChange={handleWeekInputChange}
               title={t('选择任意日期', 'Pick any date')}
             />
           </div>
@@ -182,8 +329,9 @@ export default function TimecardControls({
               setTimecardMissingEmployeeOnly((prev) => {
                 const next = !prev;
                 if (next) {
-                  setTimecardAgency('');
-                  setTimecardPosition('');
+                  setTimecardAgency([]);
+                  setTimecardDepartment([]);
+                  setTimecardPosition([]);
                 }
                 return next;
               });
@@ -207,13 +355,14 @@ export default function TimecardControls({
             disabled={isLocked}
             onClick={() => {
               setTimecardSearch('');
-              setTimecardAgency('');
-              setTimecardPosition('');
-              setTimecardShift('');
+              setTimecardAgency([]);
+              setTimecardDepartment([]);
+              setTimecardPosition([]);
+              setTimecardShift([]);
               setTimecardInProgressOnly(false);
               setTimecardPresentDayFilter(null);
               setTimecardMissingEmployeeOnly(false);
-              void fetchTimecard({ reset: true, search: '', agency: '', position: '', lockUi: false });
+              void fetchTimecard({ reset: true, search: '', agency: [], department: [], position: [], lockUi: false });
             }}
             className={ghostButtonClass}
           >
@@ -222,7 +371,7 @@ export default function TimecardControls({
         </div>
       </div>
 
-      <div className="mt-5 grid gap-4 md:grid-cols-6">
+      <div className="mt-5 grid gap-4 md:grid-cols-7">
         <div className="md:col-span-2">
           <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Search</label>
           <input
@@ -234,53 +383,52 @@ export default function TimecardControls({
           />
         </div>
 
-        <div>
-          <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Agency</label>
-          <select
-            value={timecardAgency}
-            onChange={(e) => setTimecardAgency(e.target.value)}
+        <TimecardMultiSelect
+          label="Agency"
+          allLabel={t('全部 Agency', 'All agencies')}
+          selected={timecardAgency}
+          options={timecardAgencyOptions.map((agency) => ({ value: agency, label: agency }))}
+          onChange={setTimecardAgency}
             disabled={isLocked || timecardMissingEmployeeOnly}
-            className={controlInputClass}
-          >
-            <option value="">{t('全部 Agency', 'All agencies')}</option>
-            {timecardAgencyOptions.map((agency) => (
-              <option key={agency} value={agency}>
-                {agency}
-              </option>
-            ))}
-          </select>
-        </div>
+          isLight={isLight}
+          controlClass={controlInputClass}
+        />
 
-        <div>
-          <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Position</label>
-          <select
-            value={timecardPosition}
-            onChange={(e) => setTimecardPosition(e.target.value)}
+        <TimecardMultiSelect
+          label="Dept"
+          allLabel={t('全部部门', 'All dept')}
+          selected={timecardDepartment}
+          options={timecardDepartmentOptions}
+          onChange={setTimecardDepartment}
+          disabled={isLocked || timecardMissingEmployeeOnly}
+          isLight={isLight}
+          controlClass={controlInputClass}
+        />
+
+        <TimecardMultiSelect
+          label="Position"
+          allLabel={t('全部岗位', 'All positions')}
+          selected={timecardPosition}
+          options={timecardPositionOptions.map((position) => ({ value: position, label: position }))}
+          onChange={setTimecardPosition}
             disabled={isLocked || timecardMissingEmployeeOnly}
-            className={controlInputClass}
-          >
-            <option value="">{t('全部岗位', 'All positions')}</option>
-            {timecardPositionOptions.map((position) => (
-              <option key={position} value={position}>
-                {position}
-              </option>
-            ))}
-          </select>
-        </div>
+          isLight={isLight}
+          controlClass={controlInputClass}
+        />
 
-        <div>
-          <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Shift</label>
-          <select
-            value={timecardShift}
-            onChange={(e) => setTimecardShift((e.target.value as '' | 'early' | 'late') ?? '')}
-            disabled={isLocked}
-            className={controlInputClass}
-          >
-            <option value="">{t('全部班次', 'All shifts')}</option>
-            <option value="early">{t('早班', 'Morning')}</option>
-            <option value="late">{t('晚班', 'Night')}</option>
-          </select>
-        </div>
+        <TimecardMultiSelect
+          label="Shift"
+          allLabel={t('全部班次', 'All shifts')}
+          selected={timecardShift}
+          options={[
+            { value: 'early', label: t('早班', 'Morning') },
+            { value: 'late', label: t('晚班', 'Night') }
+          ]}
+          onChange={setTimecardShift}
+          disabled={isLocked}
+          isLight={isLight}
+          controlClass={controlInputClass}
+        />
 
         <div className="flex items-end">
           <label

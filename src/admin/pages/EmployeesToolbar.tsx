@@ -16,24 +16,185 @@ type EmployeesToolbarProps = {
   uploadEmployees: () => void | Promise<void>;
   exportEmployees: () => void | Promise<void>;
   setEmployeeAddOpen: (next: boolean | ((prev: boolean) => boolean)) => void;
+  openDepartedEmployees: () => void | Promise<void>;
   fetchEmployees: (arg: { reset: boolean; search?: string; agency?: string; position?: string; labels?: string[] }) => void | Promise<unknown>;
   setEmployeeSearch: (value: string) => void;
-  setEmployeeAgency: (value: string) => void;
-  setEmployeePosition: (value: string) => void;
-  setEmployeeShiftFilter: (value: '' | 'early' | 'late') => void;
+  setEmployeeAgency: (value: string[] | ((prev: string[]) => string[])) => void;
+  setEmployeeDepartment: (value: string[] | ((prev: string[]) => string[])) => void;
+  setEmployeePosition: (value: string[] | ((prev: string[]) => string[])) => void;
+  setEmployeeShiftFilter: (value: Array<'early' | 'late'> | ((prev: Array<'early' | 'late'>) => Array<'early' | 'late'>)) => void;
   setEmployeeLabels: (value: string[] | ((prev: string[]) => string[])) => void;
   uploadError: string | null;
   employeeSearch: string;
-  employeeAgency: string;
+  employeeAgency: string[];
   employeeAgencyOptions: string[];
-  employeePosition: string;
+  employeeDepartment: string[];
+  employeeDepartmentOptions: Array<{ value: string; label: string }>;
+  employeePosition: string[];
   employeePositionOptions: string[];
-  employeeShiftFilter: '' | 'early' | 'late';
+  employeeShiftFilter: Array<'early' | 'late'>;
   employeeLabels: string[];
   employeeFilterLabelOptions: string[];
+  getSchedulePositionBadgeClass: (position: string) => string;
   getScheduleLabelToneClass: (label: string) => string;
   cycleScheduleLabelTone: (label: string) => void;
 };
+
+type EmployeeMultiSelectOption<Value extends string = string> = {
+  value: Value;
+  label: string;
+  badgeClass?: string;
+};
+
+function buildEmployeeMultiSelectLabel(allLabel: string, selected: string[]) {
+  if (selected.length === 0) return allLabel;
+  if (selected.length === 1) return selected[0];
+  return `${selected.length} selected`;
+}
+
+function EmployeeMultiSelect<Value extends string>({
+  label,
+  allLabel,
+  selected,
+  options,
+  onChange,
+  disabled,
+  isLight
+}: {
+  label: string;
+  allLabel: string;
+  selected: Value[];
+  options: readonly EmployeeMultiSelectOption<Value>[];
+  onChange: (value: Value[]) => void;
+  disabled: boolean;
+  isLight: boolean;
+}) {
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
+  const selectedSet = new Set(selected);
+
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      const root = detailsRef.current;
+      if (!root || !root.open) return;
+      const target = event.target as Node | null;
+      if (target && root.contains(target)) return;
+      root.open = false;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const root = detailsRef.current;
+      if (root?.open) root.open = false;
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
+  const toggleValue = (value: Value) => {
+    onChange(selectedSet.has(value) ? selected.filter((item) => item !== value) : [...selected, value]);
+  };
+
+  const optionClass = (active: boolean) =>
+    [
+      'flex cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-sm transition',
+      active
+        ? isLight
+          ? 'border-emerald-700/50 bg-emerald-100 text-emerald-900'
+          : 'border-neon/50 bg-neon/10 text-neon'
+        : isLight
+          ? 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
+          : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+    ].join(' ');
+
+  return (
+    <div>
+      <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{label}</label>
+      <details ref={detailsRef} className="relative mt-2">
+        <summary
+          className={[
+            'flex h-[46px] cursor-pointer list-none items-center justify-between rounded-2xl border px-4 text-sm outline-none transition',
+            isLight ? 'border-slate-300 bg-white text-slate-800 shadow-sm hover:border-slate-400' : 'border-white/10 bg-black/30 text-white hover:border-white/20',
+            disabled ? 'pointer-events-none cursor-not-allowed opacity-60' : ''
+          ].join(' ')}
+        >
+          <span className="truncate">{buildEmployeeMultiSelectLabel(allLabel, selected)}</span>
+          <span className={['ml-3 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{selected.length}</span>
+        </summary>
+        <div
+          className={[
+            'absolute z-30 mt-2 w-full rounded-2xl border p-3',
+            isLight
+              ? 'border-slate-200 bg-white shadow-[0_18px_40px_rgba(15,23,42,0.16)]'
+              : 'border-slate-700 bg-slate-900 shadow-[0_18px_40px_rgba(0,0,0,0.45)]'
+          ].join(' ')}
+        >
+          <div className={['mb-2 flex items-center justify-between text-[11px]', isLight ? 'text-slate-500' : 'text-slate-300'].join(' ')}>
+            <span>Multi-select</span>
+            <button
+              type="button"
+              disabled={disabled || selected.length === 0}
+              onClick={(event) => {
+                event.preventDefault();
+                onChange([]);
+              }}
+              className={[
+                'min-w-[52px] rounded-md border px-2 py-1 text-[12px] font-medium leading-none transition disabled:cursor-not-allowed disabled:opacity-50',
+                isLight
+                  ? 'border-slate-300 bg-white text-slate-600 shadow-sm hover:border-slate-400 hover:bg-slate-50'
+                  : 'border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700'
+              ].join(' ')}
+            >
+              Clear
+            </button>
+          </div>
+          <div className="max-h-56 space-y-1 overflow-auto pr-1">
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => onChange([])}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                onChange([]);
+              }}
+              className={optionClass(selected.length === 0)}
+            >
+              <span className="inline-flex max-w-[80%] items-center truncate rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">
+                {allLabel}
+              </span>
+            </div>
+            {options.map((option) => {
+              const active = selectedSet.has(option.value);
+              return (
+                <div
+                  key={option.value}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => toggleValue(option.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    toggleValue(option.value);
+                  }}
+                  className={optionClass(active)}
+                >
+                  <span className={['inline-flex max-w-[80%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold', option.badgeClass ?? 'border-white/20'].join(' ')}>
+                    {option.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </details>
+    </div>
+  );
+}
 
 export default function EmployeesToolbar({
   t,
@@ -49,9 +210,11 @@ export default function EmployeesToolbar({
   uploadEmployees,
   exportEmployees,
   setEmployeeAddOpen,
+  openDepartedEmployees,
   fetchEmployees,
   setEmployeeSearch,
   setEmployeeAgency,
+  setEmployeeDepartment,
   setEmployeePosition,
   setEmployeeShiftFilter,
   setEmployeeLabels,
@@ -59,11 +222,14 @@ export default function EmployeesToolbar({
   employeeSearch,
   employeeAgency,
   employeeAgencyOptions,
+  employeeDepartment,
+  employeeDepartmentOptions,
   employeePosition,
   employeePositionOptions,
   employeeShiftFilter,
   employeeLabels,
   employeeFilterLabelOptions,
+  getSchedulePositionBadgeClass,
   getScheduleLabelToneClass,
   cycleScheduleLabelTone
 }: EmployeesToolbarProps) {
@@ -148,6 +314,14 @@ export default function EmployeesToolbar({
           </button>
           <button
             type="button"
+            disabled={isLocked}
+            onClick={() => void openDepartedEmployees()}
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {t('离职员工', 'Departed')}
+          </button>
+          <button
+            type="button"
             disabled={writeLocked}
             onClick={() => setEmployeeAddOpen(true)}
             className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
@@ -167,9 +341,10 @@ export default function EmployeesToolbar({
             disabled={isLocked}
             onClick={() => {
               setEmployeeSearch('');
-              setEmployeeAgency('');
-              setEmployeePosition('');
-              setEmployeeShiftFilter('');
+              setEmployeeAgency([]);
+              setEmployeeDepartment([]);
+              setEmployeePosition([]);
+              setEmployeeShiftFilter([]);
               setEmployeeLabels([]);
               void fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
             }}
@@ -181,7 +356,7 @@ export default function EmployeesToolbar({
       </div>
       {uploadError && <p className="mt-3 text-sm text-ember">{uploadError}</p>}
 
-      <div className="mt-5 grid gap-4 md:grid-cols-6">
+      <div className="mt-5 grid gap-4 md:grid-cols-7">
         <div className="md:col-span-2">
           <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Search</label>
           <input
@@ -192,51 +367,45 @@ export default function EmployeesToolbar({
             className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
           />
         </div>
-        <div>
-          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Agency</label>
-          <select
-            value={employeeAgency}
-            onChange={(e) => setEmployeeAgency(e.target.value)}
-            disabled={isLocked}
-            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <option value="">{t('全部Agency', 'All agencies')}</option>
-            {employeeAgencyOptions.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">Position</label>
-          <select
-            value={employeePosition}
-            onChange={(e) => setEmployeePosition(e.target.value)}
-            disabled={isLocked}
-            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <option value="">{t('全部岗位', 'All positions')}</option>
-            {employeePositionOptions.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('班次', 'Shift')}</label>
-          <select
-            value={employeeShiftFilter}
-            onChange={(e) => setEmployeeShiftFilter((e.target.value as '' | 'early' | 'late') ?? '')}
-            disabled={isLocked}
-            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <option value="">{t('全部班次', 'All shifts')}</option>
-            <option value="early">{t('白班', 'Day')}</option>
-            <option value="late">{t('晚班', 'Night')}</option>
-          </select>
-        </div>
+        <EmployeeMultiSelect
+          label="Agency"
+          allLabel={t('全部 Agency', 'All agencies')}
+          selected={employeeAgency}
+          options={employeeAgencyOptions.map((agency) => ({ value: agency, label: agency }))}
+          onChange={setEmployeeAgency}
+          disabled={isLocked}
+          isLight={isLight}
+        />
+        <EmployeeMultiSelect
+          label="Dept"
+          allLabel={t('全部部门', 'All dept')}
+          selected={employeeDepartment}
+          options={employeeDepartmentOptions}
+          onChange={setEmployeeDepartment}
+          disabled={isLocked}
+          isLight={isLight}
+        />
+        <EmployeeMultiSelect
+          label="Position"
+          allLabel={t('全部岗位', 'All positions')}
+          selected={employeePosition}
+          options={employeePositionOptions.map((position) => ({ value: position, label: position, badgeClass: getSchedulePositionBadgeClass(position) }))}
+          onChange={setEmployeePosition}
+          disabled={isLocked}
+          isLight={isLight}
+        />
+        <EmployeeMultiSelect<'early' | 'late'>
+          label={t('班次', 'Shift')}
+          allLabel={t('全部班次', 'All shifts')}
+          selected={employeeShiftFilter}
+          options={[
+            { value: 'early', label: t('白班', 'Day'), badgeClass: 'border-amber-300/30 bg-amber-400/[0.13] text-amber-100' },
+            { value: 'late', label: t('晚班', 'Night'), badgeClass: 'border-indigo-300/30 bg-indigo-500/10 text-indigo-200' }
+          ]}
+          onChange={setEmployeeShiftFilter}
+          disabled={isLocked}
+          isLight={isLight}
+        />
         <div>
           <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('标签', 'Label')}</label>
           <details ref={labelDetailsRef} className="relative mt-2">

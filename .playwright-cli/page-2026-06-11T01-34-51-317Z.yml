@@ -1,0 +1,19 @@
+- main [ref=e4]:
+  - generic [ref=e6]:
+    - generic [ref=e8]:
+      - generic [ref=e9]: OBP Security
+      - heading "Punch Screen Unlock" [level=1] [ref=e10]:
+        - text: Punch Screen
+        - text: Unlock
+    - generic [ref=e12]:
+      - generic [ref=e13]: Sign In
+      - generic [ref=e14]: Administrator Unlock
+      - generic [ref=e15]:
+        - generic [ref=e16]:
+          - generic [ref=e17]: Email
+          - textbox "Email" [active] [ref=e18]:
+            - /placeholder: Admin email
+        - generic [ref=e19]:
+          - generic [ref=e20]: Password
+          - textbox "Password" [ref=e21]
+        - button "Unlock Punch Screen" [disabled] [ref=e22]

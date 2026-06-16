@@ -34,18 +34,11 @@ export const ensureCron = (req: any, res: any) => {
   const authHeader = (req.headers?.authorization as string | undefined) ?? '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
   if (adminToken && token === adminToken) return true;
+  if (cronSecret && token === cronSecret) return true;
   const userAgent = String(req.headers?.['user-agent'] ?? '').toLowerCase();
   const isCronRequest = req.headers?.['x-vercel-cron'] === '1' || userAgent.includes('vercel-cron');
 
   if (!isCronRequest) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return false;
-  }
-  if (!cronSecret) {
-    res.status(500).json({ error: 'Missing CRON_SECRET configuration' });
-    return false;
-  }
-  if (token !== cronSecret) {
     res.status(401).json({ error: 'Unauthorized' });
     return false;
   }

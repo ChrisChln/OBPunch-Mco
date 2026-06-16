@@ -1,20 +1,31 @@
+import { useState } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
-import type { DeviceType } from '../types';
+import { Pencil, Power, Printer } from 'lucide-react';
+import type { DeviceLabelPrintPayload, DeviceRow, DeviceType } from '../types';
 
 type TranslateFn = (zh: string, en: string) => string;
+
+type DeviceEditDraft = {
+  device_name: string;
+  device_sn: string;
+  device_type: string;
+  position: string;
+  note: string;
+  active: boolean;
+};
 
 type DevicesPageProps = {
   t: TranslateFn;
   isLocked: boolean;
   isReadOnly?: boolean;
-  deviceRowsFiltered: any[];
+  deviceRowsFiltered: DeviceRow[];
   isAllFilteredDevicesSelected: boolean;
   setDeviceSelectedLabelSns: Dispatch<SetStateAction<string[]>>;
   normalizeDeviceSn: (value: string) => string;
   refreshDevicePanel: () => void | Promise<void>;
-  deviceSelectedLabelRows: any[];
+  deviceSelectedLabelRows: DeviceLabelPrintPayload[];
   deviceLabelBatchPrinting: boolean;
-  printDeviceLabelBatch: (rows: any[]) => void | Promise<void>;
+  printDeviceLabelBatch: (rows: DeviceLabelPrintPayload[]) => void | Promise<void>;
   deviceFileInputRef: RefObject<HTMLInputElement>;
   onDeviceFileSelected: (file: File | null) => void | Promise<void>;
   uploadDevices: () => void | Promise<void>;
@@ -24,15 +35,18 @@ type DevicesPageProps = {
   setDeviceSearch: (value: string) => void;
   deviceFilterType: DeviceType | '';
   setDeviceFilterType: (value: DeviceType | '') => void;
+  deviceFilterDepartment: string[];
+  setDeviceFilterDepartment: (value: string[]) => void;
   deviceFilterPosition: string;
   setDeviceFilterPosition: (value: string) => void;
+  deviceDepartmentOptions: Array<{ value: string; label: string }>;
   deviceBorrowedOnly: boolean;
   setDeviceBorrowedOnly: (value: boolean) => void;
   devicesError: string | null;
   DEVICE_TYPES: readonly string[]; // 现在是动态生成的可用类型列表
   ALLOWED_POSITIONS: readonly string[];
   normalizeDeviceType: (value: string) => DeviceType;
-  deviceCurrentBorrowBySn: Map<string, any>;
+  deviceCurrentBorrowBySn: Map<string, { staff_id?: string | null; staff_name?: string | null; created_at?: string | null }>;
   selectedDeviceLabelSnSet: Set<string>;
   deviceLastUserBySn: Map<string, string>;
   serverTime: Date;
@@ -41,7 +55,8 @@ type DevicesPageProps = {
   DEVICE_COUNTING_STALE_MS: number;
   deviceLabelPrintingSn: string | null;
   printDeviceLabel: (payload: { sn: string; name: string; position: string; type: string }) => void | Promise<void>;
-  toggleDeviceActive: (row: any) => void | Promise<void>;
+  toggleDeviceActive: (row: DeviceRow) => void | Promise<void>;
+  updateDevice: (original: DeviceRow, draft: DeviceEditDraft) => void | Promise<void>;
 };
 
 export default function DevicesPage({
@@ -65,8 +80,11 @@ export default function DevicesPage({
   setDeviceSearch,
   deviceFilterType,
   setDeviceFilterType,
+  deviceFilterDepartment,
+  setDeviceFilterDepartment,
   deviceFilterPosition,
   setDeviceFilterPosition,
+  deviceDepartmentOptions,
   deviceBorrowedOnly,
   setDeviceBorrowedOnly,
   devicesError,
@@ -82,9 +100,68 @@ export default function DevicesPage({
   DEVICE_COUNTING_STALE_MS,
   deviceLabelPrintingSn,
   printDeviceLabel,
-  toggleDeviceActive
+  toggleDeviceActive,
+  updateDevice
 }: DevicesPageProps) {
   const writeLocked = isLocked || isReadOnly;
+  const [editingRow, setEditingRow] = useState<DeviceRow | null>(null);
+  const [editDraft, setEditDraft] = useState<DeviceEditDraft>({
+    device_name: '',
+    device_sn: '',
+    device_type: 'PDA',
+    position: '',
+    note: '',
+    active: true
+  });
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const openDeviceEdit = (row: DeviceRow) => {
+    setEditingRow(row);
+    setEditDraft({
+      device_name: String(row.device_name ?? row.name ?? '').trim(),
+      device_sn: normalizeDeviceSn(String(row.device_sn ?? row.sn ?? '')),
+      device_type: normalizeDeviceType(String(row.device_type ?? row.type ?? 'PDA')),
+      position: String(row.position ?? '').trim(),
+      note: String(row.note ?? ''),
+      active: row.active !== false
+    });
+    setEditError(null);
+  };
+  const closeDeviceEdit = () => {
+    if (editSaving) return;
+    setEditingRow(null);
+    setEditError(null);
+  };
+  const saveDeviceEdit = async () => {
+    if (!editingRow || editSaving) return;
+    const nextDraft = {
+      ...editDraft,
+      device_name: editDraft.device_name.trim(),
+      device_sn: normalizeDeviceSn(editDraft.device_sn),
+      device_type: editDraft.device_type.trim(),
+      position: editDraft.position.trim(),
+      note: editDraft.note.trim()
+    };
+    if (!nextDraft.device_sn) {
+      setEditError(t('SN 必填。', 'SN is required.'));
+      return;
+    }
+    if (!nextDraft.device_type) {
+      setEditError(t('类型必填。', 'Type is required.'));
+      return;
+    }
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      await updateDevice(editingRow, nextDraft);
+      setEditingRow(null);
+    } catch (error) {
+      setEditError(String((error as Error)?.message ?? error ?? t('保存失败。', 'Save failed.')));
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   return (
     <section className="glass reveal rounded-3xl px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -170,7 +247,7 @@ export default function DevicesPage({
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-5">
               <input
                 value={deviceSearch}
                 onChange={(e) => setDeviceSearch(e.target.value)}
@@ -188,6 +265,19 @@ export default function DevicesPage({
                 {DEVICE_TYPES.map((item) => (
                   <option key={item} value={item}>
                     {item}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={deviceFilterDepartment[0] ?? ''}
+                onChange={(e) => setDeviceFilterDepartment(e.target.value ? [e.target.value] : [])}
+                disabled={isLocked}
+                className="h-10 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">{t('全部部门', 'All dept')}</option>
+                {deviceDepartmentOptions.map((department) => (
+                  <option key={department.value} value={department.value}>
+                    {department.label}
                   </option>
                 ))}
               </select>
@@ -218,7 +308,7 @@ export default function DevicesPage({
 
             {devicesError && <p className="mt-3 text-sm text-ember">{devicesError}</p>}
             {!devicesError && (
-              <div className="mt-3 grid max-h-[70vh] grid-cols-4 gap-2 overflow-auto pr-1 md:grid-cols-5 xl:grid-cols-7 2xl:grid-cols-8">
+              <div className="mt-4 grid max-h-[70vh] grid-cols-1 gap-3 overflow-auto pr-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
                 {deviceRowsFiltered.map((row) => {
                   const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
                   const type = normalizeDeviceType(String(row.device_type ?? row.type ?? 'PDA'));
@@ -269,7 +359,7 @@ export default function DevicesPage({
                   return (
                     <div
                       key={String(row.id ?? sn)}
-                      className={['aspect-square rounded-xl border px-3 py-2 transition-colors', cardToneClass, selected ? 'ring-2 ring-neon/80' : ''].join(' ')}
+                      className={['min-h-[216px] rounded-xl border px-3 py-3 transition-colors', cardToneClass, selected ? 'ring-2 ring-neon/80' : ''].join(' ')}
                     >
                       <div className="flex h-full flex-col justify-between">
                         <div>
@@ -316,7 +406,7 @@ export default function DevicesPage({
                             </div>
                           )}
                         </div>
-                        <div className="mt-2 grid grid-cols-2 gap-1.5">
+                        <div className="mt-3 grid grid-cols-3 gap-2">
                           <button
                             type="button"
                             disabled={isLocked || deviceLabelPrintingSn === sn || deviceLabelBatchPrinting}
@@ -328,17 +418,31 @@ export default function DevicesPage({
                                 type
                               })
                             }
-                            className="rounded-xl bg-white/10 px-2 py-1 text-[11px] font-semibold text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                            aria-label={t('打印标签', 'Print label')}
+                            title={t('打印标签', 'Print label')}
+                            className="inline-flex h-9 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-white/10 text-slate-100 transition hover:border-emerald-300/40 hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-emerald-300/40 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            {deviceLabelPrintingSn === sn ? t('生成中...', 'Generating...') : t('打印标签', 'Print')}
+                            <Printer className="h-4 w-4" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={writeLocked}
+                            onClick={() => openDeviceEdit(row)}
+                            aria-label={t('更改', 'Edit')}
+                            title={t('更改', 'Edit')}
+                            className="inline-flex h-9 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-white/10 text-slate-100 transition hover:border-sky-300/40 hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-sky-300/40 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <Pencil className="h-4 w-4" aria-hidden="true" />
                           </button>
                           <button
                             type="button"
                             disabled={writeLocked}
                             onClick={() => void toggleDeviceActive(row)}
-                            className="rounded-xl bg-white/10 px-2 py-1 text-[11px] font-semibold text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+                            aria-label={active ? t('停用', 'Disable') : t('启用', 'Enable')}
+                            title={active ? t('停用', 'Disable') : t('启用', 'Enable')}
+                            className="inline-flex h-9 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-white/10 text-slate-100 transition hover:border-amber-300/40 hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-amber-300/40 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            {active ? t('停用', 'Disable') : t('启用', 'Enable')}
+                            <Power className="h-4 w-4" aria-hidden="true" />
                           </button>
                         </div>
                       </div>
@@ -353,6 +457,115 @@ export default function DevicesPage({
           </div>
         </div>
       </div>
+      {editingRow && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4 py-6" onClick={closeDeviceEdit}>
+          <div
+            className="w-full max-w-2xl rounded-3xl border border-white/10 bg-slate-950 p-5 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-4">
+              <h3 className="font-display text-xl tracking-[0.08em] text-white">{t('更改设备', 'Edit Device')}</h3>
+              <button
+                type="button"
+                disabled={editSaving}
+                onClick={closeDeviceEdit}
+                className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {t('关闭', 'Close')}
+              </button>
+            </div>
+            <div className="grid gap-4 py-5 md:grid-cols-2">
+              <label className="space-y-2 text-sm font-medium text-slate-300">
+                <span>{t('设备名', 'Name')}</span>
+                <input
+                  value={editDraft.device_name}
+                  onChange={(event) => setEditDraft((prev) => ({ ...prev, device_name: event.target.value }))}
+                  disabled={editSaving}
+                  className="h-11 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                />
+              </label>
+              <label className="space-y-2 text-sm font-medium text-slate-300">
+                <span>SN</span>
+                <input
+                  value={editDraft.device_sn}
+                  onChange={(event) => setEditDraft((prev) => ({ ...prev, device_sn: event.target.value }))}
+                  disabled={editSaving}
+                  className="h-11 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm uppercase text-white outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                />
+              </label>
+              <label className="space-y-2 text-sm font-medium text-slate-300">
+                <span>{t('类型', 'Type')}</span>
+                <input
+                  value={editDraft.device_type}
+                  list="device-edit-type-options"
+                  onChange={(event) => setEditDraft((prev) => ({ ...prev, device_type: event.target.value }))}
+                  disabled={editSaving}
+                  className="h-11 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                />
+                <datalist id="device-edit-type-options">
+                  {DEVICE_TYPES.map((item) => (
+                    <option key={item} value={item} />
+                  ))}
+                </datalist>
+              </label>
+              <label className="space-y-2 text-sm font-medium text-slate-300">
+                <span>{t('岗位', 'Position')}</span>
+                <input
+                  value={editDraft.position}
+                  list="device-edit-position-options"
+                  onChange={(event) => setEditDraft((prev) => ({ ...prev, position: event.target.value }))}
+                  disabled={editSaving}
+                  className="h-11 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                />
+                <datalist id="device-edit-position-options">
+                  {ALLOWED_POSITIONS.map((item) => (
+                    <option key={item} value={item} />
+                  ))}
+                </datalist>
+              </label>
+              <label className="space-y-2 text-sm font-medium text-slate-300 md:col-span-2">
+                <span>{t('备注', 'Note')}</span>
+                <textarea
+                  value={editDraft.note}
+                  onChange={(event) => setEditDraft((prev) => ({ ...prev, note: event.target.value }))}
+                  disabled={editSaving}
+                  rows={4}
+                  className="w-full resize-none rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60"
+                />
+              </label>
+              <label className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 text-sm font-medium text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={editDraft.active}
+                  onChange={(event) => setEditDraft((prev) => ({ ...prev, active: event.target.checked }))}
+                  disabled={editSaving}
+                  className="h-4 w-4 accent-lime-400 disabled:cursor-not-allowed"
+                />
+                {t('启用', 'Active')}
+              </label>
+            </div>
+            {editError && <div className="mb-4 rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{editError}</div>}
+            <div className="flex items-center justify-end gap-2 border-t border-white/10 pt-4">
+              <button
+                type="button"
+                disabled={editSaving}
+                onClick={closeDeviceEdit}
+                className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {t('取消', 'Cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={editSaving}
+                onClick={() => void saveDeviceEdit()}
+                className="rounded-xl bg-neon px-5 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {editSaving ? t('保存中...', 'Saving...') : t('保存', 'Save')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

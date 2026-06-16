@@ -39,7 +39,7 @@ describe('api/corrections', () => {
                   limit: async () =>
                     options?.employeeLookupErrorMessage
                       ? { data: null, error: { message: options.employeeLookupErrorMessage } }
-                      : { data: [{ terminated_at: options?.terminatedAt ?? null }], error: null }
+                      : { data: [{ staff_id: 'US010454', terminated_at: options?.terminatedAt ?? null }], error: null }
                 })
               })
             };
@@ -63,7 +63,7 @@ describe('api/corrections', () => {
             return {
               select: () => ({
                 eq: () => ({
-                  limit: async () => ({ data: [{ terminated_at: null }], error: null })
+                  limit: async () => ({ data: [{ staff_id: 'US010454', terminated_at: null }], error: null })
                 })
               })
             };
@@ -215,7 +215,24 @@ describe('api/corrections', () => {
     ]);
   });
 
-  test('returns 409 for terminated employee', async () => {
+  test('allows correction inserts on the termination date', async () => {
+    process.env.ADMIN_TOKEN = 'secret';
+    process.env.SUPABASE_URL = 'https://example.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role';
+    mockSupabaseModule({ terminatedAt: '2026-04-20T08:00:00Z' });
+    const { default: handler } = await import('../../api/corrections');
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer secret' },
+      body: { staff_id: 'US010454', action: 'OUT', effective_at: '2026-04-20T18:00:00Z' }
+    };
+    const res = createRes();
+    await handler(req, res);
+    expect(res.code).toBe(200);
+    expect(res.body).toEqual({ status: 'ok' });
+  });
+
+  test('allows admin correction inserts for terminated employees', async () => {
     process.env.ADMIN_TOKEN = 'secret';
     process.env.SUPABASE_URL = 'https://example.supabase.co';
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role';
@@ -228,8 +245,8 @@ describe('api/corrections', () => {
     };
     const res = createRes();
     await handler(req, res);
-    expect(res.code).toBe(409);
-    expect(String(res.body?.error ?? '')).toContain('Terminated employee cannot punch');
+    expect(res.code).toBe(200);
+    expect(res.body).toEqual({ status: 'ok' });
   });
 
   test('returns 500 when employee lookup fails', async () => {
@@ -294,7 +311,7 @@ describe('api/corrections', () => {
             return {
               select: () => ({
                 eq: () => ({
-                  limit: async () => ({ data: [{ terminated_at: null }], error: null })
+                  limit: async () => ({ data: [{ staff_id: 'US010454', terminated_at: null }], error: null })
                 })
               })
             };
