@@ -1845,6 +1845,17 @@ export default function AdminAppPage() {
     if (value === 'late') return 'indigo';
     return 'slate';
   };
+  const renderScheduleEmptyPill = (content: ReactNode = null, title?: string) => (
+    <span
+      title={title}
+      className={[
+        'inline-flex h-[22px] min-w-[52px] items-center justify-center px-2 text-center text-[10px] font-semibold leading-none',
+        themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'
+      ].join(' ')}
+    >
+      {content === '-' ? null : content}
+    </span>
+  );
   const renderScheduleGlowBadge = (
     content: ReactNode,
     toneKey: LabelToneKey,
@@ -1852,9 +1863,10 @@ export default function AdminAppPage() {
     title?: string
   ) => {
     const glowTheme = POSITION_GLOW_THEME[toneKey];
+    const outerClassName = innerClassName.includes('w-[58px]') ? ' w-[58px]' : '';
     return (
       <BorderGlow
-        className="admin-position-badge-glow admin-schedule-badge-glow"
+        className={`admin-position-badge-glow admin-schedule-badge-glow${outerClassName}`}
         edgeSensitivity={30}
         glowColor={glowTheme.glowColor}
         backgroundColor={POSITION_GLOW_BACKGROUND[toneKey] ?? '#120F17'}
@@ -1875,7 +1887,36 @@ export default function AdminAppPage() {
           ].join(' ')}
           title={title}
         >
-          {content}
+          {content === '-' ? null : content}
+        </span>
+      </BorderGlow>
+    );
+  };
+  const renderScheduleLabelGlowFrame = (content: ReactNode, toneKey: LabelToneKey, title?: string) => {
+    const glowTheme = POSITION_GLOW_THEME[toneKey];
+    return (
+      <BorderGlow
+        className="admin-position-badge-glow admin-schedule-badge-glow"
+        edgeSensitivity={30}
+        glowColor={glowTheme.glowColor}
+        backgroundColor={POSITION_GLOW_BACKGROUND[toneKey] ?? '#120F17'}
+        borderRadius={999}
+        glowRadius={18}
+        glowIntensity={1}
+        coneSpread={25}
+        interactive={false}
+        rotateDuration={4200}
+        colors={glowTheme.colors}
+        fillOpacity={0.5}
+      >
+        <span
+          title={title}
+          className={[
+            'inline-flex h-[22px] w-[58px] items-center justify-center rounded-full px-2 text-center text-[10px] font-semibold leading-none',
+            themeMode === 'light' ? 'text-white' : 'text-slate-100'
+          ].join(' ')}
+        >
+          {content === '-' ? null : content}
         </span>
       </BorderGlow>
     );
@@ -6998,14 +7039,31 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setDepartedEmployeesLoading(true);
       setDepartedEmployeesError(null);
       try {
-        const run = async (selectExpr: string) =>
+        const buildSelect = (mode: EmployeeColumnMode, includeTerminationType: boolean) => {
+          const base =
+            mode === 'cased'
+              ? 'staff_id, name, "Agency", "Position", active, terminated_at'
+              : 'staff_id, name, agency, position, active, terminated_at';
+          return includeTerminationType ? `${base}, termination_type` : base;
+        };
+        const run = async (mode: EmployeeColumnMode, includeTerminationType: boolean) =>
           await supabase
             .from(EMPLOYEE_TABLE)
-            .select(selectExpr)
+            .select(buildSelect(mode, includeTerminationType))
             .not('terminated_at', 'is', null)
             .order('terminated_at', { ascending: false })
             .limit(1000);
-        const res = await run('*');
+        let mode = await resolveEmployeeColumnMode();
+        let res = await run(mode, true);
+        if (res.error) {
+          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
+          employeeColumnModeRef.current = flipped;
+          mode = flipped;
+          res = await run(mode, true);
+        }
+        if (res.error && /termination_type/i.test(String(res.error.message ?? ''))) {
+          res = await run(mode, false);
+        }
         if (res.error) {
           setDepartedEmployees([]);
           setDepartedEmployeesError(res.error.message);
@@ -14800,9 +14858,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }),
     [dailyListVisiblePositions, dailyListFilterPositions]
   );
+  const tomorrowDailyListNonJdlRows = useMemo(() => {
+    const isNonJdlRow = (row: DailyListRow) => !isScheduleOnlyAgency(String(row.agency ?? '').trim());
+    return {
+      earlyRows: tomorrowDailyList.earlyRows.filter(isNonJdlRow),
+      lateRows: tomorrowDailyList.lateRows.filter(isNonJdlRow)
+    };
+  }, [tomorrowDailyList.earlyRows, tomorrowDailyList.lateRows]);
   const tomorrowDailyRowsDisplayed = useMemo(() => {
     if (selectedDailyFilterPositions.length === 0) {
-      return { earlyRows: tomorrowDailyList.earlyRows, lateRows: tomorrowDailyList.lateRows };
+      return tomorrowDailyListNonJdlRows;
     }
     const allowed = new Set<string>(
       selectedDailyFilterPositions
@@ -14814,10 +14879,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return Boolean(pos && allowed.has(pos));
     };
     return {
-      earlyRows: tomorrowDailyList.earlyRows.filter(match),
-      lateRows: tomorrowDailyList.lateRows.filter(match)
+      earlyRows: tomorrowDailyListNonJdlRows.earlyRows.filter(match),
+      lateRows: tomorrowDailyListNonJdlRows.lateRows.filter(match)
     };
-  }, [tomorrowDailyList, selectedDailyFilterPositions]);
+  }, [tomorrowDailyListNonJdlRows, selectedDailyFilterPositions]);
   const dailyListDisplayedCapacities = useMemo(
     () => ({
       early: sumDailyListCapacityRows(tomorrowDailyRowsDisplayed.earlyRows),
@@ -14825,7 +14890,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }),
     [tomorrowDailyRowsDisplayed, dailyListCapacityByRowKey]
   );
-  const canCopyDailyListAll = tomorrowDailyList.earlyRows.length + tomorrowDailyList.lateRows.length > 0;
+  const canCopyDailyListAll = tomorrowDailyListNonJdlRows.earlyRows.length + tomorrowDailyListNonJdlRows.lateRows.length > 0;
   const canCopyDailyListEarly = tomorrowDailyRowsDisplayed.earlyRows.length > 0;
   const canCopyDailyListLate = tomorrowDailyRowsDisplayed.lateRows.length > 0;
   const dailyListDateDisplay = useMemo(() => {
@@ -15689,8 +15754,8 @@ const makeDailyListTsv = (rows: DailyListRow[]) =>
       )
       .join('\n');
   const copyDailyList = async (scope: 'early' | 'late' | 'all') => {
-    const early = scope === 'all' ? tomorrowDailyList.earlyRows : tomorrowDailyRowsDisplayed.earlyRows;
-    const late = scope === 'all' ? tomorrowDailyList.lateRows : tomorrowDailyRowsDisplayed.lateRows;
+    const early = scope === 'all' ? tomorrowDailyListNonJdlRows.earlyRows : tomorrowDailyRowsDisplayed.earlyRows;
+    const late = scope === 'all' ? tomorrowDailyListNonJdlRows.lateRows : tomorrowDailyRowsDisplayed.lateRows;
     const mmddyyyy = (() => {
       const [yyyy, mm, dd] = String(tomorrowDailyList.targetDate ?? '').split('-');
       if (!yyyy || !mm || !dd) return '';
@@ -17401,7 +17466,7 @@ ${rowsToHtml(late)}
                                 {renderScheduleGlowBadge(
                                   effectiveWorkDays,
                                   getScheduleWorkDaysToneKey(effectiveWorkDays),
-                                  'min-w-[32px] px-2.5 py-[5px] tabular-nums'
+                                  'min-w-[38px] px-1.5 py-0.5 tabular-nums'
                                 )}
                               </td>
                               <td className={['px-1 py-2 truncate', scheduleBodyTextClass].join(' ')}>{agency || '-'}</td>
@@ -17419,93 +17484,113 @@ ${rowsToHtml(late)}
                                     {scheduleDriverInfo.label}
                                   </span>
                                 ) : (
-                                  <span className={scheduleBodyTextClass}>-</span>
+                                  <span className={scheduleBodyTextClass} />
                                 )}
                               </td>
                               <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
-                                <BorderGlow
-                                  className="admin-position-badge-glow admin-schedule-badge-glow"
-                                  edgeSensitivity={30}
-                                  glowColor={positionGlowTheme.glowColor}
-                                  backgroundColor={positionGlowBackground}
-                                  borderRadius={999}
-                                  glowRadius={18}
-                                  glowIntensity={1}
-                                  coneSpread={25}
-                                  interactive={false}
-                                  rotateDuration={positionGlowDuration}
-                                  colors={positionGlowTheme.colors}
-                                  fillOpacity={0.5}
-                                >
-                                  <span
-                                    className={[
-                                      'inline-flex min-w-[54px] items-center justify-center rounded-full px-2.5 py-[5px] text-[10px] font-semibold uppercase tracking-[0.12em]',
-                                      themeMode === 'light' ? 'text-white' : 'text-slate-100'
-                                    ].join(' ')}
-                                  >
-                                    {position || '-'}
-                                  </span>
-                                </BorderGlow>
-                              </td>
-                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
-                                {canEditScheduleLabel ? (
+                                {position ? (
                                   <BorderGlow
                                     className="admin-position-badge-glow admin-schedule-badge-glow"
                                     edgeSensitivity={30}
-                                    glowColor={POSITION_GLOW_THEME[label ? getScheduleLabelTone(label) : 'slate'].glowColor}
-                                    backgroundColor={POSITION_GLOW_BACKGROUND[label ? getScheduleLabelTone(label) : 'slate'] ?? '#120F17'}
+                                    glowColor={positionGlowTheme.glowColor}
+                                    backgroundColor={positionGlowBackground}
                                     borderRadius={999}
                                     glowRadius={18}
                                     glowIntensity={1}
                                     coneSpread={25}
                                     interactive={false}
-                                    rotateDuration={4200}
-                                    colors={POSITION_GLOW_THEME[label ? getScheduleLabelTone(label) : 'slate'].colors}
+                                    rotateDuration={positionGlowDuration}
+                                    colors={positionGlowTheme.colors}
                                     fillOpacity={0.5}
                                   >
-                                    <select
-                                      value={labelOptions.includes(label) ? label : ''}
-                                      disabled={labelSaving || isLocked}
-                                      onChange={(event) => void updateScheduleEmployeeLabel(employee, event.target.value)}
-                                      aria-label={t('修改 Label', 'Edit label')}
-                                      title={labelSaving ? t('保存中...', 'Saving...') : t('修改 Label', 'Edit label')}
-                                      style={{ backgroundImage: 'none' }}
+                                    <span
                                       className={[
-                                        'h-[22px] w-[58px] appearance-none rounded-full border-0 bg-transparent px-2 text-center text-[10px] font-semibold leading-none outline-none transition [text-align-last:center] disabled:cursor-not-allowed disabled:opacity-60',
+                                        'inline-flex min-w-[54px] items-center justify-center rounded-full px-2.5 py-[5px] text-[10px] font-semibold uppercase tracking-[0.12em]',
                                         themeMode === 'light' ? 'text-white' : 'text-slate-100'
                                       ].join(' ')}
                                     >
-                                      {!labelOptions.includes(label) ? <option value="">-</option> : null}
+                                      {position}
+                                    </span>
+                                  </BorderGlow>
+                                ) : (
+                                  renderScheduleEmptyPill()
+                                )}
+                              </td>
+                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
+                                {canEditScheduleLabel && !label ? (
+                                  <span
+                                    className="relative inline-flex align-middle"
+                                    title={labelSaving ? t('保存中...', 'Saving...') : t('修改 Label', 'Edit label')}
+                                  >
+                                    {renderScheduleLabelGlowFrame(null, 'slate')}
+                                    <select
+                                      value=""
+                                      disabled={labelSaving || isLocked}
+                                      onChange={(event) => void updateScheduleEmployeeLabel(employee, event.target.value)}
+                                      aria-label={t('修改 Label', 'Edit label')}
+                                      style={{ backgroundImage: 'none' }}
+                                      className="absolute inset-0 h-full w-full cursor-pointer appearance-none border-0 bg-transparent text-transparent opacity-0 outline-none disabled:cursor-not-allowed"
+                                    >
+                                      <option value="" />
                                       {labelOptions.map((item) => (
                                         <option key={`${staff}-label-${item}`} value={item}>
                                           {item}
                                         </option>
                                       ))}
                                     </select>
-                                  </BorderGlow>
+                                  </span>
+                                ) : canEditScheduleLabel ? (
+                                  <span
+                                    className="relative inline-flex align-middle"
+                                    title={labelSaving ? t('保存中...', 'Saving...') : t('修改 Label', 'Edit label')}
+                                  >
+                                    {renderScheduleLabelGlowFrame(
+                                      <span className="truncate">{label}</span>,
+                                      getScheduleLabelTone(label)
+                                    )}
+                                    <select
+                                      value={labelOptions.includes(label) ? label : ''}
+                                      disabled={labelSaving || isLocked}
+                                      onChange={(event) => void updateScheduleEmployeeLabel(employee, event.target.value)}
+                                      aria-label={t('修改 Label', 'Edit label')}
+                                      style={{ backgroundImage: 'none' }}
+                                      className="absolute inset-0 h-full w-full cursor-pointer appearance-none border-0 bg-transparent text-transparent opacity-0 outline-none disabled:cursor-not-allowed"
+                                    >
+                                      {!labelOptions.includes(label) ? <option value="" /> : null}
+                                      {labelOptions.map((item) => (
+                                        <option key={`${staff}-label-${item}`} value={item}>
+                                          {item}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </span>
                                 ) : label ? (
-                                  renderScheduleGlowBadge(
+                                  renderScheduleLabelGlowFrame(
                                     <span className="truncate">{label}</span>,
-                                    getScheduleLabelTone(label),
-                                    'max-w-[64px] px-2.5 py-[5px]'
+                                    getScheduleLabelTone(label)
                                   )
                                 ) : (
-                                  '-'
+                                  renderScheduleLabelGlowFrame(null, 'slate')
                                 )}
                               </td>
                               <td className={['px-1 py-2 text-center', scheduleBodyTextClass].join(' ')}>
                                 {(() => {
                                   const dbShift = normalizeShiftValue(String(employee.shift ?? '').trim());
                                   const shift = dbShift || '';
-                                  const shiftLabel = shift === 'early' ? t('早班', 'Morning') : shift === 'late' ? t('晚班', 'Night') : '-';
+                                  const shiftLabel = shift === 'early' ? t('早班', 'Morning') : shift === 'late' ? t('晚班', 'Night') : '';
                                   return renderScheduleGlowBadge(
                                     shiftLabel,
                                     getScheduleShiftToneKey(shift),
-                                    'min-w-[52px] px-2.5 py-[5px] tracking-[0.04em]'
+                                    'h-[22px] w-[58px] px-2 tracking-[0.04em]'
                                   );
                                 })()}
                               </td>
-                              <td className={['px-1 py-2 text-center font-mono', scheduleBodyTextClass].join(' ')}>{formatUph(scheduleUphByStaffId[staff])}</td>
+                              <td className={['px-1 py-2 text-center font-mono', scheduleBodyTextClass].join(' ')}>
+                                {(() => {
+                                  const uph = formatUph(scheduleUphByStaffId[staff]);
+                                  return uph === '-' ? '' : uph;
+                                })()}
+                              </td>
                               <td className="px-1 py-2 text-center">
                                 {(() => {
                                   const count = Number(scheduleMonthlyAbsentByStaffId[staff] ?? 0);
