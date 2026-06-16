@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import type { EmployeeRow, TerminationType } from '../types';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -35,6 +35,9 @@ const formatDate = (value: unknown) => {
   return date.toISOString().slice(0, 10);
 };
 
+const ROW_HEIGHT = 50;
+const OVERSCAN = 10;
+
 export default function DepartedEmployeesModal({
   open,
   t,
@@ -55,6 +58,12 @@ export default function DepartedEmployeesModal({
   const [agency, setAgency] = useState('');
   const [position, setPosition] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | TerminationType>('all');
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
+  const visibleStartRef = useRef(0);
+  const pendingScrollTopRef = useRef(0);
+  const scrollRafRef = useRef<number | null>(null);
+  const [visibleStart, setVisibleStart] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(560);
   const isLight = themeMode === 'light';
 
   const agencyOptions = useMemo(
@@ -95,6 +104,62 @@ export default function DepartedEmployeesModal({
       return haystack.includes(needle);
     });
   }, [agency, position, rows, search, typeFilter]);
+
+  useEffect(() => {
+    const el = tableScrollRef.current;
+    if (!el) return;
+    const syncHeight = () => setViewportHeight(el.clientHeight || 560);
+    syncHeight();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(syncHeight);
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
+    window.addEventListener('resize', syncHeight);
+    return () => window.removeEventListener('resize', syncHeight);
+  }, [open]);
+
+  useEffect(() => {
+    visibleStartRef.current = 0;
+    setVisibleStart(0);
+    if (tableScrollRef.current) tableScrollRef.current.scrollTop = 0;
+  }, [agency, position, search, typeFilter, rows]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current);
+    };
+  }, []);
+
+  const handleScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    pendingScrollTopRef.current = event.currentTarget.scrollTop;
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const nextStart = Math.max(0, Math.floor(pendingScrollTopRef.current / ROW_HEIGHT) - OVERSCAN);
+      if (nextStart === visibleStartRef.current) return;
+      visibleStartRef.current = nextStart;
+      setVisibleStart(nextStart);
+    });
+  }, []);
+
+  const visibleMeta = useMemo(() => {
+    const total = filteredRows.length;
+    const visibleCount = Math.ceil(Math.max(1, viewportHeight) / ROW_HEIGHT) + OVERSCAN * 2;
+    const start = Math.min(visibleStart, total);
+    const end = Math.min(total, start + visibleCount);
+    return {
+      start,
+      end,
+      topSpacerHeight: start * ROW_HEIGHT,
+      bottomSpacerHeight: Math.max(0, (total - end) * ROW_HEIGHT)
+    };
+  }, [filteredRows.length, viewportHeight, visibleStart]);
+
+  const visibleRows = useMemo(
+    () => filteredRows.slice(visibleMeta.start, visibleMeta.end),
+    [filteredRows, visibleMeta.end, visibleMeta.start]
+  );
 
   if (!open) return null;
 
@@ -155,7 +220,12 @@ export default function DepartedEmployeesModal({
 
         {error ? <div className="px-5 pb-3 text-sm text-ember">{error}</div> : null}
 
-        <div className="min-h-0 flex-1 overflow-auto px-5 pb-5">
+        <div
+          ref={tableScrollRef}
+          className="min-h-0 flex-1 overflow-auto px-5 pb-5"
+          style={{ contain: 'layout paint style' }}
+          onScroll={handleScroll}
+        >
           <table className="w-full min-w-[900px] table-fixed text-left text-sm">
             <thead className={['sticky top-0 z-10 border-b text-xs uppercase tracking-[0.18em]', isLight ? 'border-slate-200 bg-white text-slate-500' : 'border-white/10 bg-slate-950 text-slate-400'].join(' ')}>
               <tr>
@@ -169,11 +239,19 @@ export default function DepartedEmployeesModal({
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((row) => {
+              {visibleMeta.topSpacerHeight > 0 ? (
+                <tr aria-hidden="true">
+                  <td
+                    colSpan={canManageDeparted || canHardDelete ? 7 : 6}
+                    style={{ height: visibleMeta.topSpacerHeight, padding: 0, border: 0 }}
+                  />
+                </tr>
+              ) : null}
+              {visibleRows.map((row) => {
                 const staffId = normalizeText(row.staff_id);
                 const type = normalizeTerminationType(row.termination_type);
                 return (
-                  <tr key={`${staffId}:${row.terminated_at}`} className="border-b border-white/5 last:border-0">
+                  <tr key={`${staffId}:${row.terminated_at}`} className="h-[50px] border-b border-white/5 last:border-0">
                     <td className="px-3 py-3 font-mono">{formatDate(row.terminated_at)}</td>
                     <td className="px-3 py-3">
                       <span className="block truncate" title={normalizeText(row.name) || '-'}>
@@ -228,6 +306,14 @@ export default function DepartedEmployeesModal({
                   </tr>
                 );
               })}
+              {visibleMeta.bottomSpacerHeight > 0 ? (
+                <tr aria-hidden="true">
+                  <td
+                    colSpan={canManageDeparted || canHardDelete ? 7 : 6}
+                    style={{ height: visibleMeta.bottomSpacerHeight, padding: 0, border: 0 }}
+                  />
+                </tr>
+              ) : null}
             </tbody>
           </table>
           {!loading && filteredRows.length === 0 ? (
