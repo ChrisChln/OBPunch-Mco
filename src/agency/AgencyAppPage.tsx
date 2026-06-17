@@ -33,6 +33,7 @@ import {
 import { computeAgencySummaryCards, isAgencyWorklikeState } from './boardMetrics';
 import { buildDriverGroupWarnings, getNextDriverGroupCode } from './driverGroups';
 import { normalizeAgencyNote } from './notes';
+import { formatAgencyPayrate, normalizeAgencyPayrateInput } from './payrate';
 import type {
   AgencyBoard,
   AgencyEmployeeRow,
@@ -630,6 +631,7 @@ export default function AgencyAppPage() {
     label: '',
     entryTime: '',
     note: '',
+    payrate: '',
     count: 1,
     employeeName: '',
     lockedAgency: false,
@@ -1013,6 +1015,7 @@ export default function AgencyAppPage() {
       label: '',
       entryTime: '09:00',
       note: 'NEW',
+      payrate: '',
       count: 1,
       employeeName: '',
       lockedAgency: hasLockedAgency,
@@ -1034,6 +1037,7 @@ export default function AgencyAppPage() {
       label: '',
       entryTime: '09:00',
       note: 'NEW',
+      payrate: String(row.payrate ?? ''),
       count: 1,
       employeeName: String(row.name ?? ''),
       lockedAgency: true,
@@ -1116,7 +1120,10 @@ export default function AgencyAppPage() {
     }
     beginBusy(selectedNewHire ? 'Saving request' : 'Creating request');
     try {
-      await upsertAgencyNewHireDemand(supabase, newHireForm);
+      await upsertAgencyNewHireDemand(supabase, {
+        ...newHireForm,
+        payrate: normalizeAgencyPayrateInput(newHireForm.payrate)
+      });
       closeModal();
       await refreshBoard();
     } catch (nextError) {
@@ -1438,6 +1445,7 @@ export default function AgencyAppPage() {
     1 +
     1 +
     1 +
+    1 +
     (showStartTimeColumn ? 1 : 0);
 
   const scheduleCellByStaffDate = useMemo(() => {
@@ -1494,6 +1502,7 @@ export default function AgencyAppPage() {
         shift: row.shift,
         start_time: row.start_time,
         label: row.label,
+        payrate: row.payrate,
         state: row.days.find((item) => item.work_date === selectedDate)?.state ?? 'rest',
         fixed_work_count: weeklyWorkCountByStaffId.get(row.staff_id) ?? row.fixed_work_count,
         has_absent: absentMarkKeys.has(`${row.staff_id}__${selectedDate}`),
@@ -1564,6 +1573,7 @@ export default function AgencyAppPage() {
           shift: row.shift,
           start_time: row.start_time,
           label: row.label,
+          payrate: row.payrate,
           state: '',
           can_delete: row.can_delete
         })),
@@ -1706,6 +1716,7 @@ export default function AgencyAppPage() {
           agency: String(employee.agency ?? '').trim(),
           position: String(employee.position ?? '').trim(),
           shift: shiftLabel(employee.shift),
+          payrate: formatAgencyPayrate(employee.payrate),
           startTime: formatStartTime(employee.start_time),
           state: stateLabel(state)
         };
@@ -1716,6 +1727,7 @@ export default function AgencyAppPage() {
         agency: string;
         position: string;
         shift: string;
+        payrate: string;
         startTime: string;
         state: string;
       } => row !== null);
@@ -1731,7 +1743,7 @@ export default function AgencyAppPage() {
   ]);
 
   const exportSelectedDateWorkList = useCallback(async () => {
-    const header = ['Date', 'USID', 'Name', 'Agency', 'Position', 'Shift', 'Start Time', 'State'];
+    const header = ['Date', 'USID', 'Name', 'Agency', 'Position', 'Shift', 'Payrate', 'Start Time', 'State'];
     const rows = selectedDateWorkExportRows.map((row) => [
       selectedDate,
       row.staffId,
@@ -1739,13 +1751,14 @@ export default function AgencyAppPage() {
       row.agency,
       row.position,
       row.shift,
+      row.payrate,
       row.startTime,
       row.state
     ]);
     try {
       const XLSX = await import('xlsx');
       const worksheet = XLSX.utils.aoa_to_sheet([header, ...rows]);
-      worksheet['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+      worksheet['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Work List');
       XLSX.writeFile(workbook, `agency-worklist-${selectedDate}.xlsx`);
@@ -1907,6 +1920,7 @@ export default function AgencyAppPage() {
   const selectedNoteDirty =
     Boolean(selectedNoteEmployee) && normalizeAgencyNote(selectedNoteDraft) !== normalizeAgencyNote(selectedNoteEmployee?.agency_note);
   const selectedNoteSaving = selectedNoteStaffId ? savingNoteStaffIds.has(selectedNoteStaffId) : false;
+  const isNewHirePayrateInvalid = Boolean(String(newHireForm.payrate ?? '').trim()) && !normalizeAgencyPayrateInput(newHireForm.payrate);
   const selectedDriverGroupEmployee = driverGroupForm.sourceStaffId
     ? employeeRows.find((employee) => employee.staff_id === driverGroupForm.sourceStaffId) ?? null
     : null;
@@ -2028,18 +2042,19 @@ export default function AgencyAppPage() {
                   {filteredNewHireRequests.length === 0 && gapsByGroupOnSelectedDate.length === 0 ? <div className="text-sm text-slate-400">No new requests.</div> : null}
                   {filteredNewHireRequests.length > 0 ? (
                     <div className="overflow-x-auto rounded-[22px] border border-white/10 bg-white/[0.03]">
-                      <div className="min-w-[900px]">
-                        <div className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_96px_180px] items-center gap-3 px-4 py-2 text-[11px] uppercase tracking-[0.16em] text-slate-400">
+                      <div className="min-w-[980px]">
+                        <div className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_88px_96px_180px] items-center gap-3 px-4 py-2 text-[11px] uppercase tracking-[0.16em] text-slate-400">
                           <div>Name</div>
                           <div>Agency</div>
                           <div>Position</div>
                           <div>Shift</div>
+                          <div className="text-right">Payrate</div>
                           <div className="text-center">Start Time</div>
                           <div className="text-right">Actions</div>
                         </div>
                         <div className="h-px bg-white/10" />
                         {filteredNewHireRequests.map((row) => (
-                          <div key={row.staff_id} className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_96px_180px] items-center gap-3 px-4 py-4">
+                          <div key={row.staff_id} className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_88px_96px_180px] items-center gap-3 px-4 py-4">
                             <div className="min-w-0 text-sm text-slate-100">
                               <span className="block truncate">{String(row.name ?? '').trim() || '-'}</span>
                             </div>
@@ -2058,6 +2073,7 @@ export default function AgencyAppPage() {
                                 {shiftLabel(row.shift)}
                               </GlowLabelChip>
                             </div>
+                            <div className="text-right font-mono text-sm text-slate-300">{formatAgencyPayrate(row.payrate)}</div>
                             <div className="text-center font-mono text-sm text-slate-300">
                               {formatNewHireStartTime(row.start_time)}
                             </div>
@@ -2211,6 +2227,7 @@ export default function AgencyAppPage() {
                       <th className={[compactScheduleView ? 'w-[88px]' : 'w-[84px]', 'px-1 py-2'].join(' ')}>Position</th>
                       <th className={[compactScheduleView ? 'w-[66px]' : 'w-[60px]', 'px-1 py-2 text-center'].join(' ')}>Shift</th>
                       <th className={[compactScheduleView ? 'w-[128px]' : 'w-[116px]', 'px-1 py-2 text-center'].join(' ')}>Status</th>
+                      <th className="w-[76px] px-1 py-2 text-right">Payrate</th>
                       {showStartTimeColumn ? <th className="w-[68px] px-1 py-2 text-center">Start</th> : null}
                       {visibleWeekDates.map((workDate) => (
                         <th
@@ -2355,6 +2372,7 @@ export default function AgencyAppPage() {
                             <span>{agencyStatusLabel(employee.agencyStatus)}</span>
                           </span>
                         </td>
+                        <td className="px-1 py-2 text-right font-mono text-slate-300">{formatAgencyPayrate(employee.payrate)}</td>
                         {showStartTimeColumn ? (
                           <td className="px-1 py-2 text-center font-mono text-slate-300">
                             {formatStartTime(employee.start_time)}
@@ -2523,6 +2541,15 @@ export default function AgencyAppPage() {
               readOnly
               aria-label="Entry time"
             />
+            <input
+              value={newHireForm.payrate}
+              type="text"
+              inputMode="decimal"
+              onChange={(event) => setNewHireForm((prev) => ({ ...prev, payrate: event.target.value }))}
+              onBlur={() => setNewHireForm((prev) => ({ ...prev, payrate: normalizeAgencyPayrateInput(prev.payrate) }))}
+              placeholder="Payrate"
+              className={inputClass}
+            />
             {newHireForm.lockedWorkDate ? (
               <div className={[inputClass, 'flex items-center pl-3'].join(' ')}>
                 <span className="text-white">{newHireForm.workDate}</span>
@@ -2554,6 +2581,7 @@ export default function AgencyAppPage() {
               !String(newHireForm.agency ?? '').trim() ||
               !String(newHireForm.position ?? '').trim() ||
               !String(newHireForm.employeeName ?? '').trim() ||
+              isNewHirePayrateInvalid ||
               (!selectedNewHire && newHireSelectedOpenSlots <= 0)
             }
           >

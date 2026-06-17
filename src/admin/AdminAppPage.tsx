@@ -19,6 +19,7 @@ import {
   saveLabelToneMap
 } from '../lib/labelTone';
 import { matchesAuditSearch } from './auditSearch';
+import { createManualTemporaryStaffId, isNewHirePlaceholderStaffId, resolveEmployeeEditStaffIds } from './tempStaffIds';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import AdminHeader from './components/AdminHeader';
@@ -941,24 +942,6 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   }
   return '';
 };
-const isNewHirePlaceholderStaffId = (value: string) => {
-  const staff = String(value ?? '').trim().toUpperCase();
-  if (!staff) return false;
-  if (/^TUS\d{7,}$/i.test(staff)) return true;
-  if (/^TEMP-USID-[A-Z0-9]+-\d{4,}$/i.test(staff)) return true;
-  if (/^NEWREQ-\d{8}(?:-[A-Z]+)?-\d{3,}$/i.test(staff)) return true; // legacy format
-  return /^\d{4}[A-Z]+\d{3,}$/i.test(staff); // MMDD + POSITION + SEQ
-};
-const createManualTemporaryStaffId = (existingStaffIds: string[] = []) => {
-  let max = 0;
-  for (const value of existingStaffIds) {
-    const match = String(value ?? '').trim().toUpperCase().match(/^TUS(\d{7,})$/);
-    if (!match) continue;
-    const n = Number(match[1]);
-    if (Number.isFinite(n)) max = Math.max(max, n);
-  }
-  return `TUS${String(max + 1).padStart(7, '0')}`;
-};
 const isNewHirePlaceholderName = (value: string) => /^\d{2}\/\d{2}NEW\s+[A-Z]+(\d+)$/i.test(String(value ?? '').trim());
 const isNewHireFirstWorkDate = (staffId: string, workDate: Date | string) => {
   const staff = String(staffId ?? '').trim().toUpperCase();
@@ -977,6 +960,16 @@ const isNewHireFirstWorkDate = (staffId: string, workDate: Date | string) => {
   const month = match[1];
   const day = match[2];
   return dateText.slice(5, 7) === month && dateText.slice(8, 10) === day;
+};
+const isDailyListNewHireForDate = (value: string, workDate: Date | string) => {
+  const text = String(value ?? '').trim().toUpperCase();
+  if (!text) return false;
+  const dateText = typeof workDate === 'string' ? workDate : toDateOnly(workDate);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateText)) return false;
+  if (isNewHireFirstWorkDate(text, dateText)) return true;
+  const displayMatch = text.match(/^(\d{2})\/(\d{2})NEW\s+[A-Z]+\d+$/i);
+  if (!displayMatch) return false;
+  return dateText.slice(5, 7) === displayMatch[1] && dateText.slice(8, 10) === displayMatch[2];
 };
 const displayStaffId = (value: string) => String(value ?? '').trim();
 const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperCase();
@@ -2284,7 +2277,7 @@ export default function AdminAppPage() {
   const [dailyCapacityStaffStatsByStaffId, setDailyCapacityStaffStatsByStaffId] = useState<Record<string, DailyCapacityStaffStats>>({});
   const [dailyCapacityTemplatePayload, setDailyCapacityTemplatePayload] = useState<EffPayloadLite>(() => effDefaultPayload());
   const [dailyCapacityLoading, setDailyCapacityLoading] = useState(false);
-  const [dailyCapacityError, setDailyCapacityError] = useState<string | null>(null);
+  const [, setDailyCapacityError] = useState<string | null>(null);
   const [scheduleMistakeByStaffId, setScheduleMistakeByStaffId] = useState<Record<string, number>>({});
   const [scheduleMistakeDetailsByStaffId, setScheduleMistakeDetailsByStaffId] = useState<Record<string, ScheduleMistakeDetail[]>>({});
   const [scheduleMonthlyAbsentDatesByStaffId, setScheduleMonthlyAbsentDatesByStaffId] = useState<Record<string, string[]>>({});
@@ -2337,6 +2330,8 @@ export default function AdminAppPage() {
   const [dailyListOpen, setDailyListOpen] = useState(false);
   const [dailyListDateInput, setDailyListDateInput] = useState(() => toDateOnly(addDays(new Date(), 1)));
   const [dailyListNewHireOpen, setDailyListNewHireOpen] = useState(false);
+  const [dailyListNewHireDetailOpen, setDailyListNewHireDetailOpen] = useState(false);
+  const [dailyListNewHireDetailPosition, setDailyListNewHireDetailPosition] = useState('');
   const [dailyListNewHirePosition, setDailyListNewHirePosition] = useState<string>('');
   const [dailyListNewHireCount, setDailyListNewHireCount] = useState(1);
   const [dailyListNewHireAgency, setDailyListNewHireAgency] = useState('');
@@ -2352,6 +2347,7 @@ export default function AdminAppPage() {
   const [dailyListFilterPositions, setDailyListFilterPositions] = useState<DailyListLightFlags>(
     createEmptyDailyListLightFlags
   );
+  const [dailyListFilterAgency, setDailyListFilterAgency] = useState('');
   const dailyListSelectedPositionsRef = useRef<DailyListLightFlags>(createEmptyDailyListLightFlags());
   const dailyListLightsSaveSeqRef = useRef(0);
   const dailyListLightsPendingRef = useRef<{
@@ -8801,12 +8797,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
     const originalStaffRaw = String(employeeEditOriginalStaffId ?? '').trim();
-    const isPlaceholderOriginal = isNewHirePlaceholderStaffId(originalStaffRaw);
-    const originalStaff = isPlaceholderOriginal ? originalStaffRaw : normalizeStaffId(originalStaffRaw);
     const nextStaffInputRaw = String(employeeEditStaffId ?? '').trim();
-    const nextStaff = nextStaffInputRaw
-      ? normalizeStaffId(nextStaffInputRaw)
-      : createManualTemporaryStaffId(employees.map((row) => String(row.staff_id ?? '').trim()));
+    const { originalStaff, nextStaff, isPlaceholderOriginal } = resolveEmployeeEditStaffIds(originalStaffRaw, nextStaffInputRaw);
     if (!originalStaff || !nextStaff) return;
     if (!isPlaceholderOriginal && originalStaff !== nextStaff && !isValidStaffIdValue(nextStaff) && !isNewHirePlaceholderStaffId(nextStaff)) {
       setEmployeesError('Invalid staff ID format (e.g. US010454).');
@@ -14879,8 +14871,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       lateRows: tomorrowDailyList.lateRows.filter(isNonJdlRow)
     };
   }, [tomorrowDailyList.earlyRows, tomorrowDailyList.lateRows]);
+  const dailyListAgencyOptions = useMemo(() => {
+    const agencies = new Set<string>();
+    [...tomorrowDailyListNonJdlRows.earlyRows, ...tomorrowDailyListNonJdlRows.lateRows].forEach((row) => {
+      const agency = String(row.agency ?? '').trim();
+      if (agency) agencies.add(agency);
+    });
+    return Array.from(agencies).sort((a, b) => a.localeCompare(b, 'en-US'));
+  }, [tomorrowDailyListNonJdlRows]);
   const tomorrowDailyRowsDisplayed = useMemo(() => {
-    if (selectedDailyFilterPositions.length === 0) {
+    const selectedAgency = dailyListFilterAgency.trim().toLowerCase();
+    if (selectedDailyFilterPositions.length === 0 && !selectedAgency) {
       return tomorrowDailyListNonJdlRows;
     }
     const allowed = new Set<string>(
@@ -14890,13 +14891,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     );
     const match = (row: DailyListRow) => {
       const pos = normalizeDailyListPositionKey(String(row.position ?? '').trim());
-      return Boolean(pos && allowed.has(pos));
+      const agency = String(row.agency ?? '').trim().toLowerCase();
+      const matchesPosition = allowed.size === 0 || Boolean(pos && allowed.has(pos));
+      const matchesAgency = !selectedAgency || agency === selectedAgency;
+      return matchesPosition && matchesAgency;
     };
     return {
       earlyRows: tomorrowDailyListNonJdlRows.earlyRows.filter(match),
       lateRows: tomorrowDailyListNonJdlRows.lateRows.filter(match)
     };
-  }, [tomorrowDailyListNonJdlRows, selectedDailyFilterPositions]);
+  }, [tomorrowDailyListNonJdlRows, selectedDailyFilterPositions, dailyListFilterAgency]);
   const dailyListDisplayedCapacities = useMemo(
     () => ({
       early: sumDailyListCapacityRows(tomorrowDailyRowsDisplayed.earlyRows),
@@ -15015,6 +15019,80 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const dailyListTotalDemandCount = useMemo(
     () => Number(tomorrowDailyList.countedEarlyRows.length ?? 0) + Number(tomorrowDailyList.countedLateRows.length ?? 0),
     [tomorrowDailyList]
+  );
+  const dailyListDepartmentDemandSummary = useMemo(() => {
+    const counts: Record<'OB' | 'IB' | 'INV', number> = { OB: 0, IB: 0, INV: 0 };
+    for (const row of [...tomorrowDailyList.countedEarlyRows, ...tomorrowDailyList.countedLateRows]) {
+      const position = String(row.position ?? '').trim();
+      const positionKey = normalizeDailyListPositionKey(position) || position;
+      if (!dailyListSelectedPositions[positionKey] && !dailyListSelectedPositions[position]) continue;
+      const department = getDepartmentForPosition(row.position);
+      if (department === 'OB' || department === 'IB' || department === 'INV') counts[department] += 1;
+    }
+    return counts;
+  }, [dailyListSelectedPositions, getDepartmentForPosition, tomorrowDailyList]);
+  const dailyListDisplayedNewHireSummary = useMemo(() => {
+    const rows = [...tomorrowDailyRowsDisplayed.earlyRows, ...tomorrowDailyRowsDisplayed.lateRows];
+    const countByDepartmentAgency = new Map<string, { department: PositionDepartment; agency: string; count: number }>();
+    for (const row of rows) {
+      const staff = String(row.staff_id ?? '').trim();
+      const name = String(row.name ?? '').trim();
+      if (!isDailyListNewHireForDate(staff, tomorrowDailyList.targetDate) && !isDailyListNewHireForDate(name, tomorrowDailyList.targetDate)) continue;
+      const position = normalizePositionKey(String(row.position ?? '').trim()) || '-';
+      const department = getDepartmentForPosition(position);
+      const agency = String(row.agency ?? '').trim();
+      const key = `${department}__${agency.toLowerCase()}`;
+      const current = countByDepartmentAgency.get(key);
+      countByDepartmentAgency.set(key, {
+        department,
+        agency,
+        count: (current?.count ?? 0) + 1
+      });
+    }
+    const groups = Array.from(countByDepartmentAgency.values()).sort((left, right) => {
+      const departmentCompare = left.department.localeCompare(right.department, 'en-US');
+      if (departmentCompare !== 0) return departmentCompare;
+      return left.agency.localeCompare(right.agency, 'en-US');
+    });
+    return {
+      groups,
+      peopleCount: groups.reduce((sum, group) => sum + group.count, 0)
+    };
+  }, [getDepartmentForPosition, tomorrowDailyRowsDisplayed, tomorrowDailyList.targetDate]);
+  const dailyListNewHireDetailRows = useMemo(
+    () =>
+      [...tomorrowDailyList.earlyRows, ...tomorrowDailyList.lateRows]
+        .filter((row) => {
+          const staff = String(row.staff_id ?? '').trim();
+          const name = String(row.name ?? '').trim();
+          return isDailyListNewHireForDate(staff, tomorrowDailyList.targetDate) || isDailyListNewHireForDate(name, tomorrowDailyList.targetDate);
+        })
+        .sort((left, right) => {
+          const positionCompare = String(left.position ?? '').localeCompare(String(right.position ?? ''), 'en-US');
+          if (positionCompare !== 0) return positionCompare;
+          return String(left.agency ?? '').localeCompare(String(right.agency ?? ''), 'en-US');
+        }),
+    [tomorrowDailyList]
+  );
+  const dailyListNewHireDetailPositionOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          dailyListNewHireDetailRows
+            .map((row) => normalizePositionKey(String(row.position ?? '').trim()))
+            .filter((position): position is string => Boolean(position))
+        )
+      ).sort(
+        (left, right) => left.localeCompare(right, 'en-US')
+      ),
+    [dailyListNewHireDetailRows]
+  );
+  const dailyListNewHireDetailRowsFiltered = useMemo(
+    () =>
+      dailyListNewHireDetailPosition
+        ? dailyListNewHireDetailRows.filter((row) => normalizePositionKey(String(row.position ?? '').trim()) === dailyListNewHireDetailPosition)
+        : dailyListNewHireDetailRows,
+    [dailyListNewHireDetailPosition, dailyListNewHireDetailRows]
   );
 
   const scheduleEmployeesBase = useMemo(() => {
@@ -16100,7 +16178,7 @@ ${rowsToHtml(late)}
         setStatus({ tone: 'error', message: '暂无可导出的排班数据。' });
         return;
       }
-      if (scheduleShift !== 'early' && scheduleShift !== 'late') {
+      if (scheduleShift && scheduleShift !== 'early' && scheduleShift !== 'late') {
         setStatus({ tone: 'error', message: '请先在 Shift 里选择早班或晚班后再导出。' });
         return;
       }
@@ -16175,10 +16253,13 @@ ${rowsToHtml(late)}
         };
 
         const wb = XLSX.utils.book_new();
-        const shift = scheduleShift as 'early' | 'late';
-        const sheetName = shift === 'late' ? '1' : '0';
-        XLSX.utils.book_append_sheet(wb, buildSheet(shift), sheetName);
-        const filename = `ob_schedule_${sheetName}_${toDateOnly(scheduleWeekStart)}.xlsx`;
+        const shiftsToExport: Array<'early' | 'late'> = scheduleShift === 'early' || scheduleShift === 'late' ? [scheduleShift] : ['early', 'late'];
+        for (const shift of shiftsToExport) {
+          const sheetName = shift === 'late' ? '1' : '0';
+          XLSX.utils.book_append_sheet(wb, buildSheet(shift), sheetName);
+        }
+        const filenameShiftPart = shiftsToExport.length === 1 ? (shiftsToExport[0] === 'late' ? '1' : '0') : 'all';
+        const filename = `ob_schedule_${filenameShiftPart}_${toDateOnly(scheduleWeekStart)}.xlsx`;
         XLSX.writeFile(wb, filename);
         setStatus({ tone: 'success', message: `已导出：${filename}` });
       } catch (err: any) {
@@ -18255,111 +18336,189 @@ ${rowsToHtml(late)}
                           <div className="md:col-span-2">
                             <div
                               className={[
-                                'flex flex-wrap items-center gap-2 rounded-2xl border px-3 py-2',
+                                'flex flex-col gap-2 rounded-2xl border px-3 py-2',
                                 themeMode === 'light' ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/25'
                               ].join(' ')}
                             >
-                              <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
-                                {t('筛选', 'Filter')}
-                              </span>
-                              {dailyListVisiblePositions.map((position) => {
-                                const filterKey = normalizeDailyListPositionKey(position) || position;
-                                const isFilterSelected = selectedDailyFilterPositions.some(
-                                  (selectedPosition) => (normalizeDailyListPositionKey(selectedPosition) || selectedPosition) === filterKey
-                                );
-                                const filterButton = (
-                                  <button
-                                    key={`filter-button-${position}`}
-                                    type="button"
-                                    onClick={() =>
-                                      setDailyListFilterPositions((prev) => ({
-                                        ...prev,
-                                        [filterKey]: !prev[filterKey]
-                                      }))
-                                    }
-                                    className={[
-                                      'rounded-lg border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] transition',
-                                      isFilterSelected
-                                        ? themeMode === 'light'
-                                          ? 'border-transparent bg-white/80 text-slate-950'
-                                          : 'border-transparent bg-white/[0.06] text-white'
-                                        : themeMode === 'light'
-                                          ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
-                                          : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
-                                    ].join(' ')}
-                                  >
-                                    {position}
-                                  </button>
-                                );
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                  {t('岗位', 'Position')}
+                                </span>
+                                {dailyListVisiblePositions.map((position) => {
+                                  const filterKey = normalizeDailyListPositionKey(position) || position;
+                                  const isFilterSelected = selectedDailyFilterPositions.some(
+                                    (selectedPosition) => (normalizeDailyListPositionKey(selectedPosition) || selectedPosition) === filterKey
+                                  );
+                                  const filterButton = (
+                                    <button
+                                      key={`filter-button-${position}`}
+                                      type="button"
+                                      onClick={() =>
+                                        setDailyListFilterPositions((prev) => ({
+                                          ...prev,
+                                          [filterKey]: !prev[filterKey]
+                                        }))
+                                      }
+                                      className={[
+                                        'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] transition',
+                                        isFilterSelected
+                                          ? themeMode === 'light'
+                                            ? 'border-sky-500 bg-sky-50 text-sky-950 shadow-sm ring-2 ring-sky-200'
+                                            : 'border-sky-300/70 bg-sky-400/25 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_0_1px_rgba(125,211,252,0.18),0_8px_22px_rgba(14,165,233,0.22)] ring-2 ring-sky-400/35'
+                                          : themeMode === 'light'
+                                            ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                                            : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
+                                      ].join(' ')}
+                                    >
+                                      {isFilterSelected ? (
+                                        <span
+                                          className={[
+                                            'h-1.5 w-1.5 shrink-0 rounded-full',
+                                            themeMode === 'light' ? 'bg-sky-600' : 'bg-sky-200 shadow-[0_0_10px_rgba(186,230,253,0.95)]'
+                                          ].join(' ')}
+                                        />
+                                      ) : null}
+                                      {position}
+                                    </button>
+                                  );
 
-                                return isFilterSelected ? (
-                                  <ElectricBorder
-                                    key={`filter-${position}`}
-                                    color={getElectricBorderColor(position, schedulePositionToneByPosition)}
-                                    speed={0.9}
-                                    chaos={0.1}
-                                    thickness={1}
-                                    borderRadius={8}
-                                    className="eb-chip rounded-lg"
-                                  >
-                                    {filterButton}
-                                  </ElectricBorder>
-                                ) : (
-                                  <span key={`filter-${position}`} className="inline-flex">
-                                    {filterButton}
-                                  </span>
-                                );
-                              })}
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setDailyListFilterPositions(createEmptyDailyListLightFlags())
-                                }
-                                className={[
-                                  'ml-auto rounded-lg px-3 py-1 text-xs font-semibold transition',
-                                  themeMode === 'light'
-                                    ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                                ].join(' ')}
-                              >
-                                {t('清空筛选', 'Clear filters')}
-                              </button>
+                                  return isFilterSelected ? (
+                                    <ElectricBorder
+                                      key={`filter-${position}`}
+                                      color={getElectricBorderColor(position, schedulePositionToneByPosition)}
+                                      speed={0.9}
+                                      chaos={0.1}
+                                      thickness={1}
+                                      borderRadius={8}
+                                      className="eb-chip rounded-lg"
+                                    >
+                                      {filterButton}
+                                    </ElectricBorder>
+                                  ) : (
+                                    <span key={`filter-${position}`} className="inline-flex">
+                                      {filterButton}
+                                    </span>
+                                  );
+                                })}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDailyListFilterPositions(createEmptyDailyListLightFlags());
+                                    setDailyListFilterAgency('');
+                                  }}
+                                  className={[
+                                    'ml-auto rounded-lg px-3 py-1 text-xs font-semibold transition',
+                                    themeMode === 'light'
+                                      ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                  ].join(' ')}
+                                >
+                                  {t('清空筛选', 'Clear filters')}
+                                </button>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                  Agency
+                                </span>
+                                {dailyListAgencyOptions.map((agency) => {
+                                  const isFilterSelected = dailyListFilterAgency.trim().toLowerCase() === agency.toLowerCase();
+                                  return (
+                                    <button
+                                      key={`filter-agency-${agency}`}
+                                      type="button"
+                                      onClick={() => setDailyListFilterAgency(isFilterSelected ? '' : agency)}
+                                      className={[
+                                        'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition',
+                                        isFilterSelected
+                                          ? themeMode === 'light'
+                                            ? 'border-sky-500 bg-sky-50 text-sky-950 shadow-sm ring-2 ring-sky-200'
+                                            : 'border-sky-300/70 bg-sky-400/25 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_0_1px_rgba(125,211,252,0.18),0_8px_22px_rgba(14,165,233,0.22)] ring-2 ring-sky-400/35'
+                                          : themeMode === 'light'
+                                            ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                                            : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
+                                      ].join(' ')}
+                                    >
+                                      {isFilterSelected ? (
+                                        <span
+                                          className={[
+                                            'h-1.5 w-1.5 shrink-0 rounded-full',
+                                            themeMode === 'light' ? 'bg-sky-600' : 'bg-sky-200 shadow-[0_0_10px_rgba(186,230,253,0.95)]'
+                                          ].join(' ')}
+                                        />
+                                      ) : null}
+                                      {agency}
+                                    </button>
+                                  );
+                                })}
+                              </div>
                             </div>
                           </div>
                           <div className="md:col-span-2">
                             <div
                               className={[
-                                'flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 text-sm font-medium',
+                                'flex flex-wrap items-center justify-between gap-3 rounded-xl border px-3 py-2 text-sm font-medium',
                                 themeMode === 'light'
                                   ? 'border-slate-200 bg-slate-50 text-slate-700'
                                   : 'border-white/10 bg-white/5 text-slate-200'
                               ].join(' ')}
                             >
-                              <div>
-                                {lang === 'en' ? `${dailyListDateDisplay} Outbound Request:` : `${dailyListDateDisplay} 出库需求:`}
-                                {' '}
-                                <span className={themeMode === 'light' ? 'text-slate-900' : 'text-white'}>{dailyListTotalDemandCount}</span>
-                                {lang === 'en' ? ' people' : t('人', '')}
+                              <div className="min-w-0 flex-1">
+                                <div>
+                                  {lang === 'en' ? `${dailyListDateDisplay} Staff demand:` : `${dailyListDateDisplay} 人员需求:`}
+                                  <span className={themeMode === 'light' ? 'text-slate-900' : 'text-white'}>{dailyListTotalDemandCount}</span>
+                                  {lang === 'en' ? ' people' : t('人', '')}
+                                  <span className={['ml-3 text-xs font-semibold', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                    {lang === 'en'
+                                      ? `Confirmed OB ${dailyListDepartmentDemandSummary.OB}, IB ${dailyListDepartmentDemandSummary.IB}, INV ${dailyListDepartmentDemandSummary.INV}`
+                                      : `已确认：OB${dailyListDepartmentDemandSummary.OB}人，IB${dailyListDepartmentDemandSummary.IB}人，INV${dailyListDepartmentDemandSummary.INV}人`}
+                                  </span>
+                                </div>
+                                {dailyListDisplayedNewHireSummary.peopleCount > 0 ? (
+                                  <div className={['mt-1 text-xs font-semibold leading-5', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                    {lang === 'en'
+                                      ? `Includes ${dailyListDisplayedNewHireSummary.groups
+                                          .map(
+                                            (group) =>
+                                              `${group.department} demand ${group.agency || 'Any agency'} new hire ${group.count}${
+                                                group.count === 1 ? '' : 's'
+                                              }`
+                                          )
+                                          .join(', ')}`
+                                      : `其中包括 ${dailyListDisplayedNewHireSummary.groups
+                                          .map((group) => `${group.department}需求${group.agency || '任意Agency'}新人${group.count}名`)
+                                          .join('、')}`}
+                                  </div>
+                                ) : null}
                               </div>
-                              <button
-                                type="button"
-                                disabled={isLocked}
-                                onClick={() => setDailyListNewHireOpen(true)}
-                                className={[
-                                  'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50',
-                                  themeMode === 'light'
-                                    ? 'border border-slate-300 bg-white text-slate-900 hover:bg-slate-100'
-                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                                ].join(' ')}
-                              >
-                                {t('新人需求', 'New Request')}
-                              </button>
+                              <div className="flex shrink-0 items-center gap-2 self-start">
+                                <button
+                                  type="button"
+                                  disabled={dailyListNewHireDetailRows.length === 0}
+                                  onClick={() => setDailyListNewHireDetailOpen(true)}
+                                  className={[
+                                    'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50',
+                                    themeMode === 'light'
+                                      ? 'border border-slate-300 bg-white text-slate-900 hover:bg-slate-100'
+                                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                  ].join(' ')}
+                                >
+                                  {t('新人明细', 'New Hire List')}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isLocked}
+                                  onClick={() => setDailyListNewHireOpen(true)}
+                                  className={[
+                                    'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50',
+                                    themeMode === 'light'
+                                      ? 'border border-slate-300 bg-white text-slate-900 hover:bg-slate-100'
+                                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                  ].join(' ')}
+                                >
+                                  {t('新人需求', 'New Request')}
+                                </button>
+                              </div>
                             </div>
-                            {dailyCapacityError ? (
-                              <div className={['mt-2 text-xs', themeMode === 'light' ? 'text-amber-700' : 'text-amber-200'].join(' ')}>
-                                {t('预计产能已回退到模板值。', 'Capacity has fallen back to template values.')}
-                              </div>
-                            ) : null}
                             {dailyListDataAudit.missingRows.length > 0 ? (
                               <div
                                 className={[
@@ -18549,6 +18708,112 @@ ${rowsToHtml(late)}
                               </table>
                             </div>
                           </div>
+                        </div>
+                      </div>
+                    </div>,
+                    document.body
+                  )}
+
+                {dailyListNewHireDetailOpen &&
+                  createPortal(
+                    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+                      <div
+                        className={[
+                          'flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border shadow-2xl',
+                          themeMode === 'light' ? 'border-slate-200 bg-white text-slate-900' : 'border-white/15 bg-slate-950 text-slate-100'
+                        ].join(' ')}
+                        role="dialog"
+                        aria-modal="true"
+                      >
+                        <div className={['flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4', themeMode === 'light' ? 'border-slate-200' : 'border-white/10'].join(' ')}>
+                          <div>
+                            <h3 className="text-base font-semibold">{t('新人明细', 'New Hire List')}</h3>
+                            <div className={['mt-1 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                              {dailyListDateDisplay}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setDailyListNewHireDetailOpen(false)}
+                            className={[
+                              'rounded-xl px-3 py-1.5 text-xs font-semibold transition',
+                              themeMode === 'light'
+                                ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                                : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                            ].join(' ')}
+                          >
+                            {t('关闭', 'Close')}
+                          </button>
+                        </div>
+                        <div className={['flex flex-wrap items-center gap-2 border-b px-5 py-3', themeMode === 'light' ? 'border-slate-200' : 'border-white/10'].join(' ')}>
+                          <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                            {t('岗位', 'Position')}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setDailyListNewHireDetailPosition('')}
+                            className={[
+                              'rounded-lg border px-2.5 py-1 text-xs font-semibold transition',
+                              !dailyListNewHireDetailPosition
+                                ? themeMode === 'light'
+                                  ? 'border-sky-500 bg-sky-50 text-sky-950'
+                                  : 'border-sky-300/70 bg-sky-400/20 text-white'
+                                : themeMode === 'light'
+                                  ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                                  : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
+                            ].join(' ')}
+                          >
+                            {t('全部岗位', 'All')}
+                          </button>
+                          {dailyListNewHireDetailPositionOptions.map((position) => (
+                            <button
+                              key={`daily-list-new-hire-detail-position-${position}`}
+                              type="button"
+                              onClick={() => setDailyListNewHireDetailPosition(position)}
+                              className={[
+                                'rounded-lg border px-2.5 py-1 text-xs font-semibold transition',
+                                dailyListNewHireDetailPosition === position
+                                  ? themeMode === 'light'
+                                    ? 'border-sky-500 bg-sky-50 text-sky-950'
+                                    : 'border-sky-300/70 bg-sky-400/20 text-white'
+                                  : themeMode === 'light'
+                                    ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                                    : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
+                              ].join(' ')}
+                            >
+                              {position}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="overflow-auto p-5">
+                          <table className="min-w-full text-left text-xs">
+                            <thead className={['text-[10px] uppercase tracking-[0.16em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                              <tr>
+                                <th className="border-b px-3 py-2">{t('姓名', 'Name')}</th>
+                                <th className="border-b px-3 py-2">Agency</th>
+                                <th className="border-b px-3 py-2">{t('岗位', 'Position')}</th>
+                                <th className="border-b px-3 py-2">{t('到岗时间', 'Start Time')}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {dailyListNewHireDetailRowsFiltered.length === 0 ? (
+                                <tr>
+                                  <td colSpan={4} className={['px-3 py-6 text-center', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                    {t('暂无数据', 'No data')}
+                                  </td>
+                                </tr>
+                              ) : (
+                                dailyListNewHireDetailRowsFiltered.map((row) => (
+                                  <tr key={`new-hire-detail-${row.staff_id}`} className={themeMode === 'light' ? 'border-b border-slate-100' : 'border-b border-white/5'}>
+                                    <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-800' : 'text-slate-100'].join(' ')}>{row.name || '-'}</td>
+                                    <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.agency || t('任意Agency', 'Any agency')}</td>
+                                    <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.position || '-'}</td>
+                                    <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.start_time || '-'}</td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
                         </div>
                       </div>
                     </div>,
