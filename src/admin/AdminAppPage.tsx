@@ -18850,7 +18850,7 @@ ${rowsToHtml(late)}
             )}
 
             {page === 'employees' && (
-              <section className="px-6 py-8">
+              <section className="flex min-h-[calc(100vh-64px)] flex-col px-4 py-5 sm:px-6 sm:py-8">
                 <EmployeesToolbar
                   t={t}
                   themeMode={themeMode}
@@ -19085,7 +19085,7 @@ ${rowsToHtml(late)}
             )}
 
             {page === 'timecard' && (
-              <section className="px-6 py-8">
+              <section className="flex min-h-[calc(100vh-64px)] flex-col px-4 py-5 sm:px-6 sm:py-8">
                 <TimecardControls
                   t={t}
                   themeMode={themeMode}

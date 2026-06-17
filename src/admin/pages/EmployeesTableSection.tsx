@@ -197,7 +197,7 @@ export default function EmployeesTableSection({
       <div
         ref={containerRef}
         className={[
-          'mt-5 max-h-[68vh] min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border',
+          'mt-5 min-h-[280px] min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain rounded-2xl border [scrollbar-gutter:stable]',
           isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/30'
         ].join(' ')}
         style={{ contain: 'layout paint style' }}
