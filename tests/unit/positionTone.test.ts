@@ -56,10 +56,10 @@ describe('positionTone', () => {
     });
   });
 
-  test('uses legacy position tones as fallback before positions load', () => {
+  test('does not let legacy position tones overwrite current tones before positions load', () => {
     expect(mergeLegacyPositionToneMap({ pack: 'emerald' }, { pack: 'rose', receive: 'cyan' }, [])).toEqual({
-      pack: 'rose',
-      receive: 'cyan'
+      receive: 'cyan',
+      pack: 'emerald'
     });
   });
 });
