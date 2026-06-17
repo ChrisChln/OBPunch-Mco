@@ -49,7 +49,7 @@ export const mergeLegacyPositionToneMap = (
   legacy: PositionToneMap,
   authoritativePositions: readonly string[]
 ): PositionToneMap => {
-  if (authoritativePositions.length === 0) return { ...current, ...legacy };
+  if (authoritativePositions.length === 0) return { ...legacy, ...current };
   return { ...legacy, ...current };
 };
 

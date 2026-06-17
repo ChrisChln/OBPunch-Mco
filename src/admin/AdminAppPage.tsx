@@ -2847,7 +2847,7 @@ export default function AdminAppPage() {
     scheduleLabelToneReadyRef.current = false;
     void loadScheduleLabelToneGlobal();
     void loadSchedulePositionToneGlobal();
-  }, [user?.email]);
+  }, [user?.email, positions]);
 
   useEffect(() => {
     if (page !== 'schedule') return;
@@ -2864,7 +2864,7 @@ export default function AdminAppPage() {
       active = false;
       window.clearInterval(timer);
     };
-  }, [page, user?.email, offsetMs]);
+  }, [page, user?.email, offsetMs, positions]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
