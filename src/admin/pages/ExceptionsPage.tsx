@@ -189,7 +189,7 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
       <div className="mb-5 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div>
           <div className={['text-xs font-bold uppercase tracking-[0.22em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Admin</div>
-          <h1 className="mt-2 text-4xl font-black tracking-tight">Exceptions</h1>
+          <h1 className="mt-2 text-4xl font-black tracking-tight">{t('异常单', 'Exceptions')}</h1>
         </div>
         <div className="flex flex-wrap gap-2">
           <input type="date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} className={inputClass(isLight)} />
@@ -231,7 +231,7 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
                 <span className="text-sm font-bold text-slate-500">{openRows.length}</span>
               </div>
               <div className="max-h-[620px] overflow-auto">
-                {openRows.length ? openRows.map(renderRow) : <div className="p-8 text-center text-sm font-semibold text-slate-500">No open exceptions</div>}
+                {openRows.length ? openRows.map(renderRow) : <div className="p-8 text-center text-sm font-semibold text-slate-500">{t('暂无未完成异常单', 'No open exceptions')}</div>}
               </div>
             </div>
             <div className="overflow-hidden rounded-2xl border border-slate-200">
@@ -240,7 +240,7 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
                 <span className="text-sm font-bold text-slate-500">{closedRows.length}</span>
               </div>
               <div className="max-h-[620px] overflow-auto">
-                {closedRows.length ? closedRows.map(renderRow) : <div className="p-8 text-center text-sm font-semibold text-slate-500">No closed exceptions</div>}
+                {closedRows.length ? closedRows.map(renderRow) : <div className="p-8 text-center text-sm font-semibold text-slate-500">{t('暂无已关闭异常单', 'No closed exceptions')}</div>}
               </div>
             </div>
           </div>
