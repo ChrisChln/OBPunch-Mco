@@ -131,12 +131,14 @@ describe('exceptionReports', () => {
     expect(payload.reportId).toBe('99');
     expect(payload.qrValue).toContain('/exception?id=99');
     expect(payload.createdBy).toBe('US300');
+    expect(payload.exceptionTypeLabel).toBe('Less Pick');
     expect(qrFields.get('Product')).toBe('SKU123');
     expect(qrFields.get('Picking List')).toBe('PL-1');
     expect(qrFields.get('Container')).toBe('C-1');
     expect(fields.has('Product')).toBe(false);
     expect(fields.has('Picking List')).toBe(false);
     expect(fields.has('Container')).toBe(false);
+    expect(fields.has('Type')).toBe(false);
     expect(fields.has('Inv Adj')).toBe(false);
     expect(fields.has('Lead')).toBe(false);
     expect(fields.has('Resolution')).toBe(false);

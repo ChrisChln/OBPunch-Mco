@@ -334,6 +334,10 @@ const buildPrintLabelHtml = (payload: ExceptionReportPrintPayload, qrDataUrl: st
     .created-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 0.12in; }
     .created-label { font-size: 0.1in; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04in; color: #64748b; }
     .created-value { margin-top: 0.02in; font-size: 0.18in; font-weight: 900; color: #020617; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .type-banner { grid-column: span 2; display: grid; grid-template-columns: 0.42in minmax(0, 1fr); align-items: center; gap: 0.1in; border: 2px solid #020617; border-radius: 0.12in; background: #fff; padding: 0.08in 0.12in; }
+    .type-icon { display: grid; place-items: center; width: 0.36in; height: 0.36in; border: 2px solid #020617; border-radius: 999px; color: #020617; font-size: 0.24in; font-weight: 900; line-height: 1; }
+    .type-kicker { font-size: 0.085in; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05in; color: #64748b; }
+    .type-value { margin-top: 0.01in; font-size: 0.26in; font-weight: 900; line-height: 1; color: #020617; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .qr-grid { grid-column: span 2; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.06in; }
     .qr-field { min-width: 0; border: 1px solid #e2e8f0; border-radius: 0.08in; background: #fff; padding: 0.04in 0.06in; }
     .qr-label { text-align: center; font-size: 0.075in; font-weight: 800; text-transform: uppercase; letter-spacing: 0.012in; color: #64748b; }
@@ -365,6 +369,13 @@ const buildPrintLabelHtml = (payload: ExceptionReportPrintPayload, qrDataUrl: st
             <div class="created-label">Created By</div>
             <div class="created-value">${escapePrintHtml(payload.createdBy)}</div>
           </div>
+        </div>
+      </div>
+      <div class="type-banner">
+        <div class="type-icon">!</div>
+        <div>
+          <div class="type-kicker">Exception Type</div>
+          <div class="type-value">${escapePrintHtml(payload.exceptionTypeLabel)}</div>
         </div>
       </div>
       <div class="qr-grid">${qrFields}</div>
