@@ -28,6 +28,7 @@ import {
   setAgencyScheduleState,
   upsertAgencyEmployeeNote,
   upsertAgencyDriverGroup,
+  upsertAgencyPayrate,
   upsertAgencyNewHireDemand
 } from './api';
 import { computeAgencySummaryCards, isAgencyWorklikeState } from './boardMetrics';
@@ -43,7 +44,7 @@ import type {
   AgencyWeekSchedule
 } from './types';
 
-type ModalState = 'new_hire' | 'termination' | 'driver_group' | 'employee_note' | null;
+type ModalState = 'new_hire' | 'termination' | 'driver_group' | 'employee_note' | 'payrate' | null;
 type NoticeTone = 'error' | 'info';
 
 type NoticeState = {
@@ -51,6 +52,13 @@ type NoticeState = {
   message: string;
   tone: NoticeTone;
 } | null;
+
+type PayrateTarget = {
+  staffId: string;
+  name: string;
+  workDate: string;
+  payrate: string;
+};
 
 type DeleteNewHireConfirmState = {
   staffId: string;
@@ -615,6 +623,8 @@ export default function AgencyAppPage() {
   const [selectedEmployee, setSelectedEmployee] = useState<AgencyEmployeeRow | null>(null);
   const [selectedNewHire, setSelectedNewHire] = useState<AgencyNewHireRequestRow | null>(null);
   const [selectedNoteEmployee, setSelectedNoteEmployee] = useState<AgencyEmployeeRow | null>(null);
+  const [selectedPayrateTarget, setSelectedPayrateTarget] = useState<PayrateTarget | null>(null);
+  const [payrateDraft, setPayrateDraft] = useState('');
   const [driverGroupForm, setDriverGroupForm] = useState<DriverGroupFormState>({
     code: '1',
     driverStaffId: '',
@@ -1053,6 +1063,8 @@ export default function AgencyAppPage() {
     setSelectedEmployee(null);
     setSelectedNewHire(null);
     setSelectedNoteEmployee(null);
+    setSelectedPayrateTarget(null);
+    setPayrateDraft('');
     setTerminationReason('');
   };
 
@@ -1104,6 +1116,12 @@ export default function AgencyAppPage() {
     setModal('employee_note');
   };
 
+  const openPayrateModal = (target: PayrateTarget) => {
+    setSelectedPayrateTarget(target);
+    setPayrateDraft(target.payrate);
+    setModal('payrate');
+  };
+
   const requestCancelTermination = (employee: AgencyEmployeeRow) => {
     const displayName = String(employee.name ?? '').trim() || employee.staff_id;
     setCancelTerminationConfirm({
@@ -1118,8 +1136,14 @@ export default function AgencyAppPage() {
       openNotice('error', 'No GAP for selected Agency / Position / Shift.');
       return;
     }
-    beginBusy(selectedNewHire ? 'Saving request' : 'Creating request');
+    beginBusy(selectedNewHire ? 'Saving payrate' : 'Creating request');
     try {
+      if (selectedNewHire) {
+        await upsertAgencyPayrate(supabase, selectedNewHire.staff_id, selectedDate, normalizeAgencyPayrateInput(newHireForm.payrate));
+        closeModal();
+        await refreshBoard();
+        return;
+      }
       await upsertAgencyNewHireDemand(supabase, {
         ...newHireForm,
         payrate: normalizeAgencyPayrateInput(newHireForm.payrate)
@@ -1128,6 +1152,25 @@ export default function AgencyAppPage() {
       await refreshBoard();
     } catch (nextError) {
       openNotice('error', nextError instanceof Error ? nextError.message : 'New request save failed.');
+    } finally {
+      endBusy();
+    }
+  };
+
+  const submitPayrate = async () => {
+    if (!supabase || !canOperateAgency || !selectedPayrateTarget) return;
+    const normalizedPayrate = normalizeAgencyPayrateInput(payrateDraft);
+    if (String(payrateDraft ?? '').trim() && !normalizedPayrate) {
+      openNotice('error', 'Invalid payrate.');
+      return;
+    }
+    beginBusy('Saving payrate');
+    try {
+      await upsertAgencyPayrate(supabase, selectedPayrateTarget.staffId, selectedPayrateTarget.workDate, normalizedPayrate);
+      closeModal();
+      await refreshBoard();
+    } catch (nextError) {
+      openNotice('error', nextError instanceof Error ? nextError.message : 'Payrate save failed.');
     } finally {
       endBusy();
     }
@@ -1921,6 +1964,7 @@ export default function AgencyAppPage() {
     Boolean(selectedNoteEmployee) && normalizeAgencyNote(selectedNoteDraft) !== normalizeAgencyNote(selectedNoteEmployee?.agency_note);
   const selectedNoteSaving = selectedNoteStaffId ? savingNoteStaffIds.has(selectedNoteStaffId) : false;
   const isNewHirePayrateInvalid = Boolean(String(newHireForm.payrate ?? '').trim()) && !normalizeAgencyPayrateInput(newHireForm.payrate);
+  const isPayrateDraftInvalid = Boolean(String(payrateDraft ?? '').trim()) && !normalizeAgencyPayrateInput(payrateDraft);
   const selectedDriverGroupEmployee = driverGroupForm.sourceStaffId
     ? employeeRows.find((employee) => employee.staff_id === driverGroupForm.sourceStaffId) ?? null
     : null;
@@ -2073,7 +2117,23 @@ export default function AgencyAppPage() {
                                 {shiftLabel(row.shift)}
                               </GlowLabelChip>
                             </div>
-                            <div className="text-right font-mono text-sm text-slate-300">{formatAgencyPayrate(row.payrate)}</div>
+                            <div className="text-right">
+                              <button
+                                type="button"
+                                className="h-8 rounded-lg border border-white/10 bg-white/5 px-2 text-right font-mono text-sm text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={busy || !canOperateAgency}
+                                onClick={() =>
+                                  openPayrateModal({
+                                    staffId: row.staff_id,
+                                    name: String(row.name ?? '').trim() || row.staff_id,
+                                    workDate: selectedDate,
+                                    payrate: row.payrate
+                                  })
+                                }
+                              >
+                                {formatAgencyPayrate(row.payrate)}
+                              </button>
+                            </div>
                             <div className="text-center font-mono text-sm text-slate-300">
                               {formatNewHireStartTime(row.start_time)}
                             </div>
@@ -2372,7 +2432,23 @@ export default function AgencyAppPage() {
                             <span>{agencyStatusLabel(employee.agencyStatus)}</span>
                           </span>
                         </td>
-                        <td className="px-1 py-2 text-right font-mono text-slate-300">{formatAgencyPayrate(employee.payrate)}</td>
+                        <td className="px-1 py-2 text-right">
+                          <button
+                            type="button"
+                            className="h-8 rounded-lg border border-white/10 bg-white/5 px-2 text-right font-mono text-xs text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={busy || !canOperateAgency}
+                            onClick={() =>
+                              openPayrateModal({
+                                staffId: employee.staff_id,
+                                name: String(employee.name ?? '').trim() || employee.staff_id,
+                                workDate: selectedDate,
+                                payrate: employee.payrate
+                              })
+                            }
+                          >
+                            {formatAgencyPayrate(employee.payrate)}
+                          </button>
+                        </td>
                         {showStartTimeColumn ? (
                           <td className="px-1 py-2 text-center font-mono text-slate-300">
                             {formatStartTime(employee.start_time)}
@@ -2630,6 +2706,35 @@ export default function AgencyAppPage() {
               }}
               className={neonButtonClass}
               disabled={!canOperateAgency || selectedNoteSaving || !selectedNoteDirty}
+            >
+              <Save className="mr-2 h-4 w-4" />
+              Save
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={modal === 'payrate'} title="Payrate">
+        <div className="space-y-4">
+          <div className="text-sm font-semibold text-white">
+            {selectedPayrateTarget ? `${selectedPayrateTarget.name} (${selectedPayrateTarget.staffId})` : '-'}
+          </div>
+          <input
+            value={payrateDraft}
+            type="text"
+            inputMode="decimal"
+            onChange={(event) => setPayrateDraft(event.target.value)}
+            onBlur={() => setPayrateDraft((current) => normalizeAgencyPayrateInput(current))}
+            placeholder="Payrate"
+            className={inputClass}
+          />
+          <div className="flex justify-end gap-3">
+            <button type="button" onClick={closeModal} className={buttonClass}>Close</button>
+            <button
+              type="button"
+              onClick={() => void submitPayrate()}
+              className={neonButtonClass}
+              disabled={!canOperateAgency || busy || isPayrateDraftInvalid}
             >
               <Save className="mr-2 h-4 w-4" />
               Save

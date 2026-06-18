@@ -10,6 +10,7 @@ import {
   HiCube,
   HiCurrencyDollar,
   HiDocumentText,
+  HiExclamationTriangle,
   HiFolder,
   HiHome,
   HiShieldCheck,
@@ -60,7 +61,8 @@ const PAGE_ICONS: Record<AdminPage, IconType> = {
   devices: HiCube,
   forecast: HiChartPie,
   prediction_model: HiCog6Tooth,
-  efficiency: HiCurrencyDollar
+  efficiency: HiCurrencyDollar,
+  exceptions: HiExclamationTriangle
 };
 
 const NAV_ITEMS: NavItem[] = [
@@ -80,7 +82,8 @@ const NAV_ITEMS: NavItem[] = [
   { page: 'devices', label: (t) => t('设备管理', 'Devices') },
   { page: 'forecast', label: (t) => t('件量预测', 'Forecast') },
   { page: 'prediction_model', label: (t) => t('预测模型', 'Prediction Model') },
-  { page: 'efficiency', label: (t) => t('人效', 'Efficiency') }
+  { page: 'efficiency', label: (t) => t('人效', 'Efficiency') },
+  { page: 'exceptions', label: (t) => t('Exceptions', 'Exceptions') }
 ];
 
 const ALL_NAV_PAGES = NAV_ITEMS.map((item) => item.page);
