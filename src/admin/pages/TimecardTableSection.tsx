@@ -386,7 +386,7 @@ export default function TimecardTableSection({
   return (
     <div
       ref={containerRef}
-      className="relative mt-5 min-h-[280px] flex-1 overflow-auto overscroll-contain rounded-2xl border border-white/10 bg-black/30 [scrollbar-gutter:stable]"
+      className="relative mt-5 min-h-0 flex-1 overflow-auto overscroll-contain rounded-2xl border border-white/10 bg-black/30 [scrollbar-gutter:stable]"
       style={{ contain: 'layout paint style' }}
       onScroll={handleBodyScroll}
     >
