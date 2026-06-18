@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Pencil } from 'lucide-react';
 import QRCode from 'qrcode';
 import BorderGlow from './components/reactBits/BorderGlow';
 import {
@@ -323,13 +324,13 @@ const buildPrintLabelHtml = (payload: ExceptionReportPrintPayload, qrDataUrl: st
     html, body { width: 4in; height: 6in; margin: 0; overflow: hidden; background: #f8fafc; }
     body { color: #020617; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .sheet { width: 4in; height: 6in; overflow: hidden; padding: 0.18in; background: #f8fafc; }
-    .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.12in; border-bottom: 1px solid #cbd5e1; padding-bottom: 0.12in; }
+    .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.12in; border-bottom: 1px solid #cbd5e1; margin-top: 0.08in; padding-bottom: 0.1in; }
     .title { font-size: 0.16in; font-weight: 900; text-transform: uppercase; letter-spacing: 0.08in; color: #64748b; }
     .id { margin-top: 0.04in; font-size: 0.26in; font-weight: 900; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .status { display: inline-flex; margin-top: 0.04in; border: 1px solid #cbd5e1; border-radius: 999px; background: #fff; padding: 0.02in 0.08in; font-size: 0.11in; font-weight: 800; text-transform: uppercase; }
     .main-qr { display: grid; place-items: center; width: 0.92in; height: 0.92in; flex: 0 0 auto; border: 1px solid #cbd5e1; border-radius: 0.12in; background: #fff; padding: 0.04in; }
     img { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.06in; margin-top: 0.12in; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.06in; margin-top: 0.08in; }
     .created { grid-column: span 2; border: 1px solid #e2e8f0; border-radius: 0.12in; background: #fff; color: #020617; padding: 0.08in 0.12in; }
     .created-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 0.12in; }
     .created-label { font-size: 0.1in; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04in; color: #64748b; }
@@ -350,6 +351,13 @@ const buildPrintLabelHtml = (payload: ExceptionReportPrintPayload, qrDataUrl: st
 </head>
 <body>
   <section class="sheet">
+    <div class="type-banner">
+      <div class="type-icon">!</div>
+      <div>
+        <div class="type-kicker">Exception Type</div>
+        <div class="type-value">${escapePrintHtml(payload.exceptionTypeLabel)}</div>
+      </div>
+    </div>
     <div class="header">
       <div>
         <div class="title">${escapePrintHtml(payload.title)}</div>
@@ -369,13 +377,6 @@ const buildPrintLabelHtml = (payload: ExceptionReportPrintPayload, qrDataUrl: st
             <div class="created-label">Created By</div>
             <div class="created-value">${escapePrintHtml(payload.createdBy)}</div>
           </div>
-        </div>
-      </div>
-      <div class="type-banner">
-        <div class="type-icon">!</div>
-        <div>
-          <div class="type-kicker">Exception Type</div>
-          <div class="type-value">${escapePrintHtml(payload.exceptionTypeLabel)}</div>
         </div>
       </div>
       <div class="qr-grid">${qrFields}</div>
@@ -1007,7 +1008,7 @@ export default function ExceptionPage() {
                   return (
                     <BorderGlow
                       key={row.id}
-                      className={['min-h-[300px] cursor-pointer transition duration-200 hover:-translate-y-1', active ? 'ring-2 ring-cyan-300/25 shadow-[0_0_0_1px_rgba(103,232,249,0.16),0_24px_70px_rgba(8,47,73,0.28)]' : ''].join(' ')}
+                      className={['min-h-[300px] transition duration-200', active ? 'ring-2 ring-cyan-300/25 shadow-[0_0_0_1px_rgba(103,232,249,0.16),0_24px_70px_rgba(8,47,73,0.28)]' : ''].join(' ')}
                       edgeSensitivity={30}
                       glowColor={tone.glowColor}
                       backgroundColor={tone.backgroundColor}
@@ -1020,15 +1021,6 @@ export default function ExceptionPage() {
                       fillOpacity={0.42}
                     >
                       <div
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => openEditModal(row)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            openEditModal(row);
-                          }
-                        }}
                         className={`flex min-h-[300px] min-w-0 flex-col justify-between px-6 py-6 text-left ${tone.textClass}`}
                       >
                         <div className="flex min-w-0 items-start justify-between gap-5">
@@ -1063,6 +1055,17 @@ export default function ExceptionPage() {
                             <div>{createdAt}</div>
                           </div>
                           <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(row)}
+                              disabled={saving}
+                              aria-label={`Edit exception #${row.id}`}
+                              title="Edit"
+                              className="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-600/80 bg-slate-950/50 px-3 text-sm font-black text-white shadow-[0_10px_24px_rgba(0,0,0,0.22)] transition hover:border-cyan-300/70 hover:bg-slate-900/80 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <Pencil className="h-4 w-4" aria-hidden="true" />
+                              <span>Edit</span>
+                            </button>
                             {nextStatus && nextStatus !== 'Closed' ? (
                               <button
                                 type="button"

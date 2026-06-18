@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronDown, Clock3, LayoutDashboard, LogIn, LogOut, Shield, UserRound, Waypoints } from 'lucide-react';
+import { AlertCircle, ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronDown, Clock3, LayoutDashboard, LogIn, LogOut, PackagePlus, Shield, UserRound, Waypoints } from 'lucide-react';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib/supabase';
 import { isValidPunchStaffId, normalizeStaffId } from './lib/staffId';
 import { submitPunchToApi } from './lib/punchApi';
@@ -3352,6 +3352,17 @@ const fetchPunchBoardUph = async (
                         >
                           <LayoutDashboard className="h-4 w-4 text-emerald-600" />
                           <span>Dashboard</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPunchMenuOpen(false);
+                            window.location.href = '/exception';
+                          }}
+                          className="flex w-full cursor-pointer items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm text-slate-800 transition hover:bg-slate-100"
+                        >
+                          <PackagePlus className="h-4 w-4 text-violet-600" />
+                          <span>Outbound Exception</span>
                         </button>
                         <button
                           type="button"
