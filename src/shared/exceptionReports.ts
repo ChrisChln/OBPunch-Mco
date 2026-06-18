@@ -13,12 +13,13 @@ export const formatExceptionType = (value: unknown) => {
   return normalized ? EXCEPTION_TYPE_LABELS[normalized] : '';
 };
 
-export const EXCEPTION_STATUSES = ['Open', 'Processing', 'Resolved', 'Closed'] as const;
+export const EXCEPTION_STATUSES = ['Open', 'Processing', 'Pending Adjustment', 'Resolved', 'Closed'] as const;
 export type ExceptionStatus = (typeof EXCEPTION_STATUSES)[number];
 
 export const EXCEPTION_STATUS_LABELS: Record<ExceptionStatus, string> = {
   Open: '已创建',
   Processing: '处理中',
+  'Pending Adjustment': '待调整',
   Resolved: '已处理',
   Closed: '取消'
 };
@@ -68,14 +69,22 @@ export type ExceptionReportPrintField = {
   value: string;
 };
 
+export type ExceptionReportPrintQrField = ExceptionReportPrintField & {
+  key: 'product' | 'pickingList' | 'container';
+};
+
 export type ExceptionReportPrintPayload = {
   title: string;
   reportId: string;
   status: ExceptionStatus;
   reportDate: string;
+  createdBy: string;
   qrValue: string;
+  qrFields: ExceptionReportPrintQrField[];
   fields: ExceptionReportPrintField[];
 };
+
+export type ExceptionReportStaffNameResolver = (staffId: string) => string;
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -108,11 +117,17 @@ export const normalizeExceptionStatus = (value: unknown): ExceptionStatus | null
 
 export const isValidExceptionTransition = (from: ExceptionStatus, to: ExceptionStatus) => {
   if (from === to) return true;
-  const order: ExceptionStatus[] = ['Open', 'Processing', 'Resolved', 'Closed'];
+  if (to === 'Closed') return true;
+  if (from === 'Closed' && to === 'Open') return true;
+  if (from === 'Processing' && to === 'Resolved') return true;
+  const order: ExceptionStatus[] = ['Open', 'Processing', 'Pending Adjustment', 'Resolved', 'Closed'];
   const fromIndex = order.indexOf(from);
   const toIndex = order.indexOf(to);
   return toIndex === fromIndex + 1;
 };
+
+export const needsInventoryAdjustment = (input: Pick<ExceptionReportInput, 'borrowed_location' | 'inventory_adjustment'>) =>
+  Boolean(trimText(input.borrowed_location)) && !Boolean(input.inventory_adjustment);
 
 export const parseNonNegativeNumber = (value: unknown): number | null => {
   if (value === null || value === undefined || value === '') return null;
@@ -169,41 +184,43 @@ export const buildExceptionUpdatePayload = (input: ExceptionReportInput) => {
   return payload;
 };
 
-export const buildExceptionPrintPayload = (report: ExceptionReportRecord, origin = ''): ExceptionReportPrintPayload => {
+const resolvePrintStaffName = (value: unknown, resolveStaffName?: ExceptionReportStaffNameResolver) => {
+  const staffId = trimText(value);
+  if (!staffId) return '';
+  return trimText(resolveStaffName?.(staffId)) || staffId;
+};
+
+export const buildExceptionPrintPayload = (
+  report: ExceptionReportRecord,
+  origin = '',
+  resolveStaffName?: ExceptionReportStaffNameResolver
+): ExceptionReportPrintPayload => {
   const reportId = String(report.id ?? '').trim();
   const qrValue = origin ? `${origin.replace(/\/$/, '')}/exception?id=${encodeURIComponent(reportId)}` : `EXCEPTION:${reportId}`;
   const borrowed = report.borrowed_location
-    ? `${report.borrowed_location} / ${report.borrowed_qty ?? '-'}`
-    : '-';
-  const responsibility =
-    report.responsibility_result === 'responsible'
-      ? report.responsible_staff_id || 'Responsible'
-      : report.responsibility_result === 'no_responsibility'
-        ? 'No responsibility'
-        : 'Pending';
-
+    ? `${report.borrowed_location} / ${report.borrowed_qty ?? ''}`
+    : '';
   return {
     title: 'Exception',
     reportId,
     status: report.status,
     reportDate: formatPrintDateTime(report.created_at, report.report_date),
+    createdBy: resolvePrintStaffName(report.submitted_by_lead_id, resolveStaffName),
     qrValue,
+    qrFields: [
+      { key: 'product', label: 'Product', value: report.product_barcode || '' },
+      { key: 'pickingList', label: 'Picking List', value: report.picking_list_number || '' },
+      { key: 'container', label: 'Container', value: report.picking_container || '' }
+    ],
     fields: [
-      { label: 'Type', value: formatExceptionType(report.exception_type) || '-' },
-      { label: 'Product', value: report.product_barcode || '-' },
-      { label: 'Picking List', value: report.picking_list_number || '-' },
-      { label: 'Container', value: report.picking_container || '-' },
-      { label: 'Picked Loc', value: report.picked_location || '-' },
-      { label: 'System Qty', value: String(report.system_location_qty ?? '-') },
-      { label: 'Actual', value: String(report.actual_qty ?? '-') },
-      { label: 'Picking Op', value: report.picking_operator || '-' },
-      { label: 'Pack/Rebin Op', value: report.packing_rebin_operator || '-' },
-      { label: 'Count By', value: report.count_by || '-' },
-      { label: 'Borrowed', value: borrowed },
-      { label: 'Inv Adj', value: report.inventory_adjustment ? 'Yes' : 'No' },
-      { label: 'Lead', value: report.submitted_by_lead_id || '-' },
-      { label: 'Resolution', value: report.resolution_note || '-' },
-      { label: 'Responsibility', value: responsibility }
+      { label: 'Type', value: formatExceptionType(report.exception_type) || '' },
+      { label: 'Picked Loc', value: report.picked_location || '' },
+      { label: 'System Qty', value: report.system_location_qty === null ? '' : String(report.system_location_qty) },
+      { label: 'Actual', value: report.actual_qty === null ? '' : String(report.actual_qty) },
+      { label: 'Picker', value: resolvePrintStaffName(report.picking_operator, resolveStaffName) },
+      { label: 'Packer', value: resolvePrintStaffName(report.packing_rebin_operator, resolveStaffName) },
+      { label: 'Count By', value: resolvePrintStaffName(report.count_by, resolveStaffName) },
+      { label: 'Borrowed', value: borrowed }
     ]
   };
 };

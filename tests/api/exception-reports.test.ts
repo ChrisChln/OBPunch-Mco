@@ -269,6 +269,61 @@ describe('api/exception-reports', () => {
     expect(updateException.mock.calls[0][0].actual_qty).toBeNull();
   });
 
+  test('lead patch requires inventory adjustment before resolving borrowed inventory', async () => {
+    const updateException = vi.fn();
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return {
+          select: () => ({
+            eq: () => ({
+              single: async () => ({
+                data: {
+                  id: 9,
+                  ...baseBody,
+                  lead_pin: undefined,
+                  status: 'Processing',
+                  borrowed_location: 'B02',
+                  borrowed_qty: 2,
+                  inventory_adjustment: false,
+                  resolution_note: null
+                },
+                error: null
+              })
+            })
+          }),
+          update: updateException
+        };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler(
+      {
+        method: 'PATCH',
+        headers: {},
+        body: {
+          ...baseBody,
+          id: 9,
+          status: 'Resolved',
+          borrowed_location: 'B02',
+          borrowed_qty: 2,
+          inventory_adjustment: false
+        }
+      },
+      res
+    );
+
+    expect(res.code).toBe(400);
+    expect(String(res.body?.error ?? '')).toContain('Inventory adjustment is required');
+    expect(updateException).not.toHaveBeenCalled();
+  });
+
   test('admin close creates one mistake report', async () => {
     const mistakeInsert = vi.fn(() => ({
       select: () => ({
