@@ -79,6 +79,7 @@ export type ExceptionReportPrintPayload = {
   status: ExceptionStatus;
   reportDate: string;
   createdBy: string;
+  exceptionTypeLabel: string;
   qrValue: string;
   qrFields: ExceptionReportPrintQrField[];
   fields: ExceptionReportPrintField[];
@@ -206,6 +207,7 @@ export const buildExceptionPrintPayload = (
     status: report.status,
     reportDate: formatPrintDateTime(report.created_at, report.report_date),
     createdBy: resolvePrintStaffName(report.submitted_by_lead_id, resolveStaffName),
+    exceptionTypeLabel: formatExceptionType(report.exception_type) || '',
     qrValue,
     qrFields: [
       { key: 'product', label: 'Product', value: report.product_barcode || '' },
@@ -213,7 +215,6 @@ export const buildExceptionPrintPayload = (
       { key: 'container', label: 'Container', value: report.picking_container || '' }
     ],
     fields: [
-      { label: 'Type', value: formatExceptionType(report.exception_type) || '' },
       { label: 'Picked Loc', value: report.picked_location || '' },
       { label: 'System Qty', value: report.system_location_qty === null ? '' : String(report.system_location_qty) },
       { label: 'Actual', value: report.actual_qty === null ? '' : String(report.actual_qty) },
