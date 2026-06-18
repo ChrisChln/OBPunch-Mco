@@ -216,11 +216,11 @@ export const buildExceptionPrintPayload = (
     ],
     fields: [
       { label: 'Picked Loc', value: report.picked_location || '' },
+      { label: 'Count By', value: resolvePrintStaffName(report.count_by, resolveStaffName) },
       { label: 'System Qty', value: report.system_location_qty === null ? '' : String(report.system_location_qty) },
       { label: 'Actual', value: report.actual_qty === null ? '' : String(report.actual_qty) },
       { label: 'Picker', value: resolvePrintStaffName(report.picking_operator, resolveStaffName) },
       { label: 'Packer', value: resolvePrintStaffName(report.packing_rebin_operator, resolveStaffName) },
-      { label: 'Count By', value: resolvePrintStaffName(report.count_by, resolveStaffName) },
       { label: 'Borrowed', value: borrowed }
     ]
   };

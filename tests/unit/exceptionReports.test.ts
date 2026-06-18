@@ -126,6 +126,7 @@ describe('exceptionReports', () => {
 
     const payload = buildExceptionPrintPayload(report, 'https://example.test');
     const fields = new Map(payload.fields.map((field) => [field.label, field.value]));
+    const fieldLabels = payload.fields.map((field) => field.label);
     const qrFields = new Map(payload.qrFields.map((field) => [field.label, field.value]));
 
     expect(payload.reportId).toBe('99');
@@ -143,6 +144,7 @@ describe('exceptionReports', () => {
     expect(fields.has('Lead')).toBe(false);
     expect(fields.has('Resolution')).toBe(false);
     expect(fields.has('Responsibility')).toBe(false);
+    expect(fieldLabels.slice(0, 2)).toEqual(['Picked Loc', 'Count By']);
     expect(fields.get('Picker')).toBe('US100');
     expect(fields.get('Packer')).toBe('');
   });
