@@ -12885,6 +12885,41 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }, [page, scheduleWeekOffset, employees]);
 
   useEffect(() => {
+    if (page !== 'schedule' || !supabase) return;
+    let active = true;
+    let refreshTimer: number | null = null;
+
+    const refreshPunchPresence = () => {
+      if (!active || document.hidden) return;
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        if (!active || document.hidden) return;
+        void fetchSchedulePunchPresence({ keepPreviousWhileLoading: true });
+      }, 400);
+    };
+
+    const channel = supabase
+      .channel(`schedule-punch-presence-${scheduleWeekOffset}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ob_punches' }, refreshPunchPresence)
+      .subscribe();
+
+    const interval = window.setInterval(refreshPunchPresence, 30000);
+    const handleVisibility = () => {
+      if (!document.hidden) refreshPunchPresence();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      active = false;
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      void supabase.removeChannel(channel);
+    };
+  }, [page, scheduleWeekOffset, employees]);
+
+  useEffect(() => {
     if (page !== 'schedule') return;
     void fetchScheduleUph();
     void fetchScheduleMistakeCounts();

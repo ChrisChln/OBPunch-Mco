@@ -4,6 +4,7 @@ import {
   buildExceptionUpdatePayload,
   buildExceptionPrintPayload,
   isValidExceptionTransition,
+  needsInventoryAdjustment,
   validateExceptionReportInput,
   type ExceptionReportInput,
   type ExceptionReportRecord
@@ -90,9 +91,20 @@ describe('exceptionReports', () => {
   test('allows only forward status transitions', () => {
     expect(isValidExceptionTransition('Open', 'Processing')).toBe(true);
     expect(isValidExceptionTransition('Processing', 'Resolved')).toBe(true);
+    expect(isValidExceptionTransition('Processing', 'Pending Adjustment')).toBe(true);
+    expect(isValidExceptionTransition('Pending Adjustment', 'Resolved')).toBe(true);
     expect(isValidExceptionTransition('Resolved', 'Closed')).toBe(true);
+    expect(isValidExceptionTransition('Open', 'Closed')).toBe(true);
+    expect(isValidExceptionTransition('Closed', 'Open')).toBe(true);
     expect(isValidExceptionTransition('Open', 'Resolved')).toBe(false);
     expect(isValidExceptionTransition('Resolved', 'Processing')).toBe(false);
+    expect(isValidExceptionTransition('Closed', 'Processing')).toBe(false);
+  });
+
+  test('detects pending inventory adjustments after borrowing from another location', () => {
+    expect(needsInventoryAdjustment({ borrowed_location: 'B02', inventory_adjustment: false })).toBe(true);
+    expect(needsInventoryAdjustment({ borrowed_location: 'B02', inventory_adjustment: true })).toBe(false);
+    expect(needsInventoryAdjustment({ borrowed_location: '', inventory_adjustment: false })).toBe(false);
   });
 
   test('maps all key report fields into the 4x6 print payload', () => {
@@ -114,12 +126,56 @@ describe('exceptionReports', () => {
 
     const payload = buildExceptionPrintPayload(report, 'https://example.test');
     const fields = new Map(payload.fields.map((field) => [field.label, field.value]));
+    const qrFields = new Map(payload.qrFields.map((field) => [field.label, field.value]));
 
     expect(payload.reportId).toBe('99');
     expect(payload.qrValue).toContain('/exception?id=99');
-    expect(fields.get('Product')).toBe('SKU123');
-    expect(fields.get('Picking List')).toBe('PL-1');
-    expect(fields.get('Resolution')).toBe('Checked bin');
-    expect(fields.get('Responsibility')).toBe('US500');
+    expect(payload.createdBy).toBe('US300');
+    expect(qrFields.get('Product')).toBe('SKU123');
+    expect(qrFields.get('Picking List')).toBe('PL-1');
+    expect(qrFields.get('Container')).toBe('C-1');
+    expect(fields.has('Product')).toBe(false);
+    expect(fields.has('Picking List')).toBe(false);
+    expect(fields.has('Container')).toBe(false);
+    expect(fields.has('Inv Adj')).toBe(false);
+    expect(fields.has('Lead')).toBe(false);
+    expect(fields.has('Resolution')).toBe(false);
+    expect(fields.has('Responsibility')).toBe(false);
+    expect(fields.get('Picker')).toBe('US100');
+    expect(fields.get('Packer')).toBe('');
+  });
+
+  test('uses staff names in the 4x6 print payload when available', () => {
+    const report: ExceptionReportRecord = {
+      ...validInput(),
+      id: 100,
+      status: 'Closed',
+      system_location_qty: 2,
+      actual_qty: 2,
+      borrowed_qty: null,
+      responsibility_result: 'pending',
+      responsible_staff_id: null,
+      mistake_report_id: null,
+      created_at: '2026-06-18T10:00:00Z',
+      updated_at: '2026-06-18T10:00:00Z',
+      processed_at: null,
+      resolved_at: null,
+      closed_at: null,
+      packing_rebin_operator: 'US200',
+      count_by: 'US300'
+    };
+    const names = new Map([
+      ['US100', 'Daniel Plutin'],
+      ['US200', 'Andres Machado'],
+      ['US300', 'Wilkens Bertrand']
+    ]);
+
+    const payload = buildExceptionPrintPayload(report, '', (staffId) => names.get(staffId) ?? staffId);
+    const fields = new Map(payload.fields.map((field) => [field.label, field.value]));
+
+    expect(payload.createdBy).toBe('Wilkens Bertrand');
+    expect(fields.get('Picker')).toBe('Daniel Plutin');
+    expect(fields.get('Packer')).toBe('Andres Machado');
+    expect(fields.get('Count By')).toBe('Wilkens Bertrand');
   });
 });

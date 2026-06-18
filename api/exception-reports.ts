@@ -3,6 +3,7 @@ import {
   buildExceptionInsertPayload,
   buildExceptionUpdatePayload,
   isValidExceptionTransition,
+  needsInventoryAdjustment,
   normalizeExceptionStatus,
   parseNonNegativeNumber,
   validateExceptionReportInput,
@@ -69,6 +70,13 @@ const hasLeadPin = (req: any, body?: Record<string, unknown> | null) => {
     String(req.headers?.['x-exception-lead-pin'] ?? '').trim() ||
     String(req.query?.lead_pin ?? '').trim();
   return Boolean(exceptionLeadPin) && pin === exceptionLeadPin;
+};
+
+const parseIsoDateParam = (value: unknown) => {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
 
 const ensureAdminAccess = async (req: any, res: any, serviceSupabase: any, required: 'view' | 'operate' = 'operate') => {
@@ -175,11 +183,20 @@ const handleGet = async (req: any, res: any, supabase: any) => {
 
   const id = String(req.query?.id ?? '').trim();
   const reportDate = String(req.query?.date ?? '').trim();
+  const createdStart = parseIsoDateParam(req.query?.created_start);
+  const createdEnd = parseIsoDateParam(req.query?.created_end);
   const status = normalizeExceptionStatus(req.query?.status);
+
+  if (createdStart === null || createdEnd === null) {
+    res.status(400).json({ error: 'Invalid created date range.' });
+    return;
+  }
 
   let query = supabase.from(EXCEPTION_TABLE).select('*').order('created_at', { ascending: false }).limit(200);
   if (id) query = query.eq('id', id).limit(1);
   if (reportDate) query = query.eq('report_date', reportDate);
+  if (createdStart) query = query.gte('created_at', createdStart);
+  if (createdEnd) query = query.lt('created_at', createdEnd);
   if (status) query = query.eq('status', status);
 
   const result = await query;
@@ -221,8 +238,8 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
 
   const id = String(body.id ?? '').trim();
   const nextStatus = normalizeExceptionStatus(body.status);
-  if (!id || !nextStatus || nextStatus === 'Closed') {
-    res.status(400).json({ error: 'A valid id and non-Closed status are required.' });
+  if (!id || !nextStatus) {
+    res.status(400).json({ error: 'A valid id and status are required.' });
     return;
   }
 
@@ -265,6 +282,10 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
     res.status(400).json({ error: errors[0] ?? 'Invalid exception report.' });
     return;
   }
+  if (nextStatus === 'Resolved' && needsInventoryAdjustment(editedInput)) {
+    res.status(400).json({ error: 'Inventory adjustment is required before resolving this exception.' });
+    return;
+  }
 
   const updatePayload: Record<string, unknown> = {
     status: nextStatus,
@@ -272,6 +293,20 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
   };
   if (nextStatus === 'Processing') updatePayload.processed_at = new Date().toISOString();
   if (nextStatus === 'Resolved') updatePayload.resolved_at = new Date().toISOString();
+  if (nextStatus === 'Closed') {
+    updatePayload.closed_at = new Date().toISOString();
+    updatePayload.responsibility_result = 'pending';
+    updatePayload.responsible_staff_id = null;
+    updatePayload.mistake_report_id = null;
+  }
+  if (currentStatus === 'Closed' && nextStatus === 'Open') {
+    updatePayload.processed_at = null;
+    updatePayload.resolved_at = null;
+    updatePayload.closed_at = null;
+    updatePayload.responsibility_result = 'pending';
+    updatePayload.responsible_staff_id = null;
+    updatePayload.mistake_report_id = null;
+  }
 
   const result = await supabase.from(EXCEPTION_TABLE).update(updatePayload).eq('id', id).select('*').single();
   if (result.error) {
