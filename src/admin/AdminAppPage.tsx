@@ -16772,7 +16772,7 @@ ${rowsToHtml(late)}
             />
           </main>
         ) : (
-          <div className="grid h-screen grid-rows-[64px_minmax(0,1fr)] overflow-hidden">
+          <div className="grid min-h-screen grid-rows-[64px_minmax(0,1fr)]">
             <AdminHeader
               t={t}
               isLocked={isLocked}
@@ -16793,7 +16793,7 @@ ${rowsToHtml(late)}
               onLogout={doLogout}
             />
 
-            <div className="flex min-h-0 flex-1 overflow-hidden">
+            <div className="flex min-h-[calc(100vh-64px)] flex-1">
               <AdminNav
                 page={page}
                 isLocked={isLocked}
@@ -16810,8 +16810,8 @@ ${rowsToHtml(late)}
                 className={[
                   'flex-1 min-w-0',
                   themeMode === 'light'
-                    ? 'min-h-0 overflow-auto bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.12),transparent_28%),linear-gradient(180deg,rgba(245,247,255,0.95),rgba(242,245,255,0.98))] text-slate-900'
-                    : 'min-h-0 overflow-auto bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.14),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(139,92,246,0.12),transparent_26%),linear-gradient(180deg,rgba(7,10,16,0.98),rgba(10,14,22,0.98))] text-slate-100',
+                    ? 'min-h-[calc(100vh-64px)] bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.12),transparent_28%),linear-gradient(180deg,rgba(245,247,255,0.95),rgba(242,245,255,0.98))] text-slate-900'
+                    : 'min-h-[calc(100vh-64px)] bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.14),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(139,92,246,0.12),transparent_26%),linear-gradient(180deg,rgba(7,10,16,0.98),rgba(10,14,22,0.98))] text-slate-100',
                   'px-0 py-0'
                 ].join(' ')}
               >
