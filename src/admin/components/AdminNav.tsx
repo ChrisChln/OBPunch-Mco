@@ -73,6 +73,7 @@ const NAV_ITEMS: NavItem[] = [
   { page: 'accounts', label: (t) => t('账号管理', 'Accounts') },
   { page: 'permissions', label: (t) => t('权限', 'Permissions') },
   { page: 'timecard', label: (t) => t('时间卡', 'Timecard') },
+  { page: 'exceptions', label: (t) => t('异常单', 'Exceptions') },
   { page: 'schedule', label: (t) => t('排班', 'Schedule'), badge: 'schedule' },
   { page: 'leave_approval', label: (t) => t('请假审批', 'Leave Approval'), badge: 'leave' },
   { page: 'work_hour_comparison', label: (t) => t('工时对比', 'Work Hour Comparison') },
@@ -82,8 +83,7 @@ const NAV_ITEMS: NavItem[] = [
   { page: 'devices', label: (t) => t('设备管理', 'Devices') },
   { page: 'forecast', label: (t) => t('件量预测', 'Forecast') },
   { page: 'prediction_model', label: (t) => t('预测模型', 'Prediction Model') },
-  { page: 'efficiency', label: (t) => t('人效', 'Efficiency') },
-  { page: 'exceptions', label: (t) => t('Exceptions', 'Exceptions') }
+  { page: 'efficiency', label: (t) => t('人效', 'Efficiency') }
 ];
 
 const ALL_NAV_PAGES = NAV_ITEMS.map((item) => item.page);
