@@ -1,5 +1,5 @@
-import { buildPredictionWorkbenchData, MAIN_LEADERBOARD_CUTOFF } from '../src/admin/forecasting/predictionWorkbenchShared.js';
-import { DEFAULT_CODE_VERSION, addDaysDateOnly, readEnabledModels } from './_forecastShared.js';
+import { buildPredictionWorkbenchData } from '../src/admin/pages/PredictionModelPage.tsx';
+import { DEFAULT_CODE_VERSION, MAIN_LEADERBOARD_CUTOFF, addDaysDateOnly, readEnabledModels } from './_forecastShared.js';
 
 type RunType = 'official' | 'manual' | 'backfill';
 type FeedbackRegimeKey = 'transition_down' | 'promotion';
@@ -16,6 +16,28 @@ type FeedbackPredictionRow = {
   candidate_scope: 'model' | 'version';
   candidate_key: string;
   forecast_value: number;
+};
+type WorkbenchMetric = {
+  key: string;
+  label: string;
+  samples: number;
+  targetForecast: number | null;
+};
+type WorkbenchEvaluationRow = {
+  date: string;
+  actual: number;
+  forecasts: Record<string, number | null>;
+};
+type WorkbenchSelectorEvaluationRow = {
+  date: string;
+  regimeKey: string;
+};
+type PredictionWorkbenchData = ReturnType<typeof buildPredictionWorkbenchData> & {
+  leaderboard: WorkbenchMetric[];
+  versionLeaderboard: WorkbenchMetric[];
+  evaluationRows: WorkbenchEvaluationRow[];
+  versionEvaluationRows: WorkbenchEvaluationRow[];
+  selectorEvaluationRows: WorkbenchSelectorEvaluationRow[];
 };
 type VersionCandidate = {
   scope: 'version';
@@ -265,7 +287,7 @@ export const runForecast = async ({
       historyRangeStart,
       historyRangeEnd,
       forecastTargetDate: targetDate
-    });
+    }) as PredictionWorkbenchData;
 
     const baseVersionCandidates: VersionCandidate[] = data.versionLeaderboard
       .filter((metric) => metric.targetForecast !== null)
@@ -408,8 +430,11 @@ export const runForecast = async ({
       .select('id,candidate_scope,candidate_key,forecast_value');
     if (predictionInsert.error) throw predictionInsert.error;
 
-    const predictionIdByKey = new Map(
-      ((predictionInsert.data as any[]) ?? []).map((row) => [`${row.candidate_scope}:${row.candidate_key}`, Number(row.id ?? 0)])
+    const predictionIdByKey = new Map<string, number>(
+      (
+        (predictionInsert.data as Array<{ id?: number | string | null; candidate_scope?: string | null; candidate_key?: string | null }> | null) ??
+        []
+      ).map((row) => [`${row.candidate_scope}:${row.candidate_key}`, Number(row.id ?? 0)])
     );
     const recommendedPredictionId =
       recommendedVersion === null ? null : predictionIdByKey.get(`version:${recommendedVersion.key}`) ?? null;

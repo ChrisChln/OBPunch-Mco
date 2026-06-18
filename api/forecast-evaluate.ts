@@ -1,12 +1,9 @@
 import {
-  MAIN_LEADERBOARD_CUTOFF
-} from '../src/admin/pages/PredictionModelPage.tsx';
-import {
-  addDaysDateOnly,
   asNumber,
   createServiceSupabase,
   ensureAdmin,
   getDefaultTargetDate,
+  MAIN_LEADERBOARD_CUTOFF,
   readThresholds
 } from './_forecastShared';
 

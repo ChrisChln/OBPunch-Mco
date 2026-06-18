@@ -5,10 +5,8 @@ import {
   isValidExceptionTransition,
   needsInventoryAdjustment,
   normalizeExceptionStatus,
-  parseNonNegativeNumber,
   validateExceptionReportInput,
-  type ExceptionReportInput,
-  type ExceptionStatus
+  type ExceptionReportInput
 } from '../src/shared/exceptionReports.js';
 import { getModuleMapFromContext, hasModuleAccess, normalizeAdminAccessContext } from '../src/shared/adminAccess.js';
 

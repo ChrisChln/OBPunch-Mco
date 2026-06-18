@@ -3,10 +3,8 @@ import {
   addDaysDateOnly,
   createServiceSupabase,
   ensureCron,
-  getDefaultTargetDate,
   isDateOnly,
-  loadForecastSetting,
-  toDateOnlyNy
+  loadForecastSetting
 } from './_forecastShared';
 import { runForecast } from './_forecastRunCore.js';
 
