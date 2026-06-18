@@ -54,6 +54,7 @@ import EfficiencyPage from './pages/EfficiencyPage';
 import WorkHourComparisonPage from './pages/WorkHourComparisonPage';
 import LeaveApprovalPage from './pages/LeaveApprovalPage';
 import TodoPage from './pages/TodoPage';
+import ExceptionsPage from './pages/ExceptionsPage';
 import AppDialog from '../components/AppDialog';
 import ElectricBorder from '../components/ElectricBorder';
 import {
@@ -1328,6 +1329,7 @@ const getVisibleAdminPages = (accessContext: AdminAccessContext | null | undefin
   if (hasModuleAccess(moduleMap, 'forecast', 'view')) pages.push('forecast');
   if (hasModuleAccess(moduleMap, 'prediction_model', 'view')) pages.push('prediction_model');
   if (hasModuleAccess(moduleMap, 'efficiency', 'view')) pages.push('efficiency');
+  if (hasModuleAccess(moduleMap, 'exceptions', 'view')) pages.push('exceptions');
 
   return pages.length > 0 ? pages : ['home'];
 };
@@ -1490,7 +1492,8 @@ export default function AdminAppPage() {
       leaveApproval: hasModuleAccess(adminModuleMap, 'leave_approval', 'operate'),
       workHourComparison: hasModuleAccess(adminModuleMap, 'work_hour_comparison', 'operate'),
       todo: hasModuleAccess(adminModuleMap, 'todo', 'operate'),
-      audit: hasModuleAccess(adminModuleMap, 'audit', 'operate')
+      audit: hasModuleAccess(adminModuleMap, 'audit', 'operate'),
+      exceptions: hasModuleAccess(adminModuleMap, 'exceptions', 'operate')
     }),
     [adminModuleMap]
   );
@@ -1508,7 +1511,8 @@ export default function AdminAppPage() {
     leaveApproval: leaveApprovalCanOperate,
     workHourComparison: workHourComparisonCanOperate,
     todo: todoCanOperate,
-    audit: auditCanOperate
+    audit: auditCanOperate,
+    exceptions: exceptionsCanOperate
   } = canOperateFlags;
   const employeesReadOnly = isLocked || !employeesCanOperate;
   const scheduleReadOnly = isLocked || !scheduleCanOperate;
@@ -16956,6 +16960,16 @@ ${rowsToHtml(late)}
                 userEmail={String(user?.email ?? '')}
                 userDisplayName={String(userDisplayName ?? '')}
                 onPendingCountChange={setTodoPendingCount}
+              />
+            )}
+            {page === 'exceptions' && (
+              <ExceptionsPage
+                t={t}
+                themeMode={themeMode}
+                isLocked={isLocked}
+                isReadOnly={!exceptionsCanOperate}
+                supabase={supabase}
+                userEmail={String(user?.email ?? '')}
               />
             )}
             {page === 'punches' && (

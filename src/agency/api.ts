@@ -295,6 +295,10 @@ const syncAgencyNewHirePayrate = async (
   }
 };
 
+export const upsertAgencyPayrate = async (supabase: SupabaseClient, staffId: string, workDate: string, payrateInput: unknown) => {
+  await syncAgencyNewHirePayrate(supabase, [staffId], workDate, payrateInput);
+};
+
 export const upsertAgencyNewHireDemand = async (supabase: SupabaseClient, input: AgencyUpsertNewHireInput) => {
   const payload = await expectRpcSuccess<Record<string, unknown>>(
     supabase.rpc('agency_upsert_new_hire_demand', {
