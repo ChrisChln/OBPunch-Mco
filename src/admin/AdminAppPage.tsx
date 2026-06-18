@@ -19134,7 +19134,7 @@ ${rowsToHtml(late)}
             )}
 
             {page === 'timecard' && (
-              <section className="flex min-h-[calc(100vh-64px)] flex-col px-4 py-5 sm:px-6 sm:py-8">
+              <section className="flex h-[calc(100vh-64px)] min-h-0 flex-col overflow-hidden px-4 py-5 sm:px-6 sm:py-8">
                 <TimecardControls
                   t={t}
                   themeMode={themeMode}
