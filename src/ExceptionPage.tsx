@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Pencil } from 'lucide-react';
+import { Pencil, Plus, X } from 'lucide-react';
 import QRCode from 'qrcode';
 import BorderGlow from './components/reactBits/BorderGlow';
 import {
@@ -8,6 +8,7 @@ import {
   buildExceptionPrintPayload,
   formatExceptionType,
   needsInventoryAdjustment,
+  splitExceptionReportItemRows,
   type ExceptionReportInput,
   type ExceptionReportPrintPayload,
   type ExceptionReportRecord,
@@ -200,12 +201,94 @@ const loginInputClass =
 const loginButtonClass =
   'mt-2 h-14 w-full cursor-pointer rounded-[20px] border border-cyan-200/70 bg-cyan-200 px-5 text-base font-semibold text-slate-950 shadow-[0_18px_48px_rgba(103,232,249,0.18)] transition hover:-translate-y-0.5 hover:bg-cyan-100 hover:shadow-[0_22px_60px_rgba(103,232,249,0.24)] disabled:cursor-not-allowed disabled:border-slate-700/70 disabled:bg-slate-900/80 disabled:text-slate-300 disabled:shadow-none disabled:hover:translate-y-0 disabled:hover:bg-slate-900/80';
 
+const splitMultiField = (value: string) => {
+  const rows = value.split(/\r?\n/);
+  return rows.length ? rows : [''];
+};
+
+const joinMultiField = (rows: string[]) => rows.map((row) => row.trim()).join('\n').replace(/\n+$/g, '');
+
 function Field({ label, children, wide = false }: { label: string; children: ReactNode; wide?: boolean }) {
   return (
     <label className={wide ? 'sm:col-span-2' : ''}>
       <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{label}</span>
       {children}
     </label>
+  );
+}
+
+function ProductLocationFields({
+  productBarcode,
+  pickedLocation,
+  onChange
+}: {
+  productBarcode: string;
+  pickedLocation: string;
+  onChange: (patch: Pick<ExceptionReportInput, 'product_barcode' | 'picked_location'>) => void;
+}) {
+  const productRows = splitMultiField(productBarcode);
+  const locationRows = splitMultiField(pickedLocation);
+  const rowCount = Math.max(1, productRows.length, locationRows.length);
+  const rows = Array.from({ length: rowCount }, (_, index) => ({
+    product: productRows[index] ?? '',
+    location: locationRows[index] ?? ''
+  }));
+
+  const updateRows = (nextRows: Array<{ product: string; location: string }>) => {
+    onChange({
+      product_barcode: joinMultiField(nextRows.map((row) => row.product)),
+      picked_location: joinMultiField(nextRows.map((row) => row.location))
+    });
+  };
+
+  return (
+    <div className="grid gap-2 sm:col-span-2">
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-3">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Product Barcode</div>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Picked Location</div>
+        <button
+          type="button"
+          onClick={() => updateRows([...rows, { product: '', location: '' }])}
+          aria-label="Add product and location"
+          title="Add"
+          className="inline-flex h-7 w-9 items-center justify-center rounded-lg border border-emerald-300/40 bg-emerald-300/10 text-emerald-100 transition hover:border-emerald-200 hover:bg-emerald-300/20"
+        >
+          <Plus className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+      {rows.map((row, index) => (
+        <div key={`product-location-${index}`} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-3">
+          <input
+            value={row.product}
+            onChange={(event) => {
+              const nextRows = [...rows];
+              nextRows[index] = { ...row, product: event.target.value };
+              updateRows(nextRows);
+            }}
+            className={inputClass}
+          />
+          <input
+            value={row.location}
+            onChange={(event) => {
+              const nextRows = [...rows];
+              nextRows[index] = { ...row, location: event.target.value };
+              updateRows(nextRows);
+            }}
+            className={inputClass}
+          />
+          <button
+            type="button"
+            onClick={() => updateRows(rows.filter((_, rowIndex) => rowIndex !== index))}
+            disabled={rows.length === 1}
+            aria-label={`Remove product and location ${index + 1}`}
+            title="Remove"
+            className="inline-flex h-11 w-9 items-center justify-center rounded-xl border border-slate-700/70 bg-[#080d18]/70 text-slate-300 transition hover:border-rose-300/70 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -282,6 +365,11 @@ function EmployeeSearchInput({
 }
 
 type PrintLabelQrDataUrls = Record<ExceptionReportPrintPayload['qrFields'][number]['key'], string>;
+type PrintLabelSheet = {
+  payload: ExceptionReportPrintPayload;
+  qrDataUrl: string;
+  qrFieldDataUrls: PrintLabelQrDataUrls;
+};
 
 const escapePrintHtml = (value: unknown) =>
   String(value ?? '')
@@ -291,7 +379,7 @@ const escapePrintHtml = (value: unknown) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-const buildPrintLabelHtml = (payload: ExceptionReportPrintPayload, qrDataUrl: string, qrFieldDataUrls: PrintLabelQrDataUrls) => {
+const buildPrintLabelSheetHtml = ({ payload, qrDataUrl, qrFieldDataUrls }: PrintLabelSheet) => {
   const qrFields = payload.qrFields
     .map((field) => {
       const qr = qrFieldDataUrls[field.key];
@@ -313,43 +401,7 @@ const buildPrintLabelHtml = (payload: ExceptionReportPrintPayload, qrDataUrl: st
     )
     .join('');
 
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Exception #${escapePrintHtml(payload.reportId)}</title>
-  <style>
-    @page { size: 4in 6in; margin: 0; }
-    * { box-sizing: border-box; }
-    html, body { width: 4in; height: 6in; margin: 0; overflow: hidden; background: #f8fafc; }
-    body { color: #020617; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .sheet { width: 4in; height: 6in; overflow: hidden; padding: 0.18in; background: #f8fafc; }
-    .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.12in; border-bottom: 1px solid #cbd5e1; margin-top: 0.08in; padding-bottom: 0.1in; }
-    .title { font-size: 0.16in; font-weight: 900; text-transform: uppercase; letter-spacing: 0.08in; color: #64748b; }
-    .id { margin-top: 0.04in; font-size: 0.26in; font-weight: 900; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .status { display: inline-flex; margin-top: 0.04in; border: 1px solid #cbd5e1; border-radius: 999px; background: #fff; padding: 0.02in 0.08in; font-size: 0.11in; font-weight: 800; text-transform: uppercase; }
-    .main-qr { display: grid; place-items: center; width: 0.92in; height: 0.92in; flex: 0 0 auto; border: 1px solid #cbd5e1; border-radius: 0.12in; background: #fff; padding: 0.04in; }
-    img { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.06in; margin-top: 0.08in; }
-    .created { grid-column: span 2; border: 1px solid #e2e8f0; border-radius: 0.12in; background: #fff; color: #020617; padding: 0.08in 0.12in; }
-    .created-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 0.12in; }
-    .created-label { font-size: 0.1in; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04in; color: #64748b; }
-    .created-value { margin-top: 0.02in; font-size: 0.18in; font-weight: 900; color: #020617; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .type-banner { grid-column: span 2; display: grid; grid-template-columns: 0.42in minmax(0, 1fr); align-items: center; gap: 0.1in; border: 2px solid #020617; border-radius: 0.12in; background: #fff; padding: 0.08in 0.12in; }
-    .type-icon { display: grid; place-items: center; width: 0.36in; height: 0.36in; border: 2px solid #020617; border-radius: 999px; color: #020617; font-size: 0.24in; font-weight: 900; line-height: 1; }
-    .type-kicker { font-size: 0.085in; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05in; color: #64748b; }
-    .type-value { margin-top: 0.01in; font-size: 0.26in; font-weight: 900; line-height: 1; color: #020617; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .qr-grid { grid-column: span 2; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.06in; }
-    .qr-field { min-width: 0; border: 1px solid #e2e8f0; border-radius: 0.08in; background: #fff; padding: 0.04in 0.06in; }
-    .qr-label { text-align: center; font-size: 0.075in; font-weight: 800; text-transform: uppercase; letter-spacing: 0.012in; color: #64748b; }
-    .qr-box { display: grid; place-items: center; width: 0.66in; height: 0.66in; margin: 0.04in auto 0; background: #fff; }
-    .qr-value { margin-top: 0.04in; text-align: center; font-size: 0.075in; font-weight: 900; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .field { min-height: 0.34in; border: 1px solid #e2e8f0; border-radius: 0.08in; background: #fff; padding: 0.04in 0.08in; }
-    .field-label { font-size: 0.08in; font-weight: 800; text-transform: uppercase; letter-spacing: 0.015in; color: #64748b; }
-    .field-value { margin-top: 0.02in; font-size: 0.108in; font-weight: 900; line-height: 1.15; color: #020617; overflow-wrap: anywhere; }
-  </style>
-</head>
-<body>
+  return `
   <section class="sheet">
     <div class="type-banner">
       <div class="type-icon">!</div>
@@ -382,12 +434,54 @@ const buildPrintLabelHtml = (payload: ExceptionReportPrintPayload, qrDataUrl: st
       <div class="qr-grid">${qrFields}</div>
       ${fields}
     </div>
-  </section>
+  </section>`;
+};
+
+const buildPrintLabelHtml = (sheets: PrintLabelSheet[]) => {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Exception #${escapePrintHtml(sheets[0]?.payload.reportId ?? '')}</title>
+  <style>
+    @page { size: 4in 6in; margin: 0; }
+    * { box-sizing: border-box; }
+    html, body { width: 4in; margin: 0; background: #f8fafc; }
+    body { color: #020617; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .sheet { width: 4in; height: 6in; overflow: hidden; padding: 0.18in; background: #f8fafc; break-after: page; page-break-after: always; }
+    .sheet:last-child { break-after: auto; page-break-after: auto; }
+    .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.12in; border-bottom: 1px solid #cbd5e1; margin-top: 0.08in; padding-bottom: 0.1in; }
+    .title { font-size: 0.16in; font-weight: 900; text-transform: uppercase; letter-spacing: 0.08in; color: #64748b; }
+    .id { margin-top: 0.04in; font-size: 0.26in; font-weight: 900; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .status { display: inline-flex; margin-top: 0.04in; border: 1px solid #cbd5e1; border-radius: 999px; background: #fff; padding: 0.02in 0.08in; font-size: 0.11in; font-weight: 800; text-transform: uppercase; }
+    .main-qr { display: grid; place-items: center; width: 0.92in; height: 0.92in; flex: 0 0 auto; border: 1px solid #cbd5e1; border-radius: 0.12in; background: #fff; padding: 0.04in; }
+    img { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.06in; margin-top: 0.08in; }
+    .created { grid-column: span 2; border: 1px solid #e2e8f0; border-radius: 0.12in; background: #fff; color: #020617; padding: 0.08in 0.12in; }
+    .created-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 0.12in; }
+    .created-label { font-size: 0.1in; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04in; color: #64748b; }
+    .created-value { margin-top: 0.02in; font-size: 0.18in; font-weight: 900; color: #020617; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .type-banner { grid-column: span 2; display: grid; grid-template-columns: 0.42in minmax(0, 1fr); align-items: center; gap: 0.1in; border: 2px solid #020617; border-radius: 0.12in; background: #fff; padding: 0.08in 0.12in; }
+    .type-icon { display: grid; place-items: center; width: 0.36in; height: 0.36in; border: 2px solid #020617; border-radius: 999px; color: #020617; font-size: 0.24in; font-weight: 900; line-height: 1; }
+    .type-kicker { font-size: 0.085in; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05in; color: #64748b; }
+    .type-value { margin-top: 0.01in; font-size: 0.26in; font-weight: 900; line-height: 1; color: #020617; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .qr-grid { grid-column: span 2; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.06in; }
+    .qr-field { min-width: 0; border: 1px solid #e2e8f0; border-radius: 0.08in; background: #fff; padding: 0.04in 0.06in; }
+    .qr-label { text-align: center; font-size: 0.075in; font-weight: 800; text-transform: uppercase; letter-spacing: 0.012in; color: #64748b; }
+    .qr-box { display: grid; place-items: center; width: 0.66in; height: 0.66in; margin: 0.04in auto 0; background: #fff; }
+    .qr-value { margin-top: 0.04in; text-align: center; font-size: 0.075in; font-weight: 900; line-height: 1.1; white-space: pre-line; overflow-wrap: anywhere; }
+    .field { min-height: 0.34in; border: 1px solid #e2e8f0; border-radius: 0.08in; background: #fff; padding: 0.04in 0.08in; }
+    .field-label { font-size: 0.08in; font-weight: 800; text-transform: uppercase; letter-spacing: 0.015in; color: #64748b; }
+    .field-value { margin-top: 0.02in; font-size: 0.108in; font-weight: 900; line-height: 1.15; color: #020617; overflow-wrap: anywhere; white-space: pre-line; }
+  </style>
+</head>
+<body>
+${sheets.map((sheet) => buildPrintLabelSheetHtml(sheet)).join('\n')}
 </body>
 </html>`;
 };
 
-const printLabelDocument = (payload: ExceptionReportPrintPayload, qrDataUrl: string, qrFieldDataUrls: PrintLabelQrDataUrls) => {
+const printLabelDocument = (sheets: PrintLabelSheet[]) => {
   const iframe = document.createElement('iframe');
   iframe.style.position = 'fixed';
   iframe.style.right = '0';
@@ -406,7 +500,7 @@ const printLabelDocument = (payload: ExceptionReportPrintPayload, qrDataUrl: str
   }
 
   printDocument.open();
-  printDocument.write(buildPrintLabelHtml(payload, qrDataUrl, qrFieldDataUrls));
+  printDocument.write(buildPrintLabelHtml(sheets));
   printDocument.close();
 
   const cleanup = () => window.setTimeout(() => iframe.remove(), 500);
@@ -490,14 +584,13 @@ function NewExceptionModal({
               <Field label="Picking List Number" wide>
                 <input value={form.picking_list_number} onChange={(event) => onChange({ picking_list_number: event.target.value })} className={inputClass} />
               </Field>
-              <Field label="Product Barcode" wide>
-                <input value={form.product_barcode} onChange={(event) => onChange({ product_barcode: event.target.value })} className={inputClass} />
-              </Field>
+              <ProductLocationFields
+                productBarcode={form.product_barcode}
+                pickedLocation={form.picked_location}
+                onChange={onChange}
+              />
               <Field label="Picking Container">
                 <input value={form.picking_container} onChange={(event) => onChange({ picking_container: event.target.value })} className={inputClass} />
-              </Field>
-              <Field label="Picked Location">
-                <input value={form.picked_location} onChange={(event) => onChange({ picked_location: event.target.value })} className={inputClass} />
               </Field>
               <Field label="System Location Qty">
                 <input type="text" inputMode="decimal" value={form.system_location_qty} onChange={(event) => onChange({ system_location_qty: event.target.value })} className={numericInputClass} />
@@ -871,18 +964,37 @@ export default function ExceptionPage() {
   const openPrint = async (row: ExceptionReportRecord) => {
     setSaving(true);
     try {
-      const payload = buildExceptionPrintPayload(row, window.location.origin, (staffId) => employeeName(presentEmployees, staffId));
-      const [qr, ...fieldQrs] = await Promise.all([
-        QRCode.toDataURL(payload.qrValue, { margin: 1, width: 240, errorCorrectionLevel: 'M' }),
-        ...payload.qrFields.map((field) =>
-          field.value ? QRCode.toDataURL(field.value, { margin: 1, width: 180, errorCorrectionLevel: 'M' }) : Promise.resolve('')
-        )
-      ]);
-      const nextQrFieldDataUrls = payload.qrFields.reduce<Partial<PrintLabelQrDataUrls>>((acc, field, index) => {
-        acc[field.key] = fieldQrs[index] ?? '';
-        return acc;
-      }, {});
-      printLabelDocument(payload, qr, nextQrFieldDataUrls as PrintLabelQrDataUrls);
+      const itemRows = splitExceptionReportItemRows(row);
+      const printableRows = itemRows.length ? itemRows : [{ product_barcode: row.product_barcode || '', picked_location: row.picked_location || '' }];
+      const sheets = await Promise.all(
+        printableRows.map(async (itemRow) => {
+          const payload = buildExceptionPrintPayload(
+            {
+              ...row,
+              product_barcode: itemRow.product_barcode,
+              picked_location: itemRow.picked_location
+            },
+            window.location.origin,
+            (staffId) => employeeName(presentEmployees, staffId)
+          );
+          const [qr, ...fieldQrs] = await Promise.all([
+            QRCode.toDataURL(payload.qrValue, { margin: 1, width: 240, errorCorrectionLevel: 'M' }),
+            ...payload.qrFields.map((field) =>
+              field.value ? QRCode.toDataURL(field.value, { margin: 1, width: 180, errorCorrectionLevel: 'M' }) : Promise.resolve('')
+            )
+          ]);
+          const nextQrFieldDataUrls = payload.qrFields.reduce<Partial<PrintLabelQrDataUrls>>((acc, field, index) => {
+            acc[field.key] = fieldQrs[index] ?? '';
+            return acc;
+          }, {});
+          return {
+            payload,
+            qrDataUrl: qr,
+            qrFieldDataUrls: nextQrFieldDataUrls as PrintLabelQrDataUrls
+          };
+        })
+      );
+      printLabelDocument(sheets);
     } catch (error: any) {
       setMessage({ tone: 'error', text: String(error?.message ?? error ?? 'Failed to build label.') });
     } finally {

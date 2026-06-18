@@ -86,10 +86,35 @@ export type ExceptionReportPrintPayload = {
 };
 
 export type ExceptionReportStaffNameResolver = (staffId: string) => string;
+export type ExceptionReportItemRow = {
+  product_barcode: string;
+  picked_location: string;
+};
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 const trimText = (value: unknown) => String(value ?? '').trim();
+
+export const normalizeExceptionMultiLineText = (value: unknown, uppercase = false) =>
+  String(value ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .map((line) => (uppercase ? line.toUpperCase() : line))
+    .reduceRight<string[]>((acc, line) => {
+      if (acc.length || line) acc.unshift(line);
+      return acc;
+    }, [])
+    .join('\n');
+
+export const splitExceptionReportItemRows = (input: Pick<ExceptionReportInput, 'product_barcode' | 'picked_location'>): ExceptionReportItemRow[] => {
+  const productRows = normalizeExceptionMultiLineText(input.product_barcode).split('\n');
+  const locationRows = normalizeExceptionMultiLineText(input.picked_location).split('\n');
+  const rowCount = Math.max(productRows.length, locationRows.length, 1);
+  return Array.from({ length: rowCount }, (_, index) => ({
+    product_barcode: productRows[index] ?? '',
+    picked_location: locationRows[index] ?? ''
+  })).filter((row) => row.product_barcode || row.picked_location);
+};
 
 const formatPrintDateTime = (value: unknown, fallbackDate: string) => {
   const date = new Date(String(value ?? ''));
@@ -140,7 +165,7 @@ export const parseNonNegativeNumber = (value: unknown): number | null => {
 export const validateExceptionReportInput = (input: ExceptionReportInput): string[] => {
   const errors: string[] = [];
   if (!DATE_ONLY_PATTERN.test(trimText(input.report_date))) errors.push('Date must use YYYY-MM-DD.');
-  if (!trimText(input.product_barcode)) errors.push('Product barcode is required.');
+  if (!normalizeExceptionMultiLineText(input.product_barcode)) errors.push('Product barcode is required.');
   if (!trimText(input.picking_list_number)) errors.push('Picking list number is required.');
   if (trimText(input.system_location_qty) && parseNonNegativeNumber(input.system_location_qty) === null) errors.push('System location qty must be a non-negative number.');
   if (trimText(input.actual_qty) && parseNonNegativeNumber(input.actual_qty) === null) errors.push('Actual qty must be a non-negative number.');
@@ -162,12 +187,12 @@ export const buildExceptionInsertPayload = (input: ExceptionReportInput) => {
   return {
     report_date: trimText(input.report_date),
     exception_type: exceptionType,
-    product_barcode: trimText(input.product_barcode).toUpperCase(),
+    product_barcode: normalizeExceptionMultiLineText(input.product_barcode, true),
     picking_list_number: trimText(input.picking_list_number),
     picking_container: trimText(input.picking_container),
     picking_operator: trimText(input.picking_operator).toUpperCase(),
     packing_rebin_operator: trimText(input.packing_rebin_operator) || null,
-    picked_location: trimText(input.picked_location).toUpperCase(),
+    picked_location: normalizeExceptionMultiLineText(input.picked_location, true),
     system_location_qty: systemQty,
     actual_qty: actualQty,
     count_by: trimText(input.count_by).toUpperCase(),
