@@ -5,6 +5,8 @@ import {
   buildExceptionPrintPayload,
   isValidExceptionTransition,
   needsInventoryAdjustment,
+  normalizeExceptionMultiLineText,
+  splitExceptionReportItemRows,
   validateExceptionReportInput,
   type ExceptionReportInput,
   type ExceptionReportRecord
@@ -86,6 +88,30 @@ describe('exceptionReports', () => {
     expect(payload?.borrowed_location).toBe('B02');
     expect(payload?.borrowed_qty).toBe(2);
     expect(payload?.resolution_note).toBe('checked');
+  });
+
+  test('normalizes multiple product and location lines without losing row alignment', () => {
+    expect(normalizeExceptionMultiLineText(' sku123 \n \n sku456 ', true)).toBe('SKU123\n\nSKU456');
+
+    const payload = buildExceptionInsertPayload({
+      ...validInput(),
+      product_barcode: ' sku123 \nsku456 ',
+      picked_location: ' a01 \nb02 '
+    });
+    expect(payload?.product_barcode).toBe('SKU123\nSKU456');
+    expect(payload?.picked_location).toBe('A01\nB02');
+  });
+
+  test('splits printable item rows by product and picked location', () => {
+    expect(
+      splitExceptionReportItemRows({
+        product_barcode: 'SKU123\nSKU456',
+        picked_location: 'A01\nB02'
+      })
+    ).toEqual([
+      { product_barcode: 'SKU123', picked_location: 'A01' },
+      { product_barcode: 'SKU456', picked_location: 'B02' }
+    ]);
   });
 
   test('allows only forward status transitions', () => {
