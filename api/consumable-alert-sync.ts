@@ -8,6 +8,7 @@ import {
   computeConsumableProjection,
   isConsumableSnapshotDay,
   type ConsumableAdjustment,
+  type ConsumableItemKey,
   type ConsumableSnapshot
 } from '../src/shared/consumables';
 import { getDefaultModuleAccess, type AdminRole } from '../src/shared/adminAccess.js';
@@ -35,6 +36,25 @@ type ConsumableAlertRecord = {
   details_json: Record<string, unknown> | null;
   todo_template_id?: string | null;
   todo_item_id?: string | null;
+};
+
+type ConsumableAlertItem = {
+  item_key: ConsumableItemKey;
+  item_label?: string | null;
+  warning_days?: number | null;
+  critical_days?: number | null;
+};
+
+const normalizeConsumableAlertItem = (
+  item: ConsumableAlertItem | (typeof CONSUMABLE_ITEM_DEFINITIONS)[number]
+): ConsumableAlertItem => {
+  if ('item_key' in item) return item;
+  return {
+    item_key: item.key,
+    item_label: item.label,
+    warning_days: item.warningDays,
+    critical_days: item.criticalDays
+  };
 };
 
 const getNowInTimezoneParts = (timeZone: string) => {
@@ -335,7 +355,7 @@ const loadConsumableDataset = async (supabase: any, today: string) => {
   }
 
   return {
-    items: (itemsRes.data ?? []) as Array<{ item_key: ConsumableItemKey; item_label?: string | null; warning_days?: number | null; critical_days?: number | null }>,
+    items: (itemsRes.data ?? []) as ConsumableAlertItem[],
     snapshots: (snapshotsRes.data ?? []) as ConsumableSnapshot[],
     adjustments: (adjustmentsRes.data ?? []) as ConsumableAdjustment[],
     inboundOrdersByDate: Object.fromEntries(
@@ -571,8 +591,9 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    for (const item of dataset.items.length ? dataset.items : CONSUMABLE_ITEM_DEFINITIONS) {
-      const itemKey = item.item_key as ConsumableItemKey;
+    for (const rawItem of dataset.items.length ? dataset.items : CONSUMABLE_ITEM_DEFINITIONS) {
+      const item = normalizeConsumableAlertItem(rawItem);
+      const itemKey = item.item_key;
       const latestSnapshot = [...dataset.snapshots]
         .filter((row) => row.item_key === itemKey)
         .sort((left, right) => right.snapshot_date.localeCompare(left.snapshot_date, 'en-US'))[0];
@@ -604,7 +625,7 @@ export default async function handler(req: any, res: any) {
           alertType: classification.alertType,
           severity: classification.severity,
           details: {
-            item_label: (item as any).item_label ?? CONSUMABLE_ITEMS_BY_KEY[itemKey]?.label ?? itemKey,
+            item_label: item.item_label ?? CONSUMABLE_ITEMS_BY_KEY[itemKey]?.label ?? itemKey,
             latest_remaining_qty: latestSnapshot.remaining_qty,
             estimated_days_left: projection.estimatedDaysLeft,
             avg_daily_usage: projection.avgDailyUsage,
