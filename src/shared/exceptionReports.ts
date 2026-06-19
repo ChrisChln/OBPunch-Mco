@@ -1,11 +1,12 @@
-export const EXCEPTION_TYPES = ['over_pick', 'short_pick', 'wrong_pick', 'short_shipment'] as const;
+export const EXCEPTION_TYPES = ['over_pick', 'short_pick', 'wrong_pick', 'short_shipment', 'other'] as const;
 export type ExceptionType = (typeof EXCEPTION_TYPES)[number];
 
 export const EXCEPTION_TYPE_LABELS: Record<ExceptionType, string> = {
   over_pick: 'Over Pick',
   short_pick: 'Less Pick',
   wrong_pick: 'Wrong Pick',
-  short_shipment: 'Short Pick'
+  short_shipment: 'Short Pick',
+  other: 'Other'
 };
 
 export const formatExceptionType = (value: unknown) => {
@@ -243,6 +244,9 @@ export const validateExceptionReportInput = (input: ExceptionReportInput): strin
   const errors: string[] = [];
   const editRows = buildExceptionEditItemRows(input).filter(itemRowHasValue);
   if (!DATE_ONLY_PATTERN.test(trimText(input.report_date))) errors.push('Date must use YYYY-MM-DD.');
+  if (normalizeExceptionType(input.exception_type) === 'other' && !trimText(input.resolution_note)) {
+    errors.push('Reason is required for Other.');
+  }
   if (!editRows.some((row) => trimText(row.product))) errors.push('Product barcode is required.');
   if (!trimText(input.picking_list_number)) errors.push('Picking list number is required.');
   if (editRows.some((row) => trimText(row.systemQty) && parseNonNegativeNumber(row.systemQty) === null)) errors.push('System location qty must be a non-negative number.');

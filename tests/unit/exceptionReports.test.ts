@@ -74,6 +74,26 @@ describe('exceptionReports', () => {
     expect(payload?.actual_qty).toBeNull();
   });
 
+  test('requires a reason for Other exception type', () => {
+    expect(
+      validateExceptionReportInput({
+        ...validInput(),
+        exception_type: 'other',
+        resolution_note: ''
+      })
+    ).toContain('Reason is required for Other.');
+
+    const input = {
+      ...validInput(),
+      exception_type: 'other',
+      resolution_note: 'Mixed item issue'
+    };
+    expect(validateExceptionReportInput(input)).toEqual([]);
+    const payload = buildExceptionInsertPayload(input);
+    expect(payload?.exception_type).toBe('other');
+    expect(payload?.resolution_note).toBe('Mixed item issue');
+  });
+
   test('builds a normalized update payload from edited report fields', () => {
     const payload = buildExceptionUpdatePayload({
       ...validInput(),
