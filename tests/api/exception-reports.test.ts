@@ -105,7 +105,7 @@ describe('api/exception-reports', () => {
     expect(insert.mock.calls[0][0][0].product_barcode).toBe('SKU123');
     expect(insert.mock.calls[0][0][0].report_number).toBe('202606180001');
     expect(insert.mock.calls[0][0][0].item_rows).toEqual([
-      { product_barcode: 'SKU123', picked_location: 'A01', picking_container: 'C-1', system_location_qty: 5, actual_qty: 4 }
+      { product_barcode: 'SKU123', picked_location: 'A01', system_location_qty: 5, actual_qty: 4 }
     ]);
     expect(res.body.row.status).toBe('Open');
   });

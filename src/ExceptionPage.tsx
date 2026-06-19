@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Pencil, Plus, X } from 'lucide-react';
 import QRCode from 'qrcode';
 import BorderGlow from './components/reactBits/BorderGlow';
+import { compactLooseSearchText, matchesLooseSearch, normalizeLooseSearchText } from './lib/textSearch';
 import {
   EXCEPTION_TYPE_LABELS,
   EXCEPTION_TYPES,
@@ -161,6 +162,27 @@ const employeeName = (employees: PresentEmployeeOption[], value: unknown) => {
   return employee?.name.trim() || String(value ?? '').trim() || '-';
 };
 
+const employeeSearchText = (employee: PresentEmployeeOption) =>
+  `${employee.staff_id} ${employee.name} ${employee.position} ${employee.agency}`;
+
+const employeeSearchScore = (employee: PresentEmployeeOption, query: string) => {
+  const normalizedQuery = normalizeLooseSearchText(query);
+  if (!normalizedQuery) return 0;
+
+  const normalizedName = normalizeLooseSearchText(employee.name);
+  const normalizedStaffId = normalizeLooseSearchText(employee.staff_id);
+  const normalizedHaystack = normalizeLooseSearchText(employeeSearchText(employee));
+  const compactQuery = compactLooseSearchText(query);
+  const compactName = compactLooseSearchText(employee.name);
+  const compactStaffId = compactLooseSearchText(employee.staff_id);
+
+  if (normalizedName === normalizedQuery || normalizedStaffId === normalizedQuery) return 0;
+  if (normalizedName.startsWith(normalizedQuery) || normalizedStaffId.startsWith(normalizedQuery)) return 1;
+  if (compactName.startsWith(compactQuery) || compactStaffId.startsWith(compactQuery)) return 2;
+  if (normalizedHaystack.includes(normalizedQuery)) return 3;
+  return 4;
+};
+
 const formatQueueDateTime = (value: unknown) => {
   const date = new Date(String(value ?? ''));
   if (Number.isNaN(date.getTime())) return '-';
@@ -246,19 +268,17 @@ function ExceptionItemFields({
     setVisibleRowCount((current) => Math.max(current, rows.length));
   }, [rows.length]);
 
-  const updateRows = (nextRows: Array<{ product: string; location: string; container: string; systemQty: string; actualQty: string }>) => {
+  const updateRows = (nextRows: Array<{ product: string; location: string; systemQty: string; actualQty: string }>) => {
     setVisibleRowCount(Math.max(1, nextRows.length));
-    const firstRow = nextRows[0] ?? { product: '', location: '', container: '', systemQty: '', actualQty: '' };
+    const firstRow = nextRows[0] ?? { product: '', location: '', systemQty: '', actualQty: '' };
     onChange({
       product_barcode: joinMultiField(nextRows.map((row) => row.product)),
       picked_location: joinMultiField(nextRows.map((row) => row.location)),
-      picking_container: firstRow.container,
       system_location_qty: firstRow.systemQty,
       actual_qty: firstRow.actualQty,
       item_rows: nextRows.map((row) => ({
         product_barcode: row.product,
         picked_location: row.location,
-        picking_container: row.container,
         system_location_qty: row.systemQty,
         actual_qty: row.actualQty
       }))
@@ -268,10 +288,9 @@ function ExceptionItemFields({
   return (
     <div className="grid gap-2 sm:col-span-2">
       <div className="overflow-x-auto">
-      <div className="grid min-w-[920px] grid-cols-[minmax(160px,1fr)_minmax(160px,1fr)_minmax(150px,0.8fr)_minmax(130px,0.65fr)_minmax(110px,0.55fr)_auto] gap-3">
+      <div className="grid min-w-[760px] grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_minmax(130px,0.65fr)_minmax(110px,0.55fr)_auto] gap-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Product Barcode</div>
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Picked Location</div>
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Container</div>
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">System Qty</div>
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Actual</div>
         <button
@@ -285,7 +304,7 @@ function ExceptionItemFields({
         </button>
       </div>
       {rows.map((row, index) => (
-        <div key={`exception-item-${index}`} className="mt-2 grid min-w-[920px] grid-cols-[minmax(160px,1fr)_minmax(160px,1fr)_minmax(150px,0.8fr)_minmax(130px,0.65fr)_minmax(110px,0.55fr)_auto] gap-3">
+        <div key={`exception-item-${index}`} className="mt-2 grid min-w-[760px] grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_minmax(130px,0.65fr)_minmax(110px,0.55fr)_auto] gap-3">
           <input
             value={row.product}
             onChange={(event) => {
@@ -300,15 +319,6 @@ function ExceptionItemFields({
             onChange={(event) => {
               const nextRows = [...rows];
               nextRows[index] = { ...row, location: event.target.value };
-              updateRows(nextRows);
-            }}
-            className={inputClass}
-          />
-          <input
-            value={row.container}
-            onChange={(event) => {
-              const nextRows = [...rows];
-              nextRows[index] = { ...row, container: event.target.value };
               updateRows(nextRows);
             }}
             className={inputClass}
@@ -369,13 +379,11 @@ function EmployeeSearchInput({
   const selectedEmployee = useMemo(() => findPresentEmployee(employees, value), [employees, value]);
   const displayValue = selectedEmployee?.name || value;
   const options = useMemo(() => {
-    const query = value.trim().toLowerCase();
+    const query = value.trim();
     if (!query) return employees.slice(0, 12);
     return employees
-      .filter((employee) => {
-        const haystack = `${employee.staff_id} ${employee.name} ${employee.position} ${employee.agency}`.toLowerCase();
-        return haystack.includes(query);
-      })
+      .filter((employee) => matchesLooseSearch(employeeSearchText(employee), query))
+      .sort((left, right) => employeeSearchScore(left, query) - employeeSearchScore(right, query) || left.name.localeCompare(right.name, 'en-US', { sensitivity: 'base' }))
       .slice(0, 12);
   }, [employees, value]);
 
@@ -641,8 +649,11 @@ function NewExceptionModal({
                   ))}
                 </select>
               </Field>
-              <Field label="Picking List Number" wide>
+              <Field label="Picking List Number">
                 <input value={form.picking_list_number} onChange={(event) => onChange({ picking_list_number: event.target.value })} className={inputClass} />
+              </Field>
+              <Field label="Container">
+                <input value={form.picking_container} onChange={(event) => onChange({ picking_container: event.target.value })} className={inputClass} />
               </Field>
               <ExceptionItemFields form={form} onChange={onChange} />
               <EmployeeSearchInput label="Pick Operator" value={form.picking_operator} employees={employees} onChange={(value) => onChange({ picking_operator: value })} />
@@ -1029,7 +1040,7 @@ export default function ExceptionPage() {
               ...row,
               product_barcode: itemRow.product_barcode,
               picked_location: itemRow.picked_location,
-              picking_container: itemRow.picking_container ?? '',
+              picking_container: row.picking_container || '',
               system_location_qty: toNullableNumber(itemRow.system_location_qty),
               actual_qty: toNullableNumber(itemRow.actual_qty)
             },
