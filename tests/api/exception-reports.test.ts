@@ -107,7 +107,7 @@ describe('api/exception-reports', () => {
     expect(insert.mock.calls[0][0][0].item_rows).toEqual([
       { product_barcode: 'SKU123', picked_location: 'A01', system_location_qty: 5, actual_qty: 4 }
     ]);
-    expect(res.body.row.status).toBe('Open');
+    expect(res.body.row.status).toBe('Processing');
   });
 
   test('increments report number after stale duplicate sequence read', async () => {
@@ -201,7 +201,7 @@ describe('api/exception-reports', () => {
     expect(insert).toHaveBeenCalledTimes(2);
     expect(insert.mock.calls[0][0][0].item_rows).toBeDefined();
     expect(insert.mock.calls[1][0][0].item_rows).toBeUndefined();
-    expect(res.body.row.status).toBe('Open');
+    expect(res.body.row.status).toBe('Processing');
   });
 
   test('creates minimal exception reports with blank optional fields', async () => {
@@ -306,7 +306,7 @@ describe('api/exception-reports', () => {
     expect(insert.mock.calls[0][0][0].resolution_note).toBe('Mixed SKU issue');
   });
 
-  test('lead patch updates editable report fields without changing status', async () => {
+  test('lead patch infers pending adjustment when borrowed inventory is not adjusted', async () => {
     const updateException = vi.fn((payload: any) => ({
       eq: () => ({
         select: () => ({
@@ -356,6 +356,7 @@ describe('api/exception-reports', () => {
           status: 'Processing',
           product_barcode: ' sku999 ',
           picking_operator: ' us400 ',
+          packing_rebin_operator: 'us500',
           borrowed_location: ' b02 ',
           borrowed_qty: '2'
         }
@@ -368,7 +369,7 @@ describe('api/exception-reports', () => {
     expect(updateException.mock.calls[0][0].picking_operator).toBe('US400');
     expect(updateException.mock.calls[0][0].borrowed_location).toBe('B02');
     expect(updateException.mock.calls[0][0].borrowed_qty).toBe(2);
-    expect(updateException.mock.calls[0][0].status).toBe('Processing');
+    expect(updateException.mock.calls[0][0].status).toBe('Pending Adjustment');
   });
 
   test('lead patch can clear quantity fields', async () => {
@@ -432,8 +433,14 @@ describe('api/exception-reports', () => {
     expect(updateException.mock.calls[0][0].actual_qty).toBeNull();
   });
 
-  test('lead patch requires inventory adjustment before resolving borrowed inventory', async () => {
-    const updateException = vi.fn();
+  test('lead patch ignores manual resolved status until borrowed inventory is adjusted', async () => {
+    const updateException = vi.fn((payload: any) => ({
+      eq: () => ({
+        select: () => ({
+          single: async () => ({ data: { id: 9, status: 'Pending Adjustment', ...payload }, error: null })
+        })
+      })
+    }));
     const serviceSupabase = {
       from: (table: string) => {
         expect(table).toBe('ob_exception_reports');
@@ -474,6 +481,7 @@ describe('api/exception-reports', () => {
           ...baseBody,
           id: 9,
           status: 'Resolved',
+          packing_rebin_operator: 'US500',
           borrowed_location: 'B02',
           borrowed_qty: 2,
           inventory_adjustment: false
@@ -482,9 +490,8 @@ describe('api/exception-reports', () => {
       res
     );
 
-    expect(res.code).toBe(400);
-    expect(String(res.body?.error ?? '')).toContain('Inventory adjustment is required');
-    expect(updateException).not.toHaveBeenCalled();
+    expect(res.code).toBe(200);
+    expect(updateException.mock.calls[0][0].status).toBe('Pending Adjustment');
   });
 
   test('admin list accepts Authorization header casing', async () => {

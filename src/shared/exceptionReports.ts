@@ -233,6 +233,57 @@ export const isValidExceptionTransition = (from: ExceptionStatus, to: ExceptionS
 export const needsInventoryAdjustment = (input: Pick<ExceptionReportInput, 'borrowed_location' | 'inventory_adjustment'>) =>
   Boolean(trimText(input.borrowed_location)) && !Boolean(input.inventory_adjustment);
 
+const hasText = (value: unknown) => Boolean(trimText(value));
+
+const hasCompleteItemProcessing = (input: ExceptionItemRowSource) => {
+  const rows = buildExceptionEditItemRows(input).filter(itemRowHasValue);
+  return rows.length > 0 && rows.every((row) => hasText(row.product) && hasText(row.location) && hasText(row.systemQty) && hasText(row.actualQty));
+};
+
+const hasAnyItemProcessing = (input: ExceptionItemRowSource) =>
+  buildExceptionEditItemRows(input)
+    .filter(itemRowHasValue)
+    .some((row) => hasText(row.systemQty) || hasText(row.actualQty));
+
+export const inferExceptionStatus = (
+  input: Pick<
+    ExceptionReportInput,
+    | 'product_barcode'
+    | 'picked_location'
+    | 'system_location_qty'
+    | 'actual_qty'
+    | 'item_rows'
+    | 'picking_operator'
+    | 'packing_rebin_operator'
+    | 'count_by'
+    | 'borrowed_location'
+    | 'borrowed_qty'
+    | 'inventory_adjustment'
+  >
+): Exclude<ExceptionStatus, 'Closed'> => {
+  const hasAnyProcessingData =
+    hasAnyItemProcessing(input) ||
+    hasText(input.picking_operator) ||
+    hasText(input.packing_rebin_operator) ||
+    hasText(input.count_by);
+  if (!hasAnyProcessingData) return 'Open';
+
+  const hasCompleteProcessingData =
+    hasCompleteItemProcessing(input) &&
+    hasText(input.picking_operator) &&
+    hasText(input.packing_rebin_operator) &&
+    hasText(input.count_by);
+  if (!hasCompleteProcessingData) return 'Processing';
+
+  const borrowedLocation = hasText(input.borrowed_location);
+  const borrowedQty = hasText(input.borrowed_qty);
+  if (borrowedLocation || borrowedQty) {
+    return borrowedLocation && borrowedQty && input.inventory_adjustment ? 'Resolved' : 'Pending Adjustment';
+  }
+
+  return 'Resolved';
+};
+
 export const parseNonNegativeNumber = (value: unknown): number | null => {
   if (value === null || value === undefined || value === '') return null;
   const next = Number(value);

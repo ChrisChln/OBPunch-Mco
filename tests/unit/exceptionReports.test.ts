@@ -4,6 +4,7 @@ import {
   buildExceptionInsertPayload,
   buildExceptionUpdatePayload,
   buildExceptionPrintPayload,
+  inferExceptionStatus,
   isValidExceptionTransition,
   needsInventoryAdjustment,
   normalizeExceptionMultiLineText,
@@ -183,6 +184,16 @@ describe('exceptionReports', () => {
     expect(needsInventoryAdjustment({ borrowed_location: 'B02', inventory_adjustment: false })).toBe(true);
     expect(needsInventoryAdjustment({ borrowed_location: 'B02', inventory_adjustment: true })).toBe(false);
     expect(needsInventoryAdjustment({ borrowed_location: '', inventory_adjustment: false })).toBe(false);
+  });
+
+  test('infers status from completed workflow fields', () => {
+    const baseCreated = { ...validInput(), system_location_qty: '', actual_qty: '', picking_operator: '', packing_rebin_operator: '', count_by: '' };
+    const processingComplete = { ...validInput(), packing_rebin_operator: 'US400' };
+    expect(inferExceptionStatus(baseCreated)).toBe('Open');
+    expect(inferExceptionStatus({ ...validInput(), packing_rebin_operator: '', count_by: '' })).toBe('Processing');
+    expect(inferExceptionStatus(processingComplete)).toBe('Resolved');
+    expect(inferExceptionStatus({ ...processingComplete, borrowed_location: 'B02', borrowed_qty: '2', inventory_adjustment: false })).toBe('Pending Adjustment');
+    expect(inferExceptionStatus({ ...processingComplete, borrowed_location: 'B02', borrowed_qty: '2', inventory_adjustment: true })).toBe('Resolved');
   });
 
   test('maps all key report fields into the 4x6 print payload', () => {
