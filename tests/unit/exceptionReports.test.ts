@@ -196,6 +196,7 @@ describe('exceptionReports', () => {
     expect(inferExceptionStatus({ ...processingComplete, borrowed_location: 'B02', borrowed_qty: '2', inventory_adjustment: false })).toBe('Pending Adjustment');
     expect(inferExceptionStatus({ ...processingComplete, borrowed_location: 'B02', borrowed_qty: '2', inventory_adjustment: true })).toBe('Resolved');
     expect(inferExceptionStatus({ ...processingComplete, exception_type: 'short_shipment', actual_qty: 0, short_picked: true })).toBe('Short Picked');
+    expect(inferExceptionStatus({ ...validInput(), exception_type: 'short_shipment', actual_qty: 0, packing_rebin_operator: '', count_by: '', short_picked: true })).toBe('Short Picked');
   });
 
   test('persists short picked only for Short Pick zero-actual reports', () => {
