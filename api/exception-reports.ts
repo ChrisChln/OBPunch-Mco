@@ -109,7 +109,7 @@ const parseExceptionReportSequence = (reportNumber: unknown, reportDate: string)
   return Number.isInteger(sequence) && sequence > 0 ? sequence : 0;
 };
 
-const getNextExceptionReportNumber = async (supabase: any, reportDate: string) => {
+const getNextExceptionReportNumber = async (supabase: any, reportDate: string, minimumSequence = 1) => {
   const prefix = reportDateKey(reportDate);
   const result = await supabase
     .from(EXCEPTION_TABLE)
@@ -121,7 +121,7 @@ const getNextExceptionReportNumber = async (supabase: any, reportDate: string) =
 
   if (result.error) throw new Error(result.error.message);
   const lastSequence = parseExceptionReportSequence(result.data?.[0]?.report_number, reportDate);
-  return buildExceptionReportNumber(reportDate, lastSequence + 1);
+  return buildExceptionReportNumber(reportDate, Math.max(lastSequence + 1, minimumSequence));
 };
 
 const isUniqueConstraintError = (error: any) =>
@@ -294,8 +294,9 @@ const handlePost = async (req: any, res: any, supabase: any) => {
   }
 
   let lastError: any = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const reportNumber = await getNextExceptionReportNumber(supabase, payload.report_date);
+  let minimumSequence = 1;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const reportNumber = await getNextExceptionReportNumber(supabase, payload.report_date, minimumSequence);
     const result = await insertExceptionReport(supabase, { ...payload, report_number: reportNumber, status: 'Open' });
     if (!result.error) {
       res.status(200).json({ row: result.data });
@@ -303,6 +304,7 @@ const handlePost = async (req: any, res: any, supabase: any) => {
     }
     lastError = result.error;
     if (!isUniqueConstraintError(result.error)) break;
+    minimumSequence = parseExceptionReportSequence(reportNumber, payload.report_date) + 1;
   }
   res.status(500).json({ error: lastError?.message ?? 'Failed to create exception report.' });
 };

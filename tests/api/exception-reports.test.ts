@@ -110,6 +110,52 @@ describe('api/exception-reports', () => {
     expect(res.body.row.status).toBe('Open');
   });
 
+  test('increments report number after stale duplicate sequence read', async () => {
+    const select = vi.fn(() => ({
+      gte: () => ({
+        lt: () => ({
+          order: () => ({
+            limit: async () => ({ data: [{ report_number: '202606180001' }], error: null })
+          })
+        })
+      })
+    }));
+    const insert = vi.fn((rows: any[]) => ({
+      select: () => ({
+        single: async () => {
+          if (rows[0].report_number === '202606180002') {
+            return {
+              data: null,
+              error: {
+                code: '23505',
+                message: 'duplicate key value violates unique constraint "ob_exception_reports_report_number_key"'
+              }
+            };
+          }
+          return { data: { id: 4, status: 'Open', ...rows[0] }, error: null };
+        }
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return { insert, select };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'POST', headers: {}, body: baseBody }, res);
+
+    expect(res.code).toBe(200);
+    expect(insert.mock.calls.map((call) => call[0][0].report_number)).toEqual(['202606180002', '202606180003']);
+    expect(res.body.row.report_number).toBe('202606180003');
+  });
+
   test('falls back when item rows column is not in the Supabase schema cache', async () => {
     const select = vi.fn(() => ({
       gte: () => ({
