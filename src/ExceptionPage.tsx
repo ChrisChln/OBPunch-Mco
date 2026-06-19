@@ -50,6 +50,7 @@ const emptyForm = (leadId = ''): ExceptionReportInput => ({
   picked_location: '',
   system_location_qty: '',
   actual_qty: '',
+  item_rows: [],
   count_by: '',
   borrowed_location: '',
   borrowed_qty: '',
@@ -70,6 +71,7 @@ const formFromRecord = (row: ExceptionReportRecord, leadPin: string): ExceptionR
   picked_location: row.picked_location ?? '',
   system_location_qty: String(row.system_location_qty ?? ''),
   actual_qty: String(row.actual_qty ?? ''),
+  item_rows: row.item_rows ?? [],
   count_by: row.count_by ?? '',
   borrowed_location: row.borrowed_location ?? '',
   borrowed_qty: row.borrowed_qty === null || row.borrowed_qty === undefined ? '' : String(row.borrowed_qty),
@@ -172,13 +174,23 @@ const formatQueueDateTime = (value: unknown) => {
   });
 };
 
-const shouldShowFollowUp = (actualQty: unknown) => {
-  const value = String(actualQty ?? '').trim();
-  return value !== '' && Number(value) === 0;
+const shouldShowFollowUp = (form: Pick<ExceptionReportInput, 'actual_qty' | 'item_rows'>) => {
+  const itemRows = buildExceptionEditItemRows({
+    product_barcode: '',
+    picked_location: '',
+    picking_container: '',
+    system_location_qty: '',
+    actual_qty: form.actual_qty,
+    item_rows: form.item_rows
+  });
+  return itemRows.some((row) => {
+    const value = String(row.actualQty ?? '').trim();
+    return value !== '' && Number(value) === 0;
+  });
 };
 
 const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInput =>
-  shouldShowFollowUp(form.actual_qty)
+  shouldShowFollowUp(form)
     ? form
     : {
         ...form,
@@ -187,6 +199,12 @@ const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInpu
         inventory_adjustment: false,
         resolution_note: ''
       };
+
+const toNullableNumber = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return null;
+  const next = Number(value);
+  return Number.isFinite(next) ? next : null;
+};
 
 const inputClass =
   'h-11 w-full rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 text-sm font-semibold text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-300/60 focus:ring-4 focus:ring-emerald-300/10 disabled:cursor-not-allowed disabled:opacity-50';
@@ -214,45 +232,52 @@ function Field({ label, children, wide = false }: { label: string; children: Rea
   );
 }
 
-function ProductLocationFields({
-  productBarcode,
-  pickedLocation,
+function ExceptionItemFields({
+  form,
   onChange
 }: {
-  productBarcode: string;
-  pickedLocation: string;
-  onChange: (patch: Pick<ExceptionReportInput, 'product_barcode' | 'picked_location'>) => void;
+  form: ExceptionReportInput;
+  onChange: (patch: Partial<ExceptionReportInput>) => void;
 }) {
   const [visibleRowCount, setVisibleRowCount] = useState(1);
-  const rows = buildExceptionEditItemRows(
-    {
-      product_barcode: productBarcode,
-      picked_location: pickedLocation
-    },
-    visibleRowCount
-  );
+  const rows = buildExceptionEditItemRows(form, visibleRowCount);
 
   useEffect(() => {
     setVisibleRowCount((current) => Math.max(current, rows.length));
   }, [rows.length]);
 
-  const updateRows = (nextRows: Array<{ product: string; location: string }>) => {
+  const updateRows = (nextRows: Array<{ product: string; location: string; container: string; systemQty: string; actualQty: string }>) => {
     setVisibleRowCount(Math.max(1, nextRows.length));
+    const firstRow = nextRows[0] ?? { product: '', location: '', container: '', systemQty: '', actualQty: '' };
     onChange({
       product_barcode: joinMultiField(nextRows.map((row) => row.product)),
-      picked_location: joinMultiField(nextRows.map((row) => row.location))
+      picked_location: joinMultiField(nextRows.map((row) => row.location)),
+      picking_container: firstRow.container,
+      system_location_qty: firstRow.systemQty,
+      actual_qty: firstRow.actualQty,
+      item_rows: nextRows.map((row) => ({
+        product_barcode: row.product,
+        picked_location: row.location,
+        picking_container: row.container,
+        system_location_qty: row.systemQty,
+        actual_qty: row.actualQty
+      }))
     });
   };
 
   return (
     <div className="grid gap-2 sm:col-span-2">
-      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-3">
+      <div className="overflow-x-auto">
+      <div className="grid min-w-[920px] grid-cols-[minmax(160px,1fr)_minmax(160px,1fr)_minmax(150px,0.8fr)_minmax(130px,0.65fr)_minmax(110px,0.55fr)_auto] gap-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Product Barcode</div>
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Picked Location</div>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Container</div>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">System Qty</div>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Actual</div>
         <button
           type="button"
           onClick={() => setVisibleRowCount(rows.length + 1)}
-          aria-label="Add product and location"
+          aria-label="Add item row"
           title="Add"
           className="inline-flex h-7 w-9 items-center justify-center rounded-lg border border-emerald-300/40 bg-emerald-300/10 text-emerald-100 transition hover:border-emerald-200 hover:bg-emerald-300/20"
         >
@@ -260,7 +285,7 @@ function ProductLocationFields({
         </button>
       </div>
       {rows.map((row, index) => (
-        <div key={`product-location-${index}`} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-3">
+        <div key={`exception-item-${index}`} className="mt-2 grid min-w-[920px] grid-cols-[minmax(160px,1fr)_minmax(160px,1fr)_minmax(150px,0.8fr)_minmax(130px,0.65fr)_minmax(110px,0.55fr)_auto] gap-3">
           <input
             value={row.product}
             onChange={(event) => {
@@ -279,11 +304,42 @@ function ProductLocationFields({
             }}
             className={inputClass}
           />
+          <input
+            value={row.container}
+            onChange={(event) => {
+              const nextRows = [...rows];
+              nextRows[index] = { ...row, container: event.target.value };
+              updateRows(nextRows);
+            }}
+            className={inputClass}
+          />
+          <input
+            type="text"
+            inputMode="decimal"
+            value={row.systemQty}
+            onChange={(event) => {
+              const nextRows = [...rows];
+              nextRows[index] = { ...row, systemQty: event.target.value };
+              updateRows(nextRows);
+            }}
+            className={numericInputClass}
+          />
+          <input
+            type="text"
+            inputMode="decimal"
+            value={row.actualQty}
+            onChange={(event) => {
+              const nextRows = [...rows];
+              nextRows[index] = { ...row, actualQty: event.target.value };
+              updateRows(nextRows);
+            }}
+            className={numericInputClass}
+          />
           <button
             type="button"
             onClick={() => updateRows(rows.filter((_, rowIndex) => rowIndex !== index))}
             disabled={rows.length === 1}
-            aria-label={`Remove product and location ${index + 1}`}
+            aria-label={`Remove item row ${index + 1}`}
             title="Remove"
             className="inline-flex h-11 w-9 items-center justify-center rounded-xl border border-slate-700/70 bg-[#080d18]/70 text-slate-300 transition hover:border-rose-300/70 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -291,6 +347,7 @@ function ProductLocationFields({
           </button>
         </div>
       ))}
+      </div>
     </div>
   );
 }
@@ -548,11 +605,11 @@ function NewExceptionModal({
 }) {
   const nextStatus = status ? getNextExceptionStatus(status, form) : null;
   const editableStatuses = status ? [status, ...(nextStatus && nextStatus !== 'Closed' ? [nextStatus] : [])] : [];
-  const showFollowUp = shouldShowFollowUp(form.actual_qty);
+  const showFollowUp = shouldShowFollowUp(form);
 
   return (
     <div className="fixed inset-0 z-40 overflow-auto bg-slate-950/75 px-4 py-6 backdrop-blur">
-      <section className="mx-auto w-full max-w-3xl rounded-[1.75rem] border border-slate-800/80 bg-slate-950 p-5 text-white shadow-2xl">
+      <section className="mx-auto w-full max-w-5xl rounded-[1.75rem] border border-slate-800/80 bg-slate-950 p-5 text-white shadow-2xl">
         <div className="mb-5 flex items-start justify-between gap-4">
           <div>
             <div className="text-xs font-bold uppercase tracking-[0.22em] text-emerald-200">{mode === 'edit' ? 'Edit' : 'New'}</div>
@@ -587,20 +644,7 @@ function NewExceptionModal({
               <Field label="Picking List Number" wide>
                 <input value={form.picking_list_number} onChange={(event) => onChange({ picking_list_number: event.target.value })} className={inputClass} />
               </Field>
-              <ProductLocationFields
-                productBarcode={form.product_barcode}
-                pickedLocation={form.picked_location}
-                onChange={onChange}
-              />
-              <Field label="Picking Container">
-                <input value={form.picking_container} onChange={(event) => onChange({ picking_container: event.target.value })} className={inputClass} />
-              </Field>
-              <Field label="System Location Qty">
-                <input type="text" inputMode="decimal" value={form.system_location_qty} onChange={(event) => onChange({ system_location_qty: event.target.value })} className={numericInputClass} />
-              </Field>
-              <Field label="Actual">
-                <input type="text" inputMode="decimal" value={form.actual_qty} onChange={(event) => onChange({ actual_qty: event.target.value })} className={numericInputClass} />
-              </Field>
+              <ExceptionItemFields form={form} onChange={onChange} />
               <EmployeeSearchInput label="Pick Operator" value={form.picking_operator} employees={employees} onChange={(value) => onChange({ picking_operator: value })} />
               <EmployeeSearchInput label="Packing/Rebin Operator" value={form.packing_rebin_operator ?? ''} employees={employees} onChange={(value) => onChange({ packing_rebin_operator: value })} />
               <EmployeeSearchInput label="Count By USID" value={form.count_by} employees={employees} onChange={(value) => onChange({ count_by: value })} />
@@ -969,14 +1013,25 @@ export default function ExceptionPage() {
     setSaving(true);
     try {
       const itemRows = splitExceptionReportItemRows(row);
-      const printableRows = itemRows.length ? itemRows : [{ product_barcode: row.product_barcode || '', picked_location: row.picked_location || '' }];
+      const printableRows = itemRows.length
+        ? itemRows
+        : [{
+            product_barcode: row.product_barcode || '',
+            picked_location: row.picked_location || '',
+            picking_container: row.picking_container || '',
+            system_location_qty: row.system_location_qty,
+            actual_qty: row.actual_qty
+          }];
       const sheets = await Promise.all(
         printableRows.map(async (itemRow) => {
           const payload = buildExceptionPrintPayload(
             {
               ...row,
               product_barcode: itemRow.product_barcode,
-              picked_location: itemRow.picked_location
+              picked_location: itemRow.picked_location,
+              picking_container: itemRow.picking_container ?? '',
+              system_location_qty: toNullableNumber(itemRow.system_location_qty),
+              actual_qty: toNullableNumber(itemRow.actual_qty)
             },
             window.location.origin,
             (staffId) => employeeName(presentEmployees, staffId)

@@ -37,6 +37,7 @@ export type ExceptionReportInput = {
   picked_location: string;
   system_location_qty: number | string;
   actual_qty: number | string;
+  item_rows?: ExceptionReportItemRow[] | null;
   count_by: string;
   borrowed_location?: string | null;
   borrowed_qty?: number | string | null;
@@ -90,11 +91,26 @@ export type ExceptionReportStaffNameResolver = (staffId: string) => string;
 export type ExceptionReportItemRow = {
   product_barcode: string;
   picked_location: string;
+  picking_container?: string;
+  system_location_qty?: number | string | null;
+  actual_qty?: number | string | null;
 };
 
 export type ExceptionReportEditItemRow = {
   product: string;
   location: string;
+  container: string;
+  systemQty: string;
+  actualQty: string;
+};
+
+type ExceptionItemRowSource = {
+  product_barcode?: unknown;
+  picked_location?: unknown;
+  picking_container?: unknown;
+  system_location_qty?: unknown;
+  actual_qty?: unknown;
+  item_rows?: unknown;
 };
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -112,31 +128,75 @@ export const normalizeExceptionMultiLineText = (value: unknown, uppercase = fals
     }, [])
     .join('\n');
 
-export const splitExceptionReportItemRows = (input: Pick<ExceptionReportInput, 'product_barcode' | 'picked_location'>): ExceptionReportItemRow[] => {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const itemRowHasValue = (row: ExceptionReportEditItemRow) =>
+  Boolean(row.product || row.location || row.container || row.systemQty || row.actualQty);
+
+export const buildExceptionEditItemRows = (
+  input: ExceptionItemRowSource,
+  minimumRowCount = 1
+): ExceptionReportEditItemRow[] => {
+  const rawItemRows = Array.isArray(input.item_rows) ? input.item_rows : [];
+  const itemRows = rawItemRows
+    .filter(isRecord)
+    .map((row) => ({
+      product: String(row.product_barcode ?? '').trim(),
+      location: String(row.picked_location ?? '').trim(),
+      container: String(row.picking_container ?? '').trim(),
+      systemQty: String(row.system_location_qty ?? '').trim(),
+      actualQty: String(row.actual_qty ?? '').trim()
+    }));
+
+  if (itemRows.length) {
+    const safeMinimumRowCount = Math.max(1, Math.floor(minimumRowCount));
+    return [
+      ...itemRows,
+      ...Array.from({ length: Math.max(0, safeMinimumRowCount - itemRows.length) }, () => ({
+        product: '',
+        location: '',
+        container: '',
+        systemQty: '',
+        actualQty: ''
+      }))
+    ];
+  }
+
   const productRows = normalizeExceptionMultiLineText(input.product_barcode).split('\n');
   const locationRows = normalizeExceptionMultiLineText(input.picked_location).split('\n');
-  const rowCount = Math.max(productRows.length, locationRows.length, 1);
+  const safeMinimumRowCount = Math.max(1, Math.floor(minimumRowCount));
+  const rowCount = Math.max(productRows.length, locationRows.length, safeMinimumRowCount);
   return Array.from({ length: rowCount }, (_, index) => ({
-    product_barcode: productRows[index] ?? '',
-    picked_location: locationRows[index] ?? ''
-  })).filter((row) => row.product_barcode || row.picked_location);
+    product: productRows[index] ?? '',
+    location: locationRows[index] ?? '',
+    container: index === 0 ? trimText(input.picking_container) : '',
+    systemQty: index === 0 ? trimText(input.system_location_qty) : '',
+    actualQty: index === 0 ? trimText(input.actual_qty) : ''
+  }));
 };
 
 export const getExceptionReportNumber = (report: Pick<ExceptionReportRecord, 'id' | 'report_number'>) =>
   trimText(report.report_number) || trimText(report.id);
 
-export const buildExceptionEditItemRows = (
-  input: Pick<ExceptionReportInput, 'product_barcode' | 'picked_location'>,
-  minimumRowCount = 1
-): ExceptionReportEditItemRow[] => {
-  const productRows = String(input.product_barcode ?? '').split(/\r?\n/);
-  const locationRows = String(input.picked_location ?? '').split(/\r?\n/);
-  const safeMinimumRowCount = Math.max(1, Math.floor(minimumRowCount));
-  const rowCount = Math.max(safeMinimumRowCount, productRows.length, locationRows.length);
-  return Array.from({ length: rowCount }, (_, index) => ({
-    product: productRows[index] ?? '',
-    location: locationRows[index] ?? ''
-  }));
+export const normalizeExceptionItemRows = (
+  input: ExceptionItemRowSource
+): ExceptionReportItemRow[] =>
+  buildExceptionEditItemRows(input)
+    .filter(itemRowHasValue)
+    .map((row) => ({
+      product_barcode: trimText(row.product).toUpperCase(),
+      picked_location: trimText(row.location).toUpperCase(),
+      picking_container: trimText(row.container),
+      system_location_qty: trimText(row.systemQty) ? parseNonNegativeNumber(row.systemQty) : null,
+      actual_qty: trimText(row.actualQty) ? parseNonNegativeNumber(row.actualQty) : null
+    }));
+
+export const splitExceptionReportItemRows = (
+  input: ExceptionItemRowSource
+): ExceptionReportItemRow[] => {
+  const itemRows = normalizeExceptionItemRows(input);
+  return itemRows.filter((row) => row.product_barcode || row.picked_location);
 };
 
 const formatPrintDateTime = (value: unknown, fallbackDate: string) => {
@@ -187,11 +247,12 @@ export const parseNonNegativeNumber = (value: unknown): number | null => {
 
 export const validateExceptionReportInput = (input: ExceptionReportInput): string[] => {
   const errors: string[] = [];
+  const editRows = buildExceptionEditItemRows(input).filter(itemRowHasValue);
   if (!DATE_ONLY_PATTERN.test(trimText(input.report_date))) errors.push('Date must use YYYY-MM-DD.');
-  if (!normalizeExceptionMultiLineText(input.product_barcode)) errors.push('Product barcode is required.');
+  if (!editRows.some((row) => trimText(row.product))) errors.push('Product barcode is required.');
   if (!trimText(input.picking_list_number)) errors.push('Picking list number is required.');
-  if (trimText(input.system_location_qty) && parseNonNegativeNumber(input.system_location_qty) === null) errors.push('System location qty must be a non-negative number.');
-  if (trimText(input.actual_qty) && parseNonNegativeNumber(input.actual_qty) === null) errors.push('Actual qty must be a non-negative number.');
+  if (editRows.some((row) => trimText(row.systemQty) && parseNonNegativeNumber(row.systemQty) === null)) errors.push('System location qty must be a non-negative number.');
+  if (editRows.some((row) => trimText(row.actualQty) && parseNonNegativeNumber(row.actualQty) === null)) errors.push('Actual qty must be a non-negative number.');
 
   const borrowedLocation = trimText(input.borrowed_location);
   const borrowedQty = parseNonNegativeNumber(input.borrowed_qty);
@@ -202,22 +263,25 @@ export const validateExceptionReportInput = (input: ExceptionReportInput): strin
 
 export const buildExceptionInsertPayload = (input: ExceptionReportInput) => {
   const exceptionType = normalizeExceptionType(input.exception_type);
-  const systemQty = trimText(input.system_location_qty) ? parseNonNegativeNumber(input.system_location_qty) : null;
-  const actualQty = trimText(input.actual_qty) ? parseNonNegativeNumber(input.actual_qty) : null;
+  const itemRows = normalizeExceptionItemRows(input);
+  const firstRow = itemRows[0];
+  const systemQty = firstRow ? firstRow.system_location_qty ?? null : trimText(input.system_location_qty) ? parseNonNegativeNumber(input.system_location_qty) : null;
+  const actualQty = firstRow ? firstRow.actual_qty ?? null : trimText(input.actual_qty) ? parseNonNegativeNumber(input.actual_qty) : null;
   const borrowedLocation = trimText(input.borrowed_location);
   const borrowedQty = borrowedLocation ? parseNonNegativeNumber(input.borrowed_qty) : null;
 
   return {
     report_date: trimText(input.report_date),
     exception_type: exceptionType,
-    product_barcode: normalizeExceptionMultiLineText(input.product_barcode, true),
+    product_barcode: itemRows.length ? itemRows.map((row) => row.product_barcode).join('\n') : normalizeExceptionMultiLineText(input.product_barcode, true),
     picking_list_number: trimText(input.picking_list_number),
-    picking_container: trimText(input.picking_container),
+    picking_container: firstRow?.picking_container ?? trimText(input.picking_container),
     picking_operator: trimText(input.picking_operator).toUpperCase(),
     packing_rebin_operator: trimText(input.packing_rebin_operator) || null,
-    picked_location: normalizeExceptionMultiLineText(input.picked_location, true),
+    picked_location: itemRows.length ? itemRows.map((row) => row.picked_location).join('\n') : normalizeExceptionMultiLineText(input.picked_location, true),
     system_location_qty: systemQty,
     actual_qty: actualQty,
+    item_rows: itemRows,
     count_by: trimText(input.count_by).toUpperCase(),
     borrowed_location: borrowedLocation ? borrowedLocation.toUpperCase() : null,
     borrowed_qty: borrowedQty,
