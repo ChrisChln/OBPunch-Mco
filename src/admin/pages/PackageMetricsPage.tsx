@@ -662,17 +662,6 @@ const parseJsonResponse = (text: string) => {
   }
 };
 
-const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.subarray(index, index + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return window.btoa(binary);
-};
-
 const resolvePackageMetricsImportUrls = () => {
   if (typeof window === 'undefined') return ['/api/package-metrics-import'];
   const urls = ['/api/package-metrics-import'];
@@ -1419,7 +1408,7 @@ export default function PackageMetricsPage({
       const requestBody = JSON.stringify({
         metric_date: metricDate,
         filename: selectedFile.name,
-        file_base64: arrayBufferToBase64(fileBuffer)
+        rows
       });
       const requestInit: RequestInit = {
         method: 'POST',
