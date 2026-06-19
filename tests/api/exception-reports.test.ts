@@ -306,6 +306,54 @@ describe('api/exception-reports', () => {
     expect(insert.mock.calls[0][0][0].resolution_note).toBe('Mixed SKU issue');
   });
 
+  test('creates Short Picked reports as a separate status', async () => {
+    const select = vi.fn(() => ({
+      gte: () => ({
+        lt: () => ({
+          order: () => ({
+            limit: async () => ({ data: [], error: null })
+          })
+        })
+      })
+    }));
+    const insert = vi.fn((rows: any[]) => ({
+      select: () => ({
+        single: async () => ({
+          data: { id: 8, ...rows[0] },
+          error: null
+        })
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return { insert, select };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({
+      method: 'POST',
+      headers: {},
+      body: {
+        ...baseBody,
+        exception_type: 'short_shipment',
+        packing_rebin_operator: 'US500',
+        actual_qty: 0,
+        short_picked: true
+      }
+    }, res);
+
+    expect(res.code).toBe(200);
+    expect(insert.mock.calls[0][0][0].short_picked).toBe(true);
+    expect(res.body.row.status).toBe('Short Picked');
+  });
+
   test('lead patch infers pending adjustment when borrowed inventory is not adjusted', async () => {
     const updateException = vi.fn((payload: any) => ({
       eq: () => ({

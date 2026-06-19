@@ -55,6 +55,7 @@ const emptyForm = (leadId = ''): ExceptionReportInput => ({
   count_by: '',
   borrowed_location: '',
   borrowed_qty: '',
+  short_picked: false,
   inventory_adjustment: false,
   submitted_by_lead_id: leadId,
   lead_pin: '',
@@ -76,13 +77,14 @@ const formFromRecord = (row: ExceptionReportRecord, leadPin: string): ExceptionR
   count_by: row.count_by ?? '',
   borrowed_location: row.borrowed_location ?? '',
   borrowed_qty: row.borrowed_qty === null || row.borrowed_qty === undefined ? '' : String(row.borrowed_qty),
+  short_picked: Boolean(row.short_picked),
   inventory_adjustment: row.inventory_adjustment,
   submitted_by_lead_id: row.submitted_by_lead_id,
   lead_pin: leadPin,
   resolution_note: row.resolution_note ?? ''
 });
 
-const statusOrder: ExceptionStatus[] = ['Open', 'Processing', 'Pending Adjustment', 'Resolved', 'Closed'];
+const statusOrder: ExceptionStatus[] = ['Open', 'Processing', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'];
 
 const statusCardTone: Record<ExceptionStatus, { backgroundColor: string; glowColor: string; colors: string[]; textClass: string; badgeClass: string }> = {
   Open: {
@@ -105,6 +107,13 @@ const statusCardTone: Record<ExceptionStatus, { backgroundColor: string; glowCol
     colors: ['#c4b5fd', '#818cf8', '#6366f1'],
     textClass: 'text-indigo-50',
     badgeClass: 'border-indigo-200/40 bg-indigo-200/12 text-indigo-100'
+  },
+  'Short Picked': {
+    backgroundColor: '#3b2605',
+    glowColor: '35 92 68',
+    colors: ['#fed7aa', '#fb923c', '#ea580c'],
+    textClass: 'text-orange-50',
+    badgeClass: 'border-orange-200/40 bg-orange-200/12 text-orange-100'
   },
   Resolved: {
     backgroundColor: '#022c22',
@@ -201,6 +210,21 @@ const shouldShowFollowUp = (form: Pick<ExceptionReportInput, 'actual_qty' | 'ite
   });
 };
 
+const shouldShowShortPicked = (form: Pick<ExceptionReportInput, 'exception_type' | 'actual_qty' | 'item_rows'>) => {
+  if (form.exception_type !== 'short_shipment') return false;
+  return buildExceptionEditItemRows({
+    product_barcode: '',
+    picked_location: '',
+    picking_container: '',
+    system_location_qty: '',
+    actual_qty: form.actual_qty,
+    item_rows: form.item_rows
+  }).some((row) => {
+    const value = String(row.actualQty ?? '').trim();
+    return value !== '' && Number(value) === 0;
+  });
+};
+
 const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInput =>
   shouldShowFollowUp(form) || form.exception_type === 'other'
     ? form
@@ -208,6 +232,7 @@ const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInpu
         ...form,
         borrowed_location: '',
         borrowed_qty: '',
+        short_picked: false,
         inventory_adjustment: false,
         resolution_note: ''
       };
@@ -603,6 +628,7 @@ function NewExceptionModal({
 }) {
   const inferredStatus = status === 'Closed' ? 'Closed' : inferExceptionStatus(form);
   const showFollowUp = shouldShowFollowUp(form);
+  const showShortPicked = shouldShowShortPicked(form);
   const showOtherReason = form.exception_type === 'other';
 
   return (
@@ -660,14 +686,62 @@ function NewExceptionModal({
           {showFollowUp ? <div className="rounded-3xl border border-slate-800/80 bg-black/20 p-4">
             <div className="mb-4 text-sm font-black text-white">Follow-up</div>
             <div className="grid gap-3">
+              {showShortPicked ? (
+                <Field label="Short Picked">
+                  <div className="flex h-11 w-full items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 transition focus-within:border-orange-300/60 focus-within:ring-4 focus-within:ring-orange-300/10">
+                    <span className={['text-sm font-black', form.short_picked ? 'text-orange-100' : 'text-slate-300'].join(' ')}>
+                      {form.short_picked ? 'Yes' : 'No'}
+                    </span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      checked={Boolean(form.short_picked)}
+                      onChange={(event) =>
+                        onChange(
+                          event.target.checked
+                            ? { short_picked: true, borrowed_location: '', borrowed_qty: '', inventory_adjustment: false }
+                            : { short_picked: false }
+                        )
+                      }
+                      className="sr-only"
+                    />
+                    <span
+                      aria-hidden="true"
+                      className={[
+                        'relative h-7 w-12 shrink-0 rounded-full border transition',
+                        form.short_picked ? 'border-orange-300/40 bg-orange-300/25' : 'border-slate-700/70 bg-slate-800'
+                      ].join(' ')}
+                    >
+                      <span
+                        className={[
+                          'absolute left-1 top-1 h-5 w-5 rounded-full shadow-lg transition',
+                          form.short_picked ? 'translate-x-5 bg-orange-200' : 'translate-x-0 bg-slate-400'
+                        ].join(' ')}
+                      />
+                    </span>
+                  </div>
+                </Field>
+              ) : null}
               <Field label="Borrowed Location">
-                <input value={form.borrowed_location ?? ''} onChange={(event) => onChange({ borrowed_location: event.target.value })} className={inputClass} />
+                <input
+                  value={form.borrowed_location ?? ''}
+                  onChange={(event) => onChange({ borrowed_location: event.target.value, short_picked: false })}
+                  disabled={Boolean(form.short_picked)}
+                  className={inputClass}
+                />
               </Field>
               <Field label="Borrowed Qty">
-                <input type="text" inputMode="decimal" value={form.borrowed_qty ?? ''} onChange={(event) => onChange({ borrowed_qty: event.target.value })} className={numericInputClass} />
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={form.borrowed_qty ?? ''}
+                  onChange={(event) => onChange({ borrowed_qty: event.target.value, short_picked: false })}
+                  disabled={Boolean(form.short_picked)}
+                  className={numericInputClass}
+                />
               </Field>
               <Field label="Inventory Adjustment">
-                <div className="flex h-11 w-full items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 transition focus-within:border-emerald-300/60 focus-within:ring-4 focus-within:ring-emerald-300/10">
+                <div className={['flex h-11 w-full items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 transition focus-within:border-emerald-300/60 focus-within:ring-4 focus-within:ring-emerald-300/10', form.short_picked ? 'opacity-50' : ''].join(' ')}>
                   <span className={['text-sm font-black', form.inventory_adjustment ? 'text-emerald-100' : 'text-slate-300'].join(' ')}>
                     {form.inventory_adjustment ? 'Yes' : 'No'}
                   </span>
@@ -675,6 +749,7 @@ function NewExceptionModal({
                     type="checkbox"
                     role="switch"
                     checked={form.inventory_adjustment}
+                    disabled={Boolean(form.short_picked)}
                     onChange={(event) => onChange({ inventory_adjustment: event.target.checked })}
                     className="sr-only"
                   />

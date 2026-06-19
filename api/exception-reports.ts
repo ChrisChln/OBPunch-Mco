@@ -349,6 +349,7 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
     count_by: String(valueFromBody('count_by', currentRes.data.count_by) ?? ''),
     borrowed_location: String(valueFromBody('borrowed_location', currentRes.data.borrowed_location) ?? ''),
     borrowed_qty: valueFromBody('borrowed_qty', currentRes.data.borrowed_qty ?? ''),
+    short_picked: Boolean(valueFromBody('short_picked', currentRes.data.short_picked)),
     inventory_adjustment: Boolean(valueFromBody('inventory_adjustment', currentRes.data.inventory_adjustment)),
     submitted_by_lead_id: String(valueFromBody('submitted_by_lead_id', currentRes.data.submitted_by_lead_id) ?? ''),
     resolution_note: String(valueFromBody('resolution_note', currentRes.data.resolution_note) ?? '')

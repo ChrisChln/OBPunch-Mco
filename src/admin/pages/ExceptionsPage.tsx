@@ -24,7 +24,7 @@ type ExceptionsPageProps = {
   userEmail: string;
 };
 
-const statusOptions: Array<'all' | ExceptionStatus> = ['all', 'Open', 'Processing', 'Pending Adjustment', 'Resolved', 'Closed'];
+const statusOptions: Array<'all' | ExceptionStatus> = ['all', 'Open', 'Processing', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'];
 const typeOptions: Array<'all' | ExceptionType> = ['all', ...EXCEPTION_TYPES];
 
 const todayDate = () => new Date().toLocaleDateString('en-CA');
@@ -50,6 +50,13 @@ const statusCardTone: Record<ExceptionStatus, { backgroundColor: string; glowCol
     colors: ['#c4b5fd', '#818cf8', '#6366f1'],
     textClass: 'text-indigo-50',
     badgeClass: 'border-indigo-200/40 bg-indigo-200/12 text-indigo-100'
+  },
+  'Short Picked': {
+    backgroundColor: '#3b2605',
+    glowColor: '35 92 68',
+    colors: ['#fed7aa', '#fb923c', '#ea580c'],
+    textClass: 'text-orange-50',
+    badgeClass: 'border-orange-200/40 bg-orange-200/12 text-orange-100'
   },
   Resolved: {
     backgroundColor: '#022c22',
