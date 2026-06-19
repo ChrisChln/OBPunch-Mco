@@ -7,3 +7,5 @@ create unique index if not exists ob_exception_reports_report_number_key
 
 create index if not exists ob_exception_reports_report_number_date_idx
   on public.ob_exception_reports (report_date desc, report_number desc);
+
+notify pgrst, 'reload schema';
