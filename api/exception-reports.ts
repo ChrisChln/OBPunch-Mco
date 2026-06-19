@@ -18,7 +18,11 @@ const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY as string |
 const supabaseAnonKey =
   (process.env.SUPABASE_ANON_KEY as string | undefined) ??
   (process.env.VITE_SUPABASE_ANON_KEY as string | undefined);
-const exceptionLeadPin = (process.env.EXCEPTION_LEAD_PIN as string | undefined) ?? (!isProduction ? '6666' : undefined);
+const normalizeConfiguredPin = (value: unknown) => {
+  const text = String(value ?? '').trim();
+  return text || undefined;
+};
+const exceptionLeadPin = normalizeConfiguredPin(process.env.EXCEPTION_LEAD_PIN) ?? (!isProduction ? '6666' : undefined);
 
 const EXCEPTION_TABLE = 'ob_exception_reports';
 const MISTAKE_REPORT_TABLE = (process.env.VITE_MISTAKE_REPORT_TABLE as string | undefined) ?? 'ob_mistake_reports';
@@ -77,6 +81,12 @@ const hasLeadPin = (req: any, body?: Record<string, unknown> | null) => {
     String(getHeaderValue(req, 'x-exception-lead-pin') ?? '').trim() ||
     String(req.query?.lead_pin ?? '').trim();
   return Boolean(exceptionLeadPin) && pin === exceptionLeadPin;
+};
+
+const ensureLeadPinConfigured = (res: any) => {
+  if (exceptionLeadPin) return true;
+  res.status(500).json({ error: 'Exception Lead PIN is not configured.' });
+  return false;
 };
 
 const parseIsoDateParam = (value: unknown) => {
@@ -231,6 +241,7 @@ const handleGet = async (req: any, res: any, supabase: any) => {
   }
 
   const token = getBearerToken(req);
+  if (!token && !ensureLeadPinConfigured(res)) return;
   if (!token && !hasLeadPin(req)) {
     res.status(401).json({ error: 'Lead PIN or admin authorization is required.' });
     return;
@@ -269,6 +280,7 @@ const handleGet = async (req: any, res: any, supabase: any) => {
 const handlePost = async (req: any, res: any, supabase: any) => {
   const body = parseJsonBody<ExceptionReportInput>(req, res);
   if (!body) return;
+  if (!ensureLeadPinConfigured(res)) return;
   if (!hasLeadPin(req, body as Record<string, unknown>)) {
     res.status(401).json({ error: 'Invalid Lead PIN.' });
     return;
@@ -296,6 +308,7 @@ const handlePost = async (req: any, res: any, supabase: any) => {
 };
 
 const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => {
+  if (!ensureLeadPinConfigured(res)) return;
   if (!hasLeadPin(req, body)) {
     res.status(401).json({ error: 'Invalid Lead PIN.' });
     return;

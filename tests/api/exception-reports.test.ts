@@ -461,6 +461,51 @@ describe('api/exception-reports', () => {
     expect(res.body.rows).toEqual([{ id: 6, status: 'Processing' }]);
   });
 
+  test('lead list accepts configured PIN with surrounding whitespace', async () => {
+    process.env.EXCEPTION_LEAD_PIN = ' 1234 \n';
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return {
+          select: () => ({
+            order: () => ({
+              limit: async () => ({ data: [{ id: 7, status: 'Open' }], error: null })
+            })
+          })
+        };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'GET', headers: { 'X-Exception-Lead-Pin': '1234' }, query: {} }, res);
+
+    expect(res.code).toBe(200);
+    expect(res.body.rows).toEqual([{ id: 7, status: 'Open' }]);
+  });
+
+  test('lead list reports missing production PIN configuration', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    delete process.env.EXCEPTION_LEAD_PIN;
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => ({})
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'GET', headers: { 'X-Exception-Lead-Pin': '1234' }, query: {} }, res);
+
+    process.env.NODE_ENV = previousNodeEnv;
+    expect(res.code).toBe(500);
+    expect(String(res.body?.error ?? '')).toContain('Exception Lead PIN is not configured');
+  });
+
   test('admin close creates one mistake report', async () => {
     const mistakeInsert = vi.fn(() => ({
       select: () => ({
