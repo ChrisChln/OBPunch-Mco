@@ -274,6 +274,11 @@ export const inferExceptionStatus = (
     hasText(input.count_by);
   if (!hasAnyProcessingData) return 'Open';
 
+  const isShortPickZero =
+    normalizeExceptionType(input.exception_type) === 'short_shipment' &&
+    buildExceptionEditItemRows(input).some((row) => hasText(row.actualQty) && Number(row.actualQty) === 0);
+  if (isShortPickZero && input.short_picked) return 'Short Picked';
+
   const hasCompleteProcessingData =
     hasCompleteItemProcessing(input) &&
     hasText(input.picking_operator) &&
@@ -283,10 +288,6 @@ export const inferExceptionStatus = (
 
   const borrowedLocation = hasText(input.borrowed_location);
   const borrowedQty = hasText(input.borrowed_qty);
-  const isShortPickZero =
-    normalizeExceptionType(input.exception_type) === 'short_shipment' &&
-    buildExceptionEditItemRows(input).some((row) => hasText(row.actualQty) && Number(row.actualQty) === 0);
-  if (isShortPickZero && input.short_picked) return 'Short Picked';
   if (borrowedLocation || borrowedQty) {
     return borrowedLocation && borrowedQty && input.inventory_adjustment ? 'Resolved' : 'Pending Adjustment';
   }
