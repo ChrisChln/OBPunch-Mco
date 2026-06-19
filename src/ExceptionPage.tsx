@@ -212,7 +212,7 @@ const shouldShowFollowUp = (form: Pick<ExceptionReportInput, 'actual_qty' | 'ite
 };
 
 const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInput =>
-  shouldShowFollowUp(form)
+  shouldShowFollowUp(form) || form.exception_type === 'other'
     ? form
     : {
         ...form,
@@ -614,6 +614,7 @@ function NewExceptionModal({
   const nextStatus = status ? getNextExceptionStatus(status, form) : null;
   const editableStatuses = status ? [status, ...(nextStatus && nextStatus !== 'Closed' ? [nextStatus] : [])] : [];
   const showFollowUp = shouldShowFollowUp(form);
+  const showOtherReason = form.exception_type === 'other';
 
   return (
     <div className="fixed inset-0 z-40 overflow-auto bg-slate-950/75 px-4 py-6 backdrop-blur">
@@ -649,6 +650,15 @@ function NewExceptionModal({
                   ))}
                 </select>
               </Field>
+              {showOtherReason ? (
+                <Field label="Reason" wide>
+                  <textarea
+                    value={form.resolution_note ?? ''}
+                    onChange={(event) => onChange({ resolution_note: event.target.value })}
+                    className={textAreaClass}
+                  />
+                </Field>
+              ) : null}
               <Field label="Picking List Number">
                 <input value={form.picking_list_number} onChange={(event) => onChange({ picking_list_number: event.target.value })} className={inputClass} />
               </Field>
@@ -699,9 +709,9 @@ function NewExceptionModal({
                   </span>
                 </div>
               </Field>
-              <Field label="Resolution Note">
+              {!showOtherReason ? <Field label="Resolution Note">
                 <textarea value={form.resolution_note ?? ''} onChange={(event) => onChange({ resolution_note: event.target.value })} className={textAreaClass} />
-              </Field>
+              </Field> : null}
             </div>
           </div> : null}
         </div>
