@@ -69,6 +69,15 @@ describe('api/exception-reports', () => {
   });
 
   test('creates exception reports with product barcode', async () => {
+    const select = vi.fn(() => ({
+      gte: () => ({
+        lt: () => ({
+          order: () => ({
+            limit: async () => ({ data: [], error: null })
+          })
+        })
+      })
+    }));
     const insert = vi.fn((rows: any[]) => ({
       select: () => ({
         single: async () => ({
@@ -80,7 +89,7 @@ describe('api/exception-reports', () => {
     const serviceSupabase = {
       from: (table: string) => {
         expect(table).toBe('ob_exception_reports');
-        return { insert };
+        return { insert, select };
       }
     };
 
@@ -94,10 +103,20 @@ describe('api/exception-reports', () => {
 
     expect(res.code).toBe(200);
     expect(insert.mock.calls[0][0][0].product_barcode).toBe('SKU123');
+    expect(insert.mock.calls[0][0][0].report_number).toBe('202606180001');
     expect(res.body.row.status).toBe('Open');
   });
 
   test('creates minimal exception reports with blank optional fields', async () => {
+    const select = vi.fn(() => ({
+      gte: () => ({
+        lt: () => ({
+          order: () => ({
+            limit: async () => ({ data: [{ report_number: '202606180009' }], error: null })
+          })
+        })
+      })
+    }));
     const insert = vi.fn((rows: any[]) => ({
       select: () => ({
         single: async () => ({
@@ -109,7 +128,7 @@ describe('api/exception-reports', () => {
     const serviceSupabase = {
       from: (table: string) => {
         expect(table).toBe('ob_exception_reports');
-        return { insert };
+        return { insert, select };
       }
     };
 
@@ -138,6 +157,7 @@ describe('api/exception-reports', () => {
 
     expect(res.code).toBe(200);
     expect(insert.mock.calls[0][0][0].exception_type).toBeNull();
+    expect(insert.mock.calls[0][0][0].report_number).toBe('202606180010');
     expect(insert.mock.calls[0][0][0].system_location_qty).toBeNull();
     expect(insert.mock.calls[0][0][0].actual_qty).toBeNull();
     expect(res.body.row.status).toBe('Open');
@@ -350,6 +370,7 @@ describe('api/exception-reports', () => {
                 single: async () => ({
                   data: {
                     id: 5,
+                    report_number: '202606180011',
                     status: 'Resolved',
                     report_date: '2026-06-18',
                     exception_type: 'short_pick',
@@ -407,6 +428,7 @@ describe('api/exception-reports', () => {
 
     expect(res.code).toBe(200);
     expect(mistakeInsert).toHaveBeenCalledTimes(1);
+    expect(mistakeInsert.mock.calls[0][0][0].reason).toContain('Exception #202606180011');
     expect(updateException.mock.calls[0][0].mistake_report_id).toBe(77);
   });
 });

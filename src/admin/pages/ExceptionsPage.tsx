@@ -6,6 +6,7 @@ import {
   EXCEPTION_TYPES,
   buildExceptionPrintPayload,
   formatExceptionType,
+  getExceptionReportNumber,
   type ExceptionReportRecord,
   type ExceptionStatus,
   type ExceptionType
@@ -142,6 +143,7 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
       if (!query) return true;
       const haystack = [
         row.id,
+        row.report_number,
         row.product_barcode,
         row.picking_list_number,
         row.picking_container,
@@ -248,6 +250,7 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
 
   const renderRow = (row: ExceptionReportRecord) => {
     const active = selected && String(selected.id) === String(row.id);
+    const reportNumber = getExceptionReportNumber(row);
     const details = [formatExceptionType(row.exception_type), row.picking_list_number, row.picking_container].filter(Boolean).join(' · ');
     const submittedBy = employeeName(employees, row.submitted_by_lead_id);
     const createdAt = formatReviewDateTime(row.created_at);
@@ -284,7 +287,7 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
         >
           <div className="flex min-w-0 items-start justify-between gap-5">
             <div className="min-w-0">
-              <div className="truncate text-2xl font-black">#{row.id}</div>
+              <div className="truncate text-2xl font-black">#{reportNumber}</div>
               <div className="mt-3 break-words text-sm font-black opacity-95">{row.product_barcode || row.picking_list_number || '-'}</div>
               {details ? <div className="mt-3 break-words text-sm font-semibold leading-6 text-current opacity-90">{details}</div> : null}
               {hasAssignees ? (
