@@ -233,6 +233,10 @@ const inputClass =
 
 const numericInputClass =
   `${inputClass} [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`;
+const itemInputClass = `${inputClass} min-w-0`;
+const itemNumericInputClass = `${numericInputClass} min-w-0`;
+const itemRowGridClass =
+  'grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(84px,0.5fr)_minmax(76px,0.45fr)_36px] gap-3';
 
 const textAreaClass =
   'min-h-24 w-full rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 py-2 text-sm font-semibold text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-300/60 focus:ring-4 focus:ring-emerald-300/10 disabled:cursor-not-allowed disabled:opacity-50';
@@ -287,12 +291,11 @@ function ExceptionItemFields({
 
   return (
     <div className="grid gap-2 sm:col-span-2">
-      <div className="overflow-x-auto">
-      <div className="grid min-w-[760px] grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_minmax(130px,0.65fr)_minmax(110px,0.55fr)_auto] gap-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Product Barcode</div>
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Picked Location</div>
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">System Qty</div>
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Actual</div>
+      <div className={itemRowGridClass}>
+        <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Product Barcode</div>
+        <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Picked Location</div>
+        <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">System Qty</div>
+        <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Actual</div>
         <button
           type="button"
           onClick={() => setVisibleRowCount(rows.length + 1)}
@@ -304,7 +307,7 @@ function ExceptionItemFields({
         </button>
       </div>
       {rows.map((row, index) => (
-        <div key={`exception-item-${index}`} className="mt-2 grid min-w-[760px] grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_minmax(130px,0.65fr)_minmax(110px,0.55fr)_auto] gap-3">
+        <div key={`exception-item-${index}`} className={`mt-2 ${itemRowGridClass}`}>
           <input
             value={row.product}
             onChange={(event) => {
@@ -312,7 +315,7 @@ function ExceptionItemFields({
               nextRows[index] = { ...row, product: event.target.value };
               updateRows(nextRows);
             }}
-            className={inputClass}
+            className={itemInputClass}
           />
           <input
             value={row.location}
@@ -321,7 +324,7 @@ function ExceptionItemFields({
               nextRows[index] = { ...row, location: event.target.value };
               updateRows(nextRows);
             }}
-            className={inputClass}
+            className={itemInputClass}
           />
           <input
             type="text"
@@ -332,7 +335,7 @@ function ExceptionItemFields({
               nextRows[index] = { ...row, systemQty: event.target.value };
               updateRows(nextRows);
             }}
-            className={numericInputClass}
+            className={itemNumericInputClass}
           />
           <input
             type="text"
@@ -343,7 +346,7 @@ function ExceptionItemFields({
               nextRows[index] = { ...row, actualQty: event.target.value };
               updateRows(nextRows);
             }}
-            className={numericInputClass}
+            className={itemNumericInputClass}
           />
           <button
             type="button"
@@ -357,7 +360,6 @@ function ExceptionItemFields({
           </button>
         </div>
       ))}
-      </div>
     </div>
   );
 }
