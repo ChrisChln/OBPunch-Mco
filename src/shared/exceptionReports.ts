@@ -14,13 +14,14 @@ export const formatExceptionType = (value: unknown) => {
   return normalized ? EXCEPTION_TYPE_LABELS[normalized] : '';
 };
 
-export const EXCEPTION_STATUSES = ['Open', 'Processing', 'Pending Adjustment', 'Resolved', 'Closed'] as const;
+export const EXCEPTION_STATUSES = ['Open', 'Processing', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'] as const;
 export type ExceptionStatus = (typeof EXCEPTION_STATUSES)[number];
 
 export const EXCEPTION_STATUS_LABELS: Record<ExceptionStatus, string> = {
   Open: '已创建',
   Processing: '处理中',
   'Pending Adjustment': '待调整',
+  'Short Picked': '已短拣',
   Resolved: '已处理',
   Closed: '取消'
 };
@@ -42,6 +43,7 @@ export type ExceptionReportInput = {
   count_by: string;
   borrowed_location?: string | null;
   borrowed_qty?: number | string | null;
+  short_picked?: boolean;
   inventory_adjustment: boolean;
   submitted_by_lead_id: string;
   lead_pin?: string;
@@ -224,7 +226,9 @@ export const isValidExceptionTransition = (from: ExceptionStatus, to: ExceptionS
   if (to === 'Closed') return true;
   if (from === 'Closed' && to === 'Open') return true;
   if (from === 'Processing' && to === 'Resolved') return true;
-  const order: ExceptionStatus[] = ['Open', 'Processing', 'Pending Adjustment', 'Resolved', 'Closed'];
+  if (from === 'Processing' && to === 'Short Picked') return true;
+  if (from === 'Pending Adjustment' && to === 'Resolved') return true;
+  const order: ExceptionStatus[] = ['Open', 'Processing', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'];
   const fromIndex = order.indexOf(from);
   const toIndex = order.indexOf(to);
   return toIndex === fromIndex + 1;
@@ -249,6 +253,7 @@ export const inferExceptionStatus = (
   input: Pick<
     ExceptionReportInput,
     | 'product_barcode'
+    | 'exception_type'
     | 'picked_location'
     | 'system_location_qty'
     | 'actual_qty'
@@ -258,6 +263,7 @@ export const inferExceptionStatus = (
     | 'count_by'
     | 'borrowed_location'
     | 'borrowed_qty'
+    | 'short_picked'
     | 'inventory_adjustment'
   >
 ): Exclude<ExceptionStatus, 'Closed'> => {
@@ -277,9 +283,14 @@ export const inferExceptionStatus = (
 
   const borrowedLocation = hasText(input.borrowed_location);
   const borrowedQty = hasText(input.borrowed_qty);
+  const isShortPickZero =
+    normalizeExceptionType(input.exception_type) === 'short_shipment' &&
+    buildExceptionEditItemRows(input).some((row) => hasText(row.actualQty) && Number(row.actualQty) === 0);
+  if (isShortPickZero && input.short_picked) return 'Short Picked';
   if (borrowedLocation || borrowedQty) {
     return borrowedLocation && borrowedQty && input.inventory_adjustment ? 'Resolved' : 'Pending Adjustment';
   }
+  if (isShortPickZero) return 'Processing';
 
   return 'Resolved';
 };
@@ -318,6 +329,7 @@ export const buildExceptionInsertPayload = (input: ExceptionReportInput) => {
   const actualQty = firstRow ? firstRow.actual_qty ?? null : trimText(input.actual_qty) ? parseNonNegativeNumber(input.actual_qty) : null;
   const borrowedLocation = trimText(input.borrowed_location);
   const borrowedQty = borrowedLocation ? parseNonNegativeNumber(input.borrowed_qty) : null;
+  const shortPicked = Boolean(input.short_picked) && exceptionType === 'short_shipment' && itemRows.some((row) => row.actual_qty === 0);
 
   return {
     report_date: trimText(input.report_date),
@@ -334,6 +346,7 @@ export const buildExceptionInsertPayload = (input: ExceptionReportInput) => {
     count_by: trimText(input.count_by).toUpperCase(),
     borrowed_location: borrowedLocation ? borrowedLocation.toUpperCase() : null,
     borrowed_qty: borrowedQty,
+    short_picked: shortPicked,
     inventory_adjustment: Boolean(input.inventory_adjustment),
     submitted_by_lead_id: trimText(input.submitted_by_lead_id).toUpperCase(),
     resolution_note: trimText(input.resolution_note) || null

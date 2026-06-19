@@ -170,6 +170,7 @@ describe('exceptionReports', () => {
   test('allows only forward status transitions', () => {
     expect(isValidExceptionTransition('Open', 'Processing')).toBe(true);
     expect(isValidExceptionTransition('Processing', 'Resolved')).toBe(true);
+    expect(isValidExceptionTransition('Processing', 'Short Picked')).toBe(true);
     expect(isValidExceptionTransition('Processing', 'Pending Adjustment')).toBe(true);
     expect(isValidExceptionTransition('Pending Adjustment', 'Resolved')).toBe(true);
     expect(isValidExceptionTransition('Resolved', 'Closed')).toBe(true);
@@ -194,6 +195,26 @@ describe('exceptionReports', () => {
     expect(inferExceptionStatus(processingComplete)).toBe('Resolved');
     expect(inferExceptionStatus({ ...processingComplete, borrowed_location: 'B02', borrowed_qty: '2', inventory_adjustment: false })).toBe('Pending Adjustment');
     expect(inferExceptionStatus({ ...processingComplete, borrowed_location: 'B02', borrowed_qty: '2', inventory_adjustment: true })).toBe('Resolved');
+    expect(inferExceptionStatus({ ...processingComplete, exception_type: 'short_shipment', actual_qty: 0, short_picked: true })).toBe('Short Picked');
+  });
+
+  test('persists short picked only for Short Pick zero-actual reports', () => {
+    const payload = buildExceptionInsertPayload({
+      ...validInput(),
+      exception_type: 'short_shipment',
+      packing_rebin_operator: 'US400',
+      actual_qty: 0,
+      short_picked: true
+    });
+    expect(payload?.short_picked).toBe(true);
+    expect(
+      buildExceptionInsertPayload({
+        ...validInput(),
+        exception_type: 'short_pick',
+        actual_qty: 0,
+        short_picked: true
+      })?.short_picked
+    ).toBe(false);
   });
 
   test('maps all key report fields into the 4x6 print payload', () => {
