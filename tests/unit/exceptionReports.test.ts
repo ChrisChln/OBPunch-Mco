@@ -91,27 +91,43 @@ describe('exceptionReports', () => {
     expect(payload?.resolution_note).toBe('checked');
   });
 
-  test('normalizes multiple product and location lines without losing row alignment', () => {
+  test('normalizes multiple item rows without losing row alignment', () => {
     expect(normalizeExceptionMultiLineText(' sku123 \n \n sku456 ', true)).toBe('SKU123\n\nSKU456');
 
     const payload = buildExceptionInsertPayload({
       ...validInput(),
       product_barcode: ' sku123 \nsku456 ',
-      picked_location: ' a01 \nb02 '
+      picked_location: ' a01 \nb02 ',
+      item_rows: [
+        { product_barcode: ' sku123 ', picked_location: ' a01 ', picking_container: ' c1 ', system_location_qty: '5', actual_qty: '4' },
+        { product_barcode: ' sku456 ', picked_location: ' b02 ', picking_container: ' c2 ', system_location_qty: '3', actual_qty: '2' }
+      ]
     });
     expect(payload?.product_barcode).toBe('SKU123\nSKU456');
     expect(payload?.picked_location).toBe('A01\nB02');
+    expect(payload?.picking_container).toBe('c1');
+    expect(payload?.system_location_qty).toBe(5);
+    expect(payload?.actual_qty).toBe(4);
+    expect(payload?.item_rows).toEqual([
+      { product_barcode: 'SKU123', picked_location: 'A01', picking_container: 'c1', system_location_qty: 5, actual_qty: 4 },
+      { product_barcode: 'SKU456', picked_location: 'B02', picking_container: 'c2', system_location_qty: 3, actual_qty: 2 }
+    ]);
   });
 
-  test('splits printable item rows by product and picked location', () => {
+  test('splits printable item rows with independent quantities', () => {
     expect(
       splitExceptionReportItemRows({
+        ...validInput(),
         product_barcode: 'SKU123\nSKU456',
-        picked_location: 'A01\nB02'
+        picked_location: 'A01\nB02',
+        item_rows: [
+          { product_barcode: 'SKU123', picked_location: 'A01', picking_container: 'C1', system_location_qty: 5, actual_qty: 4 },
+          { product_barcode: 'SKU456', picked_location: 'B02', picking_container: 'C2', system_location_qty: 3, actual_qty: 2 }
+        ]
       })
     ).toEqual([
-      { product_barcode: 'SKU123', picked_location: 'A01' },
-      { product_barcode: 'SKU456', picked_location: 'B02' }
+      { product_barcode: 'SKU123', picked_location: 'A01', picking_container: 'C1', system_location_qty: 5, actual_qty: 4 },
+      { product_barcode: 'SKU456', picked_location: 'B02', picking_container: 'C2', system_location_qty: 3, actual_qty: 2 }
     ]);
   });
 
@@ -125,8 +141,8 @@ describe('exceptionReports', () => {
         2
       )
     ).toEqual([
-      { product: '', location: '' },
-      { product: '', location: '' }
+      { product: '', location: '', container: '', systemQty: '', actualQty: '' },
+      { product: '', location: '', container: '', systemQty: '', actualQty: '' }
     ]);
   });
 

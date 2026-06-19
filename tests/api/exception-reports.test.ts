@@ -104,6 +104,57 @@ describe('api/exception-reports', () => {
     expect(res.code).toBe(200);
     expect(insert.mock.calls[0][0][0].product_barcode).toBe('SKU123');
     expect(insert.mock.calls[0][0][0].report_number).toBe('202606180001');
+    expect(insert.mock.calls[0][0][0].item_rows).toEqual([
+      { product_barcode: 'SKU123', picked_location: 'A01', picking_container: 'C-1', system_location_qty: 5, actual_qty: 4 }
+    ]);
+    expect(res.body.row.status).toBe('Open');
+  });
+
+  test('falls back when item rows column is not in the Supabase schema cache', async () => {
+    const select = vi.fn(() => ({
+      gte: () => ({
+        lt: () => ({
+          order: () => ({
+            limit: async () => ({ data: [], error: null })
+          })
+        })
+      })
+    }));
+    const insert = vi.fn((rows: any[]) => ({
+      select: () => ({
+        single: async () => {
+          if (Object.prototype.hasOwnProperty.call(rows[0], 'item_rows')) {
+            return {
+              data: null,
+              error: {
+                code: 'PGRST204',
+                message: "Could not find the 'item_rows' column of 'ob_exception_reports' in the schema cache"
+              }
+            };
+          }
+          return { data: { id: 1, status: 'Open', ...rows[0] }, error: null };
+        }
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return { insert, select };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'POST', headers: {}, body: baseBody }, res);
+
+    expect(res.code).toBe(200);
+    expect(insert).toHaveBeenCalledTimes(2);
+    expect(insert.mock.calls[0][0][0].item_rows).toBeDefined();
+    expect(insert.mock.calls[1][0][0].item_rows).toBeUndefined();
     expect(res.body.row.status).toBe('Open');
   });
 
@@ -342,6 +393,72 @@ describe('api/exception-reports', () => {
     expect(res.code).toBe(400);
     expect(String(res.body?.error ?? '')).toContain('Inventory adjustment is required');
     expect(updateException).not.toHaveBeenCalled();
+  });
+
+  test('admin list accepts Authorization header casing', async () => {
+    const serviceSupabase = {
+      auth: {
+        getUser: async () => ({ data: { user: { id: 'u1', email: 'admin@example.com' } }, error: null })
+      },
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return {
+          select: () => ({
+            order: () => ({
+              limit: async () => ({ data: [{ id: 5, status: 'Open' }], error: null })
+            })
+          })
+        };
+      }
+    };
+    const userSupabase = {
+      rpc: async () => ({
+        data: {
+          user_id: 'u1',
+          role: 'level2',
+          is_active: true,
+          modules: [{ module_key: 'exceptions', access_level: 'view' }]
+        },
+        error: null
+      })
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: (_url: string, key: string) => (key === 'service-role' ? serviceSupabase : userSupabase)
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'GET', headers: { Authorization: 'Bearer token' }, query: {} }, res);
+
+    expect(res.code).toBe(200);
+    expect(res.body.rows).toEqual([{ id: 5, status: 'Open' }]);
+  });
+
+  test('lead list accepts X-Exception-Lead-Pin header casing', async () => {
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return {
+          select: () => ({
+            order: () => ({
+              limit: async () => ({ data: [{ id: 6, status: 'Processing' }], error: null })
+            })
+          })
+        };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'GET', headers: { 'X-Exception-Lead-Pin': '1234' }, query: {} }, res);
+
+    expect(res.code).toBe(200);
+    expect(res.body.rows).toEqual([{ id: 6, status: 'Processing' }]);
   });
 
   test('admin close creates one mistake report', async () => {

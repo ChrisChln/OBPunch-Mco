@@ -58,15 +58,23 @@ const parseJsonBody = <T>(req: any, res: any): T | null => {
   }
 };
 
+const getHeaderValue = (req: any, name: string) => {
+  const headers = (req.headers ?? {}) as Record<string, unknown>;
+  const direct = headers[name] ?? headers[name.toLowerCase()] ?? headers[name.toUpperCase()];
+  if (direct !== undefined) return direct;
+  const match = Object.keys(headers).find((key) => key.toLowerCase() === name.toLowerCase());
+  return match ? headers[match] : '';
+};
+
 const getBearerToken = (req: any) => {
-  const authHeader = String(req.headers?.authorization ?? '');
+  const authHeader = String(getHeaderValue(req, 'authorization') ?? '');
   return authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
 };
 
 const hasLeadPin = (req: any, body?: Record<string, unknown> | null) => {
   const pin =
     String(body?.lead_pin ?? '').trim() ||
-    String(req.headers?.['x-exception-lead-pin'] ?? '').trim() ||
+    String(getHeaderValue(req, 'x-exception-lead-pin') ?? '').trim() ||
     String(req.query?.lead_pin ?? '').trim();
   return Boolean(exceptionLeadPin) && pin === exceptionLeadPin;
 };
@@ -108,6 +116,27 @@ const getNextExceptionReportNumber = async (supabase: any, reportDate: string) =
 
 const isUniqueConstraintError = (error: any) =>
   String(error?.code ?? '') === '23505' || /duplicate key|unique/i.test(String(error?.message ?? ''));
+
+const isMissingItemRowsColumnError = (error: any) =>
+  String(error?.code ?? '') === 'PGRST204' &&
+  /item_rows/i.test(String(error?.message ?? error?.details ?? ''));
+
+const withoutItemRows = <T extends Record<string, unknown>>(payload: T) => {
+  const { item_rows: _itemRows, ...fallbackPayload } = payload;
+  return fallbackPayload;
+};
+
+const insertExceptionReport = async (supabase: any, payload: Record<string, unknown>) => {
+  const result = await supabase.from(EXCEPTION_TABLE).insert([payload]).select('*').single();
+  if (!isMissingItemRowsColumnError(result.error)) return result;
+  return supabase.from(EXCEPTION_TABLE).insert([withoutItemRows(payload)]).select('*').single();
+};
+
+const updateExceptionReport = async (supabase: any, id: string, payload: Record<string, unknown>) => {
+  const result = await supabase.from(EXCEPTION_TABLE).update(payload).eq('id', id).select('*').single();
+  if (!isMissingItemRowsColumnError(result.error)) return result;
+  return supabase.from(EXCEPTION_TABLE).update(withoutItemRows(payload)).eq('id', id).select('*').single();
+};
 
 const ensureAdminAccess = async (req: any, res: any, serviceSupabase: any, required: 'view' | 'operate' = 'operate') => {
   const token = getBearerToken(req);
@@ -255,11 +284,7 @@ const handlePost = async (req: any, res: any, supabase: any) => {
   let lastError: any = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const reportNumber = await getNextExceptionReportNumber(supabase, payload.report_date);
-    const result = await supabase
-      .from(EXCEPTION_TABLE)
-      .insert([{ ...payload, report_number: reportNumber, status: 'Open' }])
-      .select('*')
-      .single();
+    const result = await insertExceptionReport(supabase, { ...payload, report_number: reportNumber, status: 'Open' });
     if (!result.error) {
       res.status(200).json({ row: result.data });
       return;
@@ -309,6 +334,7 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
     picked_location: String(valueFromBody('picked_location', currentRes.data.picked_location) ?? ''),
     system_location_qty: valueFromBody('system_location_qty', currentRes.data.system_location_qty),
     actual_qty: valueFromBody('actual_qty', currentRes.data.actual_qty),
+    item_rows: valueFromBody('item_rows', currentRes.data.item_rows ?? []),
     count_by: String(valueFromBody('count_by', currentRes.data.count_by) ?? ''),
     borrowed_location: String(valueFromBody('borrowed_location', currentRes.data.borrowed_location) ?? ''),
     borrowed_qty: valueFromBody('borrowed_qty', currentRes.data.borrowed_qty ?? ''),
@@ -348,7 +374,7 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
     updatePayload.mistake_report_id = null;
   }
 
-  const result = await supabase.from(EXCEPTION_TABLE).update(updatePayload).eq('id', id).select('*').single();
+  const result = await updateExceptionReport(supabase, id, updatePayload);
   if (result.error) {
     res.status(500).json({ error: result.error.message });
     return;
