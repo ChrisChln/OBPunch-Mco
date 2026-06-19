@@ -10,7 +10,7 @@ import {
   buildExceptionPrintPayload,
   formatExceptionType,
   getExceptionReportNumber,
-  needsInventoryAdjustment,
+  inferExceptionStatus,
   splitExceptionReportItemRows,
   type ExceptionReportInput,
   type ExceptionReportPrintPayload,
@@ -120,16 +120,6 @@ const statusCardTone: Record<ExceptionStatus, { backgroundColor: string; glowCol
     textClass: 'text-slate-100',
     badgeClass: 'border-slate-200/30 bg-slate-200/10 text-slate-100'
   }
-};
-
-const getNextExceptionStatus = (
-  status: ExceptionStatus,
-  report: Pick<ExceptionReportInput, 'borrowed_location' | 'inventory_adjustment'>
-): ExceptionStatus | null => {
-  if (status === 'Processing') return needsInventoryAdjustment(report) ? 'Pending Adjustment' : 'Resolved';
-  if (status === 'Pending Adjustment') return needsInventoryAdjustment(report) ? null : 'Resolved';
-  const nextStatus = statusOrder[statusOrder.indexOf(status) + 1] ?? null;
-  return nextStatus === 'Closed' ? null : nextStatus;
 };
 
 const apiJson = async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -592,7 +582,6 @@ function NewExceptionModal({
   employees,
   saving,
   onChange,
-  onStatusChange,
   onClose,
   onPrint,
   onCancelException,
@@ -606,15 +595,13 @@ function NewExceptionModal({
   employees: PresentEmployeeOption[];
   saving: boolean;
   onChange: (patch: Partial<ExceptionReportInput>) => void;
-  onStatusChange?: (status: ExceptionStatus) => void;
   onClose: () => void;
   onPrint?: () => void;
   onCancelException?: () => void;
   onRestartException?: () => void;
   onSubmit: () => void;
 }) {
-  const nextStatus = status ? getNextExceptionStatus(status, form) : null;
-  const editableStatuses = status ? [status, ...(nextStatus && nextStatus !== 'Closed' ? [nextStatus] : [])] : [];
+  const inferredStatus = status === 'Closed' ? 'Closed' : inferExceptionStatus(form);
   const showFollowUp = shouldShowFollowUp(form);
   const showOtherReason = form.exception_type === 'other';
 
@@ -635,13 +622,9 @@ function NewExceptionModal({
           <div className="rounded-3xl border border-slate-800/80 bg-black/20 p-4">
             <div className="mb-4 text-sm font-black text-white">Report</div>
             <div className="grid gap-3 sm:grid-cols-2">
-              {mode === 'edit' && status && onStatusChange ? (
+              {mode === 'edit' && status ? (
                 <Field label="Status">
-                  <select value={status} onChange={(event) => onStatusChange(event.target.value as ExceptionStatus)} className={inputClass}>
-                    {editableStatuses.map((option) => (
-                      <option key={option} value={option}>{option}</option>
-                    ))}
-                  </select>
+                  <div className={`${inputClass} flex items-center`}>{inferredStatus}</div>
                 </Field>
               ) : null}
               <Field label="Exception Type">
@@ -756,7 +739,6 @@ export default function ExceptionPage() {
   const [presentEmployees, setPresentEmployees] = useState<PresentEmployeeOption[]>([]);
   const [selected, setSelected] = useState<ExceptionReportRecord | null>(null);
   const [editing, setEditing] = useState<ExceptionReportRecord | null>(null);
-  const [editingStatus, setEditingStatus] = useState<ExceptionStatus>('Open');
   const [statusFilter, setStatusFilter] = useState<'all' | ExceptionStatus>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | ExceptionType>('all');
   const [createdDateFilter, setCreatedDateFilter] = useState(currentDate);
@@ -886,7 +868,6 @@ export default function ExceptionPage() {
   const openEditModal = (row: ExceptionReportRecord) => {
     setSelected(row);
     setEditing(row);
-    setEditingStatus(row.status);
     setForm(formFromRecord(row, leadPin));
     setModalOpen(true);
   };
@@ -945,7 +926,6 @@ export default function ExceptionPage() {
         body: JSON.stringify({
           ...scopedForm,
           id: editing.id,
-          status: editingStatus,
           picking_operator: pickingOperator?.staff_id ?? form.picking_operator,
           packing_rebin_operator: packingRebinOperator?.staff_id ?? form.packing_rebin_operator ?? '',
           count_by: countBy?.staff_id ?? form.count_by,
@@ -956,7 +936,6 @@ export default function ExceptionPage() {
       setRows((current) => current.map((item) => (String(item.id) === String(data.row.id) ? data.row : item)));
       setSelected(data.row);
       setEditing(data.row);
-      setEditingStatus(data.row.status);
       setForm(formFromRecord(data.row, leadPin));
       setModalOpen(false);
       setMessage({ tone: 'success', text: 'Exception updated.' });
@@ -993,40 +972,11 @@ export default function ExceptionPage() {
       setRows((current) => current.map((item) => (String(item.id) === String(data.row.id) ? data.row : item)));
       setSelected(data.row);
       setEditing(data.row);
-      setEditingStatus(data.row.status);
       setForm(formFromRecord(data.row, leadPin));
       setModalOpen(false);
       setMessage({ tone: 'success', text: nextStatus === 'Closed' ? 'Exception canceled.' : 'Exception restarted.' });
     } catch (error: any) {
       setMessage({ tone: 'error', text: String(error?.message ?? error ?? 'Failed to update exception status.') });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const advanceStatus = async (row: ExceptionReportRecord) => {
-    const nextStatus = getNextExceptionStatus(row.status, row);
-    if (!nextStatus) return;
-    setSaving(true);
-    setMessage({ tone: 'idle', text: '' });
-    try {
-      const data = await apiJson<{ row: ExceptionReportRecord }>('/api/exception-reports', {
-        method: 'PATCH',
-        body: JSON.stringify({
-          id: row.id,
-          lead_pin: leadPin,
-          status: nextStatus,
-          resolution_note: row.resolution_note,
-          borrowed_location: row.borrowed_location,
-          borrowed_qty: row.borrowed_qty,
-          inventory_adjustment: row.inventory_adjustment
-        })
-      });
-      setRows((current) => current.map((item) => (String(item.id) === String(row.id) ? data.row : item)));
-      setSelected(data.row);
-      setMessage({ tone: 'success', text: `Moved to ${nextStatus}.` });
-    } catch (error: any) {
-      setMessage({ tone: 'error', text: String(error?.message ?? error ?? 'Failed to update status.') });
     } finally {
       setSaving(false);
     }
@@ -1191,7 +1141,6 @@ export default function ExceptionPage() {
               ) : (
                 visibleRows.map((row) => {
                   const active = selected && String(selected.id) === String(row.id);
-                  const nextStatus = getNextExceptionStatus(row.status, row);
                   const reportNumber = getExceptionReportNumber(row);
                   const submittedBy = employeeName(presentEmployees, row.submitted_by_lead_id);
                   const createdAt = formatQueueDateTime(row.created_at);
@@ -1261,19 +1210,6 @@ export default function ExceptionPage() {
                               <Pencil className="h-4 w-4" aria-hidden="true" />
                               <span>Edit</span>
                             </button>
-                            {nextStatus && nextStatus !== 'Closed' ? (
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  void advanceStatus(row);
-                                }}
-                                disabled={saving}
-                                className="h-9 rounded-xl border border-slate-600/80 bg-slate-950/60 px-3 text-sm font-black text-white shadow-[0_10px_24px_rgba(0,0,0,0.22)] transition hover:border-slate-400/80 hover:bg-slate-900/80 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                Move {nextStatus}
-                              </button>
-                            ) : null}
                             <button
                               type="button"
                               onClick={(event) => {
@@ -1301,12 +1237,11 @@ export default function ExceptionPage() {
         <NewExceptionModal
           mode={editing ? 'edit' : 'create'}
           reportId={editing ? getExceptionReportNumber(editing) : undefined}
-          status={editing ? editingStatus : undefined}
+          status={editing ? editing.status : undefined}
           form={form}
           employees={presentEmployees}
           saving={saving}
           onChange={updateForm}
-          onStatusChange={setEditingStatus}
           onClose={() => setModalOpen(false)}
           onPrint={editing ? () => void openPrint(editing) : undefined}
           onCancelException={editing ? () => void setEditingReportStatus('Closed') : undefined}

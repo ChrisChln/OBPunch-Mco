@@ -2,8 +2,8 @@ import { createClient } from '@supabase/supabase-js';
 import {
   buildExceptionInsertPayload,
   buildExceptionUpdatePayload,
+  inferExceptionStatus,
   isValidExceptionTransition,
-  needsInventoryAdjustment,
   normalizeExceptionStatus,
   validateExceptionReportInput,
   type ExceptionReportInput
@@ -297,7 +297,7 @@ const handlePost = async (req: any, res: any, supabase: any) => {
   let minimumSequence = 1;
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const reportNumber = await getNextExceptionReportNumber(supabase, payload.report_date, minimumSequence);
-    const result = await insertExceptionReport(supabase, { ...payload, report_number: reportNumber, status: 'Open' });
+    const result = await insertExceptionReport(supabase, { ...payload, report_number: reportNumber, status: inferExceptionStatus(body) });
     if (!result.error) {
       res.status(200).json({ row: result.data });
       return;
@@ -317,8 +317,8 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
   }
 
   const id = String(body.id ?? '').trim();
-  const nextStatus = normalizeExceptionStatus(body.status);
-  if (!id || !nextStatus) {
+  const requestedStatus = Object.prototype.hasOwnProperty.call(body, 'status') ? normalizeExceptionStatus(body.status) : null;
+  if (!id || (Object.prototype.hasOwnProperty.call(body, 'status') && !requestedStatus)) {
     res.status(400).json({ error: 'A valid id and status are required.' });
     return;
   }
@@ -330,10 +330,6 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
   }
 
   const currentStatus = normalizeExceptionStatus(currentRes.data.status) ?? 'Open';
-  if (!isValidExceptionTransition(currentStatus, nextStatus)) {
-    res.status(400).json({ error: `Cannot move ${currentStatus} to ${nextStatus}.` });
-    return;
-  }
 
   const valueFromBody = (key: string, fallback: unknown) =>
     Object.prototype.hasOwnProperty.call(body, key) ? body[key] : fallback;
@@ -363,8 +359,17 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
     res.status(400).json({ error: errors[0] ?? 'Invalid exception report.' });
     return;
   }
-  if (nextStatus === 'Resolved' && needsInventoryAdjustment(editedInput)) {
-    res.status(400).json({ error: 'Inventory adjustment is required before resolving this exception.' });
+
+  const nextStatus =
+    requestedStatus === 'Closed' || (currentStatus === 'Closed' && requestedStatus === 'Open')
+      ? requestedStatus
+      : inferExceptionStatus(editedInput);
+  if (!nextStatus) {
+    res.status(400).json({ error: 'A valid id and status are required.' });
+    return;
+  }
+  if ((requestedStatus === 'Closed' || currentStatus === 'Closed') && !isValidExceptionTransition(currentStatus, nextStatus)) {
+    res.status(400).json({ error: `Cannot move ${currentStatus} to ${nextStatus}.` });
     return;
   }
 
@@ -372,7 +377,12 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
     status: nextStatus,
     ...editedPayload
   };
+  if (nextStatus === 'Open') {
+    updatePayload.processed_at = null;
+    updatePayload.resolved_at = null;
+  }
   if (nextStatus === 'Processing') updatePayload.processed_at = new Date().toISOString();
+  if (nextStatus === 'Processing' || nextStatus === 'Pending Adjustment') updatePayload.resolved_at = null;
   if (nextStatus === 'Resolved') updatePayload.resolved_at = new Date().toISOString();
   if (nextStatus === 'Closed') {
     updatePayload.closed_at = new Date().toISOString();
