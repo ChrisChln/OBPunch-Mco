@@ -23,6 +23,7 @@ const exceptionLeadPin = (process.env.EXCEPTION_LEAD_PIN as string | undefined) 
 const EXCEPTION_TABLE = 'ob_exception_reports';
 const MISTAKE_REPORT_TABLE = (process.env.VITE_MISTAKE_REPORT_TABLE as string | undefined) ?? 'ob_mistake_reports';
 const EMPLOYEE_TABLE = (process.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
+const REPORT_NUMBER_SEQUENCE_WIDTH = 4;
 
 const createServiceSupabase = () =>
   supabaseUrl && supabaseServiceRoleKey
@@ -76,6 +77,37 @@ const parseIsoDateParam = (value: unknown) => {
   const date = new Date(text);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
+
+const reportDateKey = (value: unknown) => String(value ?? '').trim().replace(/-/g, '');
+
+const buildExceptionReportNumber = (reportDate: string, sequence: number) =>
+  `${reportDateKey(reportDate)}${String(sequence).padStart(REPORT_NUMBER_SEQUENCE_WIDTH, '0')}`;
+
+const parseExceptionReportSequence = (reportNumber: unknown, reportDate: string) => {
+  const prefix = reportDateKey(reportDate);
+  const text = String(reportNumber ?? '').trim();
+  if (!text.startsWith(prefix)) return 0;
+  const sequence = Number(text.slice(prefix.length));
+  return Number.isInteger(sequence) && sequence > 0 ? sequence : 0;
+};
+
+const getNextExceptionReportNumber = async (supabase: any, reportDate: string) => {
+  const prefix = reportDateKey(reportDate);
+  const result = await supabase
+    .from(EXCEPTION_TABLE)
+    .select('report_number')
+    .gte('report_number', `${prefix}${'0'.repeat(REPORT_NUMBER_SEQUENCE_WIDTH)}`)
+    .lt('report_number', `${prefix}:`)
+    .order('report_number', { ascending: false })
+    .limit(1);
+
+  if (result.error) throw new Error(result.error.message);
+  const lastSequence = parseExceptionReportSequence(result.data?.[0]?.report_number, reportDate);
+  return buildExceptionReportNumber(reportDate, lastSequence + 1);
+};
+
+const isUniqueConstraintError = (error: any) =>
+  String(error?.code ?? '') === '23505' || /duplicate key|unique/i.test(String(error?.message ?? ''));
 
 const ensureAdminAccess = async (req: any, res: any, serviceSupabase: any, required: 'view' | 'operate' = 'operate') => {
   const token = getBearerToken(req);
@@ -191,7 +223,7 @@ const handleGet = async (req: any, res: any, supabase: any) => {
   }
 
   let query = supabase.from(EXCEPTION_TABLE).select('*').order('created_at', { ascending: false }).limit(200);
-  if (id) query = query.eq('id', id).limit(1);
+  if (id) query = /^\d{12}$/.test(id) ? query.eq('report_number', id).limit(1) : query.eq('id', id).limit(1);
   if (reportDate) query = query.eq('report_date', reportDate);
   if (createdStart) query = query.gte('created_at', createdStart);
   if (createdEnd) query = query.lt('created_at', createdEnd);
@@ -220,12 +252,22 @@ const handlePost = async (req: any, res: any, supabase: any) => {
     return;
   }
 
-  const result = await supabase.from(EXCEPTION_TABLE).insert([{ ...payload, status: 'Open' }]).select('*').single();
-  if (result.error) {
-    res.status(500).json({ error: result.error.message });
-    return;
+  let lastError: any = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const reportNumber = await getNextExceptionReportNumber(supabase, payload.report_date);
+    const result = await supabase
+      .from(EXCEPTION_TABLE)
+      .insert([{ ...payload, report_number: reportNumber, status: 'Open' }])
+      .select('*')
+      .single();
+    if (!result.error) {
+      res.status(200).json({ row: result.data });
+      return;
+    }
+    lastError = result.error;
+    if (!isUniqueConstraintError(result.error)) break;
   }
-  res.status(200).json({ row: result.data });
+  res.status(500).json({ error: lastError?.message ?? 'Failed to create exception report.' });
 };
 
 const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => {
@@ -372,7 +414,7 @@ const handleAdminClose = async (req: any, res: any, supabase: any, body: any) =>
         {
           position: String(employeeRes.data.position ?? 'Exception'),
           employee_staff_id: responsibleStaffId,
-          reason: `Exception #${id}: ${currentRes.data.exception_type}`,
+          reason: `Exception #${String(currentRes.data.report_number ?? id).trim()}: ${currentRes.data.exception_type}`,
           reporter_staff_id: String(user.email ?? user.id ?? 'admin'),
           operational_date: currentRes.data.report_date
         }

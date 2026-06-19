@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  buildExceptionEditItemRows,
   buildExceptionInsertPayload,
   buildExceptionUpdatePayload,
   buildExceptionPrintPayload,
@@ -114,6 +115,21 @@ describe('exceptionReports', () => {
     ]);
   });
 
+  test('keeps empty editable item rows visible when adding a blank row', () => {
+    expect(
+      buildExceptionEditItemRows(
+        {
+          product_barcode: '',
+          picked_location: ''
+        },
+        2
+      )
+    ).toEqual([
+      { product: '', location: '' },
+      { product: '', location: '' }
+    ]);
+  });
+
   test('allows only forward status transitions', () => {
     expect(isValidExceptionTransition('Open', 'Processing')).toBe(true);
     expect(isValidExceptionTransition('Processing', 'Resolved')).toBe(true);
@@ -137,6 +153,7 @@ describe('exceptionReports', () => {
     const report: ExceptionReportRecord = {
       ...validInput(),
       id: 99,
+      report_number: '202606180001',
       status: 'Resolved',
       borrowed_qty: null,
       responsible_staff_id: 'US500',
@@ -155,7 +172,7 @@ describe('exceptionReports', () => {
     const fieldLabels = payload.fields.map((field) => field.label);
     const qrFields = new Map(payload.qrFields.map((field) => [field.label, field.value]));
 
-    expect(payload.reportId).toBe('99');
+    expect(payload.reportId).toBe('202606180001');
     expect(payload.qrValue).toContain('/exception?id=99');
     expect(payload.createdBy).toBe('US300');
     expect(payload.exceptionTypeLabel).toBe('Less Pick');

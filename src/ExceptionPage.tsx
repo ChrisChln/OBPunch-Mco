@@ -5,8 +5,10 @@ import BorderGlow from './components/reactBits/BorderGlow';
 import {
   EXCEPTION_TYPE_LABELS,
   EXCEPTION_TYPES,
+  buildExceptionEditItemRows,
   buildExceptionPrintPayload,
   formatExceptionType,
+  getExceptionReportNumber,
   needsInventoryAdjustment,
   splitExceptionReportItemRows,
   type ExceptionReportInput,
@@ -201,11 +203,6 @@ const loginInputClass =
 const loginButtonClass =
   'mt-2 h-14 w-full cursor-pointer rounded-[20px] border border-cyan-200/70 bg-cyan-200 px-5 text-base font-semibold text-slate-950 shadow-[0_18px_48px_rgba(103,232,249,0.18)] transition hover:-translate-y-0.5 hover:bg-cyan-100 hover:shadow-[0_22px_60px_rgba(103,232,249,0.24)] disabled:cursor-not-allowed disabled:border-slate-700/70 disabled:bg-slate-900/80 disabled:text-slate-300 disabled:shadow-none disabled:hover:translate-y-0 disabled:hover:bg-slate-900/80';
 
-const splitMultiField = (value: string) => {
-  const rows = value.split(/\r?\n/);
-  return rows.length ? rows : [''];
-};
-
 const joinMultiField = (rows: string[]) => rows.map((row) => row.trim()).join('\n').replace(/\n+$/g, '');
 
 function Field({ label, children, wide = false }: { label: string; children: ReactNode; wide?: boolean }) {
@@ -226,15 +223,21 @@ function ProductLocationFields({
   pickedLocation: string;
   onChange: (patch: Pick<ExceptionReportInput, 'product_barcode' | 'picked_location'>) => void;
 }) {
-  const productRows = splitMultiField(productBarcode);
-  const locationRows = splitMultiField(pickedLocation);
-  const rowCount = Math.max(1, productRows.length, locationRows.length);
-  const rows = Array.from({ length: rowCount }, (_, index) => ({
-    product: productRows[index] ?? '',
-    location: locationRows[index] ?? ''
-  }));
+  const [visibleRowCount, setVisibleRowCount] = useState(1);
+  const rows = buildExceptionEditItemRows(
+    {
+      product_barcode: productBarcode,
+      picked_location: pickedLocation
+    },
+    visibleRowCount
+  );
+
+  useEffect(() => {
+    setVisibleRowCount((current) => Math.max(current, rows.length));
+  }, [rows.length]);
 
   const updateRows = (nextRows: Array<{ product: string; location: string }>) => {
+    setVisibleRowCount(Math.max(1, nextRows.length));
     onChange({
       product_barcode: joinMultiField(nextRows.map((row) => row.product)),
       picked_location: joinMultiField(nextRows.map((row) => row.location))
@@ -248,7 +251,7 @@ function ProductLocationFields({
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Picked Location</div>
         <button
           type="button"
-          onClick={() => updateRows([...rows, { product: '', location: '' }])}
+          onClick={() => setVisibleRowCount(rows.length + 1)}
           aria-label="Add product and location"
           title="Add"
           className="inline-flex h-7 w-9 items-center justify-center rounded-lg border border-emerald-300/40 bg-emerald-300/10 text-emerald-100 transition hover:border-emerald-200 hover:bg-emerald-300/20"
@@ -705,6 +708,7 @@ export default function ExceptionPage() {
       const submittedBy = employeeName(presentEmployees, row.submitted_by_lead_id);
       const haystack = [
         row.id,
+        row.report_number,
         row.product_barcode,
         row.picking_list_number,
         row.picking_container,
@@ -1110,6 +1114,7 @@ export default function ExceptionPage() {
                 visibleRows.map((row) => {
                   const active = selected && String(selected.id) === String(row.id);
                   const nextStatus = getNextExceptionStatus(row.status, row);
+                  const reportNumber = getExceptionReportNumber(row);
                   const submittedBy = employeeName(presentEmployees, row.submitted_by_lead_id);
                   const createdAt = formatQueueDateTime(row.created_at);
                   const details = [formatExceptionType(row.exception_type), row.picking_list_number, row.picking_container].filter(Boolean).join(' · ');
@@ -1137,7 +1142,7 @@ export default function ExceptionPage() {
                       >
                         <div className="flex min-w-0 items-start justify-between gap-5">
                           <div className="min-w-0">
-                            <div className="truncate text-2xl font-black">#{row.id}</div>
+                            <div className="truncate text-2xl font-black">#{reportNumber}</div>
                             <div className="mt-3 break-words text-sm font-black opacity-95">{row.product_barcode}</div>
                             {details ? <div className="mt-3 break-words text-sm font-semibold leading-6 text-current opacity-90">{details}</div> : null}
                             {hasAssignees ? (
@@ -1171,7 +1176,7 @@ export default function ExceptionPage() {
                               type="button"
                               onClick={() => openEditModal(row)}
                               disabled={saving}
-                              aria-label={`Edit exception #${row.id}`}
+                              aria-label={`Edit exception #${reportNumber}`}
                               title="Edit"
                               className="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-600/80 bg-slate-950/50 px-3 text-sm font-black text-white shadow-[0_10px_24px_rgba(0,0,0,0.22)] transition hover:border-cyan-300/70 hover:bg-slate-900/80 disabled:cursor-not-allowed disabled:opacity-50"
                             >
@@ -1217,7 +1222,7 @@ export default function ExceptionPage() {
       {modalOpen ? (
         <NewExceptionModal
           mode={editing ? 'edit' : 'create'}
-          reportId={editing ? String(editing.id) : undefined}
+          reportId={editing ? getExceptionReportNumber(editing) : undefined}
           status={editing ? editingStatus : undefined}
           form={form}
           employees={presentEmployees}

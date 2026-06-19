@@ -48,6 +48,7 @@ export type ExceptionReportInput = {
 
 export type ExceptionReportRecord = Omit<ExceptionReportInput, 'lead_pin' | 'exception_type' | 'system_location_qty' | 'actual_qty' | 'borrowed_qty'> & {
   id: number | string;
+  report_number?: string | null;
   exception_type: ExceptionType | string | null;
   system_location_qty: number | null;
   actual_qty: number | null;
@@ -91,6 +92,11 @@ export type ExceptionReportItemRow = {
   picked_location: string;
 };
 
+export type ExceptionReportEditItemRow = {
+  product: string;
+  location: string;
+};
+
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 const trimText = (value: unknown) => String(value ?? '').trim();
@@ -114,6 +120,23 @@ export const splitExceptionReportItemRows = (input: Pick<ExceptionReportInput, '
     product_barcode: productRows[index] ?? '',
     picked_location: locationRows[index] ?? ''
   })).filter((row) => row.product_barcode || row.picked_location);
+};
+
+export const getExceptionReportNumber = (report: Pick<ExceptionReportRecord, 'id' | 'report_number'>) =>
+  trimText(report.report_number) || trimText(report.id);
+
+export const buildExceptionEditItemRows = (
+  input: Pick<ExceptionReportInput, 'product_barcode' | 'picked_location'>,
+  minimumRowCount = 1
+): ExceptionReportEditItemRow[] => {
+  const productRows = String(input.product_barcode ?? '').split(/\r?\n/);
+  const locationRows = String(input.picked_location ?? '').split(/\r?\n/);
+  const safeMinimumRowCount = Math.max(1, Math.floor(minimumRowCount));
+  const rowCount = Math.max(safeMinimumRowCount, productRows.length, locationRows.length);
+  return Array.from({ length: rowCount }, (_, index) => ({
+    product: productRows[index] ?? '',
+    location: locationRows[index] ?? ''
+  }));
 };
 
 const formatPrintDateTime = (value: unknown, fallbackDate: string) => {
@@ -221,8 +244,9 @@ export const buildExceptionPrintPayload = (
   origin = '',
   resolveStaffName?: ExceptionReportStaffNameResolver
 ): ExceptionReportPrintPayload => {
-  const reportId = String(report.id ?? '').trim();
-  const qrValue = origin ? `${origin.replace(/\/$/, '')}/exception?id=${encodeURIComponent(reportId)}` : `EXCEPTION:${reportId}`;
+  const reportId = getExceptionReportNumber(report);
+  const lookupId = trimText(report.id) || reportId;
+  const qrValue = origin ? `${origin.replace(/\/$/, '')}/exception?id=${encodeURIComponent(lookupId)}` : `EXCEPTION:${reportId}`;
   const borrowed = report.borrowed_location
     ? `${report.borrowed_location} / ${report.borrowed_qty ?? ''}`
     : '';
