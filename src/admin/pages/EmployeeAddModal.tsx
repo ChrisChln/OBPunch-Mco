@@ -9,6 +9,7 @@ type EmployeeAddModalProps = {
   t: TranslateFn;
   themeMode: 'light' | 'dark';
   isLocked: boolean;
+  isSubmitting: boolean;
   employeeNewStaffId: string;
   setEmployeeNewStaffId: (value: string) => void;
   employeeNewName: string;
@@ -41,6 +42,7 @@ export default function EmployeeAddModal({
   t,
   themeMode,
   isLocked,
+  isSubmitting,
   employeeNewStaffId,
   setEmployeeNewStaffId,
   employeeNewName,
@@ -295,11 +297,11 @@ export default function EmployeeAddModal({
           </button>
           <button
             type="button"
-            disabled={isAddDisabled}
+            disabled={isAddDisabled || isSubmitting}
             onClick={() => void addEmployeeRow()}
             className={addBtnClass}
           >
-            {t('添加', 'Add')}
+            {isSubmitting ? t('添加中...', 'Adding...') : t('添加', 'Add')}
           </button>
         </div>
       </div>

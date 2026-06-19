@@ -2161,6 +2161,7 @@ export default function AdminAppPage() {
   const [employeeNewWorkAccount, setEmployeeNewWorkAccount] = useState('');
   const [employeeNewWorkPassword, setEmployeeNewWorkPassword] = useState('');
   const [employeeAddOpen, setEmployeeAddOpen] = useState(false);
+  const [employeeAddFeedback, setEmployeeAddFeedback] = useState<{ tone: 'pending' | 'success' | 'error'; message: string } | null>(null);
   const [employeeEditOpen, setEmployeeEditOpen] = useState(false);
   const [employeeEditOriginalStaffId, setEmployeeEditOriginalStaffId] = useState<string | null>(null);
   const [employeeEditStaffId, setEmployeeEditStaffId] = useState<string | null>(null);
@@ -5971,6 +5972,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setSchedulePunchPresenceWeekOffset(null);
     }
 
+    const mode = options?.mode ?? 'week';
     const sourceEmployees = options?.employeesOverride ?? employees;
     const staffSet = new Set(
       sourceEmployees
@@ -5978,7 +5980,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         .map((e) => normalizeStaffId(String(e.staff_id ?? '').trim()))
         .filter((staff): staff is string => Boolean(staff))
     );
-    if (staffSet.size === 0) {
+    if (staffSet.size === 0 && mode !== 'operational_day') {
       if (!isStale()) {
         setSchedulePunchPresenceKeys(new Set());
         setScheduleFirstInByStaffDayKey({});
@@ -5989,12 +5991,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
 
-    const mode = options?.mode ?? 'week';
     const dayMs = 24 * 60 * 60 * 1000;
     const found = new Set<string>();
     const firstInByDayKey: Record<string, string> = {};
     const operationalPunchesByStaffId: Record<string, Array<{ action: 'IN' | 'OUT'; created_at: string }>> = {};
-    const staffBatches = chunk(Array.from(staffSet), 120);
 
     if (mode === 'operational_day') {
       const now = new Date(serverTime);
@@ -6005,54 +6005,51 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       const dayIndex = (operationalStart.getDay() + 6) % 7;
 
-      for (const batch of staffBatches) {
-        const res = await fetchAllPagedRows<any>({
-          pageSize: 1000,
-          shouldStop: isStale,
-          fetchPage: async (from, to) =>
-            await supabase
-              .from('ob_punches')
-              .select('staff_id, action, created_at')
-              .in('staff_id', batch)
-              .gte('created_at', operationalStart.toISOString())
-              .lte('created_at', now.toISOString())
-              .order('created_at', { ascending: true })
-              .range(from, to)
-        });
+      const res = await fetchAllPagedRows<any>({
+        pageSize: 1000,
+        shouldStop: isStale,
+        fetchPage: async (from, to) =>
+          await supabase
+            .from('ob_punches')
+            .select('staff_id, action, created_at')
+            .gte('created_at', operationalStart.toISOString())
+            .lte('created_at', now.toISOString())
+            .order('created_at', { ascending: true })
+            .range(from, to)
+      });
 
-        if (res.error) {
-          if (!isStale()) {
-            if (!keepPreviousWhileLoading) {
-              setSchedulePunchPresenceKeys(new Set());
-              setScheduleFirstInByStaffDayKey({});
-              setHomePunchesByStaffId({});
-              setSchedulePunchPresenceReady(false);
-              setSchedulePunchPresenceWeekOffset(null);
-            }
+      if (res.error) {
+        if (!isStale()) {
+          if (!keepPreviousWhileLoading) {
+            setSchedulePunchPresenceKeys(new Set());
+            setScheduleFirstInByStaffDayKey({});
+            setHomePunchesByStaffId({});
+            setSchedulePunchPresenceReady(false);
+            setSchedulePunchPresenceWeekOffset(null);
           }
-          return;
         }
+        return;
+      }
 
-        for (const row of res.rows) {
-          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-          if (!staff || !staffSet.has(staff)) continue;
-          const at = new Date(String((row as any).created_at ?? ''));
-          if (Number.isNaN(at.getTime())) continue;
-          const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-          // Keep the home dashboard consistent with its visible punch list:
-          // exact-cutoff OUT events are hidden from display, so they should not
-          // independently make someone count as having punched for the day.
-          if (isExactOperationalCutoffOut(at.toISOString(), action)) continue;
-          found.add(`${staff}__${dayIndex}`);
-          const list = operationalPunchesByStaffId[staff] ?? [];
-          list.push({ action, created_at: at.toISOString() });
-          operationalPunchesByStaffId[staff] = list;
-          if (action === 'IN') {
-            const firstInKey = `${staff}__${dayIndex}`;
-            const prev = firstInByDayKey[firstInKey];
-            if (!prev || at.getTime() < new Date(prev).getTime()) {
-              firstInByDayKey[firstInKey] = at.toISOString();
-            }
+      for (const row of res.rows) {
+        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+        if (!staff || !isAttendanceQueryableStaffId(staff)) continue;
+        const at = new Date(String((row as any).created_at ?? ''));
+        if (Number.isNaN(at.getTime())) continue;
+        const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+        // Keep the home dashboard consistent with its visible punch list:
+        // exact-cutoff OUT events are hidden from display, so they should not
+        // independently make someone count as having punched for the day.
+        if (isExactOperationalCutoffOut(at.toISOString(), action)) continue;
+        found.add(`${staff}__${dayIndex}`);
+        const list = operationalPunchesByStaffId[staff] ?? [];
+        list.push({ action, created_at: at.toISOString() });
+        operationalPunchesByStaffId[staff] = list;
+        if (action === 'IN') {
+          const firstInKey = `${staff}__${dayIndex}`;
+          const prev = firstInByDayKey[firstInKey];
+          if (!prev || at.getTime() < new Date(prev).getTime()) {
+            firstInByDayKey[firstInKey] = at.toISOString();
           }
         }
       }
@@ -6078,6 +6075,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const weekStart = addDays(baseWeekStart, weekOffset * 7);
     const { start, end } = getDayRange(weekStart, 0, 7);
     const day0StartMs = start.getTime();
+    const staffBatches = chunk(Array.from(staffSet), 120);
 
     for (const batch of staffBatches) {
       const res = await fetchAllPagedRows<any>({
@@ -7281,12 +7279,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const addEmployeeRow = async () => {
+    const failAddEmployee = (message: string) => {
+      setEmployeesError(message);
+      setEmployeeAddFeedback({ tone: 'error', message });
+    };
     if (!employeesCanOperate) {
-      setEmployeesError(t('员工模块当前为只读。', 'Employees is read-only.'));
+      failAddEmployee(t('员工模块当前为只读。', 'Employees is read-only.'));
       return;
     }
     if (!supabase) {
-      setEmployeesError('缺少 Supabase 配置。');
+      failAddEmployee('缺少 Supabase 配置。');
       return;
     }
 
@@ -7295,7 +7297,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       ? normalizeStaffId(staffRaw)
       : createManualTemporaryStaffId(employees.map((row) => String(row.staff_id ?? '').trim()));
     if (!staff || (!isValidStaffIdValue(staff) && !isNewHirePlaceholderStaffId(staff))) {
-      setEmployeesError('员工ID格式不正确。');
+      failAddEmployee('员工ID格式不正确。');
       return;
     }
 
@@ -7309,45 +7311,51 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const workAccount = employeeNewWorkAccount.trim();
     const workPassword = resolveDefaultWorkPassword(workAccount, employeeNewWorkPassword.trim());
     if (!name) {
-      setEmployeesError('Name is required.');
+      failAddEmployee('Name is required.');
       return;
     }
     if (!agency) {
-      setEmployeesError('Agency is required.');
+      failAddEmployee('Agency is required.');
       return;
     }
     if (isScheduleOnlyAgency(agency)) {
-      setEmployeesError(t('JDL只能由系统自动创建。', 'JDL can only be created by the system.'));
+      failAddEmployee(t('JDL只能由系统自动创建。', 'JDL can only be created by the system.'));
       return;
     }
     if (!position) {
-      setEmployeesError('Position is required.');
+      failAddEmployee('Position is required.');
       return;
     }
     if (!shift) {
-      setEmployeesError('Shift is required.');
+      failAddEmployee('Shift is required.');
       return;
     }
     if (!label) {
-      setEmployeesError('Label is required.');
+      failAddEmployee('Label is required.');
       return;
     }
     const normalizedPos = normalizePositionKey(position);
     if (!normalizedPos) {
-      setEmployeesError(`Position 只能是：${activePositionNames.join(', ')}`);
+      failAddEmployee(`Position 只能是：${activePositionNames.join(', ')}`);
       return;
     }
     if (!canOperatePosition('employees', normalizedPos)) {
-      setEmployeesError(t('当前账号不能操作该 Position。', 'This account cannot operate this position.'));
+      failAddEmployee(t('当前账号不能操作该 Position。', 'This account cannot operate this position.'));
       return;
     }
     const resolvedShiftTime = resolveShiftStartTime(shift, normalizedPos, shiftTime);
 
-    await runLocked('employee_add', async () => {
+    if (busyRef.current) {
+      failAddEmployee(t('请等待当前操作完成后再添加员工。', 'Please wait for the current action to finish before adding an employee.'));
+      return;
+    }
+    setEmployeeAddFeedback({ tone: 'pending', message: t('正在添加员工...', 'Adding employee...') });
+    try {
+      await runLocked('employee_add', async () => {
       setEmployeesError(null);
 
       const mode = await resolveEmployeeColumnMode();
-      const payload =
+      let payload =
         mode === 'cased'
           ? {
               staff_id: staff,
@@ -7388,34 +7396,47 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         attemptUpsert = await supabase
           .from(EMPLOYEE_TABLE)
           .upsert([fallbackPayload as any], { onConflict: 'staff_id', ignoreDuplicates: false });
+        payload = fallbackPayload as typeof payload;
       }
 
       if (attemptUpsert.error) {
         const attemptInsert = await supabase.from(EMPLOYEE_TABLE).insert([payload as any]);
         if (attemptInsert.error) {
-          setEmployeesError(attemptInsert.error.message);
+          failAddEmployee(attemptInsert.error.message);
           return;
         }
       }
 
-      setStatus({ tone: 'success', message: `已添加/更新员工：${staff}` });
-      await writeAudit({
-        action: 'employee_upsert',
-        staffId: staff,
-        target: EMPLOYEE_TABLE,
-        payload: {
-          staff_id: staff,
-          name,
-          agency,
-          position: normalizedPos,
-          employment_type: employmentType,
-          shift,
-          shift_time: resolvedShiftTime,
-          label,
-          work_account: workAccount,
-          work_password: workPassword
-        }
-      });
+      const successMessage = t(`已添加/更新员工：${staff}`, `Employee added/updated: ${staff}`);
+      setStatus({ tone: 'success', message: successMessage });
+      setEmployeeAddFeedback({ tone: 'success', message: successMessage });
+      try {
+        await writeAudit({
+          action: 'employee_upsert',
+          staffId: staff,
+          target: EMPLOYEE_TABLE,
+          payload: {
+            staff_id: staff,
+            name,
+            agency,
+            position: normalizedPos,
+            employment_type: employmentType,
+            shift,
+            shift_time: resolvedShiftTime,
+            label,
+            work_account: workAccount,
+            work_password: workPassword
+          }
+        });
+      } catch (auditError: any) {
+        setStatus({
+          tone: 'error',
+          message: t(
+            `员工已保存，但审计记录失败：${String(auditError?.message ?? auditError ?? 'Unknown error')}`,
+            `Employee saved, but audit logging failed: ${String(auditError?.message ?? auditError ?? 'Unknown error')}`
+          )
+        });
+      }
       setEmployeeNewStaffId('');
       setEmployeeNewName('');
       setEmployeeNewAgency('');
@@ -7426,9 +7447,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setEmployeeNewLabel('');
       setEmployeeNewWorkAccount('');
       setEmployeeNewWorkPassword('');
-      setEmployeeAddOpen(false);
-      await fetchEmployees({ reset: true });
-    });
+      window.setTimeout(() => {
+        setEmployeeAddOpen(false);
+        setEmployeeAddFeedback(null);
+      }, 700);
+      try {
+        await fetchEmployees({ reset: true });
+      } catch (fetchError: any) {
+        setStatus({
+          tone: 'error',
+          message: t(
+            `员工已保存，但刷新列表失败：${String(fetchError?.message ?? fetchError ?? 'Unknown error')}`,
+            `Employee saved, but refresh failed: ${String(fetchError?.message ?? fetchError ?? 'Unknown error')}`
+          )
+        });
+      }
+      });
+    } catch (error: any) {
+      failAddEmployee(String(error?.message ?? error ?? t('添加员工失败。', 'Failed to add employee.')));
+    }
   };
 
   const deleteEmployeeRow = async (staffId: string) => {
@@ -8779,6 +8816,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
   const closeEmployeeAdd = () => {
     setEmployeeAddOpen(false);
+    setEmployeeAddFeedback(null);
     setEmployeeNewStaffId('');
     setEmployeeNewName('');
     setEmployeeNewAgency('');
@@ -15581,7 +15619,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff) continue;
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
-      const hasPunch = schedulePunchPresenceKeys.has(`${staff}__${homeOperationalDayIndex}`);
+      const hasPunch =
+        schedulePunchPresenceKeys.has(`${staff}__${homeOperationalDayIndex}`) ||
+        (homePunchesByStaffId[staff]?.length ?? 0) > 0;
       // 跳过没有排班也没有打卡的人
       if (!row && !hasPunch && !activeStaffSet.has(staff)) continue;
       // 如果排班不是工作状态，但没有打卡记录，也跳过
@@ -15611,6 +15651,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     homeOperationalDayIndex,
     employeeProfileByStaffId,
     employeeShiftByStaffId,
+    homePunchesByStaffId,
     schedulePunchPresenceKeys,
     scheduleVisiblePositionSet
   ]);
@@ -15624,6 +15665,60 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     return map;
   }, [employees]);
+
+  const homeWorkHoursByPositionShift = useMemo(() => {
+    const stats: Record<string, { early: number; late: number }> = {};
+    const capEndMs = new Date(serverTime).getTime();
+    if (!Number.isFinite(capEndMs)) return stats;
+
+    const getHours = (punches: Array<{ action: 'IN' | 'OUT'; created_at: string }>) => {
+      let totalMs = 0;
+      let inAtMs: number | null = null;
+      for (const punch of punches) {
+        const atMs = Date.parse(String(punch.created_at ?? ''));
+        if (!Number.isFinite(atMs)) continue;
+        if (punch.action === 'IN') {
+          inAtMs = atMs;
+          continue;
+        }
+        if (punch.action === 'OUT') {
+          if (inAtMs !== null && atMs > inAtMs) totalMs += atMs - inAtMs;
+          inAtMs = null;
+        }
+      }
+      if (inAtMs !== null && capEndMs > inAtMs) totalMs += capEndMs - inAtMs;
+      return totalMs / 3600000;
+    };
+
+    for (const [staffRaw, punchesRaw] of Object.entries(homePunchesByStaffId)) {
+      const staff = normalizeStaffId(String(staffRaw ?? '').trim());
+      if (!staff || !Array.isArray(punchesRaw) || punchesRaw.length === 0) continue;
+      const employee = homeEmployeeByStaffId.get(staff);
+      const profile = employeeProfileByStaffId.get(staff);
+      const agency = String(profile?.agency ?? employee?.agency ?? employee?.Agency ?? '').trim();
+      if (isScheduleOnlyAgency(agency)) continue;
+      const positionRaw = String(profile?.position ?? employee?.position ?? employee?.Position ?? '').trim();
+      const position = normalizePositionKey(positionRaw);
+      if (!position || !scheduleVisiblePositionSet.has(position)) continue;
+      const firstIn = punchesRaw.find((punch) => punch.action === 'IN')?.created_at ?? punchesRaw[0]?.created_at ?? '';
+      const shift = employeeShiftByStaffId[staff]?.shift || getShiftBucket(firstIn) || 'early';
+      if (shift !== 'early' && shift !== 'late') continue;
+      const hours = getHours(
+        [...punchesRaw].sort((a, b) => Date.parse(String(a.created_at ?? '')) - Date.parse(String(b.created_at ?? '')))
+      );
+      if (hours <= 0) continue;
+      const current = (stats[position] ??= { early: 0, late: 0 });
+      current[shift] += hours;
+    }
+    return stats;
+  }, [
+    homePunchesByStaffId,
+    serverTime,
+    homeEmployeeByStaffId,
+    employeeProfileByStaffId,
+    employeeShiftByStaffId,
+    scheduleVisiblePositionSet
+  ]);
 
   const homeBorrowedDeviceByStaffId = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -16807,7 +16902,7 @@ ${rowsToHtml(late)}
             />
           </main>
         ) : (
-          <div className="grid min-h-screen grid-rows-[64px_minmax(0,1fr)]">
+          <div className="grid h-screen max-h-screen overflow-hidden grid-rows-[64px_minmax(0,1fr)]">
             <AdminHeader
               t={t}
               isLocked={isLocked}
@@ -16828,7 +16923,7 @@ ${rowsToHtml(late)}
               onLogout={doLogout}
             />
 
-            <div className="flex min-h-[calc(100vh-64px)] flex-1">
+            <div className="flex min-h-0 flex-1">
               <AdminNav
                 page={page}
                 isLocked={isLocked}
@@ -16843,20 +16938,22 @@ ${rowsToHtml(late)}
 
               <main
                 className={[
-                  'flex-1 min-w-0',
+                  'flex-1 min-w-0 min-h-0',
                   themeMode === 'light'
-                    ? 'min-h-[calc(100vh-64px)] bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.12),transparent_28%),linear-gradient(180deg,rgba(245,247,255,0.95),rgba(242,245,255,0.98))] text-slate-900'
-                    : 'min-h-[calc(100vh-64px)] bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.14),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(139,92,246,0.12),transparent_26%),linear-gradient(180deg,rgba(7,10,16,0.98),rgba(10,14,22,0.98))] text-slate-100',
-                  'px-0 py-0'
+                    ? 'bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.12),transparent_28%),linear-gradient(180deg,rgba(245,247,255,0.95),rgba(242,245,255,0.98))] text-slate-900'
+                    : 'bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.14),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(139,92,246,0.12),transparent_26%),linear-gradient(180deg,rgba(7,10,16,0.98),rgba(10,14,22,0.98))] text-slate-100',
+                  page === 'employees' ? 'overflow-hidden' : 'overflow-y-auto overflow-x-hidden',
+                  'px-0 py-0 [scrollbar-gutter:stable]'
                 ].join(' ')}
               >
-                <div className="flex w-full flex-col gap-6">
+                <div className="flex h-full min-h-0 w-full flex-col gap-6">
 
             {page === 'home' && (
               <HomeDashboardPage
                 t={t}
                 themeMode={themeMode}
                 homeCardStats={homeCardStats}
+                homeWorkHoursByPositionShift={homeWorkHoursByPositionShift}
                 homeExpectedPositionSummaryCards={homeExpectedPositionSummaryCards}
                 getHomeCardToneClass={getHomeCardToneClass}
                 getHomeChipToneClass={getHomeChipToneClass}
@@ -18899,7 +18996,7 @@ ${rowsToHtml(late)}
             )}
 
             {page === 'employees' && (
-              <section className="flex min-h-[calc(100vh-64px)] flex-col px-4 py-5 sm:px-6 sm:py-8">
+              <section className="flex h-full min-h-0 flex-col overflow-hidden px-4 py-5 sm:px-6 sm:py-8">
                 <EmployeesToolbar
                   t={t}
                   themeMode={themeMode}
@@ -18938,11 +19035,33 @@ ${rowsToHtml(late)}
                   cycleScheduleLabelTone={cycleScheduleLabelTone}
                 />
 
+                {employeeAddFeedback ? (
+                  <div
+                    className={[
+                      'rounded-2xl border px-4 py-3 text-sm font-semibold',
+                      employeeAddFeedback.tone === 'success'
+                        ? themeMode === 'light'
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                          : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-100'
+                        : employeeAddFeedback.tone === 'error'
+                          ? themeMode === 'light'
+                            ? 'border-rose-200 bg-rose-50 text-rose-700'
+                            : 'border-rose-400/30 bg-rose-400/10 text-rose-100'
+                          : themeMode === 'light'
+                            ? 'border-sky-200 bg-sky-50 text-sky-700'
+                            : 'border-sky-400/30 bg-sky-400/10 text-sky-100'
+                    ].join(' ')}
+                  >
+                    {employeeAddFeedback.message}
+                  </div>
+                ) : null}
+
                 <EmployeeAddModal
                   t={t}
                   themeMode={themeMode}
                   open={employeeAddOpen}
                   isLocked={employeesReadOnly}
+                  isSubmitting={employeeAddFeedback?.tone === 'pending'}
                   employeeNewStaffId={employeeNewStaffId}
                   setEmployeeNewStaffId={setEmployeeNewStaffId}
                   employeeNewName={employeeNewName}
