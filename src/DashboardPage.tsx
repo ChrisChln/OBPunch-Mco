@@ -364,6 +364,14 @@ const chunkArray = <T,>(list: T[], size: number): T[][] => {
   return chunks;
 };
 
+const formatDashboardHours = (value: number) => {
+  const rounded = Math.round(Math.max(0, Number(value) || 0) * 100) / 100;
+  return rounded.toLocaleString('en-US', {
+    minimumFractionDigits: rounded % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2
+  });
+};
+
 const computeWorkHoursFromPunches = (punches: PunchRow[], capEnd: Date) => {
   if (!punches.length) return 0;
   const capEndMs = capEnd.getTime();
@@ -574,7 +582,7 @@ export default function DashboardPage() {
     };
   }, []);
   const [rows, setRows] = useState<DashboardRow[]>([]);
-  const [cardStatsByKey, setCardStatsByKey] = useState<Record<string, { expected: number; present: number; onClock: number; offWorked: number }>>({});
+  const [cardStatsByKey, setCardStatsByKey] = useState<Record<string, { expected: number; present: number; onClock: number; offWorked: number; workHours: number }>>({});
   const [dashboardPositionNames, setDashboardPositionNames] = useState<string[]>([...DEFAULT_POSITION_NAMES]);
   const [dashboardPositionDepartments, setDashboardPositionDepartments] = useState<Record<string, string>>({});
   const [cardPositions, setCardPositions] = useState<string[]>([...DEFAULT_DASHBOARD_CARD_POSITIONS]);
@@ -969,8 +977,18 @@ export default function DashboardPage() {
           restWorkedByKey.get(key)?.add(staffId);
         }
       }
-      const nextCardStatsByKey: Record<string, { expected: number; present: number; onClock: number; offWorked: number }> = {};
-      const observedCardPositions = [...staffByKey.keys(), ...restByKey.keys(), ...arrivedByKey.keys(), ...onClockByKey.keys(), ...restWorkedByKey.keys()]
+      const workHoursByKey = new Map<string, number>();
+      for (const [staffId, punches] of punchesByStaff.entries()) {
+        if (!activeEmployeeStaffIds.has(staffId) || !attendanceTrackedStaffIds.has(staffId)) continue;
+        const hours = computeWorkHoursFromPunches(punches, capEnd);
+        if (!Number.isFinite(hours) || hours <= 0) continue;
+        const keys = keysByStaff.get(staffId) ?? [];
+        for (const key of keys) {
+          workHoursByKey.set(key, (workHoursByKey.get(key) ?? 0) + hours);
+        }
+      }
+      const nextCardStatsByKey: Record<string, { expected: number; present: number; onClock: number; offWorked: number; workHours: number }> = {};
+      const observedCardPositions = [...staffByKey.keys(), ...restByKey.keys(), ...arrivedByKey.keys(), ...onClockByKey.keys(), ...restWorkedByKey.keys(), ...workHoursByKey.keys()]
         .map((key) => String(key.split(':')[1] ?? '').trim())
         .filter(Boolean);
       const orderedCardPositions = buildDashboardCardPositions(activePositionNames, observedCardPositions);
@@ -979,12 +997,12 @@ export default function DashboardPage() {
           const key = `${shift}:${position}`;
           const expectedIds = staffByKey.get(key) ?? new Set<string>();
           const arrivedIds = arrivedByKey.get(key) ?? new Set<string>();
-          const presentIds = new Set(Array.from(expectedIds).filter((staffId) => arrivedIds.has(staffId)));
           nextCardStatsByKey[key] = {
             expected: expectedIds.size,
-            present: presentIds.size,
+            present: arrivedIds.size,
             onClock: onClockByKey.get(key)?.size ?? 0,
-            offWorked: restWorkedByKey.get(key)?.size ?? 0
+            offWorked: restWorkedByKey.get(key)?.size ?? 0,
+            workHours: workHoursByKey.get(key) ?? 0
           };
         }
       }
@@ -1294,7 +1312,7 @@ export default function DashboardPage() {
       const digest = `${nextRows.length}|${nextRows
         .map(
           (r) =>
-            `${r.staff_id}:${r.name}:${r.agency}:${r.position}:${r.label}:${r.shift}:${r.attendance}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}:${r.schedule_state}:${r.work_account}:${r.temp_account_name}:${r.mistake_count_7d ?? 0}`
+            `${r.staff_id}:${r.name}:${r.agency}:${r.position}:${r.label}:${r.shift}:${r.attendance}:${r.work_hours_today}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}:${r.schedule_state}:${r.work_account}:${r.temp_account_name}:${r.mistake_count_7d ?? 0}`
         )
         .join(';')}`;
 
@@ -2064,7 +2082,7 @@ export default function DashboardPage() {
                   ].join(' ')}
                 >
                   <div className="flex items-end justify-between gap-4">
-                    <div>
+                    <div className="min-w-0">
                       <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">
                         {getDashboardDepartmentLabel(card.department)} {isMorning ? 'Morning' : 'Night'}
                       </div>
@@ -2084,6 +2102,12 @@ export default function DashboardPage() {
                         >
                           {card.expected > 0 ? `${ratio.toFixed(1)}% coverage` : '0.0% coverage'}
                         </span>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">Hours</div>
+                      <div className={['mt-2 text-2xl font-semibold leading-none', getAttendanceCardValueClass(tonePosition)].join(' ')}>
+                        {formatDashboardHours(card.workHours)}
                       </div>
                     </div>
                   </div>

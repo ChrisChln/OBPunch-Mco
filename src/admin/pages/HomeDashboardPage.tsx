@@ -38,6 +38,7 @@ type HomeDashboardPageProps = {
   t: TranslateFn;
   themeMode: 'light' | 'dark';
   homeCardStats: Record<string, { early: number; late: number; active: number }>;
+  homeWorkHoursByPositionShift: Record<string, { early: number; late: number }>;
   homeExpectedPositionSummaryCards: Array<{ position: string; early: number; late: number; total: number }>;
   getHomeCardToneClass: (value: string, toneMap?: Partial<Record<string, LabelToneKey>>) => string;
   getHomeChipToneClass: (value: string, toneMap?: Partial<Record<string, LabelToneKey>>) => string;
@@ -94,6 +95,36 @@ const isRowOnClock = (row: HomeRosterRow) => {
   if (row.attendance === 'Normal') return true;
   const punches = row.punches ?? [];
   return punches[punches.length - 1]?.action === 'IN';
+};
+
+const computeWorkHoursFromPunches = (punches: Array<{ action: 'IN' | 'OUT'; created_at: string }>, capEnd: Date) => {
+  if (!punches.length) return 0;
+  const capEndMs = capEnd.getTime();
+  if (!Number.isFinite(capEndMs)) return 0;
+  let totalMs = 0;
+  let currentInMs: number | null = null;
+  for (const punch of punches) {
+    const atMs = Date.parse(String(punch.created_at ?? ''));
+    if (!Number.isFinite(atMs)) continue;
+    if (punch.action === 'IN') {
+      currentInMs = atMs;
+      continue;
+    }
+    if (punch.action === 'OUT') {
+      if (currentInMs !== null && atMs > currentInMs) totalMs += atMs - currentInMs;
+      currentInMs = null;
+    }
+  }
+  if (currentInMs !== null && capEndMs > currentInMs) totalMs += capEndMs - currentInMs;
+  return totalMs / 3600000;
+};
+
+const formatDashboardHours = (value: number) => {
+  const rounded = Math.round(Math.max(0, Number(value) || 0) * 100) / 100;
+  return rounded.toLocaleString('en-US', {
+    minimumFractionDigits: rounded % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2
+  });
 };
 
 const formatShiftLabel = (value: string) => {
@@ -238,6 +269,7 @@ function HomeDashboardPage({
   t,
   themeMode: _themeMode,
   homeCardStats,
+  homeWorkHoursByPositionShift,
   homeExpectedPositionSummaryCards,
   getHomeCardToneClass: _getHomeCardToneClass,
   getHomeChipToneClass: _getHomeChipToneClass,
@@ -281,7 +313,7 @@ function HomeDashboardPage({
   );
 
   const homeAttendanceStats = useMemo(() => {
-    const rows = homeRosterRowsCurrent
+    const rowInputs = homeRosterRowsCurrent
       .map((row) => {
         const position = normalizePositionKey(row.position, homeDashboardPositionNames);
         const shift = normalizeShiftValue(row.shift);
@@ -293,12 +325,40 @@ function HomeDashboardPage({
           isExpected: row.attendance !== 'Off Worked',
           hasPunch: hasPunchLog(row),
           isOnClock: isRowOnClock(row),
-          attendance: row.attendance
+          attendance: row.attendance,
+          workHours: computeWorkHoursFromPunches(row.punches ?? [], new Date())
         };
       })
       .filter((row): row is NonNullable<typeof row> => Boolean(row));
-    return buildDashboardAttendanceStats(rows);
-  }, [homeRosterRowsCurrent, homeDashboardPositionNames]);
+    const stats = buildDashboardAttendanceStats(rowInputs);
+    for (const position of cardPositions) {
+      const live = homeCardStats[position];
+      if (!live) continue;
+      for (const shift of ['early', 'late'] as const) {
+        const key = `${shift}:${position}`;
+        const current = stats[key] ?? {
+          expected: summaryByPosition.get(position)?.[shift] ?? 0,
+          present: 0,
+          onClock: 0,
+          offWorked: 0,
+          workHours: 0
+        };
+        stats[key] = {
+          ...current,
+          present: Number(live[shift] ?? 0),
+          workHours: Number(homeWorkHoursByPositionShift[position]?.[shift] ?? current.workHours ?? 0)
+        };
+      }
+    }
+    return stats;
+  }, [
+    cardPositions,
+    homeCardStats,
+    homeWorkHoursByPositionShift,
+    homeRosterRowsCurrent,
+    homeDashboardPositionNames,
+    summaryByPosition
+  ]);
 
   const departmentCoverageCards = useMemo(
     () =>
@@ -458,13 +518,19 @@ function HomeDashboardPage({
                   ].join(' ')}
                 >
                   <div className="flex items-end justify-between gap-4">
-                    <div>
+                    <div className="min-w-0">
                       <div className={['text-[11px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>{getDashboardDepartmentLabel(card.department)} {isMorning ? 'Morning' : 'Night'}</div>
                       <div className="mt-3 flex items-end gap-3">
                         <span className={['text-3xl font-semibold tracking-[-0.03em]', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : isLight ? 'text-slate-800' : 'text-stone-50'].join(' ')}>{card.present}/{card.expected}</span>
                         <span className={['pb-1 text-sm font-semibold', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : isLight ? (ratio < 80 ? 'text-rose-500' : ratio >= 90 ? getAttendanceCardValueClassLight(tonePosition) : 'text-slate-500') : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? getAttendanceCardValueClass(tonePosition) : 'text-stone-300'].join(' ')}>
                           {card.expected > 0 ? `${ratio.toFixed(1)}% coverage` : '0.0% coverage'}
                         </span>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className={['text-[10px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>{t('总工时', 'Hours')}</div>
+                      <div className={['mt-2 text-2xl font-semibold leading-none', isLight ? getAttendanceCardValueClassLight(tonePosition) : getAttendanceCardValueClass(tonePosition)].join(' ')}>
+                        {formatDashboardHours(card.workHours)}
                       </div>
                     </div>
                   </div>
