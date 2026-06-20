@@ -28,6 +28,7 @@ const EXCEPTION_TABLE = 'ob_exception_reports';
 const MISTAKE_REPORT_TABLE = (process.env.VITE_MISTAKE_REPORT_TABLE as string | undefined) ?? 'ob_mistake_reports';
 const EMPLOYEE_TABLE = (process.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 const REPORT_NUMBER_SEQUENCE_WIDTH = 4;
+const REPORT_NUMBER_CREATE_ATTEMPT_LIMIT = 50;
 
 const createServiceSupabase = () =>
   supabaseUrl && supabaseServiceRoleKey
@@ -298,7 +299,7 @@ const handlePost = async (req: any, res: any, supabase: any) => {
 
   let lastError: any = null;
   let minimumSequence = 1;
-  for (let attempt = 0; attempt < 10; attempt += 1) {
+  for (let attempt = 0; attempt < REPORT_NUMBER_CREATE_ATTEMPT_LIMIT; attempt += 1) {
     const reportNumber = await getNextExceptionReportNumber(supabase, payload.report_date, minimumSequence);
     const result = await insertExceptionReport(supabase, { ...payload, report_number: reportNumber, status: inferExceptionStatus(body) });
     if (!result.error) {
