@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import BorderGlow from '../../components/reactBits/BorderGlow';
 import {
+  EXCEPTION_STATUS_LABELS,
   EXCEPTION_TYPE_LABELS,
   EXCEPTION_TYPES,
   buildExceptionPrintPayload,
@@ -24,8 +25,18 @@ type ExceptionsPageProps = {
   userEmail: string;
 };
 
-const statusOptions: Array<'all' | ExceptionStatus> = ['all', 'Open', 'Processing', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'];
+type ResponsibilityDecision = 'picker' | 'packer' | 'all' | 'no_responsibility';
+
+const statusOptions: Array<'all' | ExceptionStatus> = ['all', 'Open', 'Processing', 'Counted', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'];
 const typeOptions: Array<'all' | ExceptionType> = ['all', ...EXCEPTION_TYPES];
+
+const normalizeStaffId = (value: unknown) => String(value ?? '').trim().toUpperCase();
+
+const defaultResponsibilityDecision = (report: ExceptionReportRecord): ResponsibilityDecision => {
+  if (normalizeStaffId(report.picking_operator)) return 'picker';
+  if (normalizeStaffId(report.packing_rebin_operator)) return 'packer';
+  return 'no_responsibility';
+};
 
 const todayDate = () => new Date().toLocaleDateString('en-CA');
 
@@ -43,6 +54,13 @@ const statusCardTone: Record<ExceptionStatus, { backgroundColor: string; glowCol
     colors: ['#fde68a', '#fbbf24', '#f59e0b'],
     textClass: 'text-amber-50',
     badgeClass: 'border-amber-200/40 bg-amber-200/12 text-amber-100'
+  },
+  Counted: {
+    backgroundColor: '#083344',
+    glowColor: '187 92 69',
+    colors: ['#a5f3fc', '#22d3ee', '#0891b2'],
+    textClass: 'text-cyan-50',
+    badgeClass: 'border-cyan-200/40 bg-cyan-200/12 text-cyan-100'
   },
   'Pending Adjustment': {
     backgroundColor: '#312e81',
@@ -125,23 +143,11 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
   const [statusFilter, setStatusFilter] = useState<'all' | ExceptionStatus>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | ExceptionType>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [decision, setDecision] = useState<'responsible' | 'no_responsibility'>('responsible');
-  const [responsibleStaffId, setResponsibleStaffId] = useState('');
+  const [decision, setDecision] = useState<ResponsibilityDecision>('picker');
   const [resolutionNote, setResolutionNote] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ tone: 'success' | 'error' | 'idle'; text: string }>({ tone: 'idle', text: '' });
-
-  const employeeOptions = useMemo(
-    () =>
-      employees
-        .map((employee) => ({
-          staffId: String(employee.staff_id ?? '').trim().toUpperCase(),
-          label: `${String(employee.staff_id ?? '').trim().toUpperCase()} - ${String(employee.name ?? '').trim() || '-'}`
-        }))
-        .filter((employee) => employee.staffId),
-    [employees]
-  );
 
   const visibleRows = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -221,8 +227,17 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
   useEffect(() => {
     if (!selected) return;
     setResolutionNote(String(selected.resolution_note ?? ''));
-    setResponsibleStaffId(String(selected.responsible_staff_id ?? ''));
-    setDecision(selected.responsibility_result === 'no_responsibility' ? 'no_responsibility' : 'responsible');
+    const result = selected.responsibility_result;
+    if (result === 'picker' || result === 'packer' || result === 'all' || result === 'no_responsibility') {
+      setDecision(result);
+      return;
+    }
+    const responsibleStaff = normalizeStaffId(selected.responsible_staff_id);
+    const pickerStaff = normalizeStaffId(selected.picking_operator);
+    const packerStaff = normalizeStaffId(selected.packing_rebin_operator);
+    if (responsibleStaff && responsibleStaff === packerStaff) setDecision('packer');
+    else if (responsibleStaff && responsibleStaff === pickerStaff) setDecision('picker');
+    else setDecision(defaultResponsibilityDecision(selected));
   }, [selected?.id]);
 
   const closeSelected = async () => {
@@ -241,7 +256,6 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
           action: 'close',
           id: selected.id,
           responsibility_result: decision,
-          responsible_staff_id: responsibleStaffId,
           resolution_note: resolutionNote
         })
       });
@@ -315,7 +329,7 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
               ) : null}
             </div>
             <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.14em] shadow-[0_10px_26px_rgba(0,0,0,0.22)] backdrop-blur ${tone.badgeClass}`}>
-              {row.status}
+              {EXCEPTION_STATUS_LABELS[row.status]}
             </span>
           </div>
           <div className="mt-8 flex items-end justify-between gap-4 border-t border-slate-700/70 pt-4">
@@ -354,7 +368,7 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as 'all' | ExceptionStatus)} className={inputClass(isLight)}>
             {statusOptions.map((status) => (
               <option key={status} value={status}>
-                {status === 'all' ? 'All' : status}
+                {status === 'all' ? 'All' : EXCEPTION_STATUS_LABELS[status]}
               </option>
             ))}
           </select>
@@ -403,7 +417,7 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
                   <div className={['text-xs font-bold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Review</div>
                   <div className="mt-1 text-3xl font-black">#{selected.id}</div>
                 </div>
-                <span className={['rounded-full border px-3 py-1 text-xs font-black', isLight ? 'border-slate-200 bg-white' : 'border-slate-700/80 bg-slate-950/60'].join(' ')}>{selected.status}</span>
+                <span className={['rounded-full border px-3 py-1 text-xs font-black', isLight ? 'border-slate-200 bg-white' : 'border-slate-700/80 bg-slate-950/60'].join(' ')}>{EXCEPTION_STATUS_LABELS[selected.status]}</span>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
@@ -420,27 +434,18 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
                 <select
                   value={decision}
                   disabled={isLocked || isReadOnly || selected.status !== 'Resolved' || saving}
-                  onChange={(event) => setDecision(event.target.value as 'responsible' | 'no_responsibility')}
+                  onChange={(event) => setDecision(event.target.value as ResponsibilityDecision)}
                   className={[inputClass(isLight), 'w-full'].join(' ')}
                 >
-                  <option value="responsible">Responsible</option>
+                  <option value="picker" disabled={!selected.picking_operator}>
+                    Picker{selected.picking_operator ? ` - ${employeeName(employees, selected.picking_operator)}` : ''}
+                  </option>
+                  <option value="packer" disabled={!selected.packing_rebin_operator}>
+                    Packing/Rebin{selected.packing_rebin_operator ? ` - ${employeeName(employees, selected.packing_rebin_operator)}` : ''}
+                  </option>
+                  <option value="all" disabled={!selected.picking_operator && !selected.packing_rebin_operator}>All responsible</option>
                   <option value="no_responsibility">No responsibility</option>
                 </select>
-                {decision === 'responsible' ? (
-                  <select
-                    value={responsibleStaffId}
-                    disabled={isLocked || isReadOnly || selected.status !== 'Resolved' || saving}
-                    onChange={(event) => setResponsibleStaffId(event.target.value)}
-                    className={[inputClass(isLight), 'mt-3 w-full'].join(' ')}
-                  >
-                    <option value="">Select staff</option>
-                    {employeeOptions.map((employee) => (
-                      <option key={employee.staffId} value={employee.staffId}>
-                        {employee.label}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
                 <textarea
                   value={resolutionNote}
                   disabled={isLocked || isReadOnly || selected.status !== 'Resolved' || saving}

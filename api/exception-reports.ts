@@ -131,25 +131,46 @@ const getNextExceptionReportNumber = async (supabase: any, reportDate: string, m
 const isUniqueConstraintError = (error: any) =>
   String(error?.code ?? '') === '23505' || /duplicate key|unique/i.test(String(error?.message ?? ''));
 
-const isMissingItemRowsColumnError = (error: any) =>
-  String(error?.code ?? '') === 'PGRST204' &&
-  /item_rows/i.test(String(error?.message ?? error?.details ?? ''));
+const isMissingAtomicCreateFunctionError = (error: any) =>
+  ['42883', 'PGRST202'].includes(String(error?.code ?? '')) ||
+  /could not find.*create_exception_report_atomic|function.*create_exception_report_atomic.*does not exist/i.test(
+    String(error?.message ?? error?.details ?? '')
+  );
 
-const withoutItemRows = <T extends Record<string, unknown>>(payload: T) => {
-  const { item_rows: _itemRows, ...fallbackPayload } = payload;
-  return fallbackPayload;
+const isMissingOptionalExceptionColumnError = (error: any) =>
+  String(error?.code ?? '') === 'PGRST204' &&
+  /item_rows|extra_taken/i.test(String(error?.message ?? error?.details ?? ''));
+
+const withoutOptionalExceptionColumns = <T extends Record<string, unknown>>(payload: T, error: any) => {
+  const missing = String(error?.message ?? error?.details ?? '');
+  if (/item_rows/i.test(missing)) {
+    const { item_rows: _itemRows, ...nextPayload } = payload;
+    return nextPayload;
+  }
+  if (/extra_taken/i.test(missing)) {
+    const { extra_taken: _extraTaken, ...nextPayload } = payload;
+    return nextPayload;
+  }
+  return payload;
 };
 
 const insertExceptionReport = async (supabase: any, payload: Record<string, unknown>) => {
   const result = await supabase.from(EXCEPTION_TABLE).insert([payload]).select('*').single();
-  if (!isMissingItemRowsColumnError(result.error)) return result;
-  return supabase.from(EXCEPTION_TABLE).insert([withoutItemRows(payload)]).select('*').single();
+  if (!isMissingOptionalExceptionColumnError(result.error)) return result;
+  return supabase.from(EXCEPTION_TABLE).insert([withoutOptionalExceptionColumns(payload, result.error)]).select('*').single();
+};
+
+const insertExceptionReportAtomic = async (supabase: any, payload: Record<string, unknown>, status: string) => {
+  if (typeof supabase.rpc !== 'function') return null;
+  const result = await supabase.rpc('create_exception_report_atomic', { p_payload: { ...payload, status } });
+  if (isMissingAtomicCreateFunctionError(result.error)) return null;
+  return result;
 };
 
 const updateExceptionReport = async (supabase: any, id: string, payload: Record<string, unknown>) => {
   const result = await supabase.from(EXCEPTION_TABLE).update(payload).eq('id', id).select('*').single();
-  if (!isMissingItemRowsColumnError(result.error)) return result;
-  return supabase.from(EXCEPTION_TABLE).update(withoutItemRows(payload)).eq('id', id).select('*').single();
+  if (!isMissingOptionalExceptionColumnError(result.error)) return result;
+  return supabase.from(EXCEPTION_TABLE).update(withoutOptionalExceptionColumns(payload, result.error)).eq('id', id).select('*').single();
 };
 
 const ensureAdminAccess = async (req: any, res: any, serviceSupabase: any, required: 'view' | 'operate' = 'operate') => {
@@ -297,11 +318,22 @@ const handlePost = async (req: any, res: any, supabase: any) => {
     return;
   }
 
+  const status = inferExceptionStatus(body);
+  const atomicResult = await insertExceptionReportAtomic(supabase, payload, status);
+  if (atomicResult) {
+    if (atomicResult.error) {
+      res.status(500).json({ error: atomicResult.error.message });
+      return;
+    }
+    res.status(200).json({ row: atomicResult.data });
+    return;
+  }
+
   let lastError: any = null;
   let minimumSequence = 1;
   for (let attempt = 0; attempt < REPORT_NUMBER_CREATE_ATTEMPT_LIMIT; attempt += 1) {
     const reportNumber = await getNextExceptionReportNumber(supabase, payload.report_date, minimumSequence);
-    const result = await insertExceptionReport(supabase, { ...payload, report_number: reportNumber, status: inferExceptionStatus(body) });
+    const result = await insertExceptionReport(supabase, { ...payload, report_number: reportNumber, status });
     if (!result.error) {
       res.status(200).json({ row: result.data });
       return;
@@ -354,11 +386,12 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
     borrowed_location: String(valueFromBody('borrowed_location', currentRes.data.borrowed_location) ?? ''),
     borrowed_qty: valueFromBody('borrowed_qty', currentRes.data.borrowed_qty ?? ''),
     short_picked: Boolean(valueFromBody('short_picked', currentRes.data.short_picked)),
+    extra_taken: Boolean(valueFromBody('extra_taken', currentRes.data.extra_taken)),
     inventory_adjustment: Boolean(valueFromBody('inventory_adjustment', currentRes.data.inventory_adjustment)),
     submitted_by_lead_id: String(valueFromBody('submitted_by_lead_id', currentRes.data.submitted_by_lead_id) ?? ''),
     resolution_note: String(valueFromBody('resolution_note', currentRes.data.resolution_note) ?? '')
   } satisfies ExceptionReportInput;
-  const errors = validateExceptionReportInput(editedInput);
+  const errors = validateExceptionReportInput(editedInput, { requireCountByForQuantities: true });
   const editedPayload = buildExceptionUpdatePayload(editedInput);
   if (errors.length || !editedPayload) {
     res.status(400).json({ error: errors[0] ?? 'Invalid exception report.' });
@@ -386,8 +419,8 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
     updatePayload.processed_at = null;
     updatePayload.resolved_at = null;
   }
-  if (nextStatus === 'Processing') updatePayload.processed_at = new Date().toISOString();
-  if (nextStatus === 'Processing' || nextStatus === 'Pending Adjustment') updatePayload.resolved_at = null;
+  if (nextStatus === 'Processing' || nextStatus === 'Counted') updatePayload.processed_at = new Date().toISOString();
+  if (nextStatus === 'Processing' || nextStatus === 'Counted' || nextStatus === 'Pending Adjustment') updatePayload.resolved_at = null;
   if (nextStatus === 'Resolved') updatePayload.resolved_at = new Date().toISOString();
   if (nextStatus === 'Closed') {
     updatePayload.closed_at = new Date().toISOString();
@@ -419,7 +452,7 @@ const handleAdminClose = async (req: any, res: any, supabase: any, body: any) =>
   const id = String(body.id ?? '').trim();
   const responsibilityResult = String(body.responsibility_result ?? '').trim();
   const responsibleStaffId = String(body.responsible_staff_id ?? '').trim().toUpperCase();
-  if (!id || !['responsible', 'no_responsibility'].includes(responsibilityResult)) {
+  if (!id || !['picker', 'packer', 'all', 'responsible', 'no_responsibility'].includes(responsibilityResult)) {
     res.status(400).json({ error: 'A valid close decision is required.' });
     return;
   }
@@ -443,45 +476,70 @@ const handleAdminClose = async (req: any, res: any, supabase: any, body: any) =>
   }
 
   let mistakeReportId: number | string | null = currentRes.data.mistake_report_id ?? null;
-  if (responsibilityResult === 'responsible') {
+  const pickerStaffId = String(currentRes.data.picking_operator ?? '').trim().toUpperCase();
+  const packerStaffId = String(currentRes.data.packing_rebin_operator ?? '').trim().toUpperCase();
+  const selectedResponsibleStaffIds =
+    responsibilityResult === 'picker'
+      ? [pickerStaffId]
+      : responsibilityResult === 'packer'
+        ? [packerStaffId]
+        : responsibilityResult === 'all'
+          ? [pickerStaffId, packerStaffId]
+          : responsibilityResult === 'responsible'
+            ? [responsibleStaffId]
+            : [];
+  const targetStaffIds = Array.from(new Set(selectedResponsibleStaffIds.filter(Boolean)));
+  if (responsibilityResult !== 'no_responsibility' && targetStaffIds.length === 0) {
+    res.status(400).json({ error: 'Responsible staff was not found on this exception.' });
+    return;
+  }
+  if (responsibilityResult === 'responsible' && ![pickerStaffId, packerStaffId].includes(responsibleStaffId)) {
+    res.status(400).json({ error: 'Responsible staff must be the picker or packing/rebin operator.' });
+    return;
+  }
+
+  if (targetStaffIds.length) {
     if (mistakeReportId) {
       res.status(409).json({ error: 'Mistake has already been created for this exception.' });
       return;
     }
 
-    const employeeRes = await supabase
-      .from('ob_employees')
-      .select('staff_id, position')
-      .eq('staff_id', responsibleStaffId)
-      .limit(1)
-      .maybeSingle();
-    if (employeeRes.error) {
-      res.status(500).json({ error: employeeRes.error.message });
-      return;
-    }
-    if (!employeeRes.data?.staff_id) {
-      res.status(400).json({ error: 'Responsible staff was not found.' });
-      return;
+    const mistakeRows = [];
+    for (const staffId of targetStaffIds) {
+      const employeeRes = await supabase
+        .from('ob_employees')
+        .select('staff_id, position')
+        .eq('staff_id', staffId)
+        .limit(1)
+        .maybeSingle();
+      if (employeeRes.error) {
+        res.status(500).json({ error: employeeRes.error.message });
+        return;
+      }
+      if (!employeeRes.data?.staff_id) {
+        res.status(400).json({ error: 'Responsible staff was not found.' });
+        return;
+      }
+      const roleLabel = staffId === pickerStaffId ? 'Picker' : staffId === packerStaffId ? 'Packing/Rebin' : 'Responsible';
+      mistakeRows.push({
+        position: String(employeeRes.data.position ?? 'Exception'),
+        employee_staff_id: staffId,
+        reason: `Exception #${String(currentRes.data.report_number ?? id).trim()}: ${currentRes.data.exception_type} (${roleLabel})`,
+        reporter_staff_id: String(user.email ?? user.id ?? 'admin'),
+        operational_date: currentRes.data.report_date
+      });
     }
 
     const mistakeRes = await supabase
       .from(MISTAKE_REPORT_TABLE)
-      .insert([
-        {
-          position: String(employeeRes.data.position ?? 'Exception'),
-          employee_staff_id: responsibleStaffId,
-          reason: `Exception #${String(currentRes.data.report_number ?? id).trim()}: ${currentRes.data.exception_type}`,
-          reporter_staff_id: String(user.email ?? user.id ?? 'admin'),
-          operational_date: currentRes.data.report_date
-        }
-      ])
-      .select('id')
-      .single();
+      .insert(mistakeRows)
+      .select('id');
     if (mistakeRes.error) {
       res.status(500).json({ error: mistakeRes.error.message });
       return;
     }
-    mistakeReportId = mistakeRes.data?.id ?? null;
+    const mistakeData = Array.isArray(mistakeRes.data) ? mistakeRes.data : [mistakeRes.data].filter(Boolean);
+    mistakeReportId = mistakeData[0]?.id ?? null;
   }
 
   const result = await supabase
@@ -489,7 +547,7 @@ const handleAdminClose = async (req: any, res: any, supabase: any, body: any) =>
     .update({
       status: 'Closed',
       responsibility_result: responsibilityResult,
-      responsible_staff_id: responsibilityResult === 'responsible' ? responsibleStaffId : null,
+      responsible_staff_id: targetStaffIds.length === 1 ? targetStaffIds[0] : null,
       mistake_report_id: mistakeReportId,
       resolution_note: String(body.resolution_note ?? currentRes.data.resolution_note ?? '').trim() || null,
       closed_at: new Date().toISOString()
