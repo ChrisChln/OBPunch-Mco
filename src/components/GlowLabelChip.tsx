@@ -9,6 +9,7 @@ type GlowLabelChipProps = {
   className?: string;
   title?: string;
   static?: boolean;
+  glowSeed?: string;
 };
 
 const GLOW_THEME: Record<LabelToneKey, { glowColor: string; colors: [string, string, string] }> = {
@@ -81,7 +82,7 @@ export const getGlowToneForPunch = (value: string): LabelToneKey => {
   return 'slate';
 };
 
-export default function GlowLabelChip({ children, tone = 'slate', className = '', title, static: useStatic = false }: GlowLabelChipProps) {
+export default function GlowLabelChip({ children, tone = 'slate', className = '', title, static: useStatic = false, glowSeed }: GlowLabelChipProps) {
   const glowTheme = GLOW_THEME[tone] ?? GLOW_THEME.slate;
   if (useStatic) {
     return (
@@ -117,6 +118,7 @@ export default function GlowLabelChip({ children, tone = 'slate', className = ''
       rotateDuration={4200}
       colors={glowTheme.colors}
       fillOpacity={0.5}
+      glowSeed={glowSeed}
     >
       <span
         className={[

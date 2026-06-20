@@ -109,6 +109,9 @@ const parseExceptionReportSequence = (reportNumber: unknown, reportDate: string)
   return Number.isInteger(sequence) && sequence > 0 ? sequence : 0;
 };
 
+const getMaxExceptionReportSequence = (rows: Array<{ report_number?: unknown }> | null | undefined, reportDate: string) =>
+  Math.max(0, ...(rows ?? []).map((row) => parseExceptionReportSequence(row.report_number, reportDate)));
+
 const getNextExceptionReportNumber = async (supabase: any, reportDate: string, minimumSequence = 1) => {
   const prefix = reportDateKey(reportDate);
   const result = await supabase
@@ -117,10 +120,10 @@ const getNextExceptionReportNumber = async (supabase: any, reportDate: string, m
     .gte('report_number', `${prefix}${'0'.repeat(REPORT_NUMBER_SEQUENCE_WIDTH)}`)
     .lt('report_number', `${prefix}:`)
     .order('report_number', { ascending: false })
-    .limit(1);
+    .limit(2000);
 
   if (result.error) throw new Error(result.error.message);
-  const lastSequence = parseExceptionReportSequence(result.data?.[0]?.report_number, reportDate);
+  const lastSequence = getMaxExceptionReportSequence(result.data, reportDate);
   return buildExceptionReportNumber(reportDate, Math.max(lastSequence + 1, minimumSequence));
 };
 
