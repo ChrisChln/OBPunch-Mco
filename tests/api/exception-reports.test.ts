@@ -786,6 +786,151 @@ describe('api/exception-reports', () => {
     expect(updateException.mock.calls[0][0].status).toBe('Pending Adjustment');
   });
 
+  test('lead patch keeps matched stock shortage processing until a replenishment action is selected', async () => {
+    const updateException = vi.fn((payload: any) => ({
+      eq: () => ({
+        select: () => ({
+          single: async () => ({ data: { id: 9, status: 'Processing', ...payload }, error: null })
+        })
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return {
+          select: () => ({
+            eq: () => ({
+              single: async () => ({
+                data: {
+                  id: 9,
+                  ...baseBody,
+                  lead_pin: undefined,
+                  status: 'Processing',
+                  packing_rebin_operator: 'US500',
+                  borrowed_location: null,
+                  borrowed_qty: null,
+                  resolution_note: null
+                },
+                error: null
+              })
+            })
+          }),
+          update: updateException
+        };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler(
+      {
+        method: 'PATCH',
+        headers: {},
+        body: {
+          ...baseBody,
+          id: 9,
+          status: 'Resolved',
+          packing_rebin_operator: 'US500',
+          system_location_qty: 3,
+          actual_qty: 3,
+          extra_taken: false,
+          inventory_adjustment: false
+        }
+      },
+      res
+    );
+
+    expect(res.code).toBe(200);
+    expect(updateException.mock.calls[0][0].status).toBe('Processing');
+  });
+
+  test('lead patch requires inventory adjustment after extra taken replenishment', async () => {
+    const updateException = vi.fn((payload: any) => ({
+      eq: () => ({
+        select: () => ({
+          single: async () => ({ data: { id: 9, status: payload.status, ...payload }, error: null })
+        })
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return {
+          select: () => ({
+            eq: () => ({
+              single: async () => ({
+                data: {
+                  id: 9,
+                  ...baseBody,
+                  lead_pin: undefined,
+                  status: 'Processing',
+                  packing_rebin_operator: 'US500',
+                  borrowed_location: null,
+                  borrowed_qty: null,
+                  resolution_note: null
+                },
+                error: null
+              })
+            })
+          }),
+          update: updateException
+        };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const pendingRes = createRes();
+    await handler(
+      {
+        method: 'PATCH',
+        headers: {},
+        body: {
+          ...baseBody,
+          id: 9,
+          status: 'Resolved',
+          packing_rebin_operator: 'US500',
+          system_location_qty: 3,
+          actual_qty: 3,
+          extra_taken: true,
+          inventory_adjustment: false
+        }
+      },
+      pendingRes
+    );
+
+    const resolvedRes = createRes();
+    await handler(
+      {
+        method: 'PATCH',
+        headers: {},
+        body: {
+          ...baseBody,
+          id: 9,
+          status: 'Resolved',
+          packing_rebin_operator: 'US500',
+          system_location_qty: 3,
+          actual_qty: 3,
+          extra_taken: true,
+          inventory_adjustment: true
+        }
+      },
+      resolvedRes
+    );
+
+    expect(pendingRes.code).toBe(200);
+    expect(resolvedRes.code).toBe(200);
+    expect(updateException.mock.calls[0][0].status).toBe('Pending Adjustment');
+    expect(updateException.mock.calls[1][0].status).toBe('Resolved');
+  });
+
   test('admin list accepts Authorization header casing', async () => {
     const serviceSupabase = {
       auth: {

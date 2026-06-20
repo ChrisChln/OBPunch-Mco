@@ -11,6 +11,7 @@ import {
   buildExceptionPrintPayload,
   formatExceptionType,
   getExceptionReportNumber,
+  hasExceptionReplenishmentCandidate,
   inferExceptionStatus,
   splitExceptionReportItemRows,
   type ExceptionReportInput,
@@ -205,23 +206,7 @@ const formatQueueDateTime = (value: unknown) => {
   });
 };
 
-const hasShortageRows = (form: Pick<ExceptionReportInput, 'system_location_qty' | 'actual_qty' | 'item_rows'>) => {
-  const itemRows = buildExceptionEditItemRows({
-    product_barcode: '',
-    picked_location: '',
-    picking_container: '',
-    system_location_qty: form.system_location_qty,
-    actual_qty: form.actual_qty,
-    item_rows: form.item_rows
-  });
-  return itemRows.some((row) => {
-    const systemQty = Number(String(row.systemQty ?? '').trim());
-    const actualQty = Number(String(row.actualQty ?? '').trim());
-    return Number.isFinite(systemQty) && Number.isFinite(actualQty) && systemQty > actualQty;
-  });
-};
-
-const shouldShowFollowUp = (form: Pick<ExceptionReportInput, 'system_location_qty' | 'actual_qty' | 'item_rows'>) => {
+const shouldShowFollowUp = (form: Pick<ExceptionReportInput, 'exception_type' | 'system_location_qty' | 'actual_qty' | 'item_rows'>) => {
   const itemRows = buildExceptionEditItemRows({
     product_barcode: '',
     picked_location: '',
@@ -233,7 +218,7 @@ const shouldShowFollowUp = (form: Pick<ExceptionReportInput, 'system_location_qt
   return itemRows.some((row) => {
     const value = String(row.actualQty ?? '').trim();
     return value !== '' && Number(value) === 0;
-  }) || hasShortageRows(form);
+  }) || hasExceptionReplenishmentCandidate(form);
 };
 
 const shouldShowShortPicked = (form: Pick<ExceptionReportInput, 'exception_type' | 'actual_qty' | 'item_rows'>) => {
@@ -662,7 +647,7 @@ function NewExceptionModal({
   const inferredStatus = status === 'Closed' ? 'Closed' : inferExceptionStatus(form);
   const showFollowUp = shouldShowFollowUp(form);
   const showShortPicked = shouldShowShortPicked(form);
-  const showExtraTaken = hasShortageRows(form);
+  const showExtraTaken = hasExceptionReplenishmentCandidate(form);
   const adjustmentEnabled = Boolean(form.extra_taken || String(form.borrowed_location ?? '').trim());
   const showOtherReason = form.exception_type === 'other';
 

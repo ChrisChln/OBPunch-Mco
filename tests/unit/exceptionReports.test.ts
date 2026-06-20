@@ -209,25 +209,32 @@ describe('exceptionReports', () => {
     expect(validateExceptionReportInput({ ...validInput(), inventory_adjustment: true })).toContain(
       'Inventory adjustment requires borrowed inventory or extra taken.'
     );
-    expect(validateExceptionReportInput({ ...validInput(), system_location_qty: 2, actual_qty: 1, extra_taken: true, inventory_adjustment: true })).toEqual([]);
-    expect(validateExceptionReportInput({ ...validInput(), system_location_qty: 1, actual_qty: 1, extra_taken: true })).toContain(
-      'Extra taken can only be marked when system qty is greater than actual qty.'
+    expect(validateExceptionReportInput({ ...validInput(), system_location_qty: 3, actual_qty: 3, extra_taken: true, inventory_adjustment: true })).toEqual([]);
+    expect(validateExceptionReportInput({ ...validInput(), system_location_qty: 3, actual_qty: 2, extra_taken: true, inventory_adjustment: true })).toEqual([]);
+    expect(validateExceptionReportInput({ ...validInput(), system_location_qty: 3, actual_qty: 4, extra_taken: true })).toContain(
+      'Extra taken can only be marked when counted stock still needs replenishment.'
     );
   });
 
   test('infers status from completed workflow fields', () => {
     const baseCreated = { ...validInput(), system_location_qty: '', actual_qty: '', picking_operator: '', packing_rebin_operator: '', count_by: '' };
     const processingComplete = { ...validInput(), packing_rebin_operator: 'US400' };
+    const pickerShortPickEvidence = { ...processingComplete, system_location_qty: 3, actual_qty: 4 };
+    const matchedStockStillNeedsReplenishment = { ...processingComplete, system_location_qty: 3, actual_qty: 3 };
+    const shortStockStillNeedsReplenishment = { ...processingComplete, system_location_qty: 3, actual_qty: 2 };
     expect(inferExceptionStatus(baseCreated)).toBe('Open');
     expect(inferExceptionStatus({ ...validInput(), actual_qty: '', packing_rebin_operator: '', count_by: '' })).toBe('Processing');
     expect(inferExceptionStatus({ ...validInput(), packing_rebin_operator: '', count_by: '' })).toBe('Counted');
     expect(inferExceptionStatus({ ...validInput(), packing_rebin_operator: 'US400', count_by: '' })).toBe('Counted');
-    expect(inferExceptionStatus(processingComplete)).toBe('Resolved');
+    expect(inferExceptionStatus(pickerShortPickEvidence)).toBe('Resolved');
+    expect(inferExceptionStatus(matchedStockStillNeedsReplenishment)).toBe('Processing');
+    expect(inferExceptionStatus(shortStockStillNeedsReplenishment)).toBe('Processing');
     expect(inferExceptionStatus({ ...processingComplete, borrowed_location: 'B02', borrowed_qty: '2', inventory_adjustment: false })).toBe('Pending Adjustment');
     expect(inferExceptionStatus({ ...processingComplete, borrowed_location: 'B02', borrowed_qty: '2', inventory_adjustment: true })).toBe('Resolved');
-    expect(inferExceptionStatus({ ...processingComplete, system_location_qty: 2, actual_qty: 1, extra_taken: true, inventory_adjustment: false })).toBe('Pending Adjustment');
-    expect(inferExceptionStatus({ ...processingComplete, system_location_qty: 2, actual_qty: 1, extra_taken: true, inventory_adjustment: true })).toBe('Resolved');
-    expect(inferExceptionStatus({ ...processingComplete, system_location_qty: 2, actual_qty: 1, extra_taken: false, inventory_adjustment: false })).toBe('Resolved');
+    expect(inferExceptionStatus({ ...matchedStockStillNeedsReplenishment, extra_taken: true, inventory_adjustment: false })).toBe('Pending Adjustment');
+    expect(inferExceptionStatus({ ...matchedStockStillNeedsReplenishment, extra_taken: true, inventory_adjustment: true })).toBe('Resolved');
+    expect(inferExceptionStatus({ ...shortStockStillNeedsReplenishment, extra_taken: true, inventory_adjustment: false })).toBe('Pending Adjustment');
+    expect(inferExceptionStatus({ ...shortStockStillNeedsReplenishment, extra_taken: true, inventory_adjustment: true })).toBe('Resolved');
     expect(inferExceptionStatus({ ...processingComplete, exception_type: 'short_shipment', actual_qty: 0, short_picked: true })).toBe('Short Picked');
     expect(inferExceptionStatus({ ...validInput(), exception_type: 'short_shipment', actual_qty: 0, packing_rebin_operator: '', count_by: '', short_picked: true })).toBe('Short Picked');
   });
