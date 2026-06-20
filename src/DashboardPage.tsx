@@ -2302,12 +2302,20 @@ export default function DashboardPage() {
                         {row.name || '-'}
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
-                        <GlowLabelChip tone={getGlowToneForPosition(row.position)} className="min-w-[54px] uppercase tracking-[0.12em]">
+                        <GlowLabelChip
+                          tone={getGlowToneForPosition(row.position)}
+                          className="min-w-[54px] uppercase tracking-[0.12em]"
+                          glowSeed={`${row.staff_id}:position:${row.position || '-'}`}
+                        >
                           {row.position || '-'}
                         </GlowLabelChip>
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
-                        <GlowLabelChip tone={(labelToneMap[String(row.label || '').trim().toLowerCase()] ?? 'slate')} className="min-w-[34px]">
+                        <GlowLabelChip
+                          tone={(labelToneMap[String(row.label || '').trim().toLowerCase()] ?? 'slate')}
+                          className="min-w-[34px]"
+                          glowSeed={`${row.staff_id}:label:${row.label || '-'}`}
+                        >
                           {row.label || '-'}
                         </GlowLabelChip>
                       </td>
@@ -2352,7 +2360,11 @@ export default function DashboardPage() {
                         )}
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
-                        <GlowLabelChip tone={getGlowToneForShift(row.display_shift || row.shift)} className="min-w-[68px]">
+                        <GlowLabelChip
+                          tone={getGlowToneForShift(row.display_shift || row.shift)}
+                          className="min-w-[68px]"
+                          glowSeed={`${row.staff_id}:shift:${row.display_shift || row.shift || '-'}`}
+                        >
                           {formatShiftLabel(row.display_shift || row.shift)}
                         </GlowLabelChip>
                       </td>
@@ -2409,6 +2421,7 @@ export default function DashboardPage() {
                                   tone={isShortGapPunch ? 'rose' : getGlowToneForPunch(punch.action)}
                                   className="min-w-[72px] py-1 text-[11px]"
                                   title={formatDateTime(punch.created_at)}
+                                  glowSeed={`${row.staff_id}:punch:${punch.id || punch.created_at || idx}:${idx}`}
                                 >
                                   {`${punch.action} ${formatTimeOnly(punch.created_at)}`}
                                 </GlowLabelChip>
@@ -2759,7 +2772,11 @@ export default function DashboardPage() {
                       {punchDetailRows.map((punch, idx) => (
                         <tr key={punch.id || `${punch.staff_id}-${punch.created_at}-${idx}`} className="border-t border-white/5 odd:bg-white/[0.03]">
                           <td className="px-3 py-2 align-top">
-                            <GlowLabelChip tone={getGlowToneForPunch(punch.action)} className="min-w-[72px] py-1 text-xs">
+                            <GlowLabelChip
+                              tone={getGlowToneForPunch(punch.action)}
+                              className="min-w-[72px] py-1 text-xs"
+                              glowSeed={`${punch.staff_id}:detail-punch:${punch.id || punch.created_at || idx}:${idx}`}
+                            >
                               {punch.action}
                             </GlowLabelChip>
                           </td>

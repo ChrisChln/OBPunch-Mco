@@ -260,6 +260,49 @@ describe('api/exception-reports', () => {
     expect(res.body.row.status).toBe('Open');
   });
 
+  test('creates the eleventh exception report for the same date', async () => {
+    const select = vi.fn(() => ({
+      gte: () => ({
+        lt: () => ({
+          order: () => ({
+            limit: async () => ({
+              data: Array.from({ length: 10 }, (_, index) => ({
+                report_number: `20260618${String(index + 1).padStart(4, '0')}`
+              })),
+              error: null
+            })
+          })
+        })
+      })
+    }));
+    const insert = vi.fn((rows: any[]) => ({
+      select: () => ({
+        single: async () => ({
+          data: { id: 11, status: 'Open', ...rows[0] },
+          error: null
+        })
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return { insert, select };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'POST', headers: {}, body: baseBody }, res);
+
+    expect(res.code).toBe(200);
+    expect(insert.mock.calls[0][0][0].report_number).toBe('202606180011');
+    expect(res.body.row.report_number).toBe('202606180011');
+  });
+
   test('creates Other exception reports with a required reason', async () => {
     const select = vi.fn(() => ({
       gte: () => ({
