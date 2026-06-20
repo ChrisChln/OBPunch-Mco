@@ -75,6 +75,19 @@ describe('exceptionReports', () => {
     expect(payload?.actual_qty).toBeNull();
   });
 
+  test('requires Count By only when counted quantities are edited', () => {
+    const input: ExceptionReportInput = {
+      ...validInput(),
+      count_by: ''
+    };
+
+    expect(validateExceptionReportInput(input)).toEqual([]);
+    expect(validateExceptionReportInput(input, { requireCountByForQuantities: true })).toContain(
+      'Count By USID is required when counted quantities are entered.'
+    );
+    expect(validateExceptionReportInput({ ...input, system_location_qty: '', actual_qty: '' }, { requireCountByForQuantities: true })).toEqual([]);
+  });
+
   test('requires a reason for Other exception type', () => {
     expect(
       validateExceptionReportInput({
@@ -102,6 +115,7 @@ describe('exceptionReports', () => {
       picking_operator: ' us100 ',
       borrowed_location: ' b02 ',
       borrowed_qty: '2',
+      extra_taken: true,
       resolution_note: ' checked '
     });
 
@@ -109,6 +123,7 @@ describe('exceptionReports', () => {
     expect(payload?.picking_operator).toBe('US100');
     expect(payload?.borrowed_location).toBe('B02');
     expect(payload?.borrowed_qty).toBe(2);
+    expect(payload?.extra_taken).toBe(true);
     expect(payload?.resolution_note).toBe('checked');
   });
 
@@ -169,9 +184,12 @@ describe('exceptionReports', () => {
 
   test('allows only forward status transitions', () => {
     expect(isValidExceptionTransition('Open', 'Processing')).toBe(true);
+    expect(isValidExceptionTransition('Processing', 'Counted')).toBe(true);
     expect(isValidExceptionTransition('Processing', 'Resolved')).toBe(true);
     expect(isValidExceptionTransition('Processing', 'Short Picked')).toBe(true);
     expect(isValidExceptionTransition('Processing', 'Pending Adjustment')).toBe(true);
+    expect(isValidExceptionTransition('Counted', 'Pending Adjustment')).toBe(true);
+    expect(isValidExceptionTransition('Counted', 'Resolved')).toBe(true);
     expect(isValidExceptionTransition('Pending Adjustment', 'Resolved')).toBe(true);
     expect(isValidExceptionTransition('Resolved', 'Closed')).toBe(true);
     expect(isValidExceptionTransition('Open', 'Closed')).toBe(true);
@@ -187,14 +205,29 @@ describe('exceptionReports', () => {
     expect(needsInventoryAdjustment({ borrowed_location: '', inventory_adjustment: false })).toBe(false);
   });
 
+  test('validates inventory adjustment scope for extra taken', () => {
+    expect(validateExceptionReportInput({ ...validInput(), inventory_adjustment: true })).toContain(
+      'Inventory adjustment requires borrowed inventory or extra taken.'
+    );
+    expect(validateExceptionReportInput({ ...validInput(), system_location_qty: 2, actual_qty: 1, extra_taken: true, inventory_adjustment: true })).toEqual([]);
+    expect(validateExceptionReportInput({ ...validInput(), system_location_qty: 1, actual_qty: 1, extra_taken: true })).toContain(
+      'Extra taken can only be marked when system qty is greater than actual qty.'
+    );
+  });
+
   test('infers status from completed workflow fields', () => {
     const baseCreated = { ...validInput(), system_location_qty: '', actual_qty: '', picking_operator: '', packing_rebin_operator: '', count_by: '' };
     const processingComplete = { ...validInput(), packing_rebin_operator: 'US400' };
     expect(inferExceptionStatus(baseCreated)).toBe('Open');
-    expect(inferExceptionStatus({ ...validInput(), packing_rebin_operator: '', count_by: '' })).toBe('Processing');
+    expect(inferExceptionStatus({ ...validInput(), actual_qty: '', packing_rebin_operator: '', count_by: '' })).toBe('Processing');
+    expect(inferExceptionStatus({ ...validInput(), packing_rebin_operator: '', count_by: '' })).toBe('Counted');
+    expect(inferExceptionStatus({ ...validInput(), packing_rebin_operator: 'US400', count_by: '' })).toBe('Counted');
     expect(inferExceptionStatus(processingComplete)).toBe('Resolved');
     expect(inferExceptionStatus({ ...processingComplete, borrowed_location: 'B02', borrowed_qty: '2', inventory_adjustment: false })).toBe('Pending Adjustment');
     expect(inferExceptionStatus({ ...processingComplete, borrowed_location: 'B02', borrowed_qty: '2', inventory_adjustment: true })).toBe('Resolved');
+    expect(inferExceptionStatus({ ...processingComplete, system_location_qty: 2, actual_qty: 1, extra_taken: true, inventory_adjustment: false })).toBe('Pending Adjustment');
+    expect(inferExceptionStatus({ ...processingComplete, system_location_qty: 2, actual_qty: 1, extra_taken: true, inventory_adjustment: true })).toBe('Resolved');
+    expect(inferExceptionStatus({ ...processingComplete, system_location_qty: 2, actual_qty: 1, extra_taken: false, inventory_adjustment: false })).toBe('Resolved');
     expect(inferExceptionStatus({ ...processingComplete, exception_type: 'short_shipment', actual_qty: 0, short_picked: true })).toBe('Short Picked');
     expect(inferExceptionStatus({ ...validInput(), exception_type: 'short_shipment', actual_qty: 0, packing_rebin_operator: '', count_by: '', short_picked: true })).toBe('Short Picked');
   });

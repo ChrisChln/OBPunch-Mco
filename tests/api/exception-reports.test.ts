@@ -107,7 +107,94 @@ describe('api/exception-reports', () => {
     expect(insert.mock.calls[0][0][0].item_rows).toEqual([
       { product_barcode: 'SKU123', picked_location: 'A01', system_location_qty: 5, actual_qty: 4 }
     ]);
-    expect(res.body.row.status).toBe('Processing');
+    expect(res.body.row.status).toBe('Counted');
+  });
+
+  test('creates exception reports through atomic database rpc when available', async () => {
+    const rpc = vi.fn(async (name: string, params: any) => ({
+      data: {
+        id: 10,
+        ...params.p_payload,
+        report_number: '202606180011'
+      },
+      error: null
+    }));
+    const insert = vi.fn();
+    const select = vi.fn();
+    const serviceSupabase = {
+      rpc,
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return { insert, select };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'POST', headers: {}, body: baseBody }, res);
+
+    expect(res.code).toBe(200);
+    expect(rpc).toHaveBeenCalledWith('create_exception_report_atomic', {
+      p_payload: expect.objectContaining({
+        report_date: '2026-06-18',
+        product_barcode: 'SKU123',
+        status: 'Counted'
+      })
+    });
+    expect(insert).not.toHaveBeenCalled();
+    expect(select).not.toHaveBeenCalled();
+    expect(res.body.row.report_number).toBe('202606180011');
+  });
+
+  test('falls back to compatible insert when atomic database rpc is not deployed yet', async () => {
+    const rpc = vi.fn(async () => ({
+      data: null,
+      error: {
+        code: 'PGRST202',
+        message: 'Could not find the function public.create_exception_report_atomic(p_payload) in the schema cache'
+      }
+    }));
+    const select = vi.fn(() => ({
+      gte: () => ({
+        lt: () => ({
+          order: () => ({
+            limit: async () => ({ data: [{ report_number: '202606180011' }], error: null })
+          })
+        })
+      })
+    }));
+    const insert = vi.fn((rows: any[]) => ({
+      select: () => ({
+        single: async () => ({
+          data: { id: 11, status: 'Open', ...rows[0] },
+          error: null
+        })
+      })
+    }));
+    const serviceSupabase = {
+      rpc,
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return { insert, select };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'POST', headers: {}, body: baseBody }, res);
+
+    expect(res.code).toBe(200);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(insert.mock.calls[0][0][0].report_number).toBe('202606180012');
+    expect(res.body.row.report_number).toBe('202606180012');
   });
 
   test('increments report number after stale duplicate sequence read', async () => {
@@ -201,7 +288,7 @@ describe('api/exception-reports', () => {
     expect(insert).toHaveBeenCalledTimes(2);
     expect(insert.mock.calls[0][0][0].item_rows).toBeDefined();
     expect(insert.mock.calls[1][0][0].item_rows).toBeUndefined();
-    expect(res.body.row.status).toBe('Processing');
+    expect(res.body.row.status).toBe('Counted');
   });
 
   test('creates minimal exception reports with blank optional fields', async () => {
@@ -584,6 +671,60 @@ describe('api/exception-reports', () => {
     expect(updateException.mock.calls[0][0].actual_qty).toBeNull();
   });
 
+  test('lead patch requires count by when counted quantities are entered', async () => {
+    const updateException = vi.fn();
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return {
+          select: () => ({
+            eq: () => ({
+              single: async () => ({
+                data: {
+                  id: 9,
+                  ...baseBody,
+                  lead_pin: undefined,
+                  status: 'Processing',
+                  count_by: '',
+                  borrowed_location: null,
+                  borrowed_qty: null,
+                  resolution_note: null
+                },
+                error: null
+              })
+            })
+          }),
+          update: updateException
+        };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler(
+      {
+        method: 'PATCH',
+        headers: {},
+        body: {
+          ...baseBody,
+          id: 9,
+          count_by: '',
+          system_location_qty: 4,
+          actual_qty: 0
+        }
+      },
+      res
+    );
+
+    expect(res.code).toBe(400);
+    expect(String(res.body?.error ?? '')).toContain('Count By USID is required');
+    expect(updateException).not.toHaveBeenCalled();
+  });
+
   test('lead patch ignores manual resolved status until borrowed inventory is adjusted', async () => {
     const updateException = vi.fn((payload: any) => ({
       eq: () => ({
@@ -758,9 +899,7 @@ describe('api/exception-reports', () => {
 
   test('admin close creates one mistake report', async () => {
     const mistakeInsert = vi.fn(() => ({
-      select: () => ({
-        single: async () => ({ data: { id: 77 }, error: null })
-      })
+      select: async () => ({ data: [{ id: 77 }], error: null })
     }));
     const updateException = vi.fn((payload: any) => ({
       eq: () => ({
@@ -786,6 +925,8 @@ describe('api/exception-reports', () => {
                     status: 'Resolved',
                     report_date: '2026-06-18',
                     exception_type: 'short_pick',
+                    picking_operator: 'US500',
+                    packing_rebin_operator: 'US501',
                     mistake_report_id: null,
                     resolution_note: ''
                   },
@@ -833,7 +974,7 @@ describe('api/exception-reports', () => {
       {
         method: 'PATCH',
         headers: { authorization: 'Bearer token' },
-        body: { action: 'close', id: 5, responsibility_result: 'responsible', responsible_staff_id: 'US500' }
+        body: { action: 'close', id: 5, responsibility_result: 'picker' }
       },
       res
     );
@@ -841,6 +982,98 @@ describe('api/exception-reports', () => {
     expect(res.code).toBe(200);
     expect(mistakeInsert).toHaveBeenCalledTimes(1);
     expect(mistakeInsert.mock.calls[0][0][0].reason).toContain('Exception #202606180011');
+    expect(mistakeInsert.mock.calls[0][0][0].reason).toContain('Picker');
+    expect(mistakeInsert.mock.calls[0][0][0].employee_staff_id).toBe('US500');
     expect(updateException.mock.calls[0][0].mistake_report_id).toBe(77);
+  });
+
+  test('admin close creates picker and packer mistakes when all are responsible', async () => {
+    const mistakeInsert = vi.fn(() => ({
+      select: async () => ({ data: [{ id: 81 }, { id: 82 }], error: null })
+    }));
+    const updateException = vi.fn((payload: any) => ({
+      eq: () => ({
+        select: () => ({
+          single: async () => ({ data: { id: 6, status: 'Closed', ...payload }, error: null })
+        })
+      })
+    }));
+
+    const serviceSupabase = {
+      auth: {
+        getUser: async () => ({ data: { user: { id: 'u1', email: 'admin@example.com' } }, error: null })
+      },
+      from: (table: string) => {
+        if (table === 'ob_exception_reports') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: {
+                    id: 6,
+                    report_number: '202606180012',
+                    status: 'Resolved',
+                    report_date: '2026-06-18',
+                    exception_type: 'wrong_pick',
+                    picking_operator: 'US500',
+                    packing_rebin_operator: 'US501',
+                    mistake_report_id: null,
+                    resolution_note: ''
+                  },
+                  error: null
+                })
+              })
+            }),
+            update: updateException
+          };
+        }
+        if (table === 'ob_employees') {
+          return {
+            select: () => ({
+              eq: (column: string, staffId: string) => ({
+                limit: () => ({
+                  maybeSingle: async () => ({ data: { staff_id: staffId, position: staffId === 'US500' ? 'Pick' : 'Pack' }, error: null })
+                })
+              })
+            })
+          };
+        }
+        if (table === 'ob_mistake_reports') return { insert: mistakeInsert };
+        throw new Error(`Unexpected table ${table}`);
+      }
+    };
+    const userSupabase = {
+      rpc: async () => ({
+        data: {
+          user_id: 'u1',
+          role: 'level2',
+          is_active: true,
+          modules: [{ module_key: 'exceptions', access_level: 'operate' }]
+        },
+        error: null
+      })
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: (_url: string, key: string) => (key === 'service-role' ? serviceSupabase : userSupabase)
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler(
+      {
+        method: 'PATCH',
+        headers: { authorization: 'Bearer token' },
+        body: { action: 'close', id: 6, responsibility_result: 'all' }
+      },
+      res
+    );
+
+    expect(res.code).toBe(200);
+    expect(mistakeInsert).toHaveBeenCalledTimes(1);
+    expect(mistakeInsert.mock.calls[0][0].map((row: any) => row.employee_staff_id)).toEqual(['US500', 'US501']);
+    expect(updateException.mock.calls[0][0].responsibility_result).toBe('all');
+    expect(updateException.mock.calls[0][0].responsible_staff_id).toBeNull();
+    expect(updateException.mock.calls[0][0].mistake_report_id).toBe(81);
   });
 });

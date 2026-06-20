@@ -6,6 +6,7 @@ import { compactLooseSearchText, matchesLooseSearch, normalizeLooseSearchText } 
 import {
   EXCEPTION_TYPE_LABELS,
   EXCEPTION_TYPES,
+  EXCEPTION_STATUS_LABELS,
   buildExceptionEditItemRows,
   buildExceptionPrintPayload,
   formatExceptionType,
@@ -56,6 +57,7 @@ const emptyForm = (leadId = ''): ExceptionReportInput => ({
   borrowed_location: '',
   borrowed_qty: '',
   short_picked: false,
+  extra_taken: false,
   inventory_adjustment: false,
   submitted_by_lead_id: leadId,
   lead_pin: '',
@@ -78,13 +80,14 @@ const formFromRecord = (row: ExceptionReportRecord, leadPin: string): ExceptionR
   borrowed_location: row.borrowed_location ?? '',
   borrowed_qty: row.borrowed_qty === null || row.borrowed_qty === undefined ? '' : String(row.borrowed_qty),
   short_picked: Boolean(row.short_picked),
+  extra_taken: Boolean(row.extra_taken),
   inventory_adjustment: row.inventory_adjustment,
   submitted_by_lead_id: row.submitted_by_lead_id,
   lead_pin: leadPin,
   resolution_note: row.resolution_note ?? ''
 });
 
-const statusOrder: ExceptionStatus[] = ['Open', 'Processing', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'];
+const statusOrder: ExceptionStatus[] = ['Open', 'Processing', 'Counted', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'];
 
 const statusCardTone: Record<ExceptionStatus, { backgroundColor: string; glowColor: string; colors: string[]; textClass: string; badgeClass: string }> = {
   Open: {
@@ -100,6 +103,13 @@ const statusCardTone: Record<ExceptionStatus, { backgroundColor: string; glowCol
     colors: ['#fde68a', '#fbbf24', '#f59e0b'],
     textClass: 'text-amber-50',
     badgeClass: 'border-amber-200/40 bg-amber-200/12 text-amber-100'
+  },
+  Counted: {
+    backgroundColor: '#083344',
+    glowColor: '187 92 69',
+    colors: ['#a5f3fc', '#22d3ee', '#0891b2'],
+    textClass: 'text-cyan-50',
+    badgeClass: 'border-cyan-200/40 bg-cyan-200/12 text-cyan-100'
   },
   'Pending Adjustment': {
     backgroundColor: '#312e81',
@@ -195,19 +205,35 @@ const formatQueueDateTime = (value: unknown) => {
   });
 };
 
-const shouldShowFollowUp = (form: Pick<ExceptionReportInput, 'actual_qty' | 'item_rows'>) => {
+const hasShortageRows = (form: Pick<ExceptionReportInput, 'system_location_qty' | 'actual_qty' | 'item_rows'>) => {
   const itemRows = buildExceptionEditItemRows({
     product_barcode: '',
     picked_location: '',
     picking_container: '',
-    system_location_qty: '',
+    system_location_qty: form.system_location_qty,
+    actual_qty: form.actual_qty,
+    item_rows: form.item_rows
+  });
+  return itemRows.some((row) => {
+    const systemQty = Number(String(row.systemQty ?? '').trim());
+    const actualQty = Number(String(row.actualQty ?? '').trim());
+    return Number.isFinite(systemQty) && Number.isFinite(actualQty) && systemQty > actualQty;
+  });
+};
+
+const shouldShowFollowUp = (form: Pick<ExceptionReportInput, 'system_location_qty' | 'actual_qty' | 'item_rows'>) => {
+  const itemRows = buildExceptionEditItemRows({
+    product_barcode: '',
+    picked_location: '',
+    picking_container: '',
+    system_location_qty: form.system_location_qty,
     actual_qty: form.actual_qty,
     item_rows: form.item_rows
   });
   return itemRows.some((row) => {
     const value = String(row.actualQty ?? '').trim();
     return value !== '' && Number(value) === 0;
-  });
+  }) || hasShortageRows(form);
 };
 
 const shouldShowShortPicked = (form: Pick<ExceptionReportInput, 'exception_type' | 'actual_qty' | 'item_rows'>) => {
@@ -225,17 +251,24 @@ const shouldShowShortPicked = (form: Pick<ExceptionReportInput, 'exception_type'
   });
 };
 
-const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInput =>
-  shouldShowFollowUp(form) || form.exception_type === 'other'
-    ? form
-    : {
-        ...form,
-        borrowed_location: '',
-        borrowed_qty: '',
-        short_picked: false,
-        inventory_adjustment: false,
-        resolution_note: ''
-      };
+const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInput => {
+  if (shouldShowFollowUp(form)) {
+    const needsAdjustment = Boolean(String(form.borrowed_location ?? '').trim()) || Boolean(form.extra_taken);
+    return {
+      ...form,
+      inventory_adjustment: needsAdjustment ? form.inventory_adjustment : false
+    };
+  }
+  return {
+    ...form,
+    borrowed_location: '',
+    borrowed_qty: '',
+    short_picked: false,
+    extra_taken: false,
+    inventory_adjustment: false,
+    resolution_note: form.exception_type === 'other' ? form.resolution_note : ''
+  };
+};
 
 const toNullableNumber = (value: unknown) => {
   if (value === null || value === undefined || value === '') return null;
@@ -629,6 +662,8 @@ function NewExceptionModal({
   const inferredStatus = status === 'Closed' ? 'Closed' : inferExceptionStatus(form);
   const showFollowUp = shouldShowFollowUp(form);
   const showShortPicked = shouldShowShortPicked(form);
+  const showExtraTaken = hasShortageRows(form);
+  const adjustmentEnabled = Boolean(form.extra_taken || String(form.borrowed_location ?? '').trim());
   const showOtherReason = form.exception_type === 'other';
 
   return (
@@ -650,7 +685,7 @@ function NewExceptionModal({
             <div className="grid gap-3 sm:grid-cols-2">
               {mode === 'edit' && status ? (
                 <Field label="Status">
-                  <div className={`${inputClass} flex items-center`}>{inferredStatus}</div>
+                  <div className={`${inputClass} flex items-center`}>{EXCEPTION_STATUS_LABELS[inferredStatus]}</div>
                 </Field>
               ) : null}
               <Field label="Exception Type">
@@ -699,7 +734,7 @@ function NewExceptionModal({
                       onChange={(event) =>
                         onChange(
                           event.target.checked
-                            ? { short_picked: true, borrowed_location: '', borrowed_qty: '', inventory_adjustment: false }
+                            ? { short_picked: true, extra_taken: false, borrowed_location: '', borrowed_qty: '', inventory_adjustment: false }
                             : { short_picked: false }
                         )
                       }
@@ -716,6 +751,42 @@ function NewExceptionModal({
                         className={[
                           'absolute left-1 top-1 h-5 w-5 rounded-full shadow-lg transition',
                           form.short_picked ? 'translate-x-5 bg-orange-200' : 'translate-x-0 bg-slate-400'
+                        ].join(' ')}
+                      />
+                    </span>
+                  </div>
+                </Field>
+              ) : null}
+              {showExtraTaken ? (
+                <Field label="Extra Taken">
+                  <div className="flex h-11 w-full items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 transition focus-within:border-cyan-300/60 focus-within:ring-4 focus-within:ring-cyan-300/10">
+                    <span className={['text-sm font-black', form.extra_taken ? 'text-cyan-100' : 'text-slate-300'].join(' ')}>
+                      {form.extra_taken ? 'Yes' : 'No'}
+                    </span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      checked={Boolean(form.extra_taken)}
+                      onChange={(event) =>
+                        onChange(
+                          event.target.checked
+                            ? { extra_taken: true, short_picked: false }
+                            : { extra_taken: false, inventory_adjustment: form.borrowed_location ? form.inventory_adjustment : false }
+                        )
+                      }
+                      className="sr-only"
+                    />
+                    <span
+                      aria-hidden="true"
+                      className={[
+                        'relative h-7 w-12 shrink-0 rounded-full border transition',
+                        form.extra_taken ? 'border-cyan-300/40 bg-cyan-300/25' : 'border-slate-700/70 bg-slate-800'
+                      ].join(' ')}
+                    >
+                      <span
+                        className={[
+                          'absolute left-1 top-1 h-5 w-5 rounded-full shadow-lg transition',
+                          form.extra_taken ? 'translate-x-5 bg-cyan-200' : 'translate-x-0 bg-slate-400'
                         ].join(' ')}
                       />
                     </span>
@@ -741,15 +812,15 @@ function NewExceptionModal({
                 />
               </Field>
               <Field label="Inventory Adjustment">
-                <div className={['flex h-11 w-full items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 transition focus-within:border-emerald-300/60 focus-within:ring-4 focus-within:ring-emerald-300/10', form.short_picked ? 'opacity-50' : ''].join(' ')}>
-                  <span className={['text-sm font-black', form.inventory_adjustment ? 'text-emerald-100' : 'text-slate-300'].join(' ')}>
-                    {form.inventory_adjustment ? 'Yes' : 'No'}
+                <div className={['flex h-11 w-full items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 transition focus-within:border-emerald-300/60 focus-within:ring-4 focus-within:ring-emerald-300/10', form.short_picked || !adjustmentEnabled ? 'opacity-50' : ''].join(' ')}>
+                  <span className={['text-sm font-black', form.inventory_adjustment && adjustmentEnabled ? 'text-emerald-100' : 'text-slate-300'].join(' ')}>
+                    {form.inventory_adjustment && adjustmentEnabled ? 'Yes' : 'No'}
                   </span>
                   <input
                     type="checkbox"
                     role="switch"
-                    checked={form.inventory_adjustment}
-                    disabled={Boolean(form.short_picked)}
+                    checked={form.inventory_adjustment && adjustmentEnabled}
+                    disabled={Boolean(form.short_picked) || !adjustmentEnabled}
                     onChange={(event) => onChange({ inventory_adjustment: event.target.checked })}
                     className="sr-only"
                   />
@@ -1184,7 +1255,7 @@ export default function ExceptionPage() {
             <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as 'all' | ExceptionStatus)} className={`${inputClass} !w-52 shrink-0`}>
               <option value="all">All</option>
               {statusOrder.map((status) => (
-                <option key={status} value={status}>{status}</option>
+                <option key={status} value={status}>{EXCEPTION_STATUS_LABELS[status]}</option>
               ))}
             </select>
             <button type="button" disabled={loading} onClick={() => void Promise.all([loadPresentEmployees(), loadRows()])} className="h-11 shrink-0 cursor-pointer rounded-2xl border border-slate-700/70 bg-[#080d18]/70 px-4 text-sm font-black text-white transition hover:border-slate-500/80 hover:bg-slate-900/80 disabled:opacity-50">
@@ -1265,7 +1336,7 @@ export default function ExceptionPage() {
                             ) : null}
                           </div>
                           <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.14em] shadow-[0_10px_26px_rgba(0,0,0,0.22)] backdrop-blur ${tone.badgeClass}`}>
-                            {row.status}
+                            {EXCEPTION_STATUS_LABELS[row.status]}
                           </span>
                         </div>
                         <div className="mt-8 flex items-end justify-between gap-4 border-t border-slate-700/70 pt-4">

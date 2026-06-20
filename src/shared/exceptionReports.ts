@@ -14,19 +14,20 @@ export const formatExceptionType = (value: unknown) => {
   return normalized ? EXCEPTION_TYPE_LABELS[normalized] : '';
 };
 
-export const EXCEPTION_STATUSES = ['Open', 'Processing', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'] as const;
+export const EXCEPTION_STATUSES = ['Open', 'Processing', 'Counted', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'] as const;
 export type ExceptionStatus = (typeof EXCEPTION_STATUSES)[number];
 
 export const EXCEPTION_STATUS_LABELS: Record<ExceptionStatus, string> = {
   Open: '已创建',
   Processing: '处理中',
+  Counted: '已盘点',
   'Pending Adjustment': '待调整',
   'Short Picked': '已短拣',
   Resolved: '已处理',
   Closed: '取消'
 };
 
-export type ResponsibilityResult = 'pending' | 'responsible' | 'no_responsibility';
+export type ResponsibilityResult = 'pending' | 'responsible' | 'picker' | 'packer' | 'all' | 'no_responsibility';
 
 export type ExceptionReportInput = {
   report_date: string;
@@ -44,6 +45,7 @@ export type ExceptionReportInput = {
   borrowed_location?: string | null;
   borrowed_qty?: number | string | null;
   short_picked?: boolean;
+  extra_taken?: boolean;
   inventory_adjustment: boolean;
   submitted_by_lead_id: string;
   lead_pin?: string;
@@ -225,10 +227,10 @@ export const isValidExceptionTransition = (from: ExceptionStatus, to: ExceptionS
   if (from === to) return true;
   if (to === 'Closed') return true;
   if (from === 'Closed' && to === 'Open') return true;
-  if (from === 'Processing' && to === 'Resolved') return true;
-  if (from === 'Processing' && to === 'Short Picked') return true;
+  if (from === 'Processing' && (to === 'Counted' || to === 'Pending Adjustment' || to === 'Short Picked' || to === 'Resolved')) return true;
+  if (from === 'Counted' && (to === 'Pending Adjustment' || to === 'Short Picked' || to === 'Resolved')) return true;
   if (from === 'Pending Adjustment' && to === 'Resolved') return true;
-  const order: ExceptionStatus[] = ['Open', 'Processing', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'];
+  const order: ExceptionStatus[] = ['Open', 'Processing', 'Counted', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'];
   const fromIndex = order.indexOf(from);
   const toIndex = order.indexOf(to);
   return toIndex === fromIndex + 1;
@@ -236,6 +238,15 @@ export const isValidExceptionTransition = (from: ExceptionStatus, to: ExceptionS
 
 export const needsInventoryAdjustment = (input: Pick<ExceptionReportInput, 'borrowed_location' | 'inventory_adjustment'>) =>
   Boolean(trimText(input.borrowed_location)) && !Boolean(input.inventory_adjustment);
+
+const hasShortageItemRow = (input: ExceptionItemRowSource) =>
+  buildExceptionEditItemRows(input)
+    .filter(itemRowHasValue)
+    .some((row) => {
+      const systemQty = parseNonNegativeNumber(row.systemQty);
+      const actualQty = parseNonNegativeNumber(row.actualQty);
+      return systemQty !== null && actualQty !== null && systemQty > actualQty;
+    });
 
 const hasText = (value: unknown) => Boolean(trimText(value));
 
@@ -264,6 +275,7 @@ export const inferExceptionStatus = (
     | 'borrowed_location'
     | 'borrowed_qty'
     | 'short_picked'
+    | 'extra_taken'
     | 'inventory_adjustment'
   >
 ): Exclude<ExceptionStatus, 'Closed'> => {
@@ -279,18 +291,15 @@ export const inferExceptionStatus = (
     buildExceptionEditItemRows(input).some((row) => hasText(row.actualQty) && Number(row.actualQty) === 0);
   if (isShortPickZero && input.short_picked) return 'Short Picked';
 
-  const hasCompleteProcessingData =
-    hasCompleteItemProcessing(input) &&
-    hasText(input.picking_operator) &&
-    hasText(input.packing_rebin_operator) &&
-    hasText(input.count_by);
-  if (!hasCompleteProcessingData) return 'Processing';
+  const hasCompleteItemData = hasCompleteItemProcessing(input);
+  if (!hasCompleteItemData) return 'Processing';
+  if (!hasText(input.picking_operator) || !hasText(input.packing_rebin_operator) || !hasText(input.count_by)) return 'Counted';
 
   const borrowedLocation = hasText(input.borrowed_location);
   const borrowedQty = hasText(input.borrowed_qty);
-  if (borrowedLocation || borrowedQty) {
-    return borrowedLocation && borrowedQty && input.inventory_adjustment ? 'Resolved' : 'Pending Adjustment';
-  }
+  const needsExtraTakenAdjustment = hasShortageItemRow(input) && Boolean(input.extra_taken);
+  if (borrowedLocation || borrowedQty) return borrowedLocation && borrowedQty && input.inventory_adjustment ? 'Resolved' : 'Pending Adjustment';
+  if (needsExtraTakenAdjustment) return input.inventory_adjustment ? 'Resolved' : 'Pending Adjustment';
   if (isShortPickZero) return 'Processing';
 
   return 'Resolved';
@@ -303,7 +312,11 @@ export const parseNonNegativeNumber = (value: unknown): number | null => {
   return next;
 };
 
-export const validateExceptionReportInput = (input: ExceptionReportInput): string[] => {
+type ExceptionReportValidationOptions = {
+  requireCountByForQuantities?: boolean;
+};
+
+export const validateExceptionReportInput = (input: ExceptionReportInput, options: ExceptionReportValidationOptions = {}): string[] => {
   const errors: string[] = [];
   const editRows = buildExceptionEditItemRows(input).filter(itemRowHasValue);
   if (!DATE_ONLY_PATTERN.test(trimText(input.report_date))) errors.push('Date must use YYYY-MM-DD.');
@@ -314,11 +327,16 @@ export const validateExceptionReportInput = (input: ExceptionReportInput): strin
   if (!trimText(input.picking_list_number)) errors.push('Picking list number is required.');
   if (editRows.some((row) => trimText(row.systemQty) && parseNonNegativeNumber(row.systemQty) === null)) errors.push('System location qty must be a non-negative number.');
   if (editRows.some((row) => trimText(row.actualQty) && parseNonNegativeNumber(row.actualQty) === null)) errors.push('Actual qty must be a non-negative number.');
+  if (options.requireCountByForQuantities && editRows.some((row) => trimText(row.systemQty) || trimText(row.actualQty)) && !trimText(input.count_by)) {
+    errors.push('Count By USID is required when counted quantities are entered.');
+  }
 
   const borrowedLocation = trimText(input.borrowed_location);
   const borrowedQty = parseNonNegativeNumber(input.borrowed_qty);
   if (borrowedLocation && borrowedQty === null) errors.push('Borrowed qty is required when borrowed location is filled.');
   if (!borrowedLocation && trimText(input.borrowed_qty)) errors.push('Borrowed location is required when borrowed qty is filled.');
+  if (input.extra_taken && !hasShortageItemRow(input)) errors.push('Extra taken can only be marked when system qty is greater than actual qty.');
+  if (input.inventory_adjustment && !borrowedLocation && !input.extra_taken) errors.push('Inventory adjustment requires borrowed inventory or extra taken.');
   return errors;
 };
 
@@ -331,6 +349,11 @@ export const buildExceptionInsertPayload = (input: ExceptionReportInput) => {
   const borrowedLocation = trimText(input.borrowed_location);
   const borrowedQty = borrowedLocation ? parseNonNegativeNumber(input.borrowed_qty) : null;
   const shortPicked = Boolean(input.short_picked) && exceptionType === 'short_shipment' && itemRows.some((row) => row.actual_qty === 0);
+  const extraTaken = Boolean(input.extra_taken) && itemRows.some((row) => {
+    const systemQty = parseNonNegativeNumber(row.system_location_qty);
+    const actualQty = parseNonNegativeNumber(row.actual_qty);
+    return systemQty !== null && actualQty !== null && systemQty > actualQty;
+  });
 
   return {
     report_date: trimText(input.report_date),
@@ -348,6 +371,7 @@ export const buildExceptionInsertPayload = (input: ExceptionReportInput) => {
     borrowed_location: borrowedLocation ? borrowedLocation.toUpperCase() : null,
     borrowed_qty: borrowedQty,
     short_picked: shortPicked,
+    extra_taken: extraTaken,
     inventory_adjustment: Boolean(input.inventory_adjustment),
     submitted_by_lead_id: trimText(input.submitted_by_lead_id).toUpperCase(),
     resolution_note: trimText(input.resolution_note) || null
