@@ -303,6 +303,66 @@ describe('api/exception-reports', () => {
     expect(res.body.row.report_number).toBe('202606180011');
   });
 
+  test('keeps trying until the eleventh report number after stale empty sequence reads', async () => {
+    const select = vi.fn(() => ({
+      gte: () => ({
+        lt: () => ({
+          order: () => ({
+            limit: async () => ({ data: [], error: null })
+          })
+        })
+      })
+    }));
+    const insert = vi.fn((rows: any[]) => ({
+      select: () => ({
+        single: async () => {
+          const sequence = Number(String(rows[0].report_number).slice('20260618'.length));
+          if (sequence <= 10) {
+            return {
+              data: null,
+              error: {
+                code: '23505',
+                message: 'duplicate key value violates unique constraint "ob_exception_reports_report_number_key"'
+              }
+            };
+          }
+          return { data: { id: 12, status: 'Open', ...rows[0] }, error: null };
+        }
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return { insert, select };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'POST', headers: {}, body: baseBody }, res);
+
+    expect(res.code).toBe(200);
+    expect(insert).toHaveBeenCalledTimes(11);
+    expect(insert.mock.calls.map((call) => call[0][0].report_number)).toEqual([
+      '202606180001',
+      '202606180002',
+      '202606180003',
+      '202606180004',
+      '202606180005',
+      '202606180006',
+      '202606180007',
+      '202606180008',
+      '202606180009',
+      '202606180010',
+      '202606180011'
+    ]);
+    expect(res.body.row.report_number).toBe('202606180011');
+  });
+
   test('creates Other exception reports with a required reason', async () => {
     const select = vi.fn(() => ({
       gte: () => ({
