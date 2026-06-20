@@ -239,13 +239,28 @@ export const isValidExceptionTransition = (from: ExceptionStatus, to: ExceptionS
 export const needsInventoryAdjustment = (input: Pick<ExceptionReportInput, 'borrowed_location' | 'inventory_adjustment'>) =>
   Boolean(trimText(input.borrowed_location)) && !Boolean(input.inventory_adjustment);
 
-const hasShortageItemRow = (input: ExceptionItemRowSource) =>
+const isShortageExceptionType = (value: unknown) => {
+  const exceptionType = normalizeExceptionType(value);
+  return exceptionType === 'short_pick' || exceptionType === 'short_shipment';
+};
+
+export const hasPickerShortPickEvidence = (input: ExceptionItemRowSource) =>
   buildExceptionEditItemRows(input)
     .filter(itemRowHasValue)
     .some((row) => {
       const systemQty = parseNonNegativeNumber(row.systemQty);
       const actualQty = parseNonNegativeNumber(row.actualQty);
-      return systemQty !== null && actualQty !== null && systemQty > actualQty;
+      return systemQty !== null && actualQty !== null && actualQty > systemQty;
+    });
+
+export const hasExceptionReplenishmentCandidate = (input: ExceptionItemRowSource & Pick<ExceptionReportInput, 'exception_type'>) =>
+  isShortageExceptionType(input.exception_type) &&
+  buildExceptionEditItemRows(input)
+    .filter(itemRowHasValue)
+    .some((row) => {
+      const systemQty = parseNonNegativeNumber(row.systemQty);
+      const actualQty = parseNonNegativeNumber(row.actualQty);
+      return systemQty !== null && actualQty !== null && actualQty <= systemQty;
     });
 
 const hasText = (value: unknown) => Boolean(trimText(value));
@@ -297,9 +312,12 @@ export const inferExceptionStatus = (
 
   const borrowedLocation = hasText(input.borrowed_location);
   const borrowedQty = hasText(input.borrowed_qty);
-  const needsExtraTakenAdjustment = hasShortageItemRow(input) && Boolean(input.extra_taken);
+  const needsReplenishmentAction = hasExceptionReplenishmentCandidate(input);
+  const needsExtraTakenAdjustment = needsReplenishmentAction && Boolean(input.extra_taken);
   if (borrowedLocation || borrowedQty) return borrowedLocation && borrowedQty && input.inventory_adjustment ? 'Resolved' : 'Pending Adjustment';
   if (needsExtraTakenAdjustment) return input.inventory_adjustment ? 'Resolved' : 'Pending Adjustment';
+  if (needsReplenishmentAction) return 'Processing';
+  if (hasPickerShortPickEvidence(input)) return 'Resolved';
   if (isShortPickZero) return 'Processing';
 
   return 'Resolved';
@@ -335,7 +353,7 @@ export const validateExceptionReportInput = (input: ExceptionReportInput, option
   const borrowedQty = parseNonNegativeNumber(input.borrowed_qty);
   if (borrowedLocation && borrowedQty === null) errors.push('Borrowed qty is required when borrowed location is filled.');
   if (!borrowedLocation && trimText(input.borrowed_qty)) errors.push('Borrowed location is required when borrowed qty is filled.');
-  if (input.extra_taken && !hasShortageItemRow(input)) errors.push('Extra taken can only be marked when system qty is greater than actual qty.');
+  if (input.extra_taken && !hasExceptionReplenishmentCandidate(input)) errors.push('Extra taken can only be marked when counted stock still needs replenishment.');
   if (input.inventory_adjustment && !borrowedLocation && !input.extra_taken) errors.push('Inventory adjustment requires borrowed inventory or extra taken.');
   return errors;
 };
@@ -349,11 +367,7 @@ export const buildExceptionInsertPayload = (input: ExceptionReportInput) => {
   const borrowedLocation = trimText(input.borrowed_location);
   const borrowedQty = borrowedLocation ? parseNonNegativeNumber(input.borrowed_qty) : null;
   const shortPicked = Boolean(input.short_picked) && exceptionType === 'short_shipment' && itemRows.some((row) => row.actual_qty === 0);
-  const extraTaken = Boolean(input.extra_taken) && itemRows.some((row) => {
-    const systemQty = parseNonNegativeNumber(row.system_location_qty);
-    const actualQty = parseNonNegativeNumber(row.actual_qty);
-    return systemQty !== null && actualQty !== null && systemQty > actualQty;
-  });
+  const extraTaken = Boolean(input.extra_taken) && hasExceptionReplenishmentCandidate(input);
 
   return {
     report_date: trimText(input.report_date),
