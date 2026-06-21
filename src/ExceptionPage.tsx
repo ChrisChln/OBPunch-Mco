@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Pencil, Plus, X } from 'lucide-react';
 import QRCode from 'qrcode';
 import BorderGlow from './components/reactBits/BorderGlow';
+import { EXCEPTION_SOP_LINK, EXCEPTION_SOP_PIN, EXCEPTION_SOP_SECTIONS } from './exceptionSopContent';
 import { compactLooseSearchText, matchesLooseSearch, normalizeLooseSearchText } from './lib/textSearch';
 import {
   EXCEPTION_TYPE_LABELS,
@@ -904,6 +905,91 @@ function NewExceptionModal({
   );
 }
 
+function SopModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[70] overflow-auto bg-slate-950/80 px-4 py-6 backdrop-blur">
+      <section className="mx-auto w-full max-w-6xl rounded-[1.75rem] border border-slate-800/80 bg-slate-950 p-5 text-slate-100 shadow-2xl sm:p-6">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-800/80 pb-4">
+          <div>
+            <div className="text-xs font-bold uppercase tracking-[0.24em] text-emerald-200">SOP</div>
+            <h2 className="mt-2 text-3xl font-black tracking-tight text-white">Picking Exception SOP</h2>
+            <div className="mt-3 flex flex-wrap gap-2 text-sm font-semibold text-slate-300">
+              <span className="rounded-full border border-slate-700/70 bg-slate-900/70 px-3 py-1">Page: {EXCEPTION_SOP_LINK}</span>
+              <span className="rounded-full border border-slate-700/70 bg-slate-900/70 px-3 py-1">PIN: {EXCEPTION_SOP_PIN}</span>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700/70 bg-slate-900/70 text-slate-200 transition hover:border-slate-500/80 hover:bg-slate-900">
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="mt-5 max-h-[78vh] overflow-y-auto pr-1">
+          <div className="grid gap-5">
+            {EXCEPTION_SOP_SECTIONS.map((section) => (
+              <article key={section.title} className="rounded-3xl border border-slate-800/80 bg-black/20 p-4 sm:p-5">
+                <h3 className="text-lg font-black text-white">{section.title}</h3>
+                {section.paragraphs?.map((paragraph) => (
+                  <p key={paragraph} className="mt-3 text-sm font-medium leading-7 text-slate-200">
+                    {paragraph}
+                  </p>
+                ))}
+                {section.bullets?.length ? (
+                  <ul className="mt-3 grid gap-2">
+                    {section.bullets.map((item) => (
+                      <li key={item} className="flex gap-3 text-sm font-medium leading-7 text-slate-200">
+                        <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-300" />
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {section.steps?.length ? (
+                  <ol className="mt-3 grid gap-2">
+                    {section.steps.map((item, index) => (
+                      <li key={item} className="flex gap-3 text-sm font-medium leading-7 text-slate-200">
+                        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-emerald-300/35 bg-emerald-300/10 text-xs font-black text-emerald-100">
+                          {index + 1}
+                        </span>
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : null}
+                {section.table ? (
+                  <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-800/80">
+                    <table className="min-w-full border-collapse text-left text-sm">
+                      <thead className="bg-slate-900/90 text-slate-100">
+                        <tr>
+                          {section.table.columns.map((column) => (
+                            <th key={column} className="border-b border-slate-800/80 px-4 py-3 font-black">
+                              {column}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {section.table.rows.map((row, rowIndex) => (
+                          <tr key={`${section.title}-row-${rowIndex}`} className="align-top odd:bg-slate-950/60 even:bg-slate-900/35">
+                            {row.map((cell, cellIndex) => (
+                              <td key={`${section.title}-cell-${rowIndex}-${cellIndex}`} className="border-t border-slate-800/70 px-4 py-3 font-medium leading-6 text-slate-200">
+                                {cell}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function ExceptionPage() {
   const [leadId, setLeadId] = useState('');
   const [leadPin, setLeadPin] = useState('');
@@ -917,6 +1003,7 @@ export default function ExceptionPage() {
   const [typeFilter, setTypeFilter] = useState<'all' | ExceptionType>('all');
   const [createdDateFilter, setCreatedDateFilter] = useState(currentDate);
   const [searchQuery, setSearchQuery] = useState('');
+  const [sopOpen, setSopOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1299,6 +1386,9 @@ export default function ExceptionPage() {
             <button type="button" disabled={loading} onClick={() => void Promise.all([loadPresentEmployees(), loadRows()])} className="h-11 shrink-0 cursor-pointer rounded-2xl border border-slate-700/70 bg-[#080d18]/70 px-4 text-sm font-black text-white transition hover:border-slate-500/80 hover:bg-slate-900/80 disabled:opacity-50">
               {loading ? 'Loading' : 'Refresh'}
             </button>
+            <button type="button" onClick={() => setSopOpen(true)} className="h-11 shrink-0 cursor-pointer rounded-2xl border border-slate-700/70 bg-[#080d18]/70 px-4 text-sm font-black text-white transition hover:border-slate-500/80 hover:bg-slate-900/80">
+              SOP
+            </button>
             <button type="button" onClick={openNewModal} className="h-11 shrink-0 cursor-pointer rounded-2xl bg-emerald-300 px-5 text-sm font-black text-slate-950 transition hover:bg-emerald-200">
               New Exception
             </button>
@@ -1433,6 +1523,8 @@ export default function ExceptionPage() {
           onSubmit={() => void (editing ? saveReport() : submitReport())}
         />
       ) : null}
+
+      {sopOpen ? <SopModal onClose={() => setSopOpen(false)} /> : null}
     </main>
   );
 }
