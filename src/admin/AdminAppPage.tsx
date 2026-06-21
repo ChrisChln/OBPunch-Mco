@@ -1938,6 +1938,17 @@ export default function AdminAppPage() {
     title: '',
     message: ''
   });
+  useEffect(() => {
+    if (!status.message || status.tone === 'pending') return undefined;
+    if (status.message === '请登录后台' || status.message === 'Please sign in') return undefined;
+
+    const timer = window.setTimeout(() => {
+      setStatus((current) => (current.message === status.message ? { ...current, message: '' } : current));
+    }, 3000);
+
+    return () => window.clearTimeout(timer);
+  }, [status]);
+
   const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; title: string; message: string }>({
     open: false,
     title: '',
@@ -13591,10 +13602,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           });
         }
       }
-      const skippedTotal = duplicateInFileCount + skippedExistingTotal;
+      const unchangedExistingTotal = Math.max(0, skippedExistingTotal - updatedTotal);
+      const skippedTotal = duplicateInFileCount + unchangedExistingTotal;
       setStatus({
         tone: 'success',
-        message: `上传完成：插入 ${insertedTotal} 条，更新 ${updatedTotal} 条，跳过重复 ${skippedTotal} 条（文件内 ${duplicateInFileCount}，表内 ${skippedExistingTotal}）`
+        message: `上传完成：新增 ${insertedTotal} 条，更新 ${updatedTotal} 条，未变更 ${unchangedExistingTotal} 条，文件内重复 ${duplicateInFileCount} 条`
       });
       await writeAudit({
         action: 'employee_upload',
@@ -13606,7 +13618,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           updated_fill: updatedTotal,
           skipped_total: skippedTotal,
           skipped_file_duplicates: duplicateInFileCount,
-          skipped_existing: skippedExistingTotal
+          skipped_existing: skippedExistingTotal,
+          existing_matched: skippedExistingTotal,
+          unchanged_existing: unchangedExistingTotal
         }
       });
     });
@@ -16959,25 +16973,25 @@ ${rowsToHtml(late)}
               >
                 <div className="flex h-full min-h-0 w-full flex-col gap-6">
                   {status.message ? (
-                    <div className="px-6 pt-6">
+                    <div className="pointer-events-none fixed left-4 top-20 z-[80] w-[min(calc(100vw-2rem),34rem)] md:left-24">
                       <div
                         className={[
-                          'rounded-2xl border px-4 py-3 text-sm font-semibold',
+                          'rounded-2xl border px-4 py-3 text-sm font-semibold shadow-[0_18px_50px_rgba(15,23,42,0.28)] backdrop-blur-md',
                           status.tone === 'success'
                             ? themeMode === 'light'
-                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                              : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-100'
+                              ? 'border-emerald-200 bg-emerald-50/95 text-emerald-700'
+                              : 'border-emerald-400/30 bg-emerald-400/12 text-emerald-100'
                             : status.tone === 'error'
                               ? themeMode === 'light'
-                                ? 'border-rose-200 bg-rose-50 text-rose-700'
-                                : 'border-rose-400/30 bg-rose-400/10 text-rose-100'
+                                ? 'border-rose-200 bg-rose-50/95 text-rose-700'
+                                : 'border-rose-400/30 bg-rose-400/12 text-rose-100'
                               : status.tone === 'pending'
                                 ? themeMode === 'light'
-                                  ? 'border-sky-200 bg-sky-50 text-sky-700'
-                                  : 'border-sky-400/30 bg-sky-400/10 text-sky-100'
+                                  ? 'border-sky-200 bg-sky-50/95 text-sky-700'
+                                  : 'border-sky-400/30 bg-sky-400/12 text-sky-100'
                                 : themeMode === 'light'
-                                  ? 'border-slate-200 bg-white/90 text-slate-600'
-                                  : 'border-white/10 bg-white/5 text-slate-300'
+                                  ? 'border-slate-200 bg-white/95 text-slate-600'
+                                  : 'border-white/10 bg-slate-900/88 text-slate-200'
                         ].join(' ')}
                       >
                         {status.message}
