@@ -9,6 +9,8 @@ import {
   EXCEPTION_STATUS_LABELS,
   buildExceptionEditItemRows,
   buildExceptionPrintPayload,
+  doesOverPickExtraQtyMatch,
+  doesShortPickMissingQtyMatch,
   formatExceptionType,
   getExceptionReportNumber,
   hasExceptionReplenishmentCandidate,
@@ -208,6 +210,7 @@ const formatQueueDateTime = (value: unknown) => {
 };
 
 const shouldShowFollowUp = (form: Pick<ExceptionReportInput, 'exception_type' | 'system_location_qty' | 'actual_qty' | 'item_rows'>) => {
+  if (form.exception_type === 'over_pick' || form.exception_type === 'short_pick') return false;
   const itemRows = buildExceptionEditItemRows({
     product_barcode: '',
     picked_location: '',
@@ -237,7 +240,18 @@ const shouldShowShortPicked = (form: Pick<ExceptionReportInput, 'exception_type'
   });
 };
 
+const isOverPick = (form: Pick<ExceptionReportInput, 'exception_type'>) => form.exception_type === 'over_pick';
+const isShortPick = (form: Pick<ExceptionReportInput, 'exception_type'>) => form.exception_type === 'short_pick';
+
 const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInput => {
+  if (isOverPick(form) || isShortPick(form)) {
+    return {
+      ...form,
+      borrowed_location: '',
+      short_picked: false,
+      extra_taken: false
+    };
+  }
   if (shouldShowFollowUp(form)) {
     const needsAdjustment = Boolean(String(form.borrowed_location ?? '').trim()) || Boolean(form.extra_taken);
     return {
@@ -301,6 +315,11 @@ function ExceptionItemFields({
 }) {
   const [visibleRowCount, setVisibleRowCount] = useState(1);
   const rows = buildExceptionEditItemRows(form, visibleRowCount);
+  const extraQtyLabel = isOverPick(form) ? 'Extra Qty' : isShortPick(form) ? 'Missing Qty' : '';
+  const showExtraQtyColumn = Boolean(extraQtyLabel);
+  const gridColumnsClass = showExtraQtyColumn
+    ? 'grid grid-cols-[minmax(0,1.1fr)_minmax(0,1.1fr)_minmax(78px,0.5fr)_minmax(78px,0.5fr)_minmax(92px,0.55fr)_36px] gap-3'
+    : itemRowGridClass;
 
   useEffect(() => {
     setVisibleRowCount((current) => Math.max(current, rows.length));
@@ -325,11 +344,12 @@ function ExceptionItemFields({
 
   return (
     <div className="grid gap-2 sm:col-span-2">
-      <div className={itemRowGridClass}>
+      <div className={gridColumnsClass}>
         <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Product Barcode</div>
         <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Picked Location</div>
         <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">System Qty</div>
         <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Actual</div>
+        {showExtraQtyColumn ? <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{extraQtyLabel}</div> : null}
         <button
           type="button"
           onClick={() => setVisibleRowCount(rows.length + 1)}
@@ -341,7 +361,7 @@ function ExceptionItemFields({
         </button>
       </div>
       {rows.map((row, index) => (
-        <div key={`exception-item-${index}`} className={`mt-2 ${itemRowGridClass}`}>
+        <div key={`exception-item-${index}`} className={`mt-2 ${gridColumnsClass}`}>
           <input
             value={row.product}
             onChange={(event) => {
@@ -382,6 +402,16 @@ function ExceptionItemFields({
             }}
             className={itemNumericInputClass}
           />
+          {showExtraQtyColumn ? (
+            <input
+              type="text"
+              inputMode="decimal"
+              value={index === 0 ? String(form.borrowed_qty ?? '') : ''}
+              onChange={(event) => onChange({ borrowed_qty: event.target.value })}
+              disabled={index !== 0}
+              className={itemNumericInputClass}
+            />
+          ) : null}
           <button
             type="button"
             onClick={() => updateRows(rows.filter((_, rowIndex) => rowIndex !== index))}
@@ -647,9 +677,15 @@ function NewExceptionModal({
 }) {
   const inferredStatus = status === 'Closed' ? 'Closed' : inferExceptionStatus(form);
   const showFollowUp = shouldShowFollowUp(form);
+  const showOverPickFollowUp = isOverPick(form);
+  const showShortPickAutoClose = isShortPick(form);
   const showShortPicked = shouldShowShortPicked(form);
-  const showExtraTaken = hasExceptionReplenishmentCandidate(form);
-  const adjustmentEnabled = Boolean(form.extra_taken || String(form.borrowed_location ?? '').trim());
+  const showExtraTaken = !showShortPickAutoClose && hasExceptionReplenishmentCandidate(form);
+  const canShowPhysicalFixSwitch =
+    (showOverPickFollowUp && doesOverPickExtraQtyMatch(form)) ||
+    (showShortPickAutoClose && doesShortPickMissingQtyMatch(form));
+  const adjustmentEnabled =
+    showOverPickFollowUp || showShortPickAutoClose || Boolean(form.extra_taken || String(form.borrowed_location ?? '').trim());
   const showOtherReason = form.exception_type === 'other';
 
   return (
@@ -665,7 +701,7 @@ function NewExceptionModal({
           </button>
         </div>
 
-        <div className={showFollowUp ? 'grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(300px,0.85fr)]' : 'grid gap-5'}>
+        <div className={showFollowUp || showOverPickFollowUp || showShortPickAutoClose ? 'grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(300px,0.85fr)]' : 'grid gap-5'}>
           <div className="rounded-3xl border border-slate-800/80 bg-black/20 p-4">
             <div className="mb-4 text-sm font-black text-white">Report</div>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -704,7 +740,7 @@ function NewExceptionModal({
             </div>
           </div>
 
-          {showFollowUp ? <div className="rounded-3xl border border-slate-800/80 bg-black/20 p-4">
+          {showFollowUp || showOverPickFollowUp || showShortPickAutoClose ? <div className="rounded-3xl border border-slate-800/80 bg-black/20 p-4">
             <div className="mb-4 text-sm font-black text-white">Follow-up</div>
             <div className="grid gap-3">
               {showShortPicked ? (
@@ -779,53 +815,59 @@ function NewExceptionModal({
                   </div>
                 </Field>
               ) : null}
-              <Field label="Borrowed Location">
-                <input
-                  value={form.borrowed_location ?? ''}
-                  onChange={(event) => onChange({ borrowed_location: event.target.value, short_picked: false })}
-                  disabled={Boolean(form.short_picked)}
-                  className={inputClass}
-                />
-              </Field>
-              <Field label="Borrowed Qty">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={form.borrowed_qty ?? ''}
-                  onChange={(event) => onChange({ borrowed_qty: event.target.value, short_picked: false })}
-                  disabled={Boolean(form.short_picked)}
-                  className={numericInputClass}
-                />
-              </Field>
-              <Field label="Inventory Adjustment">
-                <div className={['flex h-11 w-full items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 transition focus-within:border-emerald-300/60 focus-within:ring-4 focus-within:ring-emerald-300/10', form.short_picked || !adjustmentEnabled ? 'opacity-50' : ''].join(' ')}>
-                  <span className={['text-sm font-black', form.inventory_adjustment && adjustmentEnabled ? 'text-emerald-100' : 'text-slate-300'].join(' ')}>
-                    {form.inventory_adjustment && adjustmentEnabled ? 'Yes' : 'No'}
-                  </span>
+              {!showOverPickFollowUp && !showShortPickAutoClose ? (
+                <Field label="Borrowed Location">
                   <input
-                    type="checkbox"
-                    role="switch"
-                    checked={form.inventory_adjustment && adjustmentEnabled}
-                    disabled={Boolean(form.short_picked) || !adjustmentEnabled}
-                    onChange={(event) => onChange({ inventory_adjustment: event.target.checked })}
-                    className="sr-only"
+                    value={form.borrowed_location ?? ''}
+                    onChange={(event) => onChange({ borrowed_location: event.target.value, short_picked: false })}
+                    disabled={Boolean(form.short_picked)}
+                    className={inputClass}
                   />
-                  <span
-                    aria-hidden="true"
-                    className={[
-                      'relative h-7 w-12 shrink-0 rounded-full border transition',
-                      form.inventory_adjustment ? 'border-emerald-300/40 bg-emerald-300/25' : 'border-slate-700/70 bg-slate-800'
-                    ].join(' ')}
-                  >
-                    <span
-                      className={[
-                        'absolute left-1 top-1 h-5 w-5 rounded-full shadow-lg transition',
-                        form.inventory_adjustment ? 'translate-x-5 bg-emerald-200' : 'translate-x-0 bg-slate-400'
-                      ].join(' ')}
+                </Field>
+              ) : null}
+              {!showOverPickFollowUp && !showShortPickAutoClose ? (
+                <Field label="Borrowed Qty">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={form.borrowed_qty ?? ''}
+                    onChange={(event) => onChange({ borrowed_qty: event.target.value, short_picked: false })}
+                    disabled={Boolean(form.short_picked)}
+                    className={numericInputClass}
+                  />
+                </Field>
+              ) : null}
+              {(!showOverPickFollowUp && !showShortPickAutoClose) || canShowPhysicalFixSwitch ? (
+                <Field label={showOverPickFollowUp || showShortPickAutoClose ? 'Physically Fixed' : 'Inventory Adjustment'}>
+                  <div className={['flex h-11 w-full items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 transition focus-within:border-emerald-300/60 focus-within:ring-4 focus:ring-emerald-300/10', form.short_picked || !adjustmentEnabled ? 'opacity-50' : ''].join(' ')}>
+                    <span className={['text-sm font-black', form.inventory_adjustment && adjustmentEnabled ? 'text-emerald-100' : 'text-slate-300'].join(' ')}>
+                      {form.inventory_adjustment && adjustmentEnabled ? 'Yes' : 'No'}
+                    </span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      checked={form.inventory_adjustment && adjustmentEnabled}
+                      disabled={Boolean(form.short_picked) || !adjustmentEnabled || ((showOverPickFollowUp || showShortPickAutoClose) && !canShowPhysicalFixSwitch)}
+                      onChange={(event) => onChange({ inventory_adjustment: event.target.checked })}
+                      className="sr-only"
                     />
-                  </span>
-                </div>
-              </Field>
+                    <span
+                      aria-hidden="true"
+                      className={[
+                        'relative h-7 w-12 shrink-0 rounded-full border transition',
+                        form.inventory_adjustment ? 'border-emerald-300/40 bg-emerald-300/25' : 'border-slate-700/70 bg-slate-800'
+                      ].join(' ')}
+                    >
+                      <span
+                        className={[
+                          'absolute left-1 top-1 h-5 w-5 rounded-full shadow-lg transition',
+                          form.inventory_adjustment ? 'translate-x-5 bg-emerald-200' : 'translate-x-0 bg-slate-400'
+                        ].join(' ')}
+                      />
+                    </span>
+                  </div>
+                </Field>
+              ) : null}
               {!showOtherReason ? <Field label="Resolution Note">
                 <textarea value={form.resolution_note ?? ''} onChange={(event) => onChange({ resolution_note: event.target.value })} className={textAreaClass} />
               </Field> : null}

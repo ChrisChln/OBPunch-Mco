@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import {
   buildExceptionInsertPayload,
   buildExceptionUpdatePayload,
+  inferAutomaticExceptionClosure,
   inferExceptionStatus,
   isValidExceptionTransition,
   normalizeExceptionStatus,
@@ -171,6 +172,114 @@ const updateExceptionReport = async (supabase: any, id: string, payload: Record<
   const result = await supabase.from(EXCEPTION_TABLE).update(payload).eq('id', id).select('*').single();
   if (!isMissingOptionalExceptionColumnError(result.error)) return result;
   return supabase.from(EXCEPTION_TABLE).update(withoutOptionalExceptionColumns(payload, result.error)).eq('id', id).select('*').single();
+};
+
+const normalizeStaffId = (value: unknown) => String(value ?? '').trim().toUpperCase();
+
+const resolveResponsibilityTargets = (
+  report: Record<string, unknown>,
+  responsibilityResult: string,
+  responsibleStaffId: string
+) => {
+  const pickerStaffId = normalizeStaffId(report.picking_operator);
+  const packerStaffId = normalizeStaffId(report.packing_rebin_operator);
+  const selectedResponsibleStaffIds =
+    responsibilityResult === 'picker'
+      ? [pickerStaffId]
+      : responsibilityResult === 'packer'
+        ? [packerStaffId]
+        : responsibilityResult === 'all'
+          ? [pickerStaffId, packerStaffId]
+          : responsibilityResult === 'responsible'
+            ? [responsibleStaffId]
+            : [];
+  const targetStaffIds = Array.from(new Set(selectedResponsibleStaffIds.filter(Boolean)));
+
+  if (responsibilityResult !== 'no_responsibility' && targetStaffIds.length === 0) {
+    return { error: 'Responsible staff was not found on this exception.' };
+  }
+  if (responsibilityResult === 'responsible' && ![pickerStaffId, packerStaffId].includes(responsibleStaffId)) {
+    return { error: 'Responsible staff must be the picker or packing/rebin operator.' };
+  }
+
+  return { pickerStaffId, packerStaffId, targetStaffIds };
+};
+
+const createMistakeReportForExceptionClose = async (
+  supabase: any,
+  report: Record<string, unknown>,
+  targetStaffIds: string[],
+  reporterStaffId: string
+) => {
+  if (!targetStaffIds.length) return { mistakeReportId: report.mistake_report_id ?? null, error: null };
+  if (report.mistake_report_id) {
+    return { mistakeReportId: report.mistake_report_id, error: 'Mistake has already been created for this exception.' };
+  }
+
+  const pickerStaffId = normalizeStaffId(report.picking_operator);
+  const packerStaffId = normalizeStaffId(report.packing_rebin_operator);
+  const mistakeRows = [];
+  for (const staffId of targetStaffIds) {
+    const employeeRes = await supabase
+      .from(EMPLOYEE_TABLE)
+      .select('staff_id, position')
+      .eq('staff_id', staffId)
+      .limit(1)
+      .maybeSingle();
+    if (employeeRes.error) return { mistakeReportId: null, error: employeeRes.error.message };
+    if (!employeeRes.data?.staff_id) return { mistakeReportId: null, error: 'Responsible staff was not found.' };
+
+    const roleLabel = staffId === pickerStaffId ? 'Picker' : staffId === packerStaffId ? 'Packing/Rebin' : 'Responsible';
+    mistakeRows.push({
+      position: String(employeeRes.data.position ?? 'Exception'),
+      employee_staff_id: staffId,
+      reason: `Exception #${String(report.report_number ?? report.id ?? '').trim()}: ${report.exception_type} (${roleLabel})`,
+      reporter_staff_id: reporterStaffId,
+      operational_date: report.report_date
+    });
+  }
+
+  const mistakeRes = await supabase
+    .from(MISTAKE_REPORT_TABLE)
+    .insert(mistakeRows)
+    .select('id');
+  if (mistakeRes.error) return { mistakeReportId: null, error: mistakeRes.error.message };
+
+  const mistakeData = Array.isArray(mistakeRes.data) ? mistakeRes.data : [mistakeRes.data].filter(Boolean);
+  return { mistakeReportId: mistakeData[0]?.id ?? null, error: null };
+};
+
+const closeExceptionReport = async (
+  supabase: any,
+  report: Record<string, unknown>,
+  responsibilityResult: string,
+  responsibleStaffId: string,
+  resolutionNote: string,
+  reporterStaffId: string
+) => {
+  const targetRes = resolveResponsibilityTargets(report, responsibilityResult, responsibleStaffId);
+  if ('error' in targetRes) return { statusCode: 400, error: targetRes.error };
+
+  const mistakeRes = await createMistakeReportForExceptionClose(supabase, report, targetRes.targetStaffIds, reporterStaffId);
+  if (mistakeRes.error) {
+    return {
+      statusCode: /already been created/i.test(mistakeRes.error) ? 409 : 500,
+      error: mistakeRes.error
+    };
+  }
+
+  const nowIso = new Date().toISOString();
+  const result = await updateExceptionReport(supabase, String(report.id ?? ''), {
+    status: 'Closed',
+    responsibility_result: responsibilityResult,
+    responsible_staff_id: targetRes.targetStaffIds.length === 1 ? targetRes.targetStaffIds[0] : null,
+    mistake_report_id: mistakeRes.mistakeReportId,
+    resolution_note: resolutionNote || null,
+    resolved_at: String(report.resolved_at ?? '').trim() || nowIso,
+    closed_at: nowIso
+  });
+  if (result.error) return { statusCode: 500, error: result.error.message };
+  return { statusCode: 200, row: result.data };
 };
 
 const ensureAdminAccess = async (req: any, res: any, serviceSupabase: any, required: 'view' | 'operate' = 'operate') => {
@@ -402,12 +511,29 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
     requestedStatus === 'Closed' || (currentStatus === 'Closed' && requestedStatus === 'Open')
       ? requestedStatus
       : inferExceptionStatus(editedInput);
+  const automaticClosure = requestedStatus || currentStatus === 'Closed' ? null : inferAutomaticExceptionClosure(editedInput);
   if (!nextStatus) {
     res.status(400).json({ error: 'A valid id and status are required.' });
     return;
   }
   if ((requestedStatus === 'Closed' || currentStatus === 'Closed') && !isValidExceptionTransition(currentStatus, nextStatus)) {
     res.status(400).json({ error: `Cannot move ${currentStatus} to ${nextStatus}.` });
+    return;
+  }
+  if (automaticClosure) {
+    const closeResult = await closeExceptionReport(
+      supabase,
+      { ...currentRes.data, ...editedPayload, id },
+      automaticClosure.responsibility_result,
+      automaticClosure.responsible_staff_id,
+      String(editedPayload.resolution_note ?? ''),
+      normalizeStaffId(editedPayload.submitted_by_lead_id ?? currentRes.data.submitted_by_lead_id ?? 'LEAD')
+    );
+    if (closeResult.error) {
+      res.status(closeResult.statusCode).json({ error: closeResult.error });
+      return;
+    }
+    res.status(200).json({ row: closeResult.row });
     return;
   }
 
@@ -475,91 +601,19 @@ const handleAdminClose = async (req: any, res: any, supabase: any, body: any) =>
     return;
   }
 
-  let mistakeReportId: number | string | null = currentRes.data.mistake_report_id ?? null;
-  const pickerStaffId = String(currentRes.data.picking_operator ?? '').trim().toUpperCase();
-  const packerStaffId = String(currentRes.data.packing_rebin_operator ?? '').trim().toUpperCase();
-  const selectedResponsibleStaffIds =
-    responsibilityResult === 'picker'
-      ? [pickerStaffId]
-      : responsibilityResult === 'packer'
-        ? [packerStaffId]
-        : responsibilityResult === 'all'
-          ? [pickerStaffId, packerStaffId]
-          : responsibilityResult === 'responsible'
-            ? [responsibleStaffId]
-            : [];
-  const targetStaffIds = Array.from(new Set(selectedResponsibleStaffIds.filter(Boolean)));
-  if (responsibilityResult !== 'no_responsibility' && targetStaffIds.length === 0) {
-    res.status(400).json({ error: 'Responsible staff was not found on this exception.' });
+  const closeResult = await closeExceptionReport(
+    supabase,
+    currentRes.data,
+    responsibilityResult,
+    responsibleStaffId,
+    String(body.resolution_note ?? currentRes.data.resolution_note ?? '').trim(),
+    String(user.email ?? user.id ?? 'admin')
+  );
+  if (closeResult.error) {
+    res.status(closeResult.statusCode).json({ error: closeResult.error });
     return;
   }
-  if (responsibilityResult === 'responsible' && ![pickerStaffId, packerStaffId].includes(responsibleStaffId)) {
-    res.status(400).json({ error: 'Responsible staff must be the picker or packing/rebin operator.' });
-    return;
-  }
-
-  if (targetStaffIds.length) {
-    if (mistakeReportId) {
-      res.status(409).json({ error: 'Mistake has already been created for this exception.' });
-      return;
-    }
-
-    const mistakeRows = [];
-    for (const staffId of targetStaffIds) {
-      const employeeRes = await supabase
-        .from('ob_employees')
-        .select('staff_id, position')
-        .eq('staff_id', staffId)
-        .limit(1)
-        .maybeSingle();
-      if (employeeRes.error) {
-        res.status(500).json({ error: employeeRes.error.message });
-        return;
-      }
-      if (!employeeRes.data?.staff_id) {
-        res.status(400).json({ error: 'Responsible staff was not found.' });
-        return;
-      }
-      const roleLabel = staffId === pickerStaffId ? 'Picker' : staffId === packerStaffId ? 'Packing/Rebin' : 'Responsible';
-      mistakeRows.push({
-        position: String(employeeRes.data.position ?? 'Exception'),
-        employee_staff_id: staffId,
-        reason: `Exception #${String(currentRes.data.report_number ?? id).trim()}: ${currentRes.data.exception_type} (${roleLabel})`,
-        reporter_staff_id: String(user.email ?? user.id ?? 'admin'),
-        operational_date: currentRes.data.report_date
-      });
-    }
-
-    const mistakeRes = await supabase
-      .from(MISTAKE_REPORT_TABLE)
-      .insert(mistakeRows)
-      .select('id');
-    if (mistakeRes.error) {
-      res.status(500).json({ error: mistakeRes.error.message });
-      return;
-    }
-    const mistakeData = Array.isArray(mistakeRes.data) ? mistakeRes.data : [mistakeRes.data].filter(Boolean);
-    mistakeReportId = mistakeData[0]?.id ?? null;
-  }
-
-  const result = await supabase
-    .from(EXCEPTION_TABLE)
-    .update({
-      status: 'Closed',
-      responsibility_result: responsibilityResult,
-      responsible_staff_id: targetStaffIds.length === 1 ? targetStaffIds[0] : null,
-      mistake_report_id: mistakeReportId,
-      resolution_note: String(body.resolution_note ?? currentRes.data.resolution_note ?? '').trim() || null,
-      closed_at: new Date().toISOString()
-    })
-    .eq('id', id)
-    .select('*')
-    .single();
-  if (result.error) {
-    res.status(500).json({ error: result.error.message });
-    return;
-  }
-  res.status(200).json({ row: result.data });
+  res.status(200).json({ row: closeResult.row });
 };
 
 export default async function handler(req: any, res: any) {

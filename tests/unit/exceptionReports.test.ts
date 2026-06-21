@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import {
+  EXCEPTION_STATUS_LABELS,
   buildExceptionEditItemRows,
   buildExceptionInsertPayload,
   buildExceptionUpdatePayload,
   buildExceptionPrintPayload,
+  doesOverPickExtraQtyMatch,
+  doesShortPickMissingQtyMatch,
+  inferAutomaticExceptionClosure,
   inferExceptionStatus,
   isValidExceptionTransition,
   needsInventoryAdjustment,
@@ -33,6 +37,18 @@ const validInput = (): ExceptionReportInput => ({
 });
 
 describe('exceptionReports', () => {
+  test('uses English labels for exception statuses', () => {
+    expect(EXCEPTION_STATUS_LABELS).toEqual({
+      Open: 'Open',
+      Processing: 'Processing',
+      Counted: 'Counted',
+      'Pending Adjustment': 'Pending Adjustment',
+      'Short Picked': 'Short Picked',
+      Resolved: 'Resolved',
+      Closed: 'Closed'
+    });
+  });
+
   test('validates required fields and non-negative quantities', () => {
     expect(validateExceptionReportInput(validInput())).toEqual([]);
 
@@ -48,6 +64,7 @@ describe('exceptionReports', () => {
   test('requires borrowed qty when borrowed location is filled', () => {
     const errors = validateExceptionReportInput({
       ...validInput(),
+      exception_type: 'short_shipment',
       borrowed_location: 'B02',
       borrowed_qty: ''
     });
@@ -217,7 +234,7 @@ describe('exceptionReports', () => {
   });
 
   test('validates inventory adjustment scope for extra taken', () => {
-    expect(validateExceptionReportInput({ ...validInput(), inventory_adjustment: true })).toContain(
+    expect(validateExceptionReportInput({ ...validInput(), exception_type: 'short_shipment', inventory_adjustment: true })).toContain(
       'Inventory adjustment requires borrowed inventory or extra taken.'
     );
     expect(validateExceptionReportInput({ ...validInput(), system_location_qty: 3, actual_qty: 3, extra_taken: true, inventory_adjustment: true })).toEqual([]);
@@ -248,6 +265,66 @@ describe('exceptionReports', () => {
     expect(inferExceptionStatus({ ...shortStockStillNeedsReplenishment, extra_taken: true, inventory_adjustment: true })).toBe('Resolved');
     expect(inferExceptionStatus({ ...processingComplete, exception_type: 'short_shipment', actual_qty: 0, short_picked: true })).toBe('Short Picked');
     expect(inferExceptionStatus({ ...validInput(), exception_type: 'short_shipment', actual_qty: 0, packing_rebin_operator: '', count_by: '', short_picked: true })).toBe('Short Picked');
+    expect(
+      inferExceptionStatus({
+        ...validInput(),
+        exception_type: 'over_pick',
+        packing_rebin_operator: '',
+        system_location_qty: 74,
+        actual_qty: 77,
+        borrowed_qty: 3,
+        inventory_adjustment: false
+      })
+    ).toBe('Resolved');
+  });
+
+  test('matches over pick extra qty and only auto closes when physically fixed is enabled', () => {
+    const overPickInput = {
+      ...validInput(),
+      exception_type: 'over_pick',
+      packing_rebin_operator: '',
+      system_location_qty: 74,
+      actual_qty: 77,
+      borrowed_qty: 3,
+      inventory_adjustment: false
+    };
+
+    expect(doesOverPickExtraQtyMatch(overPickInput)).toBe(true);
+    expect(inferAutomaticExceptionClosure(overPickInput)).toBeNull();
+    expect(
+      inferAutomaticExceptionClosure({
+        ...overPickInput,
+        inventory_adjustment: true
+      })
+    ).toEqual({
+      responsibility_result: 'picker',
+      responsible_staff_id: 'US100'
+    });
+  });
+
+  test('matches less pick missing qty and only auto closes when physically fixed is enabled', () => {
+    const shortPickInput = {
+      ...validInput(),
+      exception_type: 'short_pick',
+      packing_rebin_operator: '',
+      system_location_qty: 74,
+      actual_qty: 71,
+      borrowed_qty: 3,
+      inventory_adjustment: false
+    };
+
+    expect(doesShortPickMissingQtyMatch(shortPickInput)).toBe(true);
+    expect(inferExceptionStatus(shortPickInput)).toBe('Resolved');
+    expect(inferAutomaticExceptionClosure(shortPickInput)).toBeNull();
+    expect(
+      inferAutomaticExceptionClosure({
+        ...shortPickInput,
+        inventory_adjustment: true
+      })
+    ).toEqual({
+      responsibility_result: 'picker',
+      responsible_staff_id: 'US100'
+    });
   });
 
   test('persists short picked only for Short Pick zero-actual reports', () => {

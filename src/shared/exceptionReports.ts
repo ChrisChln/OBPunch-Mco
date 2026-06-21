@@ -18,16 +18,21 @@ export const EXCEPTION_STATUSES = ['Open', 'Processing', 'Counted', 'Pending Adj
 export type ExceptionStatus = (typeof EXCEPTION_STATUSES)[number];
 
 export const EXCEPTION_STATUS_LABELS: Record<ExceptionStatus, string> = {
-  Open: '已创建',
-  Processing: '处理中',
-  Counted: '已盘点',
-  'Pending Adjustment': '待调整',
-  'Short Picked': '已短拣',
-  Resolved: '已处理',
-  Closed: '取消'
+  Open: 'Open',
+  Processing: 'Processing',
+  Counted: 'Counted',
+  'Pending Adjustment': 'Pending Adjustment',
+  'Short Picked': 'Short Picked',
+  Resolved: 'Resolved',
+  Closed: 'Closed'
 };
 
 export type ResponsibilityResult = 'pending' | 'responsible' | 'picker' | 'packer' | 'all' | 'no_responsibility';
+
+export type AutomaticExceptionClosure = {
+  responsibility_result: 'picker';
+  responsible_staff_id: string;
+};
 
 export type ExceptionReportInput = {
   report_date: string;
@@ -284,6 +289,99 @@ const hasEnteredCountedQuantities = (
     .some((row) => hasText(row.systemQty) || hasText(row.actualQty));
 };
 
+const summarizeItemQuantities = (input: ExceptionItemRowSource) => {
+  const rows = buildExceptionEditItemRows(input).filter(itemRowHasValue);
+  if (!rows.length) return { systemQty: null as number | null, actualQty: null as number | null };
+
+  let systemQtyTotal = 0;
+  let actualQtyTotal = 0;
+  for (const row of rows) {
+    const systemQty = parseNonNegativeNumber(row.systemQty);
+    const actualQty = parseNonNegativeNumber(row.actualQty);
+    if (systemQty === null || actualQty === null) return { systemQty: null as number | null, actualQty: null as number | null };
+    systemQtyTotal += systemQty;
+    actualQtyTotal += actualQty;
+  }
+
+  return { systemQty: systemQtyTotal, actualQty: actualQtyTotal };
+};
+
+export const doesOverPickExtraQtyMatch = (
+  input: Pick<
+    ExceptionReportInput,
+    | 'exception_type'
+    | 'item_rows'
+    | 'product_barcode'
+    | 'picked_location'
+    | 'system_location_qty'
+    | 'actual_qty'
+    | 'borrowed_qty'
+  >
+) => {
+  if (normalizeExceptionType(input.exception_type) !== 'over_pick') return false;
+  const extraQty = parseNonNegativeNumber(input.borrowed_qty);
+  if (extraQty === null || extraQty <= 0) return false;
+
+  const { systemQty, actualQty } = summarizeItemQuantities(input);
+  if (systemQty === null || actualQty === null) return false;
+  return systemQty + extraQty === actualQty;
+};
+
+export const doesShortPickMissingQtyMatch = (
+  input: Pick<
+    ExceptionReportInput,
+    | 'exception_type'
+    | 'item_rows'
+    | 'product_barcode'
+    | 'picked_location'
+    | 'system_location_qty'
+    | 'actual_qty'
+    | 'borrowed_qty'
+    | 'borrowed_location'
+  >
+) => {
+  if (normalizeExceptionType(input.exception_type) !== 'short_pick') return false;
+  if (hasText(input.borrowed_location)) return false;
+  const missingQty = parseNonNegativeNumber(input.borrowed_qty);
+  if (missingQty === null || missingQty <= 0) return false;
+
+  const { systemQty, actualQty } = summarizeItemQuantities(input);
+  if (systemQty === null || actualQty === null) return false;
+  return actualQty + missingQty === systemQty;
+};
+
+export const inferAutomaticExceptionClosure = (
+  input: Pick<
+    ExceptionReportInput,
+    | 'exception_type'
+    | 'item_rows'
+    | 'product_barcode'
+    | 'picked_location'
+    | 'system_location_qty'
+    | 'actual_qty'
+    | 'picking_operator'
+    | 'count_by'
+    | 'borrowed_qty'
+    | 'borrowed_location'
+    | 'inventory_adjustment'
+  >
+): AutomaticExceptionClosure | null => {
+  const exceptionType = normalizeExceptionType(input.exception_type);
+  if (exceptionType !== 'over_pick' && exceptionType !== 'short_pick') return null;
+  if (!hasCompleteItemProcessing(input)) return null;
+  if (exceptionType === 'over_pick' && !doesOverPickExtraQtyMatch(input)) return null;
+  if (exceptionType === 'short_pick' && !doesShortPickMissingQtyMatch(input)) return null;
+  if (!input.inventory_adjustment) return null;
+
+  const pickerStaffId = trimText(input.picking_operator).toUpperCase();
+  if (!pickerStaffId || !hasText(input.count_by)) return null;
+
+  return {
+    responsibility_result: 'picker',
+    responsible_staff_id: pickerStaffId
+  };
+};
+
 export const inferExceptionStatus = (
   input: Pick<
     ExceptionReportInput,
@@ -317,6 +415,19 @@ export const inferExceptionStatus = (
 
   const hasCompleteItemData = hasCompleteItemProcessing(input);
   if (!hasCompleteItemData) return 'Processing';
+  if (
+    normalizeExceptionType(input.exception_type) === 'over_pick' &&
+    doesOverPickExtraQtyMatch(input) &&
+    hasText(input.picking_operator) &&
+    hasText(input.count_by)
+  ) return 'Resolved';
+  if (
+    normalizeExceptionType(input.exception_type) === 'short_pick' &&
+    doesShortPickMissingQtyMatch(input) &&
+    hasText(input.picking_operator) &&
+    hasText(input.count_by)
+  ) return 'Resolved';
+  if (inferAutomaticExceptionClosure(input)) return 'Resolved';
   if (!hasText(input.picking_operator) || !hasText(input.packing_rebin_operator) || !hasText(input.count_by)) return 'Counted';
 
   const borrowedLocation = hasText(input.borrowed_location);
@@ -346,6 +457,9 @@ type ExceptionReportValidationOptions = {
 export const validateExceptionReportInput = (input: ExceptionReportInput, options: ExceptionReportValidationOptions = {}): string[] => {
   const errors: string[] = [];
   const editRows = buildExceptionEditItemRows(input).filter(itemRowHasValue);
+  const exceptionType = normalizeExceptionType(input.exception_type);
+  const isOverPick = exceptionType === 'over_pick';
+  const isShortPick = exceptionType === 'short_pick';
   if (!DATE_ONLY_PATTERN.test(trimText(input.report_date))) errors.push('Date must use YYYY-MM-DD.');
   if (normalizeExceptionType(input.exception_type) === 'other' && !trimText(input.resolution_note)) {
     errors.push('Reason is required for Other.');
@@ -361,13 +475,35 @@ export const validateExceptionReportInput = (input: ExceptionReportInput, option
   ) {
     errors.push('Count By USID is required when counted quantities are entered.');
   }
+  if (
+    isOverPick &&
+    hasCompleteItemProcessing(input) &&
+    hasText(input.picking_operator) &&
+    hasText(input.count_by)
+  ) {
+    const extraQty = parseNonNegativeNumber(input.borrowed_qty);
+    if (extraQty === null || extraQty <= 0) errors.push('Extra qty is required for Over Pick.');
+    else if (!doesOverPickExtraQtyMatch(input)) errors.push('For Over Pick, system qty plus extra qty must equal actual.');
+  }
+  if (
+    isShortPick &&
+    !hasText(input.borrowed_location) &&
+    hasCompleteItemProcessing(input) &&
+    hasText(input.picking_operator) &&
+    hasText(input.count_by) &&
+    hasText(input.borrowed_qty)
+  ) {
+    const missingQty = parseNonNegativeNumber(input.borrowed_qty);
+    if (missingQty === null || missingQty <= 0) errors.push('Missing qty is required for Less Pick.');
+    else if (!doesShortPickMissingQtyMatch(input)) errors.push('For Less Pick, actual plus missing qty must equal system qty.');
+  }
 
   const borrowedLocation = trimText(input.borrowed_location);
   const borrowedQty = parseNonNegativeNumber(input.borrowed_qty);
-  if (borrowedLocation && borrowedQty === null) errors.push('Borrowed qty is required when borrowed location is filled.');
-  if (!borrowedLocation && trimText(input.borrowed_qty)) errors.push('Borrowed location is required when borrowed qty is filled.');
+  if (!isOverPick && !isShortPick && borrowedLocation && borrowedQty === null) errors.push('Borrowed qty is required when borrowed location is filled.');
+  if (!isOverPick && !isShortPick && !borrowedLocation && trimText(input.borrowed_qty)) errors.push('Borrowed location is required when borrowed qty is filled.');
   if (input.extra_taken && !hasExceptionReplenishmentCandidate(input)) errors.push('Extra taken can only be marked when counted stock still needs replenishment.');
-  if (input.inventory_adjustment && !borrowedLocation && !input.extra_taken) errors.push('Inventory adjustment requires borrowed inventory or extra taken.');
+  if (!isOverPick && !isShortPick && input.inventory_adjustment && !borrowedLocation && !input.extra_taken) errors.push('Inventory adjustment requires borrowed inventory or extra taken.');
   return errors;
 };
 
@@ -378,7 +514,11 @@ export const buildExceptionInsertPayload = (input: ExceptionReportInput) => {
   const systemQty = firstRow ? firstRow.system_location_qty ?? null : trimText(input.system_location_qty) ? parseNonNegativeNumber(input.system_location_qty) : null;
   const actualQty = firstRow ? firstRow.actual_qty ?? null : trimText(input.actual_qty) ? parseNonNegativeNumber(input.actual_qty) : null;
   const borrowedLocation = trimText(input.borrowed_location);
-  const borrowedQty = borrowedLocation ? parseNonNegativeNumber(input.borrowed_qty) : null;
+  const borrowedQty = exceptionType === 'over_pick' || exceptionType === 'short_pick'
+    ? parseNonNegativeNumber(input.borrowed_qty)
+    : borrowedLocation
+      ? parseNonNegativeNumber(input.borrowed_qty)
+      : null;
   const shortPicked = Boolean(input.short_picked) && exceptionType === 'short_shipment' && itemRows.some((row) => row.actual_qty === 0);
   const extraTaken = Boolean(input.extra_taken) && hasExceptionReplenishmentCandidate(input);
 
