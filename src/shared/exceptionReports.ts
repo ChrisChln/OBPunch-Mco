@@ -275,6 +275,15 @@ const hasAnyItemProcessing = (input: ExceptionItemRowSource) =>
     .filter(itemRowHasValue)
     .some((row) => hasText(row.systemQty) || hasText(row.actualQty));
 
+const hasEnteredCountedQuantities = (
+  input: Pick<ExceptionReportInput, 'system_location_qty' | 'actual_qty' | 'item_rows' | 'product_barcode' | 'picked_location' | 'picking_container'>
+) => {
+  if (hasText(input.system_location_qty) || hasText(input.actual_qty)) return true;
+  return buildExceptionEditItemRows(input)
+    .filter(itemRowHasValue)
+    .some((row) => hasText(row.systemQty) || hasText(row.actualQty));
+};
+
 export const inferExceptionStatus = (
   input: Pick<
     ExceptionReportInput,
@@ -345,7 +354,11 @@ export const validateExceptionReportInput = (input: ExceptionReportInput, option
   if (!trimText(input.picking_list_number)) errors.push('Picking list number is required.');
   if (editRows.some((row) => trimText(row.systemQty) && parseNonNegativeNumber(row.systemQty) === null)) errors.push('System location qty must be a non-negative number.');
   if (editRows.some((row) => trimText(row.actualQty) && parseNonNegativeNumber(row.actualQty) === null)) errors.push('Actual qty must be a non-negative number.');
-  if (options.requireCountByForQuantities && editRows.some((row) => trimText(row.systemQty) || trimText(row.actualQty)) && !trimText(input.count_by)) {
+  if (
+    options.requireCountByForQuantities &&
+    hasEnteredCountedQuantities(input) &&
+    !trimText(input.count_by)
+  ) {
     errors.push('Count By USID is required when counted quantities are entered.');
   }
 

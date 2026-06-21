@@ -347,6 +347,52 @@ describe('api/exception-reports', () => {
     expect(res.body.row.status).toBe('Open');
   });
 
+  test('post requires count by when counted quantities are entered', async () => {
+    const insert = vi.fn();
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return {
+          select: () => ({
+            gte: () => ({
+              lt: () => ({
+                order: () => ({
+                  limit: async () => ({
+                    data: [],
+                    error: null
+                  })
+                })
+              })
+            })
+          }),
+          insert
+        };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler(
+      {
+        method: 'POST',
+        headers: {},
+        body: {
+          ...baseBody,
+          count_by: ''
+        }
+      },
+      res
+    );
+
+    expect(res.code).toBe(400);
+    expect(String(res.body?.error ?? '')).toContain('Count By USID is required');
+    expect(insert).not.toHaveBeenCalled();
+  });
+
   test('creates the eleventh exception report for the same date', async () => {
     const select = vi.fn(() => ({
       gte: () => ({
