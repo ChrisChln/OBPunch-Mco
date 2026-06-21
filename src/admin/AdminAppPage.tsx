@@ -1932,7 +1932,7 @@ export default function AdminAppPage() {
     );
   };
 
-  const [, setStatus] = useState<Status>({ tone: 'idle', message: '请登录后台' });
+  const [status, setStatus] = useState<Status>({ tone: 'idle', message: '请登录后台' });
   const [loginErrorDialog, setLoginErrorDialog] = useState<{ open: boolean; title: string; message: string }>({
     open: false,
     title: '',
@@ -2202,6 +2202,11 @@ export default function AdminAppPage() {
     employeeSnapshot: EmployeeRow | null;
     type: TerminationType;
   } | null>(null);
+
+  useEffect(() => {
+    if (!employeesError) return;
+    setStatus({ tone: 'error', message: employeesError });
+  }, [employeesError]);
   const [employeeBadgePreview, setEmployeeBadgePreview] = useState<{
     staff: string;
     name: string;
@@ -2890,6 +2895,11 @@ export default function AdminAppPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [deviceUploadError, setDeviceUploadError] = useState<string | null>(null);
   const deviceFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!uploadError) return;
+    setStatus({ tone: 'error', message: uploadError });
+  }, [uploadError]);
 
   const [, setAttendanceStats] = useState<
     Record<string, { early: number; late: number; active: number }>
@@ -7282,6 +7292,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const failAddEmployee = (message: string) => {
       setEmployeesError(message);
       setEmployeeAddFeedback({ tone: 'error', message });
+      setStatus({ tone: 'error', message });
     };
     if (!employeesCanOperate) {
       failAddEmployee(t('员工模块当前为只读。', 'Employees is read-only.'));
@@ -16947,6 +16958,32 @@ ${rowsToHtml(late)}
                 ].join(' ')}
               >
                 <div className="flex h-full min-h-0 w-full flex-col gap-6">
+                  {status.message ? (
+                    <div className="px-6 pt-6">
+                      <div
+                        className={[
+                          'rounded-2xl border px-4 py-3 text-sm font-semibold',
+                          status.tone === 'success'
+                            ? themeMode === 'light'
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                              : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-100'
+                            : status.tone === 'error'
+                              ? themeMode === 'light'
+                                ? 'border-rose-200 bg-rose-50 text-rose-700'
+                                : 'border-rose-400/30 bg-rose-400/10 text-rose-100'
+                              : status.tone === 'pending'
+                                ? themeMode === 'light'
+                                  ? 'border-sky-200 bg-sky-50 text-sky-700'
+                                  : 'border-sky-400/30 bg-sky-400/10 text-sky-100'
+                                : themeMode === 'light'
+                                  ? 'border-slate-200 bg-white/90 text-slate-600'
+                                  : 'border-white/10 bg-white/5 text-slate-300'
+                        ].join(' ')}
+                      >
+                        {status.message}
+                      </div>
+                    </div>
+                  ) : null}
 
             {page === 'home' && (
               <HomeDashboardPage
