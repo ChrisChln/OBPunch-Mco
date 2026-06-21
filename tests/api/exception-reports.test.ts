@@ -977,6 +977,178 @@ describe('api/exception-reports', () => {
     expect(updateException.mock.calls[1][0].status).toBe('Resolved');
   });
 
+  test('lead patch auto closes Over Pick when extra qty matches and physically fixed is enabled', async () => {
+    const mistakeInsert = vi.fn(() => ({
+      select: async () => ({ data: [{ id: 91 }], error: null })
+    }));
+    const updateException = vi.fn((payload: any) => ({
+      eq: () => ({
+        select: () => ({
+          single: async () => ({ data: { id: 13, ...payload }, error: null })
+        })
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        if (table === 'ob_exception_reports') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: {
+                    id: 13,
+                    report_number: '202606180013',
+                    ...baseBody,
+                    exception_type: 'over_pick',
+                    status: 'Counted',
+                    packing_rebin_operator: '',
+                    borrowed_location: null,
+                    borrowed_qty: null,
+                    inventory_adjustment: false,
+                    mistake_report_id: null,
+                    resolution_note: null
+                  },
+                  error: null
+                })
+              })
+            }),
+            update: updateException
+          };
+        }
+        if (table === 'ob_employees') {
+          return {
+            select: () => ({
+              eq: () => ({
+                limit: () => ({
+                  maybeSingle: async () => ({ data: { staff_id: 'US100', position: 'Pick' }, error: null })
+                })
+              })
+            })
+          };
+        }
+        if (table === 'ob_mistake_reports') return { insert: mistakeInsert };
+        throw new Error(`Unexpected table ${table}`);
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler(
+      {
+        method: 'PATCH',
+        headers: {},
+        body: {
+          ...baseBody,
+          id: 13,
+          exception_type: 'over_pick',
+          packing_rebin_operator: '',
+          system_location_qty: 74,
+          actual_qty: 77,
+          borrowed_qty: 3,
+          inventory_adjustment: true
+        }
+      },
+      res
+    );
+
+    expect(res.code).toBe(200);
+    expect(mistakeInsert).toHaveBeenCalledTimes(1);
+    expect(updateException.mock.calls[0][0].status).toBe('Closed');
+    expect(updateException.mock.calls[0][0].responsibility_result).toBe('picker');
+    expect(updateException.mock.calls[0][0].responsible_staff_id).toBe('US100');
+    expect(updateException.mock.calls[0][0].mistake_report_id).toBe(91);
+  });
+
+  test('lead patch auto closes Less Pick when missing qty matches and physically fixed is enabled', async () => {
+    const mistakeInsert = vi.fn(() => ({
+      select: async () => ({ data: [{ id: 92 }], error: null })
+    }));
+    const updateException = vi.fn((payload: any) => ({
+      eq: () => ({
+        select: () => ({
+          single: async () => ({ data: { id: 14, ...payload }, error: null })
+        })
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        if (table === 'ob_exception_reports') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: {
+                    id: 14,
+                    report_number: '202606180014',
+                    ...baseBody,
+                    exception_type: 'short_pick',
+                    status: 'Counted',
+                    packing_rebin_operator: '',
+                    borrowed_location: null,
+                    borrowed_qty: null,
+                    inventory_adjustment: false,
+                    mistake_report_id: null,
+                    resolution_note: null
+                  },
+                  error: null
+                })
+              })
+            }),
+            update: updateException
+          };
+        }
+        if (table === 'ob_employees') {
+          return {
+            select: () => ({
+              eq: () => ({
+                limit: () => ({
+                  maybeSingle: async () => ({ data: { staff_id: 'US100', position: 'Pick' }, error: null })
+                })
+              })
+            })
+          };
+        }
+        if (table === 'ob_mistake_reports') return { insert: mistakeInsert };
+        throw new Error(`Unexpected table ${table}`);
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler(
+      {
+        method: 'PATCH',
+        headers: {},
+        body: {
+          ...baseBody,
+          id: 14,
+          exception_type: 'short_pick',
+          packing_rebin_operator: '',
+          system_location_qty: 74,
+          actual_qty: 71,
+          borrowed_qty: 3,
+          inventory_adjustment: true
+        }
+      },
+      res
+    );
+
+    expect(res.code).toBe(200);
+    expect(mistakeInsert).toHaveBeenCalledTimes(1);
+    expect(updateException.mock.calls[0][0].status).toBe('Closed');
+    expect(updateException.mock.calls[0][0].responsibility_result).toBe('picker');
+    expect(updateException.mock.calls[0][0].responsible_staff_id).toBe('US100');
+    expect(updateException.mock.calls[0][0].mistake_report_id).toBe(92);
+  });
+
   test('admin list accepts Authorization header casing', async () => {
     const serviceSupabase = {
       auth: {
