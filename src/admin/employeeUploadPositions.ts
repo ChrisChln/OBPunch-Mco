@@ -134,9 +134,44 @@ const normalizeShiftValue = (value: unknown): '' | 'early' | 'late' => {
 };
 
 const normalizeShiftTimeValue = (value: unknown) => {
-  const parsed = parseClockTextToMinutes(String(value ?? '').trim());
-  if (!Number.isFinite(parsed)) return '';
-  return formatClockMinutes(parsed as number);
+  if (value === null || value === undefined) return '';
+
+  const normalizeExcelFraction = (raw: number) => {
+    if (!Number.isFinite(raw)) return '';
+    const fraction = ((raw % 1) + 1) % 1;
+    if (fraction <= 0) return '';
+    return formatClockMinutes(Math.round(fraction * 24 * 60));
+  };
+
+  if (typeof value === 'number') {
+    const normalized = normalizeExcelFraction(value);
+    if (normalized) return normalized;
+  }
+
+  const text = String(value ?? '').trim().replace(/：/g, ':');
+  if (!text) return '';
+
+  const direct = parseClockTextToMinutes(text);
+  if (Number.isFinite(direct)) return formatClockMinutes(direct as number);
+
+  const hhmmssMatch = text.match(/^(\d{1,2}:\d{2})(?::\d{2})$/);
+  if (hhmmssMatch) {
+    const parsed = parseClockTextToMinutes(hhmmssMatch[1] ?? '');
+    if (Number.isFinite(parsed)) return formatClockMinutes(parsed as number);
+  }
+
+  const rangeMatch = text.match(/^(\d{1,2}:\d{2})(?:\s*[-~]\s*|\s+to\s+).+$/i);
+  if (rangeMatch) {
+    const parsed = parseClockTextToMinutes(rangeMatch[1] ?? '');
+    if (Number.isFinite(parsed)) return formatClockMinutes(parsed as number);
+  }
+
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const normalized = normalizeExcelFraction(Number(text));
+    if (normalized) return normalized;
+  }
+
+  return '';
 };
 
 const buildTemporaryStaffId = (prefix: string, index: number) => {
