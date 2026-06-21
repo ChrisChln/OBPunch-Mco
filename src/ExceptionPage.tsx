@@ -14,6 +14,7 @@ import {
   hasExceptionReplenishmentCandidate,
   inferExceptionStatus,
   splitExceptionReportItemRows,
+  validateExceptionReportInput,
   type ExceptionReportInput,
   type ExceptionReportPrintPayload,
   type ExceptionReportRecord,
@@ -1011,6 +1012,11 @@ export default function ExceptionPage() {
   }, [unlocked]);
 
   const submitReport = async () => {
+    const validationErrors = validateExceptionReportInput(formWithScopedFollowUp(form), { requireCountByForQuantities: true });
+    if (validationErrors.length) {
+      setMessage({ tone: 'error', text: validationErrors[0] });
+      return;
+    }
     setSaving(true);
     setMessage({ tone: 'idle', text: '' });
     try {
@@ -1044,6 +1050,11 @@ export default function ExceptionPage() {
 
   const saveReport = async () => {
     if (!editing) return;
+    const validationErrors = validateExceptionReportInput(formWithScopedFollowUp(form), { requireCountByForQuantities: true });
+    if (validationErrors.length) {
+      setMessage({ tone: 'error', text: validationErrors[0] });
+      return;
+    }
     setSaving(true);
     setMessage({ tone: 'idle', text: '' });
     try {

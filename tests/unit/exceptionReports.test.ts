@@ -75,17 +75,28 @@ describe('exceptionReports', () => {
     expect(payload?.actual_qty).toBeNull();
   });
 
-  test('requires Count By only when counted quantities are edited', () => {
+  test('requires Count By whenever counted quantities are entered', () => {
     const input: ExceptionReportInput = {
       ...validInput(),
       count_by: ''
     };
 
-    expect(validateExceptionReportInput(input)).toEqual([]);
     expect(validateExceptionReportInput(input, { requireCountByForQuantities: true })).toContain(
       'Count By USID is required when counted quantities are entered.'
     );
     expect(validateExceptionReportInput({ ...input, system_location_qty: '', actual_qty: '' }, { requireCountByForQuantities: true })).toEqual([]);
+  });
+
+  test('requires Count By for legacy top-level quantities even when item rows are present', () => {
+    const input: ExceptionReportInput = {
+      ...validInput(),
+      count_by: '',
+      item_rows: [{ product_barcode: 'SKU123', picked_location: 'A01', system_location_qty: '', actual_qty: '' }]
+    };
+
+    expect(validateExceptionReportInput(input, { requireCountByForQuantities: true })).toContain(
+      'Count By USID is required when counted quantities are entered.'
+    );
   });
 
   test('requires a reason for Other exception type', () => {

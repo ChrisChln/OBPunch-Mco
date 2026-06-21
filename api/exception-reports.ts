@@ -311,7 +311,7 @@ const handlePost = async (req: any, res: any, supabase: any) => {
     return;
   }
 
-  const errors = validateExceptionReportInput(body);
+  const errors = validateExceptionReportInput(body, { requireCountByForQuantities: true });
   const payload = buildExceptionInsertPayload(body);
   if (errors.length || !payload) {
     res.status(400).json({ error: errors[0] ?? 'Invalid exception report.' });
