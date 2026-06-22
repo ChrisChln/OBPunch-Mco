@@ -5,6 +5,7 @@ import {
   buildExceptionInsertPayload,
   buildExceptionUpdatePayload,
   buildExceptionPrintPayload,
+  canPhysicallyFixShortPick,
   doesOverPickExtraQtyMatch,
   doesShortPickMissingQtyMatch,
   inferAutomaticExceptionClosure,
@@ -325,6 +326,44 @@ describe('exceptionReports', () => {
       responsibility_result: 'picker',
       responsible_staff_id: 'US100'
     });
+  });
+
+  test('treats less pick with stock still at original location as physically fixable', () => {
+    const shortPickInput = {
+      ...validInput(),
+      exception_type: 'short_pick',
+      packing_rebin_operator: 'US400',
+      system_location_qty: 20,
+      actual_qty: 21,
+      borrowed_qty: '0',
+      inventory_adjustment: false
+    };
+
+    expect(canPhysicallyFixShortPick(shortPickInput)).toBe(true);
+    expect(inferAutomaticExceptionClosure(shortPickInput)).toBeNull();
+    expect(
+      inferAutomaticExceptionClosure({
+        ...shortPickInput,
+        inventory_adjustment: true
+      })
+    ).toEqual({
+      responsibility_result: 'picker',
+      responsible_staff_id: 'US100'
+    });
+  });
+
+  test('treats zero missing qty as empty so shortage evidence does not become pending adjustment', () => {
+    expect(
+      inferExceptionStatus({
+        ...validInput(),
+        exception_type: 'short_pick',
+        packing_rebin_operator: 'US400',
+        system_location_qty: 27,
+        actual_qty: 28,
+        borrowed_qty: '0',
+        inventory_adjustment: false
+      })
+    ).toBe('Resolved');
   });
 
   test('persists short picked only for Short Pick zero-actual reports', () => {
