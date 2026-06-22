@@ -350,6 +350,24 @@ export const doesShortPickMissingQtyMatch = (
   return actualQty + missingQty === systemQty;
 };
 
+export const canPhysicallyFixShortPick = (
+  input: Pick<
+    ExceptionReportInput,
+    | 'exception_type'
+    | 'item_rows'
+    | 'product_barcode'
+    | 'picked_location'
+    | 'system_location_qty'
+    | 'actual_qty'
+    | 'borrowed_qty'
+    | 'borrowed_location'
+  >
+) => {
+  if (normalizeExceptionType(input.exception_type) !== 'short_pick') return false;
+  if (hasText(input.borrowed_location)) return false;
+  return doesShortPickMissingQtyMatch(input) || hasPickerShortPickEvidence(input);
+};
+
 export const inferAutomaticExceptionClosure = (
   input: Pick<
     ExceptionReportInput,
@@ -370,7 +388,7 @@ export const inferAutomaticExceptionClosure = (
   if (exceptionType !== 'over_pick' && exceptionType !== 'short_pick') return null;
   if (!hasCompleteItemProcessing(input)) return null;
   if (exceptionType === 'over_pick' && !doesOverPickExtraQtyMatch(input)) return null;
-  if (exceptionType === 'short_pick' && !doesShortPickMissingQtyMatch(input)) return null;
+  if (exceptionType === 'short_pick' && !canPhysicallyFixShortPick(input)) return null;
   if (!input.inventory_adjustment) return null;
 
   const pickerStaffId = trimText(input.picking_operator).toUpperCase();
@@ -431,7 +449,8 @@ export const inferExceptionStatus = (
   if (!hasText(input.picking_operator) || !hasText(input.packing_rebin_operator) || !hasText(input.count_by)) return 'Counted';
 
   const borrowedLocation = hasText(input.borrowed_location);
-  const borrowedQty = hasText(input.borrowed_qty);
+  const borrowedQtyValue = parseNonNegativeNumber(input.borrowed_qty);
+  const borrowedQty = borrowedQtyValue !== null && borrowedQtyValue > 0;
   const needsReplenishmentAction = hasExceptionReplenishmentCandidate(input);
   const needsExtraTakenAdjustment = needsReplenishmentAction && Boolean(input.extra_taken);
   if (borrowedLocation || borrowedQty) return borrowedLocation && borrowedQty && input.inventory_adjustment ? 'Resolved' : 'Pending Adjustment';
@@ -494,7 +513,11 @@ export const validateExceptionReportInput = (input: ExceptionReportInput, option
     hasText(input.borrowed_qty)
   ) {
     const missingQty = parseNonNegativeNumber(input.borrowed_qty);
-    if (missingQty === null || missingQty <= 0) errors.push('Missing qty is required for Less Pick.');
+    if (missingQty === null) errors.push('Missing qty is required for Less Pick.');
+    else if (missingQty === 0 && hasPickerShortPickEvidence(input)) {
+      // Actual > system means the stock is still at the original location, so a zero missing qty is valid.
+    }
+    else if (missingQty <= 0) errors.push('Missing qty is required for Less Pick.');
     else if (!doesShortPickMissingQtyMatch(input)) errors.push('For Less Pick, actual plus missing qty must equal system qty.');
   }
 

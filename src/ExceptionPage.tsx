@@ -10,8 +10,8 @@ import {
   EXCEPTION_STATUS_LABELS,
   buildExceptionEditItemRows,
   buildExceptionPrintPayload,
+  canPhysicallyFixShortPick,
   doesOverPickExtraQtyMatch,
-  doesShortPickMissingQtyMatch,
   formatExceptionType,
   getExceptionReportNumber,
   hasExceptionReplenishmentCandidate,
@@ -348,9 +348,9 @@ function ExceptionItemFields({
       <div className={gridColumnsClass}>
         <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Product Barcode</div>
         <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Picked Location</div>
+        {showExtraQtyColumn ? <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{extraQtyLabel}</div> : null}
         <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">System Qty</div>
         <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Actual</div>
-        {showExtraQtyColumn ? <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{extraQtyLabel}</div> : null}
         <button
           type="button"
           onClick={() => setVisibleRowCount(rows.length + 1)}
@@ -381,6 +381,16 @@ function ExceptionItemFields({
             }}
             className={itemInputClass}
           />
+          {showExtraQtyColumn ? (
+            <input
+              type="text"
+              inputMode="decimal"
+              value={index === 0 ? String(form.borrowed_qty ?? '') : ''}
+              onChange={(event) => onChange({ borrowed_qty: event.target.value })}
+              disabled={index !== 0}
+              className={itemNumericInputClass}
+            />
+          ) : null}
           <input
             type="text"
             inputMode="decimal"
@@ -403,16 +413,6 @@ function ExceptionItemFields({
             }}
             className={itemNumericInputClass}
           />
-          {showExtraQtyColumn ? (
-            <input
-              type="text"
-              inputMode="decimal"
-              value={index === 0 ? String(form.borrowed_qty ?? '') : ''}
-              onChange={(event) => onChange({ borrowed_qty: event.target.value })}
-              disabled={index !== 0}
-              className={itemNumericInputClass}
-            />
-          ) : null}
           <button
             type="button"
             onClick={() => updateRows(rows.filter((_, rowIndex) => rowIndex !== index))}
@@ -684,7 +684,7 @@ function NewExceptionModal({
   const showExtraTaken = !showShortPickAutoClose && hasExceptionReplenishmentCandidate(form);
   const canShowPhysicalFixSwitch =
     (showOverPickFollowUp && doesOverPickExtraQtyMatch(form)) ||
-    (showShortPickAutoClose && doesShortPickMissingQtyMatch(form));
+    (showShortPickAutoClose && canPhysicallyFixShortPick(form));
   const adjustmentEnabled =
     showOverPickFollowUp || showShortPickAutoClose || Boolean(form.extra_taken || String(form.borrowed_location ?? '').trim());
   const showOtherReason = form.exception_type === 'other';
