@@ -8,6 +8,7 @@ import {
   canPhysicallyFixShortPick,
   doesOverPickExtraQtyMatch,
   doesShortPickMissingQtyMatch,
+  getExceptionReportWarnings,
   inferAutomaticExceptionClosure,
   inferExceptionStatus,
   isValidExceptionTransition,
@@ -308,7 +309,7 @@ describe('exceptionReports', () => {
       ...validInput(),
       exception_type: 'short_pick',
       packing_rebin_operator: '',
-      system_location_qty: 74,
+      system_location_qty: 68,
       actual_qty: 71,
       borrowed_qty: 3,
       inventory_adjustment: false
@@ -364,6 +365,19 @@ describe('exceptionReports', () => {
         inventory_adjustment: false
       })
     ).toBe('Resolved');
+  });
+
+  test('surfaces a Less Pick warning without blocking save when the missing qty formula does not match', () => {
+    const input = {
+      ...validInput(),
+      exception_type: 'short_pick',
+      system_location_qty: 30,
+      actual_qty: 28,
+      borrowed_qty: '1'
+    };
+
+    expect(validateExceptionReportInput(input)).toEqual([]);
+    expect(getExceptionReportWarnings(input)).toContain('For Less Pick, actual minus missing qty should equal system qty.');
   });
 
   test('persists short picked only for Short Pick zero-actual reports', () => {
