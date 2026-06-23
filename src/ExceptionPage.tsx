@@ -16,7 +16,10 @@ import {
   getExceptionReportWarnings,
   getExceptionReportNumber,
   hasExceptionReplenishmentCandidate,
+  hasNoReplenishmentStockConfirmation,
+  hasShortPickReplenishmentCandidate,
   inferExceptionStatus,
+  getShortPickMissingQty,
   splitExceptionReportItemRows,
   validateExceptionReportInput,
   type ExceptionReportInput,
@@ -60,8 +63,10 @@ const emptyForm = (leadId = ''): ExceptionReportInput => ({
   actual_qty: '',
   item_rows: [],
   count_by: '',
+  missing_qty: '',
   borrowed_location: '',
   borrowed_qty: '',
+  no_replenishment_stock: false,
   short_picked: false,
   extra_taken: false,
   inventory_adjustment: false,
@@ -83,8 +88,10 @@ const formFromRecord = (row: ExceptionReportRecord, leadPin: string): ExceptionR
   actual_qty: String(row.actual_qty ?? ''),
   item_rows: row.item_rows ?? [],
   count_by: row.count_by ?? '',
+  missing_qty: String(getShortPickMissingQty(row) ?? ''),
   borrowed_location: row.borrowed_location ?? '',
   borrowed_qty: row.borrowed_qty === null || row.borrowed_qty === undefined ? '' : String(row.borrowed_qty),
+  no_replenishment_stock: hasNoReplenishmentStockConfirmation(row),
   short_picked: Boolean(row.short_picked),
   extra_taken: Boolean(row.extra_taken),
   inventory_adjustment: row.inventory_adjustment,
@@ -228,7 +235,7 @@ const shouldShowFollowUp = (form: Pick<ExceptionReportInput, 'exception_type' | 
 };
 
 const shouldShowShortPicked = (form: Pick<ExceptionReportInput, 'exception_type' | 'actual_qty' | 'item_rows'>) => {
-  if (form.exception_type !== 'short_shipment') return false;
+  if (form.exception_type !== 'short_pick') return false;
   return buildExceptionEditItemRows({
     product_barcode: '',
     picked_location: '',
@@ -246,11 +253,39 @@ const isOverPick = (form: Pick<ExceptionReportInput, 'exception_type'>) => form.
 const isShortPick = (form: Pick<ExceptionReportInput, 'exception_type'>) => form.exception_type === 'short_pick';
 
 const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInput => {
-  if (isOverPick(form) || isShortPick(form)) {
+  if (isOverPick(form)) {
     return {
       ...form,
       borrowed_location: '',
       short_picked: false,
+      extra_taken: false
+    };
+  }
+  if (isShortPick(form)) {
+    if (hasShortPickReplenishmentCandidate(form)) {
+      if (form.no_replenishment_stock) {
+        return {
+          ...form,
+          borrowed_location: '',
+          borrowed_qty: '',
+          extra_taken: false,
+          inventory_adjustment: false
+        };
+      }
+      const needsAdjustment = Boolean(String(form.borrowed_location ?? '').trim()) || Boolean(form.extra_taken);
+      return {
+        ...form,
+        short_picked: false,
+        missing_qty: '',
+        no_replenishment_stock: false,
+        inventory_adjustment: needsAdjustment ? form.inventory_adjustment : false
+      };
+    }
+    return {
+      ...form,
+      missing_qty: form.missing_qty,
+      borrowed_location: '',
+      no_replenishment_stock: form.no_replenishment_stock,
       extra_taken: false
     };
   }
@@ -265,6 +300,7 @@ const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInpu
     ...form,
     borrowed_location: '',
     borrowed_qty: '',
+    no_replenishment_stock: false,
     short_picked: false,
     extra_taken: false,
     inventory_adjustment: false,
@@ -386,8 +422,8 @@ function ExceptionItemFields({
             <input
               type="text"
               inputMode="decimal"
-              value={index === 0 ? String(form.borrowed_qty ?? '') : ''}
-              onChange={(event) => onChange({ borrowed_qty: event.target.value })}
+              value={index === 0 ? String(isShortPick(form) ? (form.missing_qty ?? '') : (form.borrowed_qty ?? '')) : ''}
+              onChange={(event) => onChange(isShortPick(form) ? { missing_qty: event.target.value } : { borrowed_qty: event.target.value })}
               disabled={index !== 0}
               className={itemNumericInputClass}
             />
@@ -680,15 +716,18 @@ function NewExceptionModal({
   const inferredStatus = status === 'Closed' ? 'Closed' : inferExceptionStatus(form);
   const showFollowUp = shouldShowFollowUp(form);
   const showOverPickFollowUp = isOverPick(form);
-  const showShortPickAutoClose = isShortPick(form);
+  const showShortPickReplenishmentFollowUp = hasShortPickReplenishmentCandidate(form);
+  const showShortPickPhysicalFix = isShortPick(form) && !showShortPickReplenishmentFollowUp;
   const showShortPicked = shouldShowShortPicked(form);
-  const showExtraTaken = !showShortPickAutoClose && hasExceptionReplenishmentCandidate(form);
+  const showExtraTaken = (showFollowUp || showShortPickReplenishmentFollowUp) && hasExceptionReplenishmentCandidate(form);
   const canShowPhysicalFixSwitch =
     (showOverPickFollowUp && doesOverPickExtraQtyMatch(form)) ||
-    (showShortPickAutoClose && canPhysicallyFixShortPick(form));
+    (showShortPickPhysicalFix && canPhysicallyFixShortPick(form));
   const adjustmentEnabled =
-    showOverPickFollowUp || showShortPickAutoClose || Boolean(form.extra_taken || String(form.borrowed_location ?? '').trim());
+    showOverPickFollowUp || showShortPickPhysicalFix || Boolean(form.extra_taken || String(form.borrowed_location ?? '').trim());
   const showOtherReason = form.exception_type === 'other';
+  const showBorrowedLocationFields =
+    (!showOverPickFollowUp && !showShortPickPhysicalFix) && (showFollowUp || showShortPickReplenishmentFollowUp);
 
   return (
     <div className="fixed inset-0 z-40 overflow-auto bg-slate-950/75 px-4 py-6 backdrop-blur">
@@ -703,7 +742,7 @@ function NewExceptionModal({
           </button>
         </div>
 
-        <div className={showFollowUp || showOverPickFollowUp || showShortPickAutoClose ? 'grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(300px,0.85fr)]' : 'grid gap-5'}>
+        <div className={showFollowUp || showOverPickFollowUp || showShortPickPhysicalFix || showShortPickReplenishmentFollowUp ? 'grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(300px,0.85fr)]' : 'grid gap-5'}>
           <div className="rounded-3xl border border-slate-800/80 bg-black/20 p-4">
             <div className="mb-4 text-sm font-black text-white">Report</div>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -742,10 +781,51 @@ function NewExceptionModal({
             </div>
           </div>
 
-          {showFollowUp || showOverPickFollowUp || showShortPickAutoClose ? <div className="rounded-3xl border border-slate-800/80 bg-black/20 p-4">
+          {showFollowUp || showOverPickFollowUp || showShortPickPhysicalFix || showShortPickReplenishmentFollowUp ? <div className="rounded-3xl border border-slate-800/80 bg-black/20 p-4">
             <div className="mb-4 text-sm font-black text-white">Follow-up</div>
             <div className="grid gap-3">
               {showShortPicked ? (
+                <>
+                <Field label="No Replenishment Stock">
+                  <div className="flex h-11 w-full items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 transition focus-within:border-amber-300/60 focus-within:ring-4 focus-within:ring-amber-300/10">
+                    <span className={['text-sm font-black', form.no_replenishment_stock ? 'text-amber-100' : 'text-slate-300'].join(' ')}>
+                      {form.no_replenishment_stock ? 'Yes' : 'No'}
+                    </span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      checked={Boolean(form.no_replenishment_stock)}
+                      onChange={(event) =>
+                        onChange(
+                          event.target.checked
+                            ? {
+                                no_replenishment_stock: true,
+                                borrowed_location: '',
+                                borrowed_qty: '',
+                                extra_taken: false,
+                                inventory_adjustment: false
+                              }
+                            : { no_replenishment_stock: false, short_picked: false }
+                        )
+                      }
+                      className="sr-only"
+                    />
+                    <span
+                      aria-hidden="true"
+                      className={[
+                        'relative h-7 w-12 shrink-0 rounded-full border transition',
+                        form.no_replenishment_stock ? 'border-amber-300/40 bg-amber-300/25' : 'border-slate-700/70 bg-slate-800'
+                      ].join(' ')}
+                    >
+                      <span
+                        className={[
+                          'absolute left-1 top-1 h-5 w-5 rounded-full shadow-lg transition',
+                          form.no_replenishment_stock ? 'translate-x-5 bg-amber-200' : 'translate-x-0 bg-slate-400'
+                        ].join(' ')}
+                      />
+                    </span>
+                  </div>
+                </Field>
                 <Field label="Short Picked">
                   <div className="flex h-11 w-full items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 transition focus-within:border-orange-300/60 focus-within:ring-4 focus-within:ring-orange-300/10">
                     <span className={['text-sm font-black', form.short_picked ? 'text-orange-100' : 'text-slate-300'].join(' ')}>
@@ -755,10 +835,17 @@ function NewExceptionModal({
                       type="checkbox"
                       role="switch"
                       checked={Boolean(form.short_picked)}
+                      disabled={!form.no_replenishment_stock}
                       onChange={(event) =>
                         onChange(
                           event.target.checked
-                            ? { short_picked: true, extra_taken: false, borrowed_location: '', borrowed_qty: '', inventory_adjustment: false }
+                            ? {
+                                short_picked: true,
+                                extra_taken: false,
+                                borrowed_location: '',
+                                borrowed_qty: '',
+                                inventory_adjustment: false
+                              }
                             : { short_picked: false }
                         )
                       }
@@ -780,6 +867,7 @@ function NewExceptionModal({
                     </span>
                   </div>
                 </Field>
+                </>
               ) : null}
               {showExtraTaken ? (
                 <Field label="Extra Taken">
@@ -794,7 +882,7 @@ function NewExceptionModal({
                       onChange={(event) =>
                         onChange(
                           event.target.checked
-                            ? { extra_taken: true, short_picked: false }
+                            ? { extra_taken: true, no_replenishment_stock: false, short_picked: false }
                             : { extra_taken: false, inventory_adjustment: form.borrowed_location ? form.inventory_adjustment : false }
                         )
                       }
@@ -817,30 +905,30 @@ function NewExceptionModal({
                   </div>
                 </Field>
               ) : null}
-              {!showOverPickFollowUp && !showShortPickAutoClose ? (
+              {showBorrowedLocationFields ? (
                 <Field label="Borrowed Location">
                   <input
                     value={form.borrowed_location ?? ''}
-                    onChange={(event) => onChange({ borrowed_location: event.target.value, short_picked: false })}
+                    onChange={(event) => onChange({ borrowed_location: event.target.value, no_replenishment_stock: false, short_picked: false })}
                     disabled={Boolean(form.short_picked)}
                     className={inputClass}
                   />
                 </Field>
               ) : null}
-              {!showOverPickFollowUp && !showShortPickAutoClose ? (
+              {showBorrowedLocationFields ? (
                 <Field label="Borrowed Qty">
                   <input
                     type="text"
                     inputMode="decimal"
                     value={form.borrowed_qty ?? ''}
-                    onChange={(event) => onChange({ borrowed_qty: event.target.value, short_picked: false })}
+                    onChange={(event) => onChange({ borrowed_qty: event.target.value, no_replenishment_stock: false, short_picked: false })}
                     disabled={Boolean(form.short_picked)}
                     className={numericInputClass}
                   />
                 </Field>
               ) : null}
-              {(!showOverPickFollowUp && !showShortPickAutoClose) || canShowPhysicalFixSwitch ? (
-                <Field label={showOverPickFollowUp || showShortPickAutoClose ? 'Physically Fixed' : 'Inventory Adjustment'}>
+              {showBorrowedLocationFields || canShowPhysicalFixSwitch ? (
+                <Field label={showOverPickFollowUp || showShortPickPhysicalFix ? 'Physically Fixed' : 'Inventory Adjustment'}>
                   <div className={['flex h-11 w-full items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 transition focus-within:border-emerald-300/60 focus-within:ring-4 focus:ring-emerald-300/10', form.short_picked || !adjustmentEnabled ? 'opacity-50' : ''].join(' ')}>
                     <span className={['text-sm font-black', form.inventory_adjustment && adjustmentEnabled ? 'text-emerald-100' : 'text-slate-300'].join(' ')}>
                       {form.inventory_adjustment && adjustmentEnabled ? 'Yes' : 'No'}
@@ -849,7 +937,7 @@ function NewExceptionModal({
                       type="checkbox"
                       role="switch"
                       checked={form.inventory_adjustment && adjustmentEnabled}
-                      disabled={Boolean(form.short_picked) || !adjustmentEnabled || ((showOverPickFollowUp || showShortPickAutoClose) && !canShowPhysicalFixSwitch)}
+                      disabled={Boolean(form.short_picked) || !adjustmentEnabled || ((showOverPickFollowUp || showShortPickPhysicalFix) && !canShowPhysicalFixSwitch)}
                       onChange={(event) => onChange({ inventory_adjustment: event.target.checked })}
                       className="sr-only"
                     />

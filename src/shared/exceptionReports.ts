@@ -18,13 +18,13 @@ export const EXCEPTION_STATUSES = ['Open', 'Processing', 'Counted', 'Pending Adj
 export type ExceptionStatus = (typeof EXCEPTION_STATUSES)[number];
 
 export const EXCEPTION_STATUS_LABELS: Record<ExceptionStatus, string> = {
-  Open: 'Open',
-  Processing: 'Processing',
+  Open: 'Created',
+  Processing: 'In Progress',
   Counted: 'Counted',
   'Pending Adjustment': 'Pending Adjustment',
   'Short Picked': 'Short Picked',
   Resolved: 'Resolved',
-  Closed: 'Closed'
+  Closed: 'Cancel'
 };
 
 export type ResponsibilityResult = 'pending' | 'responsible' | 'picker' | 'packer' | 'all' | 'no_responsibility';
@@ -47,8 +47,10 @@ export type ExceptionReportInput = {
   actual_qty: number | string;
   item_rows?: ExceptionReportItemRow[] | null;
   count_by: string;
+  missing_qty?: number | string | null;
   borrowed_location?: string | null;
   borrowed_qty?: number | string | null;
+  no_replenishment_stock?: boolean;
   short_picked?: boolean;
   extra_taken?: boolean;
   inventory_adjustment: boolean;
@@ -57,7 +59,7 @@ export type ExceptionReportInput = {
   resolution_note?: string | null;
 };
 
-export type ExceptionReportRecord = Omit<ExceptionReportInput, 'lead_pin' | 'exception_type' | 'system_location_qty' | 'actual_qty' | 'borrowed_qty'> & {
+export type ExceptionReportRecord = Omit<ExceptionReportInput, 'lead_pin' | 'exception_type' | 'system_location_qty' | 'actual_qty' | 'borrowed_qty' | 'missing_qty'> & {
   id: number | string;
   report_number?: string | null;
   exception_type: ExceptionType | string | null;
@@ -103,6 +105,8 @@ export type ExceptionReportItemRow = {
   picked_location: string;
   system_location_qty?: number | string | null;
   actual_qty?: number | string | null;
+  missing_qty?: number | string | null;
+  no_replenishment_stock?: boolean | null;
 };
 
 export type ExceptionReportEditItemRow = {
@@ -118,6 +122,8 @@ type ExceptionItemRowSource = {
   picking_container?: unknown;
   system_location_qty?: unknown;
   actual_qty?: unknown;
+  missing_qty?: unknown;
+  no_replenishment_stock?: unknown;
   item_rows?: unknown;
 };
 
@@ -196,6 +202,41 @@ export const normalizeExceptionItemRows = (
       actual_qty: trimText(row.actualQty) ? parseNonNegativeNumber(row.actualQty) : null
     }));
 
+const getFirstExceptionItemRowRecord = (input: ExceptionItemRowSource) => {
+  const firstRow = Array.isArray(input.item_rows) ? input.item_rows[0] : null;
+  return isRecord(firstRow) ? firstRow : null;
+};
+
+export const getShortPickMissingQty = (
+  input: {
+    exception_type?: unknown;
+    missing_qty?: unknown;
+    borrowed_qty?: unknown;
+    borrowed_location?: unknown;
+    item_rows?: unknown;
+  }
+) => {
+  if (normalizeExceptionType(input.exception_type) !== 'short_pick') return null;
+  const firstRow = getFirstExceptionItemRowRecord(input);
+  const itemRowValue = firstRow ? parseNonNegativeNumber(firstRow.missing_qty) : null;
+  if (itemRowValue !== null) return itemRowValue;
+  const topLevelValue = parseNonNegativeNumber(input.missing_qty);
+  if (topLevelValue !== null) return topLevelValue;
+  if (!trimText(input.borrowed_location)) return parseNonNegativeNumber(input.borrowed_qty);
+  return null;
+};
+
+export const hasNoReplenishmentStockConfirmation = (
+  input: {
+    no_replenishment_stock?: unknown;
+    item_rows?: unknown;
+  }
+) => {
+  const firstRow = getFirstExceptionItemRowRecord(input);
+  if (typeof firstRow?.no_replenishment_stock === 'boolean') return firstRow.no_replenishment_stock;
+  return Boolean(input.no_replenishment_stock);
+};
+
 export const splitExceptionReportItemRows = (
   input: ExceptionItemRowSource
 ): ExceptionReportItemRow[] => {
@@ -268,6 +309,10 @@ export const hasExceptionReplenishmentCandidate = (input: ExceptionItemRowSource
       return systemQty !== null && actualQty !== null && actualQty <= systemQty;
     });
 
+export const hasShortPickReplenishmentCandidate = (
+  input: ExceptionItemRowSource & Pick<ExceptionReportInput, 'exception_type'>
+) => normalizeExceptionType(input.exception_type) === 'short_pick' && hasExceptionReplenishmentCandidate(input);
+
 const hasText = (value: unknown) => Boolean(trimText(value));
 
 const hasCompleteItemProcessing = (input: ExceptionItemRowSource) => {
@@ -336,13 +381,14 @@ export const doesShortPickMissingQtyMatch = (
     | 'picked_location'
     | 'system_location_qty'
     | 'actual_qty'
+    | 'missing_qty'
     | 'borrowed_qty'
     | 'borrowed_location'
   >
 ) => {
   if (normalizeExceptionType(input.exception_type) !== 'short_pick') return false;
   if (hasText(input.borrowed_location)) return false;
-  const missingQty = parseNonNegativeNumber(input.borrowed_qty);
+  const missingQty = getShortPickMissingQty(input);
   if (missingQty === null || missingQty <= 0) return false;
 
   const { systemQty, actualQty } = summarizeItemQuantities(input);
@@ -359,6 +405,7 @@ export const getExceptionReportWarnings = (
     | 'picked_location'
     | 'system_location_qty'
     | 'actual_qty'
+    | 'missing_qty'
     | 'borrowed_qty'
     | 'borrowed_location'
     | 'picking_operator'
@@ -373,9 +420,9 @@ export const getExceptionReportWarnings = (
     hasCompleteItemProcessing(input) &&
     hasText(input.picking_operator) &&
     hasText(input.count_by) &&
-    hasText(input.borrowed_qty)
+    getShortPickMissingQty(input) !== null
   ) {
-    const missingQty = parseNonNegativeNumber(input.borrowed_qty);
+    const missingQty = getShortPickMissingQty(input);
     const hasMismatch =
       missingQty !== null &&
       missingQty > 0 &&
@@ -395,6 +442,7 @@ export const canPhysicallyFixShortPick = (
     | 'picked_location'
     | 'system_location_qty'
     | 'actual_qty'
+    | 'missing_qty'
     | 'borrowed_qty'
     | 'borrowed_location'
   >
@@ -415,6 +463,7 @@ export const inferAutomaticExceptionClosure = (
     | 'actual_qty'
     | 'picking_operator'
     | 'count_by'
+    | 'missing_qty'
     | 'borrowed_qty'
     | 'borrowed_location'
     | 'inventory_adjustment'
@@ -448,8 +497,10 @@ export const inferExceptionStatus = (
     | 'picking_operator'
     | 'packing_rebin_operator'
     | 'count_by'
+    | 'missing_qty'
     | 'borrowed_location'
     | 'borrowed_qty'
+    | 'no_replenishment_stock'
     | 'short_picked'
     | 'extra_taken'
     | 'inventory_adjustment'
@@ -463,9 +514,9 @@ export const inferExceptionStatus = (
   if (!hasAnyProcessingData) return 'Open';
 
   const isShortPickZero =
-    normalizeExceptionType(input.exception_type) === 'short_shipment' &&
+    normalizeExceptionType(input.exception_type) === 'short_pick' &&
     buildExceptionEditItemRows(input).some((row) => hasText(row.actualQty) && Number(row.actualQty) === 0);
-  if (isShortPickZero && input.short_picked) return 'Short Picked';
+  if (isShortPickZero && input.short_picked && hasNoReplenishmentStockConfirmation(input)) return 'Short Picked';
 
   const hasCompleteItemData = hasCompleteItemProcessing(input);
   if (!hasCompleteItemData) return 'Processing';
@@ -546,9 +597,9 @@ export const validateExceptionReportInput = (input: ExceptionReportInput, option
     hasCompleteItemProcessing(input) &&
     hasText(input.picking_operator) &&
     hasText(input.count_by) &&
-    hasText(input.borrowed_qty)
+    getShortPickMissingQty(input) !== null
   ) {
-    const missingQty = parseNonNegativeNumber(input.borrowed_qty);
+    const missingQty = getShortPickMissingQty(input);
     if (missingQty === null) errors.push('Missing qty is required for Less Pick.');
     else if (missingQty === 0 && hasPickerShortPickEvidence(input)) {
       // Actual > system means the stock is still at the original location, so a zero missing qty is valid.
@@ -558,26 +609,51 @@ export const validateExceptionReportInput = (input: ExceptionReportInput, option
 
   const borrowedLocation = trimText(input.borrowed_location);
   const borrowedQty = parseNonNegativeNumber(input.borrowed_qty);
-  if (!isOverPick && !isShortPick && borrowedLocation && borrowedQty === null) errors.push('Borrowed qty is required when borrowed location is filled.');
-  if (!isOverPick && !isShortPick && !borrowedLocation && trimText(input.borrowed_qty)) errors.push('Borrowed location is required when borrowed qty is filled.');
+  const missingQty = getShortPickMissingQty(input);
+  if (!isOverPick && borrowedLocation && borrowedQty === null) errors.push('Borrowed qty is required when borrowed location is filled.');
+  if (!isOverPick && !borrowedLocation && trimText(input.borrowed_qty)) errors.push('Borrowed location is required when borrowed qty is filled.');
   if (input.extra_taken && !hasExceptionReplenishmentCandidate(input)) errors.push('Extra taken can only be marked when counted stock still needs replenishment.');
   if (!isOverPick && !isShortPick && input.inventory_adjustment && !borrowedLocation && !input.extra_taken) errors.push('Inventory adjustment requires borrowed inventory or extra taken.');
+  if (isShortPick && input.short_picked && !hasNoReplenishmentStockConfirmation(input)) errors.push('No replenishment stock must be confirmed before marking Short Picked.');
+  if (isShortPick && input.short_picked && (borrowedLocation || borrowedQty !== null || Boolean(input.extra_taken))) {
+    errors.push('Short Picked cannot be used when replenishment stock is still being used.');
+  }
+  if (isShortPick && !borrowedLocation && trimText(input.borrowed_qty) && missingQty === null) {
+    errors.push('Borrowed location is required when borrowed qty is filled.');
+  }
   return errors;
 };
 
 export const buildExceptionInsertPayload = (input: ExceptionReportInput) => {
   const exceptionType = normalizeExceptionType(input.exception_type);
-  const itemRows = normalizeExceptionItemRows(input);
+  const normalizedItemRows = normalizeExceptionItemRows(input);
+  const itemRows = normalizedItemRows.map((row, index) =>
+    exceptionType === 'short_pick' && index === 0
+      ? {
+          ...row,
+          missing_qty: getShortPickMissingQty(input),
+          no_replenishment_stock: hasNoReplenishmentStockConfirmation(input)
+        }
+      : row
+  );
   const firstRow = itemRows[0];
   const systemQty = firstRow ? firstRow.system_location_qty ?? null : trimText(input.system_location_qty) ? parseNonNegativeNumber(input.system_location_qty) : null;
   const actualQty = firstRow ? firstRow.actual_qty ?? null : trimText(input.actual_qty) ? parseNonNegativeNumber(input.actual_qty) : null;
   const borrowedLocation = trimText(input.borrowed_location);
-  const borrowedQty = exceptionType === 'over_pick' || exceptionType === 'short_pick'
+  const borrowedQty = exceptionType === 'over_pick'
     ? parseNonNegativeNumber(input.borrowed_qty)
+    : exceptionType === 'short_pick'
+      ? borrowedLocation
+        ? parseNonNegativeNumber(input.borrowed_qty)
+        : null
     : borrowedLocation
       ? parseNonNegativeNumber(input.borrowed_qty)
       : null;
-  const shortPicked = Boolean(input.short_picked) && exceptionType === 'short_shipment' && itemRows.some((row) => row.actual_qty === 0);
+  const shortPicked =
+    Boolean(input.short_picked) &&
+    exceptionType === 'short_pick' &&
+    hasNoReplenishmentStockConfirmation(input) &&
+    itemRows.some((row) => row.actual_qty === 0);
   const extraTaken = Boolean(input.extra_taken) && hasExceptionReplenishmentCandidate(input);
 
   return {
