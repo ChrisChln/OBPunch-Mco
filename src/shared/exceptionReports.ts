@@ -347,7 +347,43 @@ export const doesShortPickMissingQtyMatch = (
 
   const { systemQty, actualQty } = summarizeItemQuantities(input);
   if (systemQty === null || actualQty === null) return false;
-  return actualQty + missingQty === systemQty;
+  return actualQty - missingQty === systemQty;
+};
+
+export const getExceptionReportWarnings = (
+  input: Pick<
+    ExceptionReportInput,
+    | 'exception_type'
+    | 'item_rows'
+    | 'product_barcode'
+    | 'picked_location'
+    | 'system_location_qty'
+    | 'actual_qty'
+    | 'borrowed_qty'
+    | 'borrowed_location'
+    | 'picking_operator'
+    | 'count_by'
+  >
+) => {
+  const warnings: string[] = [];
+  const isShortPick = normalizeExceptionType(input.exception_type) === 'short_pick';
+  if (
+    isShortPick &&
+    !hasText(input.borrowed_location) &&
+    hasCompleteItemProcessing(input) &&
+    hasText(input.picking_operator) &&
+    hasText(input.count_by) &&
+    hasText(input.borrowed_qty)
+  ) {
+    const missingQty = parseNonNegativeNumber(input.borrowed_qty);
+    const hasMismatch =
+      missingQty !== null &&
+      missingQty > 0 &&
+      !hasPickerShortPickEvidence(input) &&
+      !doesShortPickMissingQtyMatch(input);
+    if (hasMismatch) warnings.push('For Less Pick, actual minus missing qty should equal system qty.');
+  }
+  return warnings;
 };
 
 export const canPhysicallyFixShortPick = (
@@ -518,7 +554,6 @@ export const validateExceptionReportInput = (input: ExceptionReportInput, option
       // Actual > system means the stock is still at the original location, so a zero missing qty is valid.
     }
     else if (missingQty <= 0) errors.push('Missing qty is required for Less Pick.');
-    else if (!doesShortPickMissingQtyMatch(input)) errors.push('For Less Pick, actual plus missing qty must equal system qty.');
   }
 
   const borrowedLocation = trimText(input.borrowed_location);

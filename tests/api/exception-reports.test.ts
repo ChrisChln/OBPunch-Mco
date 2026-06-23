@@ -1132,7 +1132,7 @@ describe('api/exception-reports', () => {
           id: 14,
           exception_type: 'short_pick',
           packing_rebin_operator: '',
-          system_location_qty: 74,
+          system_location_qty: 68,
           actual_qty: 71,
           borrowed_qty: 3,
           inventory_adjustment: true
@@ -1233,6 +1233,54 @@ describe('api/exception-reports', () => {
     expect(updateException.mock.calls[0][0].responsibility_result).toBe('picker');
     expect(updateException.mock.calls[0][0].responsible_staff_id).toBe('US100');
     expect(updateException.mock.calls[0][0].mistake_report_id).toBe(93);
+  });
+
+  test('creates Less Pick reports even when the missing qty formula does not match', async () => {
+    const select = vi.fn(() => ({
+      gte: () => ({
+        lt: () => ({
+          order: () => ({
+            limit: async () => ({ data: [], error: null })
+          })
+        })
+      })
+    }));
+    const insert = vi.fn((rows: any[]) => ({
+      select: () => ({
+        single: async () => ({
+          data: { id: 16, status: 'Counted', ...rows[0] },
+          error: null
+        })
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return { insert, select };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({
+      method: 'POST',
+      headers: {},
+      body: {
+        ...baseBody,
+        exception_type: 'short_pick',
+        system_location_qty: 30,
+        actual_qty: 31,
+        borrowed_qty: '2'
+      }
+    }, res);
+
+    expect(res.code).toBe(200);
+    expect(insert).toHaveBeenCalledTimes(1);
+    expect(res.body.row.status).toBe('Counted');
   });
 
   test('admin list accepts Authorization header casing', async () => {

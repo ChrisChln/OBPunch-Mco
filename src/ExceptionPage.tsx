@@ -13,6 +13,7 @@ import {
   canPhysicallyFixShortPick,
   doesOverPickExtraQtyMatch,
   formatExceptionType,
+  getExceptionReportWarnings,
   getExceptionReportNumber,
   hasExceptionReplenishmentCandidate,
   inferExceptionStatus,
@@ -1141,19 +1142,20 @@ export default function ExceptionPage() {
   }, [unlocked]);
 
   const submitReport = async () => {
-    const validationErrors = validateExceptionReportInput(formWithScopedFollowUp(form), { requireCountByForQuantities: true });
+    const scopedForm = formWithScopedFollowUp(form);
+    const validationErrors = validateExceptionReportInput(scopedForm, { requireCountByForQuantities: true });
     if (validationErrors.length) {
       setMessage({ tone: 'error', text: validationErrors[0] });
       return;
     }
+    const validationWarnings = getExceptionReportWarnings(scopedForm);
+    if (validationWarnings.length) window.alert(validationWarnings[0]);
     setSaving(true);
     setMessage({ tone: 'idle', text: '' });
     try {
       const pickingOperator = findPresentEmployee(presentEmployees, form.picking_operator);
       const packingRebinOperator = form.packing_rebin_operator ? findPresentEmployee(presentEmployees, form.packing_rebin_operator) : null;
       const countBy = findPresentEmployee(presentEmployees, form.count_by);
-
-      const scopedForm = formWithScopedFollowUp(form);
       const data = await apiJson<{ row: ExceptionReportRecord }>('/api/exception-reports', {
         method: 'POST',
         body: JSON.stringify({
@@ -1179,19 +1181,20 @@ export default function ExceptionPage() {
 
   const saveReport = async () => {
     if (!editing) return;
-    const validationErrors = validateExceptionReportInput(formWithScopedFollowUp(form), { requireCountByForQuantities: true });
+    const scopedForm = formWithScopedFollowUp(form);
+    const validationErrors = validateExceptionReportInput(scopedForm, { requireCountByForQuantities: true });
     if (validationErrors.length) {
       setMessage({ tone: 'error', text: validationErrors[0] });
       return;
     }
+    const validationWarnings = getExceptionReportWarnings(scopedForm);
+    if (validationWarnings.length) window.alert(validationWarnings[0]);
     setSaving(true);
     setMessage({ tone: 'idle', text: '' });
     try {
       const pickingOperator = findPresentEmployee(presentEmployees, form.picking_operator);
       const packingRebinOperator = form.packing_rebin_operator ? findPresentEmployee(presentEmployees, form.packing_rebin_operator) : null;
       const countBy = findPresentEmployee(presentEmployees, form.count_by);
-
-      const scopedForm = formWithScopedFollowUp(form);
       const data = await apiJson<{ row: ExceptionReportRecord }>('/api/exception-reports', {
         method: 'PATCH',
         body: JSON.stringify({
@@ -1219,14 +1222,15 @@ export default function ExceptionPage() {
 
   const setEditingReportStatus = async (nextStatus: ExceptionStatus) => {
     if (!editing) return;
+    const scopedForm = formWithScopedFollowUp(form);
+    const validationWarnings = getExceptionReportWarnings(scopedForm);
+    if (validationWarnings.length) window.alert(validationWarnings[0]);
     setSaving(true);
     setMessage({ tone: 'idle', text: '' });
     try {
       const pickingOperator = findPresentEmployee(presentEmployees, form.picking_operator);
       const packingRebinOperator = form.packing_rebin_operator ? findPresentEmployee(presentEmployees, form.packing_rebin_operator) : null;
       const countBy = findPresentEmployee(presentEmployees, form.count_by);
-
-      const scopedForm = formWithScopedFollowUp(form);
       const data = await apiJson<{ row: ExceptionReportRecord }>('/api/exception-reports', {
         method: 'PATCH',
         body: JSON.stringify({
