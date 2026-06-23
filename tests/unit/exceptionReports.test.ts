@@ -9,6 +9,7 @@ import {
   doesOverPickExtraQtyMatch,
   doesShortPickMissingQtyMatch,
   getExceptionReportWarnings,
+  hasShortPickReplenishmentCandidate,
   inferAutomaticExceptionClosure,
   inferExceptionStatus,
   isValidExceptionTransition,
@@ -16,6 +17,8 @@ import {
   normalizeExceptionMultiLineText,
   splitExceptionReportItemRows,
   validateExceptionReportInput,
+  getShortPickMissingQty,
+  hasNoReplenishmentStockConfirmation,
   type ExceptionReportInput,
   type ExceptionReportRecord
 } from '../../src/shared/exceptionReports';
@@ -41,13 +44,13 @@ const validInput = (): ExceptionReportInput => ({
 describe('exceptionReports', () => {
   test('uses English labels for exception statuses', () => {
     expect(EXCEPTION_STATUS_LABELS).toEqual({
-      Open: 'Open',
-      Processing: 'Processing',
+      Open: 'Created',
+      Processing: 'In Progress',
       Counted: 'Counted',
       'Pending Adjustment': 'Pending Adjustment',
       'Short Picked': 'Short Picked',
       Resolved: 'Resolved',
-      Closed: 'Closed'
+      Closed: 'Cancel'
     });
   });
 
@@ -143,6 +146,7 @@ describe('exceptionReports', () => {
       ...validInput(),
       product_barcode: ' sku123 ',
       picking_operator: ' us100 ',
+      missing_qty: '3',
       borrowed_location: ' b02 ',
       borrowed_qty: '2',
       extra_taken: true,
@@ -151,6 +155,7 @@ describe('exceptionReports', () => {
 
     expect(payload?.product_barcode).toBe('SKU123');
     expect(payload?.picking_operator).toBe('US100');
+    expect(payload?.item_rows?.[0]?.missing_qty).toBe(3);
     expect(payload?.borrowed_location).toBe('B02');
     expect(payload?.borrowed_qty).toBe(2);
     expect(payload?.extra_taken).toBe(true);
@@ -175,7 +180,7 @@ describe('exceptionReports', () => {
     expect(payload?.system_location_qty).toBe(5);
     expect(payload?.actual_qty).toBe(4);
     expect(payload?.item_rows).toEqual([
-      { product_barcode: 'SKU123', picked_location: 'A01', system_location_qty: 5, actual_qty: 4 },
+      { product_barcode: 'SKU123', picked_location: 'A01', system_location_qty: 5, actual_qty: 4, missing_qty: null, no_replenishment_stock: false },
       { product_barcode: 'SKU456', picked_location: 'B02', system_location_qty: 3, actual_qty: 2 }
     ]);
   });
@@ -265,8 +270,26 @@ describe('exceptionReports', () => {
     expect(inferExceptionStatus({ ...matchedStockStillNeedsReplenishment, extra_taken: true, inventory_adjustment: true })).toBe('Resolved');
     expect(inferExceptionStatus({ ...shortStockStillNeedsReplenishment, extra_taken: true, inventory_adjustment: false })).toBe('Pending Adjustment');
     expect(inferExceptionStatus({ ...shortStockStillNeedsReplenishment, extra_taken: true, inventory_adjustment: true })).toBe('Resolved');
-    expect(inferExceptionStatus({ ...processingComplete, exception_type: 'short_shipment', actual_qty: 0, short_picked: true })).toBe('Short Picked');
-    expect(inferExceptionStatus({ ...validInput(), exception_type: 'short_shipment', actual_qty: 0, packing_rebin_operator: '', count_by: '', short_picked: true })).toBe('Short Picked');
+    expect(
+      inferExceptionStatus({
+        ...processingComplete,
+        exception_type: 'short_pick',
+        actual_qty: 0,
+        no_replenishment_stock: true,
+        short_picked: true
+      })
+    ).toBe('Short Picked');
+    expect(
+      inferExceptionStatus({
+        ...validInput(),
+        exception_type: 'short_pick',
+        actual_qty: 0,
+        packing_rebin_operator: '',
+        count_by: '',
+        no_replenishment_stock: true,
+        short_picked: true
+      })
+    ).toBe('Short Picked');
     expect(
       inferExceptionStatus({
         ...validInput(),
@@ -311,7 +334,7 @@ describe('exceptionReports', () => {
       packing_rebin_operator: '',
       system_location_qty: 68,
       actual_qty: 71,
-      borrowed_qty: 3,
+      missing_qty: 3,
       inventory_adjustment: false
     };
 
@@ -336,7 +359,7 @@ describe('exceptionReports', () => {
       packing_rebin_operator: 'US400',
       system_location_qty: 20,
       actual_qty: 21,
-      borrowed_qty: '0',
+      missing_qty: '0',
       inventory_adjustment: false
     };
 
@@ -361,7 +384,7 @@ describe('exceptionReports', () => {
         packing_rebin_operator: 'US400',
         system_location_qty: 27,
         actual_qty: 28,
-        borrowed_qty: '0',
+        missing_qty: '0',
         inventory_adjustment: false
       })
     ).toBe('Resolved');
@@ -373,30 +396,71 @@ describe('exceptionReports', () => {
       exception_type: 'short_pick',
       system_location_qty: 30,
       actual_qty: 28,
-      borrowed_qty: '1'
+      missing_qty: '1'
     };
 
     expect(validateExceptionReportInput(input)).toEqual([]);
     expect(getExceptionReportWarnings(input)).toContain('For Less Pick, actual minus missing qty should equal system qty.');
   });
 
-  test('persists short picked only for Short Pick zero-actual reports', () => {
+  test('treats Less Pick with borrowed stock as a replenishment flow', () => {
+    const input = {
+      ...validInput(),
+      exception_type: 'short_pick',
+      packing_rebin_operator: 'US400',
+      system_location_qty: 30,
+      actual_qty: 28,
+      borrowed_location: 'B02',
+      borrowed_qty: '2'
+    };
+
+    expect(hasShortPickReplenishmentCandidate(input)).toBe(true);
+    expect(validateExceptionReportInput({ ...input, borrowed_qty: '' })).toContain(
+      'Borrowed qty is required when borrowed location is filled.'
+    );
+    const payload = buildExceptionInsertPayload(input);
+    expect(getShortPickMissingQty(payload as ExceptionReportInput)).toBeNull();
+    expect(payload?.borrowed_location).toBe('B02');
+    expect(payload?.borrowed_qty).toBe(2);
+    expect(inferExceptionStatus({ ...input, inventory_adjustment: false })).toBe('Pending Adjustment');
+    expect(inferExceptionStatus({ ...input, inventory_adjustment: true })).toBe('Resolved');
+  });
+
+  test('persists short picked only for Less Pick zero-actual reports with no replenishment stock confirmed', () => {
     const payload = buildExceptionInsertPayload({
       ...validInput(),
-      exception_type: 'short_shipment',
+      exception_type: 'short_pick',
       packing_rebin_operator: 'US400',
       actual_qty: 0,
+      no_replenishment_stock: true,
       short_picked: true
     });
     expect(payload?.short_picked).toBe(true);
+    expect(hasNoReplenishmentStockConfirmation(payload as ExceptionReportInput)).toBe(true);
     expect(
       buildExceptionInsertPayload({
         ...validInput(),
-        exception_type: 'short_pick',
+        exception_type: 'short_shipment',
         actual_qty: 0,
         short_picked: true
       })?.short_picked
     ).toBe(false);
+  });
+
+  test('requires no replenishment stock confirmation before marking Less Pick as Short Picked', () => {
+    const input = {
+      ...validInput(),
+      exception_type: 'short_pick',
+      packing_rebin_operator: 'US400',
+      actual_qty: 0,
+      short_picked: true
+    };
+
+    expect(validateExceptionReportInput(input)).toContain(
+      'No replenishment stock must be confirmed before marking Short Picked.'
+    );
+    expect(inferExceptionStatus({ ...input, no_replenishment_stock: false })).toBe('Processing');
+    expect(inferExceptionStatus({ ...input, no_replenishment_stock: true })).toBe('Short Picked');
   });
 
   test('maps all key report fields into the 4x6 print payload', () => {

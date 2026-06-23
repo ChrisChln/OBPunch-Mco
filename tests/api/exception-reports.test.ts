@@ -39,8 +39,10 @@ const baseBody = {
   system_location_qty: 5,
   actual_qty: 4,
   count_by: 'US200',
+  missing_qty: '',
   borrowed_location: '',
   borrowed_qty: '',
+  no_replenishment_stock: false,
   inventory_adjustment: false,
   submitted_by_lead_id: 'US300'
 };
@@ -105,7 +107,7 @@ describe('api/exception-reports', () => {
     expect(insert.mock.calls[0][0][0].product_barcode).toBe('SKU123');
     expect(insert.mock.calls[0][0][0].report_number).toBe('202606180001');
     expect(insert.mock.calls[0][0][0].item_rows).toEqual([
-      { product_barcode: 'SKU123', picked_location: 'A01', system_location_qty: 5, actual_qty: 4 }
+      { product_barcode: 'SKU123', picked_location: 'A01', system_location_qty: 5, actual_qty: 4, missing_qty: null, no_replenishment_stock: false }
     ]);
     expect(res.body.row.status).toBe('Counted');
   });
@@ -542,7 +544,7 @@ describe('api/exception-reports', () => {
     expect(insert.mock.calls[0][0][0].resolution_note).toBe('Mixed SKU issue');
   });
 
-  test('creates Short Picked reports as a separate status', async () => {
+  test('creates Short Picked reports as a separate status for Less Pick after no-stock confirmation', async () => {
     const select = vi.fn(() => ({
       gte: () => ({
         lt: () => ({
@@ -578,9 +580,10 @@ describe('api/exception-reports', () => {
       headers: {},
       body: {
         ...baseBody,
-        exception_type: 'short_shipment',
+        exception_type: 'short_pick',
         packing_rebin_operator: 'US500',
         actual_qty: 0,
+        no_replenishment_stock: true,
         short_picked: true
       }
     }, res);
@@ -1134,7 +1137,7 @@ describe('api/exception-reports', () => {
           packing_rebin_operator: '',
           system_location_qty: 68,
           actual_qty: 71,
-          borrowed_qty: 3,
+          missing_qty: 3,
           inventory_adjustment: true
         }
       },
@@ -1220,7 +1223,7 @@ describe('api/exception-reports', () => {
           packing_rebin_operator: 'US500',
           system_location_qty: 20,
           actual_qty: 21,
-          borrowed_qty: 0,
+          missing_qty: 0,
           inventory_adjustment: true
         }
       },
@@ -1274,13 +1277,66 @@ describe('api/exception-reports', () => {
         exception_type: 'short_pick',
         system_location_qty: 30,
         actual_qty: 31,
-        borrowed_qty: '2'
+        missing_qty: '2'
       }
     }, res);
 
     expect(res.code).toBe(200);
     expect(insert).toHaveBeenCalledTimes(1);
     expect(res.body.row.status).toBe('Counted');
+  });
+
+  test('creates Less Pick reports with borrowed location replenishment', async () => {
+    const select = vi.fn(() => ({
+      gte: () => ({
+        lt: () => ({
+          order: () => ({
+            limit: async () => ({ data: [], error: null })
+          })
+        })
+      })
+    }));
+    const insert = vi.fn((rows: any[]) => ({
+      select: () => ({
+        single: async () => ({
+          data: { id: 17, status: rows[0].status, ...rows[0] },
+          error: null
+        })
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return { insert, select };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({
+      method: 'POST',
+      headers: {},
+      body: {
+        ...baseBody,
+        exception_type: 'short_pick',
+        packing_rebin_operator: 'US500',
+        system_location_qty: 30,
+        actual_qty: 28,
+        borrowed_location: 'B02',
+        borrowed_qty: '2',
+        inventory_adjustment: false
+      }
+    }, res);
+
+    expect(res.code).toBe(200);
+    expect(insert).toHaveBeenCalledTimes(1);
+    expect(insert.mock.calls[0][0][0].borrowed_location).toBe('B02');
+    expect(insert.mock.calls[0][0][0].borrowed_qty).toBe(2);
+    expect(res.body.row.status).toBe('Pending Adjustment');
   });
 
   test('admin list accepts Authorization header casing', async () => {
