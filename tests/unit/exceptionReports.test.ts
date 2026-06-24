@@ -9,6 +9,7 @@ import {
   doesOverPickExtraQtyMatch,
   doesShortPickMissingQtyMatch,
   getExceptionReportWarnings,
+  hasOutstandingShortPickMissingQty,
   hasShortPickReplenishmentCandidate,
   inferAutomaticExceptionClosure,
   inferExceptionStatus,
@@ -66,14 +67,15 @@ describe('exceptionReports', () => {
     expect(errors).toContain('Actual qty must be a non-negative number.');
   });
 
-  test('requires borrowed qty when borrowed location is filled', () => {
-    const errors = validateExceptionReportInput({
+  test('warns when borrowed qty is missing after borrowed location is filled', () => {
+    const input = {
       ...validInput(),
       exception_type: 'short_shipment',
       borrowed_location: 'B02',
       borrowed_qty: ''
-    });
-    expect(errors).toContain('Borrowed qty is required when borrowed location is filled.');
+    };
+    expect(validateExceptionReportInput(input)).toEqual([]);
+    expect(getExceptionReportWarnings(input)).toContain('Borrowed qty is required when borrowed location is filled.');
   });
 
   test('allows minimal reports and keeps blank quantities empty', () => {
@@ -97,38 +99,40 @@ describe('exceptionReports', () => {
     expect(payload?.actual_qty).toBeNull();
   });
 
-  test('requires Count By whenever counted quantities are entered', () => {
+  test('warns when Count By is missing after counted quantities are entered', () => {
     const input: ExceptionReportInput = {
       ...validInput(),
       count_by: ''
     };
 
-    expect(validateExceptionReportInput(input, { requireCountByForQuantities: true })).toContain(
+    expect(validateExceptionReportInput(input, { requireCountByForQuantities: true })).toEqual([]);
+    expect(getExceptionReportWarnings(input)).toContain(
       'Count By USID is required when counted quantities are entered.'
     );
     expect(validateExceptionReportInput({ ...input, system_location_qty: '', actual_qty: '' }, { requireCountByForQuantities: true })).toEqual([]);
   });
 
-  test('requires Count By for legacy top-level quantities even when item rows are present', () => {
+  test('warns for Count By with legacy top-level quantities even when item rows are present', () => {
     const input: ExceptionReportInput = {
       ...validInput(),
       count_by: '',
       item_rows: [{ product_barcode: 'SKU123', picked_location: 'A01', system_location_qty: '', actual_qty: '' }]
     };
 
-    expect(validateExceptionReportInput(input, { requireCountByForQuantities: true })).toContain(
+    expect(validateExceptionReportInput(input, { requireCountByForQuantities: true })).toEqual([]);
+    expect(getExceptionReportWarnings(input)).toContain(
       'Count By USID is required when counted quantities are entered.'
     );
   });
 
   test('requires a reason for Other exception type', () => {
-    expect(
-      validateExceptionReportInput({
-        ...validInput(),
-        exception_type: 'other',
-        resolution_note: ''
-      })
-    ).toContain('Reason is required for Other.');
+    const inputWithoutReason = {
+      ...validInput(),
+      exception_type: 'other',
+      resolution_note: ''
+    };
+    expect(validateExceptionReportInput(inputWithoutReason)).toEqual([]);
+    expect(getExceptionReportWarnings(inputWithoutReason)).toContain('Reason is required for Other.');
 
     const input = {
       ...validInput(),
@@ -240,13 +244,13 @@ describe('exceptionReports', () => {
     expect(needsInventoryAdjustment({ borrowed_location: '', inventory_adjustment: false })).toBe(false);
   });
 
-  test('validates inventory adjustment scope for extra taken', () => {
-    expect(validateExceptionReportInput({ ...validInput(), exception_type: 'short_shipment', inventory_adjustment: true })).toContain(
+  test('warns for inventory adjustment scope rules instead of blocking save', () => {
+    expect(getExceptionReportWarnings({ ...validInput(), exception_type: 'short_shipment', inventory_adjustment: true })).toContain(
       'Inventory adjustment requires borrowed inventory or extra taken.'
     );
     expect(validateExceptionReportInput({ ...validInput(), system_location_qty: 3, actual_qty: 3, extra_taken: true, inventory_adjustment: true })).toEqual([]);
     expect(validateExceptionReportInput({ ...validInput(), system_location_qty: 3, actual_qty: 2, extra_taken: true, inventory_adjustment: true })).toEqual([]);
-    expect(validateExceptionReportInput({ ...validInput(), system_location_qty: 3, actual_qty: 4, extra_taken: true })).toContain(
+    expect(getExceptionReportWarnings({ ...validInput(), system_location_qty: 3, actual_qty: 4, extra_taken: true })).toContain(
       'Extra taken can only be marked when counted stock still needs replenishment.'
     );
   });
@@ -415,7 +419,8 @@ describe('exceptionReports', () => {
     };
 
     expect(hasShortPickReplenishmentCandidate(input)).toBe(true);
-    expect(validateExceptionReportInput({ ...input, borrowed_qty: '' })).toContain(
+    expect(validateExceptionReportInput({ ...input, borrowed_qty: '' })).toEqual([]);
+    expect(getExceptionReportWarnings({ ...input, borrowed_qty: '' })).toContain(
       'Borrowed qty is required when borrowed location is filled.'
     );
     const payload = buildExceptionInsertPayload(input);
@@ -424,6 +429,38 @@ describe('exceptionReports', () => {
     expect(payload?.borrowed_qty).toBe(2);
     expect(inferExceptionStatus({ ...input, inventory_adjustment: false })).toBe('Pending Adjustment');
     expect(inferExceptionStatus({ ...input, inventory_adjustment: true })).toBe('Resolved');
+  });
+
+  test('keeps Less Pick replenishment options visible while missing qty is still above zero', () => {
+    expect(
+      hasOutstandingShortPickMissingQty({
+        ...validInput(),
+        exception_type: 'short_pick',
+        actual_qty: 126,
+        system_location_qty: 127,
+        missing_qty: '1'
+      })
+    ).toBe(true);
+
+    expect(
+      hasOutstandingShortPickMissingQty({
+        ...validInput(),
+        exception_type: 'short_pick',
+        actual_qty: 128,
+        system_location_qty: 127,
+        missing_qty: '1'
+      })
+    ).toBe(true);
+
+    expect(
+      hasOutstandingShortPickMissingQty({
+        ...validInput(),
+        exception_type: 'short_pick',
+        actual_qty: 128,
+        system_location_qty: 127,
+        missing_qty: '0'
+      })
+    ).toBe(false);
   });
 
   test('persists short picked only for Less Pick zero-actual reports with no replenishment stock confirmed', () => {
@@ -447,7 +484,7 @@ describe('exceptionReports', () => {
     ).toBe(false);
   });
 
-  test('requires no replenishment stock confirmation before marking Less Pick as Short Picked', () => {
+  test('warns when no replenishment stock is not confirmed before marking Less Pick as Short Picked', () => {
     const input = {
       ...validInput(),
       exception_type: 'short_pick',
@@ -456,7 +493,8 @@ describe('exceptionReports', () => {
       short_picked: true
     };
 
-    expect(validateExceptionReportInput(input)).toContain(
+    expect(validateExceptionReportInput(input)).toEqual([]);
+    expect(getExceptionReportWarnings(input)).toContain(
       'No replenishment stock must be confirmed before marking Short Picked.'
     );
     expect(inferExceptionStatus({ ...input, no_replenishment_stock: false })).toBe('Processing');
