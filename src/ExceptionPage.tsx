@@ -328,7 +328,7 @@ const numericInputClass =
 const itemInputClass = `${inputClass} min-w-0`;
 const itemNumericInputClass = `${numericInputClass} min-w-0`;
 const itemRowGridClass =
-  'grid min-w-[680px] grid-cols-[minmax(160px,1.3fr)_minmax(160px,1.3fr)_minmax(108px,0.6fr)_minmax(96px,0.55fr)_36px] gap-3';
+  'grid grid-cols-[minmax(0,1.45fr)_minmax(0,1.45fr)_minmax(88px,0.72fr)_minmax(88px,0.68fr)_36px] gap-3';
 
 const textAreaClass =
   'min-h-24 w-full rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 py-2 text-sm font-semibold text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-300/60 focus:ring-4 focus:ring-emerald-300/10 disabled:cursor-not-allowed disabled:opacity-50';
@@ -362,7 +362,7 @@ function ExceptionItemFields({
   const extraQtyLabel = isOverPick(form) ? 'Extra Qty' : isShortPick(form) ? 'Missing Qty' : '';
   const showExtraQtyColumn = Boolean(extraQtyLabel);
   const gridColumnsClass = showExtraQtyColumn
-    ? 'grid min-w-[800px] grid-cols-[minmax(160px,1.2fr)_minmax(160px,1.2fr)_minmax(110px,0.65fr)_minmax(110px,0.65fr)_minmax(96px,0.6fr)_36px] gap-3'
+    ? 'grid grid-cols-[minmax(0,1.4fr)_minmax(0,1.4fr)_minmax(84px,0.7fr)_minmax(84px,0.7fr)_minmax(84px,0.66fr)_36px] gap-3'
     : itemRowGridClass;
 
   useEffect(() => {
@@ -388,88 +388,86 @@ function ExceptionItemFields({
 
   return (
     <div className="grid gap-2 sm:col-span-2">
-      <div className="overflow-x-auto pb-1">
-        <div className={gridColumnsClass}>
-          <div className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Product Barcode</div>
-          <div className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Picked Location</div>
-          {showExtraQtyColumn ? <div className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{extraQtyLabel}</div> : null}
-          <div className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">System Qty</div>
-          <div className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Actual</div>
+      <div className={gridColumnsClass}>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Product Barcode</div>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Picked Location</div>
+        {showExtraQtyColumn ? <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{extraQtyLabel}</div> : null}
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">System Qty</div>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Actual</div>
+        <button
+          type="button"
+          onClick={() => setVisibleRowCount(rows.length + 1)}
+          aria-label="Add item row"
+          title="Add"
+          className="inline-flex h-7 w-9 items-center justify-center rounded-lg border border-emerald-300/40 bg-emerald-300/10 text-emerald-100 transition hover:border-emerald-200 hover:bg-emerald-300/20"
+        >
+          <Plus className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+      {rows.map((row, index) => (
+        <div key={`exception-item-${index}`} className={`mt-2 ${gridColumnsClass}`}>
+          <input
+            value={row.product}
+            onChange={(event) => {
+              const nextRows = [...rows];
+              nextRows[index] = { ...row, product: event.target.value };
+              updateRows(nextRows);
+            }}
+            className={itemInputClass}
+          />
+          <input
+            value={row.location}
+            onChange={(event) => {
+              const nextRows = [...rows];
+              nextRows[index] = { ...row, location: event.target.value };
+              updateRows(nextRows);
+            }}
+            className={itemInputClass}
+          />
+          {showExtraQtyColumn ? (
+            <input
+              type="text"
+              inputMode="decimal"
+              value={index === 0 ? String(isShortPick(form) ? (form.missing_qty ?? '') : (form.borrowed_qty ?? '')) : ''}
+              onChange={(event) => onChange(isShortPick(form) ? { missing_qty: event.target.value } : { borrowed_qty: event.target.value })}
+              disabled={index !== 0}
+              className={itemNumericInputClass}
+            />
+          ) : null}
+          <input
+            type="text"
+            inputMode="decimal"
+            value={row.systemQty}
+            onChange={(event) => {
+              const nextRows = [...rows];
+              nextRows[index] = { ...row, systemQty: event.target.value };
+              updateRows(nextRows);
+            }}
+            className={itemNumericInputClass}
+          />
+          <input
+            type="text"
+            inputMode="decimal"
+            value={row.actualQty}
+            onChange={(event) => {
+              const nextRows = [...rows];
+              nextRows[index] = { ...row, actualQty: event.target.value };
+              updateRows(nextRows);
+            }}
+            className={itemNumericInputClass}
+          />
           <button
             type="button"
-            onClick={() => setVisibleRowCount(rows.length + 1)}
-            aria-label="Add item row"
-            title="Add"
-            className="inline-flex h-7 w-9 items-center justify-center rounded-lg border border-emerald-300/40 bg-emerald-300/10 text-emerald-100 transition hover:border-emerald-200 hover:bg-emerald-300/20"
+            onClick={() => updateRows(rows.filter((_, rowIndex) => rowIndex !== index))}
+            disabled={rows.length === 1}
+            aria-label={`Remove item row ${index + 1}`}
+            title="Remove"
+            className="inline-flex h-11 w-9 items-center justify-center rounded-xl border border-slate-700/70 bg-[#080d18]/70 text-slate-300 transition hover:border-rose-300/70 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <Plus className="h-4 w-4" aria-hidden="true" />
+            <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
-        {rows.map((row, index) => (
-          <div key={`exception-item-${index}`} className={`mt-2 ${gridColumnsClass}`}>
-            <input
-              value={row.product}
-              onChange={(event) => {
-                const nextRows = [...rows];
-                nextRows[index] = { ...row, product: event.target.value };
-                updateRows(nextRows);
-              }}
-              className={itemInputClass}
-            />
-            <input
-              value={row.location}
-              onChange={(event) => {
-                const nextRows = [...rows];
-                nextRows[index] = { ...row, location: event.target.value };
-                updateRows(nextRows);
-              }}
-              className={itemInputClass}
-            />
-            {showExtraQtyColumn ? (
-              <input
-                type="text"
-                inputMode="decimal"
-                value={index === 0 ? String(isShortPick(form) ? (form.missing_qty ?? '') : (form.borrowed_qty ?? '')) : ''}
-                onChange={(event) => onChange(isShortPick(form) ? { missing_qty: event.target.value } : { borrowed_qty: event.target.value })}
-                disabled={index !== 0}
-                className={itemNumericInputClass}
-              />
-            ) : null}
-            <input
-              type="text"
-              inputMode="decimal"
-              value={row.systemQty}
-              onChange={(event) => {
-                const nextRows = [...rows];
-                nextRows[index] = { ...row, systemQty: event.target.value };
-                updateRows(nextRows);
-              }}
-              className={itemNumericInputClass}
-            />
-            <input
-              type="text"
-              inputMode="decimal"
-              value={row.actualQty}
-              onChange={(event) => {
-                const nextRows = [...rows];
-                nextRows[index] = { ...row, actualQty: event.target.value };
-                updateRows(nextRows);
-              }}
-              className={itemNumericInputClass}
-            />
-            <button
-              type="button"
-              onClick={() => updateRows(rows.filter((_, rowIndex) => rowIndex !== index))}
-              disabled={rows.length === 1}
-              aria-label={`Remove item row ${index + 1}`}
-              title="Remove"
-              className="inline-flex h-11 w-9 items-center justify-center rounded-xl border border-slate-700/70 bg-[#080d18]/70 text-slate-300 transition hover:border-rose-300/70 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <X className="h-4 w-4" aria-hidden="true" />
-            </button>
-          </div>
-        ))}
-      </div>
+      ))}
     </div>
   );
 }
@@ -739,7 +737,7 @@ export function NewExceptionModal({
 
   return (
     <div className="fixed inset-0 z-40 overflow-auto bg-slate-950/75 px-4 py-6 backdrop-blur">
-      <section className="mx-auto w-full max-w-[1380px] rounded-[1.75rem] border border-slate-800/80 bg-slate-950 p-5 text-white shadow-2xl">
+      <section className="mx-auto w-full max-w-[1520px] rounded-[1.75rem] border border-slate-800/80 bg-slate-950 p-5 text-white shadow-2xl">
         <div className="mb-5 flex items-start justify-between gap-4">
           <div>
             <div className="text-xs font-bold uppercase tracking-[0.22em] text-emerald-200">{mode === 'edit' ? 'Edit' : 'New'}</div>
@@ -750,7 +748,7 @@ export function NewExceptionModal({
           </button>
         </div>
 
-        <div className={showFollowUp || showOverPickFollowUp || showShortPickPhysicalFix || showShortPickReplenishmentFollowUp ? 'grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.9fr)]' : 'grid gap-5'}>
+        <div className={showFollowUp || showOverPickFollowUp || showShortPickPhysicalFix || showShortPickReplenishmentFollowUp ? 'grid gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(340px,0.82fr)]' : 'grid gap-5'}>
           <div className="rounded-3xl border border-slate-800/80 bg-black/20 p-4">
             <div className="mb-4 text-sm font-black text-white">Report</div>
             <div className="grid gap-3 sm:grid-cols-2">
