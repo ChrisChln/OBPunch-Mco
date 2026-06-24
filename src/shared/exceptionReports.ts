@@ -313,6 +313,20 @@ export const hasShortPickReplenishmentCandidate = (
   input: ExceptionItemRowSource & Pick<ExceptionReportInput, 'exception_type'>
 ) => normalizeExceptionType(input.exception_type) === 'short_pick' && hasExceptionReplenishmentCandidate(input);
 
+export const hasOutstandingShortPickMissingQty = (
+  input: {
+    exception_type?: unknown;
+    missing_qty?: unknown;
+    borrowed_qty?: unknown;
+    borrowed_location?: unknown;
+    item_rows?: unknown;
+  }
+) => {
+  if (normalizeExceptionType(input.exception_type) !== 'short_pick') return false;
+  const missingQty = getShortPickMissingQty(input);
+  return missingQty !== null && missingQty > 0;
+};
+
 const hasText = (value: unknown) => Boolean(trimText(value));
 
 const hasCompleteItemProcessing = (input: ExceptionItemRowSource) => {
@@ -326,7 +340,7 @@ const hasAnyItemProcessing = (input: ExceptionItemRowSource) =>
     .some((row) => hasText(row.systemQty) || hasText(row.actualQty));
 
 const hasEnteredCountedQuantities = (
-  input: Pick<ExceptionReportInput, 'system_location_qty' | 'actual_qty' | 'item_rows' | 'product_barcode' | 'picked_location' | 'picking_container'>
+  input: Pick<ExceptionReportInput, 'system_location_qty' | 'actual_qty' | 'item_rows' | 'product_barcode' | 'picked_location'>
 ) => {
   if (hasText(input.system_location_qty) || hasText(input.actual_qty)) return true;
   return buildExceptionEditItemRows(input)
@@ -410,10 +424,41 @@ export const getExceptionReportWarnings = (
     | 'borrowed_location'
     | 'picking_operator'
     | 'count_by'
+    | 'report_date'
+    | 'resolution_note'
+    | 'inventory_adjustment'
+    | 'short_picked'
+    | 'extra_taken'
+    | 'no_replenishment_stock'
   >
 ) => {
   const warnings: string[] = [];
-  const isShortPick = normalizeExceptionType(input.exception_type) === 'short_pick';
+  const exceptionType = normalizeExceptionType(input.exception_type);
+  const isOverPick = exceptionType === 'over_pick';
+  const isShortPick = exceptionType === 'short_pick';
+  const borrowedLocation = trimText(input.borrowed_location);
+  const borrowedQty = parseNonNegativeNumber(input.borrowed_qty);
+  const missingQty = getShortPickMissingQty(input);
+
+  if (normalizeExceptionType(input.exception_type) === 'other' && !trimText(input.resolution_note)) {
+    warnings.push('Reason is required for Other.');
+  }
+  if (
+    hasEnteredCountedQuantities(input) &&
+    !trimText(input.count_by)
+  ) {
+    warnings.push('Count By USID is required when counted quantities are entered.');
+  }
+  if (
+    isOverPick &&
+    hasCompleteItemProcessing(input) &&
+    hasText(input.picking_operator) &&
+    hasText(input.count_by)
+  ) {
+    const extraQty = parseNonNegativeNumber(input.borrowed_qty);
+    if (extraQty === null || extraQty <= 0) warnings.push('Extra qty is required for Over Pick.');
+    else if (!doesOverPickExtraQtyMatch(input)) warnings.push('For Over Pick, system qty plus extra qty must equal actual.');
+  }
   if (
     isShortPick &&
     !hasText(input.borrowed_location) &&
@@ -429,6 +474,34 @@ export const getExceptionReportWarnings = (
       !hasPickerShortPickEvidence(input) &&
       !doesShortPickMissingQtyMatch(input);
     if (hasMismatch) warnings.push('For Less Pick, actual minus missing qty should equal system qty.');
+  }
+  if (
+    isShortPick &&
+    !borrowedLocation &&
+    hasCompleteItemProcessing(input) &&
+    hasText(input.picking_operator) &&
+    hasText(input.count_by) &&
+    missingQty !== null
+  ) {
+    if (missingQty === null) warnings.push('Missing qty is required for Less Pick.');
+    else if (missingQty === 0 && hasPickerShortPickEvidence(input)) {
+      // Actual > system means the stock is still at the original location, so a zero missing qty is valid.
+    } else if (missingQty <= 0) warnings.push('Missing qty is required for Less Pick.');
+  }
+  if (!isOverPick && borrowedLocation && borrowedQty === null) warnings.push('Borrowed qty is required when borrowed location is filled.');
+  if (!isOverPick && !isShortPick && !borrowedLocation && trimText(input.borrowed_qty)) warnings.push('Borrowed location is required when borrowed qty is filled.');
+  if (input.extra_taken && !hasExceptionReplenishmentCandidate(input)) warnings.push('Extra taken can only be marked when counted stock still needs replenishment.');
+  if (!isOverPick && !isShortPick && input.inventory_adjustment && !borrowedLocation && !input.extra_taken) {
+    warnings.push('Inventory adjustment requires borrowed inventory or extra taken.');
+  }
+  if (isShortPick && input.short_picked && !hasNoReplenishmentStockConfirmation(input)) {
+    warnings.push('No replenishment stock must be confirmed before marking Short Picked.');
+  }
+  if (isShortPick && input.short_picked && (borrowedLocation || borrowedQty !== null || Boolean(input.extra_taken))) {
+    warnings.push('Short Picked cannot be used when replenishment stock is still being used.');
+  }
+  if (isShortPick && !borrowedLocation && trimText(input.borrowed_qty) && missingQty === null) {
+    warnings.push('Borrowed location is required when borrowed qty is filled.');
   }
   return warnings;
 };
@@ -560,67 +633,14 @@ type ExceptionReportValidationOptions = {
   requireCountByForQuantities?: boolean;
 };
 
-export const validateExceptionReportInput = (input: ExceptionReportInput, options: ExceptionReportValidationOptions = {}): string[] => {
+export const validateExceptionReportInput = (input: ExceptionReportInput, _options: ExceptionReportValidationOptions = {}): string[] => {
   const errors: string[] = [];
   const editRows = buildExceptionEditItemRows(input).filter(itemRowHasValue);
-  const exceptionType = normalizeExceptionType(input.exception_type);
-  const isOverPick = exceptionType === 'over_pick';
-  const isShortPick = exceptionType === 'short_pick';
   if (!DATE_ONLY_PATTERN.test(trimText(input.report_date))) errors.push('Date must use YYYY-MM-DD.');
-  if (normalizeExceptionType(input.exception_type) === 'other' && !trimText(input.resolution_note)) {
-    errors.push('Reason is required for Other.');
-  }
   if (!editRows.some((row) => trimText(row.product))) errors.push('Product barcode is required.');
   if (!trimText(input.picking_list_number)) errors.push('Picking list number is required.');
   if (editRows.some((row) => trimText(row.systemQty) && parseNonNegativeNumber(row.systemQty) === null)) errors.push('System location qty must be a non-negative number.');
   if (editRows.some((row) => trimText(row.actualQty) && parseNonNegativeNumber(row.actualQty) === null)) errors.push('Actual qty must be a non-negative number.');
-  if (
-    options.requireCountByForQuantities &&
-    hasEnteredCountedQuantities(input) &&
-    !trimText(input.count_by)
-  ) {
-    errors.push('Count By USID is required when counted quantities are entered.');
-  }
-  if (
-    isOverPick &&
-    hasCompleteItemProcessing(input) &&
-    hasText(input.picking_operator) &&
-    hasText(input.count_by)
-  ) {
-    const extraQty = parseNonNegativeNumber(input.borrowed_qty);
-    if (extraQty === null || extraQty <= 0) errors.push('Extra qty is required for Over Pick.');
-    else if (!doesOverPickExtraQtyMatch(input)) errors.push('For Over Pick, system qty plus extra qty must equal actual.');
-  }
-  if (
-    isShortPick &&
-    !hasText(input.borrowed_location) &&
-    hasCompleteItemProcessing(input) &&
-    hasText(input.picking_operator) &&
-    hasText(input.count_by) &&
-    getShortPickMissingQty(input) !== null
-  ) {
-    const missingQty = getShortPickMissingQty(input);
-    if (missingQty === null) errors.push('Missing qty is required for Less Pick.');
-    else if (missingQty === 0 && hasPickerShortPickEvidence(input)) {
-      // Actual > system means the stock is still at the original location, so a zero missing qty is valid.
-    }
-    else if (missingQty <= 0) errors.push('Missing qty is required for Less Pick.');
-  }
-
-  const borrowedLocation = trimText(input.borrowed_location);
-  const borrowedQty = parseNonNegativeNumber(input.borrowed_qty);
-  const missingQty = getShortPickMissingQty(input);
-  if (!isOverPick && borrowedLocation && borrowedQty === null) errors.push('Borrowed qty is required when borrowed location is filled.');
-  if (!isOverPick && !isShortPick && !borrowedLocation && trimText(input.borrowed_qty)) errors.push('Borrowed location is required when borrowed qty is filled.');
-  if (input.extra_taken && !hasExceptionReplenishmentCandidate(input)) errors.push('Extra taken can only be marked when counted stock still needs replenishment.');
-  if (!isOverPick && !isShortPick && input.inventory_adjustment && !borrowedLocation && !input.extra_taken) errors.push('Inventory adjustment requires borrowed inventory or extra taken.');
-  if (isShortPick && input.short_picked && !hasNoReplenishmentStockConfirmation(input)) errors.push('No replenishment stock must be confirmed before marking Short Picked.');
-  if (isShortPick && input.short_picked && (borrowedLocation || borrowedQty !== null || Boolean(input.extra_taken))) {
-    errors.push('Short Picked cannot be used when replenishment stock is still being used.');
-  }
-  if (isShortPick && !borrowedLocation && trimText(input.borrowed_qty) && missingQty === null) {
-    errors.push('Borrowed location is required when borrowed qty is filled.');
-  }
   return errors;
 };
 
