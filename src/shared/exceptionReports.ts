@@ -14,7 +14,7 @@ export const formatExceptionType = (value: unknown) => {
   return normalized ? EXCEPTION_TYPE_LABELS[normalized] : '';
 };
 
-export const EXCEPTION_STATUSES = ['Open', 'Processing', 'Counted', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'] as const;
+export const EXCEPTION_STATUSES = ['Open', 'Processing', 'Counted', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Completed', 'Closed'] as const;
 export type ExceptionStatus = (typeof EXCEPTION_STATUSES)[number];
 
 export const EXCEPTION_STATUS_LABELS: Record<ExceptionStatus, string> = {
@@ -24,6 +24,7 @@ export const EXCEPTION_STATUS_LABELS: Record<ExceptionStatus, string> = {
   'Pending Adjustment': 'Pending Adjustment',
   'Short Picked': 'Short Picked',
   Resolved: 'Resolved',
+  Completed: 'Completed',
   Closed: 'Cancel'
 };
 
@@ -273,10 +274,12 @@ export const isValidExceptionTransition = (from: ExceptionStatus, to: ExceptionS
   if (from === to) return true;
   if (to === 'Closed') return true;
   if (from === 'Closed' && to === 'Open') return true;
+  if (from === 'Completed' && to === 'Open') return true;
+  if (from === 'Resolved' && to === 'Completed') return true;
   if (from === 'Processing' && (to === 'Counted' || to === 'Pending Adjustment' || to === 'Short Picked' || to === 'Resolved')) return true;
   if (from === 'Counted' && (to === 'Pending Adjustment' || to === 'Short Picked' || to === 'Resolved')) return true;
   if (from === 'Pending Adjustment' && to === 'Resolved') return true;
-  const order: ExceptionStatus[] = ['Open', 'Processing', 'Counted', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'];
+  const order: ExceptionStatus[] = ['Open', 'Processing', 'Counted', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Completed', 'Closed'];
   const fromIndex = order.indexOf(from);
   const toIndex = order.indexOf(to);
   return toIndex === fromIndex + 1;

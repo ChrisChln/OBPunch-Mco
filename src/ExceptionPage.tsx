@@ -16,8 +16,8 @@ import {
   getExceptionReportWarnings,
   getExceptionReportNumber,
   hasExceptionReplenishmentCandidate,
+  hasOutstandingShortPickMissingQty,
   hasNoReplenishmentStockConfirmation,
-  hasShortPickReplenishmentCandidate,
   inferExceptionStatus,
   getShortPickMissingQty,
   splitExceptionReportItemRows,
@@ -29,7 +29,7 @@ import {
   type ExceptionType
 } from './shared/exceptionReports';
 
-type PresentEmployeeOption = {
+export type PresentEmployeeOption = {
   staff_id: string;
   name: string;
   position: string;
@@ -50,7 +50,7 @@ const buildLocalDateRange = (dateOnly: string) => {
   };
 };
 
-const emptyForm = (leadId = ''): ExceptionReportInput => ({
+export const emptyForm = (leadId = ''): ExceptionReportInput => ({
   report_date: currentDate(),
   exception_type: '',
   product_barcode: '',
@@ -75,7 +75,7 @@ const emptyForm = (leadId = ''): ExceptionReportInput => ({
   resolution_note: ''
 });
 
-const formFromRecord = (row: ExceptionReportRecord, leadPin: string): ExceptionReportInput => ({
+export const formFromRecord = (row: ExceptionReportRecord, leadPin: string): ExceptionReportInput => ({
   report_date: row.report_date,
   exception_type: row.exception_type ?? '',
   product_barcode: row.product_barcode ?? '',
@@ -100,7 +100,7 @@ const formFromRecord = (row: ExceptionReportRecord, leadPin: string): ExceptionR
   resolution_note: row.resolution_note ?? ''
 });
 
-const statusOrder: ExceptionStatus[] = ['Open', 'Processing', 'Counted', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'];
+const statusOrder: ExceptionStatus[] = ['Open', 'Processing', 'Counted', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Completed', 'Closed'];
 
 const statusCardTone: Record<ExceptionStatus, { backgroundColor: string; glowColor: string; colors: string[]; textClass: string; badgeClass: string }> = {
   Open: {
@@ -145,6 +145,13 @@ const statusCardTone: Record<ExceptionStatus, { backgroundColor: string; glowCol
     textClass: 'text-emerald-50',
     badgeClass: 'border-emerald-200/40 bg-emerald-200/12 text-emerald-100'
   },
+  Completed: {
+    backgroundColor: '#052e16',
+    glowColor: '132 199 89',
+    colors: ['#dcfce7', '#86efac', '#22c55e'],
+    textClass: 'text-lime-50',
+    badgeClass: 'border-lime-200/40 bg-lime-200/12 text-lime-100'
+  },
   Closed: {
     backgroundColor: '#020617',
     glowColor: '215 20 72',
@@ -169,7 +176,7 @@ const apiJson = async <T,>(path: string, init?: RequestInit): Promise<T> => {
 
 const normalizeStaffInput = (value: unknown) => String(value ?? '').trim().toUpperCase();
 
-const findPresentEmployee = (employees: PresentEmployeeOption[], value: unknown) => {
+export const findPresentEmployee = (employees: PresentEmployeeOption[], value: unknown) => {
   const normalized = normalizeStaffInput(value);
   if (!normalized) return null;
   return (
@@ -252,7 +259,7 @@ const shouldShowShortPicked = (form: Pick<ExceptionReportInput, 'exception_type'
 const isOverPick = (form: Pick<ExceptionReportInput, 'exception_type'>) => form.exception_type === 'over_pick';
 const isShortPick = (form: Pick<ExceptionReportInput, 'exception_type'>) => form.exception_type === 'short_pick';
 
-const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInput => {
+export const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInput => {
   if (isOverPick(form)) {
     return {
       ...form,
@@ -262,7 +269,7 @@ const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInpu
     };
   }
   if (isShortPick(form)) {
-    if (hasShortPickReplenishmentCandidate(form)) {
+    if (hasOutstandingShortPickMissingQty(form)) {
       if (form.no_replenishment_stock) {
         return {
           ...form,
@@ -276,15 +283,14 @@ const formWithScopedFollowUp = (form: ExceptionReportInput): ExceptionReportInpu
       return {
         ...form,
         short_picked: false,
-        missing_qty: '',
         no_replenishment_stock: false,
         inventory_adjustment: needsAdjustment ? form.inventory_adjustment : false
       };
     }
     return {
       ...form,
-      missing_qty: form.missing_qty,
       borrowed_location: '',
+      borrowed_qty: '',
       no_replenishment_stock: form.no_replenishment_stock,
       extra_taken: false
     };
@@ -322,7 +328,7 @@ const numericInputClass =
 const itemInputClass = `${inputClass} min-w-0`;
 const itemNumericInputClass = `${numericInputClass} min-w-0`;
 const itemRowGridClass =
-  'grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(84px,0.5fr)_minmax(76px,0.45fr)_36px] gap-3';
+  'grid min-w-[680px] grid-cols-[minmax(160px,1.3fr)_minmax(160px,1.3fr)_minmax(108px,0.6fr)_minmax(96px,0.55fr)_36px] gap-3';
 
 const textAreaClass =
   'min-h-24 w-full rounded-2xl border border-slate-700/70 bg-[#080d18]/80 px-3 py-2 text-sm font-semibold text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-300/60 focus:ring-4 focus:ring-emerald-300/10 disabled:cursor-not-allowed disabled:opacity-50';
@@ -356,7 +362,7 @@ function ExceptionItemFields({
   const extraQtyLabel = isOverPick(form) ? 'Extra Qty' : isShortPick(form) ? 'Missing Qty' : '';
   const showExtraQtyColumn = Boolean(extraQtyLabel);
   const gridColumnsClass = showExtraQtyColumn
-    ? 'grid grid-cols-[minmax(0,1.1fr)_minmax(0,1.1fr)_minmax(78px,0.5fr)_minmax(78px,0.5fr)_minmax(92px,0.55fr)_36px] gap-3'
+    ? 'grid min-w-[800px] grid-cols-[minmax(160px,1.2fr)_minmax(160px,1.2fr)_minmax(110px,0.65fr)_minmax(110px,0.65fr)_minmax(96px,0.6fr)_36px] gap-3'
     : itemRowGridClass;
 
   useEffect(() => {
@@ -382,86 +388,88 @@ function ExceptionItemFields({
 
   return (
     <div className="grid gap-2 sm:col-span-2">
-      <div className={gridColumnsClass}>
-        <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Product Barcode</div>
-        <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Picked Location</div>
-        {showExtraQtyColumn ? <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{extraQtyLabel}</div> : null}
-        <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">System Qty</div>
-        <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Actual</div>
-        <button
-          type="button"
-          onClick={() => setVisibleRowCount(rows.length + 1)}
-          aria-label="Add item row"
-          title="Add"
-          className="inline-flex h-7 w-9 items-center justify-center rounded-lg border border-emerald-300/40 bg-emerald-300/10 text-emerald-100 transition hover:border-emerald-200 hover:bg-emerald-300/20"
-        >
-          <Plus className="h-4 w-4" aria-hidden="true" />
-        </button>
-      </div>
-      {rows.map((row, index) => (
-        <div key={`exception-item-${index}`} className={`mt-2 ${gridColumnsClass}`}>
-          <input
-            value={row.product}
-            onChange={(event) => {
-              const nextRows = [...rows];
-              nextRows[index] = { ...row, product: event.target.value };
-              updateRows(nextRows);
-            }}
-            className={itemInputClass}
-          />
-          <input
-            value={row.location}
-            onChange={(event) => {
-              const nextRows = [...rows];
-              nextRows[index] = { ...row, location: event.target.value };
-              updateRows(nextRows);
-            }}
-            className={itemInputClass}
-          />
-          {showExtraQtyColumn ? (
+      <div className="overflow-x-auto pb-1">
+        <div className={gridColumnsClass}>
+          <div className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Product Barcode</div>
+          <div className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Picked Location</div>
+          {showExtraQtyColumn ? <div className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{extraQtyLabel}</div> : null}
+          <div className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">System Qty</div>
+          <div className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Actual</div>
+          <button
+            type="button"
+            onClick={() => setVisibleRowCount(rows.length + 1)}
+            aria-label="Add item row"
+            title="Add"
+            className="inline-flex h-7 w-9 items-center justify-center rounded-lg border border-emerald-300/40 bg-emerald-300/10 text-emerald-100 transition hover:border-emerald-200 hover:bg-emerald-300/20"
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+        {rows.map((row, index) => (
+          <div key={`exception-item-${index}`} className={`mt-2 ${gridColumnsClass}`}>
+            <input
+              value={row.product}
+              onChange={(event) => {
+                const nextRows = [...rows];
+                nextRows[index] = { ...row, product: event.target.value };
+                updateRows(nextRows);
+              }}
+              className={itemInputClass}
+            />
+            <input
+              value={row.location}
+              onChange={(event) => {
+                const nextRows = [...rows];
+                nextRows[index] = { ...row, location: event.target.value };
+                updateRows(nextRows);
+              }}
+              className={itemInputClass}
+            />
+            {showExtraQtyColumn ? (
+              <input
+                type="text"
+                inputMode="decimal"
+                value={index === 0 ? String(isShortPick(form) ? (form.missing_qty ?? '') : (form.borrowed_qty ?? '')) : ''}
+                onChange={(event) => onChange(isShortPick(form) ? { missing_qty: event.target.value } : { borrowed_qty: event.target.value })}
+                disabled={index !== 0}
+                className={itemNumericInputClass}
+              />
+            ) : null}
             <input
               type="text"
               inputMode="decimal"
-              value={index === 0 ? String(isShortPick(form) ? (form.missing_qty ?? '') : (form.borrowed_qty ?? '')) : ''}
-              onChange={(event) => onChange(isShortPick(form) ? { missing_qty: event.target.value } : { borrowed_qty: event.target.value })}
-              disabled={index !== 0}
+              value={row.systemQty}
+              onChange={(event) => {
+                const nextRows = [...rows];
+                nextRows[index] = { ...row, systemQty: event.target.value };
+                updateRows(nextRows);
+              }}
               className={itemNumericInputClass}
             />
-          ) : null}
-          <input
-            type="text"
-            inputMode="decimal"
-            value={row.systemQty}
-            onChange={(event) => {
-              const nextRows = [...rows];
-              nextRows[index] = { ...row, systemQty: event.target.value };
-              updateRows(nextRows);
-            }}
-            className={itemNumericInputClass}
-          />
-          <input
-            type="text"
-            inputMode="decimal"
-            value={row.actualQty}
-            onChange={(event) => {
-              const nextRows = [...rows];
-              nextRows[index] = { ...row, actualQty: event.target.value };
-              updateRows(nextRows);
-            }}
-            className={itemNumericInputClass}
-          />
-          <button
-            type="button"
-            onClick={() => updateRows(rows.filter((_, rowIndex) => rowIndex !== index))}
-            disabled={rows.length === 1}
-            aria-label={`Remove item row ${index + 1}`}
-            title="Remove"
-            className="inline-flex h-11 w-9 items-center justify-center rounded-xl border border-slate-700/70 bg-[#080d18]/70 text-slate-300 transition hover:border-rose-300/70 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <X className="h-4 w-4" aria-hidden="true" />
-          </button>
-        </div>
-      ))}
+            <input
+              type="text"
+              inputMode="decimal"
+              value={row.actualQty}
+              onChange={(event) => {
+                const nextRows = [...rows];
+                nextRows[index] = { ...row, actualQty: event.target.value };
+                updateRows(nextRows);
+              }}
+              className={itemNumericInputClass}
+            />
+            <button
+              type="button"
+              onClick={() => updateRows(rows.filter((_, rowIndex) => rowIndex !== index))}
+              disabled={rows.length === 1}
+              aria-label={`Remove item row ${index + 1}`}
+              title="Remove"
+              className="inline-flex h-11 w-9 items-center justify-center rounded-xl border border-slate-700/70 bg-[#080d18]/70 text-slate-300 transition hover:border-rose-300/70 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -686,7 +694,7 @@ const printLabelDocument = (sheets: PrintLabelSheet[]) => {
   }, 100);
 };
 
-function NewExceptionModal({
+export function NewExceptionModal({
   mode,
   reportId,
   status,
@@ -713,10 +721,10 @@ function NewExceptionModal({
   onRestartException?: () => void;
   onSubmit: () => void;
 }) {
-  const inferredStatus = status === 'Closed' ? 'Closed' : inferExceptionStatus(form);
+  const inferredStatus = status === 'Closed' || status === 'Completed' ? status : inferExceptionStatus(form);
   const showFollowUp = shouldShowFollowUp(form);
   const showOverPickFollowUp = isOverPick(form);
-  const showShortPickReplenishmentFollowUp = hasShortPickReplenishmentCandidate(form);
+  const showShortPickReplenishmentFollowUp = hasOutstandingShortPickMissingQty(form);
   const showShortPickPhysicalFix = isShortPick(form) && !showShortPickReplenishmentFollowUp;
   const showShortPicked = shouldShowShortPicked(form);
   const showExtraTaken = (showFollowUp || showShortPickReplenishmentFollowUp) && hasExceptionReplenishmentCandidate(form);
@@ -731,7 +739,7 @@ function NewExceptionModal({
 
   return (
     <div className="fixed inset-0 z-40 overflow-auto bg-slate-950/75 px-4 py-6 backdrop-blur">
-      <section className="mx-auto w-full max-w-5xl rounded-[1.75rem] border border-slate-800/80 bg-slate-950 p-5 text-white shadow-2xl">
+      <section className="mx-auto w-full max-w-[1380px] rounded-[1.75rem] border border-slate-800/80 bg-slate-950 p-5 text-white shadow-2xl">
         <div className="mb-5 flex items-start justify-between gap-4">
           <div>
             <div className="text-xs font-bold uppercase tracking-[0.22em] text-emerald-200">{mode === 'edit' ? 'Edit' : 'New'}</div>
@@ -742,7 +750,7 @@ function NewExceptionModal({
           </button>
         </div>
 
-        <div className={showFollowUp || showOverPickFollowUp || showShortPickPhysicalFix || showShortPickReplenishmentFollowUp ? 'grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(300px,0.85fr)]' : 'grid gap-5'}>
+        <div className={showFollowUp || showOverPickFollowUp || showShortPickPhysicalFix || showShortPickReplenishmentFollowUp ? 'grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.9fr)]' : 'grid gap-5'}>
           <div className="rounded-3xl border border-slate-800/80 bg-black/20 p-4">
             <div className="mb-4 text-sm font-black text-white">Report</div>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -967,7 +975,7 @@ function NewExceptionModal({
 
         <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            {mode === 'edit' && status !== 'Closed' && onCancelException ? (
+            {mode === 'edit' && status !== 'Closed' && status !== 'Completed' && onCancelException ? (
               <button type="button" onClick={onCancelException} disabled={saving} className="h-11 cursor-pointer rounded-xl border border-slate-500/40 bg-slate-950 px-5 text-sm font-black text-slate-100 transition hover:border-slate-300 hover:bg-slate-900 disabled:opacity-50">
                 Cancel Exception
               </button>
@@ -1185,7 +1193,7 @@ export default function ExceptionPage() {
       const nextEmployees = employeesData.rows ?? [];
       const matchedLead = findPresentEmployee(nextEmployees, normalizedLead);
       if (!matchedLead) {
-        throw new Error('Lead USID must match an employee clocked in today.');
+        throw new Error('Lead USID must match an employee record.');
       }
       setPresentEmployees(nextEmployees);
       setLeadId(matchedLead.staff_id);

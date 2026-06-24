@@ -19,7 +19,7 @@ import {
   saveLabelToneMap
 } from '../lib/labelTone';
 import { matchesAuditSearch } from './auditSearch';
-import { createManualTemporaryStaffId, isNewHirePlaceholderStaffId, resolveEmployeeEditStaffIds } from './tempStaffIds';
+import { allocateTemporaryStaffId, isNewHirePlaceholderStaffId, resolveEmployeeEditStaffIds } from './tempStaffIds';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import AdminHeader from './components/AdminHeader';
@@ -107,6 +107,8 @@ import {
   type PositionRecord
 } from '../shared/positions';
 import { useScheduleRealtime } from './useScheduleRealtime';
+import { shouldEnableEmployeeRealtime, useEmployeeRealtime } from './useEmployeeRealtime';
+import { sortEmployeesByPositionOrder } from './employeePositionSort';
 import {
   activatePlannedScheduleNote,
   buildDailyPlannedActivationUpserts,
@@ -2196,6 +2198,7 @@ export default function AdminAppPage() {
   const [employeeLastPunchSortNowMs, setEmployeeLastPunchSortNowMs] = useState(() => Date.now());
   const [employeeSortByLastPunchDesc, setEmployeeSortByLastPunchDesc] = useState(false);
   const [employeeSortByHireDateDesc, setEmployeeSortByHireDateDesc] = useState(false);
+  const [employeeSortByPosition, setEmployeeSortByPosition] = useState(false);
   const [employeeBadgePrintingStaffId, setEmployeeBadgePrintingStaffId] = useState<string | null>(null);
   const [accountCardPrintingStaffId, setAccountCardPrintingStaffId] = useState<string | null>(null);
   const [employeeBadgeBatchPrinting, setEmployeeBadgeBatchPrinting] = useState(false);
@@ -2207,6 +2210,7 @@ export default function AdminAppPage() {
   const [departedEmployees, setDepartedEmployees] = useState<EmployeeRow[]>([]);
   const [departedEmployeesLoading, setDepartedEmployeesLoading] = useState(false);
   const [departedEmployeesError, setDepartedEmployeesError] = useState<string | null>(null);
+  const employeeRealtimeDebounceTimerRef = useRef<number | null>(null);
   const [departureConfirm, setDepartureConfirm] = useState<{
     staff: string;
     displayName: string;
@@ -2423,6 +2427,25 @@ export default function AdminAppPage() {
       }, 300); // Debounce for 300ms
     },
     enabled: page === 'schedule' && !!supabase
+  });
+
+  useEmployeeRealtime({
+    supabase,
+    employeeTableName: EMPLOYEE_TABLE,
+    onEmployeeChange: (event) => {
+      console.log(`[Employee Realtime] Change detected: staff_id=${event.staffId}, type=${event.type}`);
+      if (employeeRealtimeDebounceTimerRef.current !== null) {
+        window.clearTimeout(employeeRealtimeDebounceTimerRef.current);
+      }
+      employeeRealtimeDebounceTimerRef.current = window.setTimeout(() => {
+        employeeRealtimeDebounceTimerRef.current = null;
+        void fetchEmployees({ reset: true, lockUi: false });
+        if (departedEmployeesOpen) {
+          void fetchDepartedEmployees({ lockUi: false });
+        }
+      }, 300);
+    },
+    enabled: !!supabase && shouldEnableEmployeeRealtime(page, departedEmployeesOpen)
   });
 
   useEffect(() => {
@@ -7119,6 +7142,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     await fetchDepartedEmployees({ lockUi: false });
   };
 
+  useEffect(() => {
+    return () => {
+      if (employeeRealtimeDebounceTimerRef.current !== null) {
+        window.clearTimeout(employeeRealtimeDebounceTimerRef.current);
+      }
+    };
+  }, []);
+
   const hardDeleteDepartedEmployee = async (staffId: string) => {
     if (!supabase) {
       setDepartedEmployeesError('Missing Supabase configuration.');
@@ -7317,7 +7348,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const staffRaw = employeeNewStaffId.trim();
     const staff = staffRaw
       ? normalizeStaffId(staffRaw)
-      : createManualTemporaryStaffId(employees.map((row) => String(row.staff_id ?? '').trim()));
+      : await allocateTemporaryStaffId(
+        supabase,
+        employees.map((row) => String(row.staff_id ?? '').trim())
+      );
     if (!staff || (!isValidStaffIdValue(staff) && !isNewHirePlaceholderStaffId(staff))) {
       failAddEmployee('员工ID格式不正确。');
       return;
@@ -10094,7 +10128,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (!isWorkingScheduleBaseState(state)) continue;
         const profile = profileByStaff.get(staff);
         const shift = initialShiftByStaff.get(staff) || profile?.shift || 'early';
-        const position = String(profile?.position ?? (row as any).position ?? '').trim();
+        const position = String(profile?.position ?? '').trim();
         if (!position) continue;
         const terminatedAt = String(profile?.terminatedAt ?? '').trim();
         if (terminatedAt) {
@@ -11981,9 +12015,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const staff = staffId.trim();
     if (!staff) return;
     const staffKey = normalizeStaffId(staff);
-    const row = timecardRows.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
     const employee = employees.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
-    const position = String(row?.position ?? employee?.position ?? employee?.Position ?? '').trim();
+    const position = String(employee?.position ?? employee?.Position ?? '').trim();
     const accessPosition = normalizePositionKey(position) || position;
     if (!canViewPosition('timecard', accessPosition)) {
       setStatus({
@@ -13623,6 +13656,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           unchanged_existing: unchangedExistingTotal
         }
       });
+      await fetchEmployees({ reset: true, lockUi: false });
+      if (departedEmployeesOpen) {
+        await fetchDepartedEmployees({ lockUi: false });
+      }
     });
   };
 
@@ -13820,10 +13857,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   }, [page, employeesAllowedByPositionScope, employeeFilterNeedles, employeeShiftByStaffId, getDepartmentForPosition, isInactiveJdlEmployee]);
 
-  // Step 3: Apply hire date sorting (optional, depends on filtered rows + sort flag)
+  // Step 3: Apply position sorting (optional, depends on filtered rows + sort flag)
+  const employeesAfterPositionSort = useMemo(() => {
+    if (!employeeSortByPosition) return employeesAfterFilter;
+    return sortEmployeesByPositionOrder(employeesAfterFilter, activePositionNames, normalizeStaffId);
+  }, [employeesAfterFilter, employeeSortByPosition, activePositionNames, normalizeStaffId]);
+
+  // Step 4: Apply hire date sorting (optional, depends on position-sorted rows + sort flag)
   const employeesAfterHireDateSort = useMemo(() => {
-    if (!employeeSortByHireDateDesc) return employeesAfterFilter;
-    return [...employeesAfterFilter].sort((a, b) => {
+    if (!employeeSortByHireDateDesc) return employeesAfterPositionSort;
+    return [...employeesAfterPositionSort].sort((a, b) => {
       const atA = Date.parse(String(a.created_at ?? ''));
       const atB = Date.parse(String(b.created_at ?? ''));
       const valA = Number.isFinite(atA) ? atA : -1;
@@ -13833,9 +13876,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
       return staffA.localeCompare(staffB, 'en-US');
     });
-  }, [employeesAfterFilter, employeeSortByHireDateDesc]);
+  }, [employeesAfterPositionSort, employeeSortByHireDateDesc, normalizeStaffId]);
 
-  // Step 4: Apply punch time sorting (optional, depends on hire-date sorted rows + sort flag)
+  // Step 5: Apply punch time sorting (optional, depends on hire-date sorted rows + sort flag)
   const employeesFiltered = useMemo(() => {
     if (!employeeSortByLastPunchDesc) return employeesAfterHireDateSort;
     const dayMs = 24 * 60 * 60 * 1000;
@@ -13875,10 +13918,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     setEmployeeLastPunchSortNowMs(serverTime.getTime());
     setEmployeeSortByLastPunchDesc(true);
+    setEmployeeSortByPosition(false);
   };
 
   const toggleEmployeeHireDateSort = () => {
     setEmployeeSortByHireDateDesc((prev) => !prev);
+    setEmployeeSortByLastPunchDesc(false);
+    setEmployeeSortByPosition(false);
+  };
+
+  const toggleEmployeePositionSort = () => {
+    setEmployeeSortByPosition((prev) => !prev);
+    setEmployeeSortByHireDateDesc(false);
     setEmployeeSortByLastPunchDesc(false);
   };
   const accountRowsAll = useMemo(() => {
@@ -14517,7 +14568,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const row = timecardRows.find((r) => normalizeStaffId(String(r.staff_id ?? '').trim()) === staff);
     const employee = employees.find((e) => normalizeStaffId(String(e.staff_id ?? '').trim()) === staff);
     const name = String(row?.name ?? employee?.name ?? '').trim() || '-';
-    const position = String(row?.position ?? employee?.position ?? employee?.Position ?? '').trim() || '-';
+    const position = String(employee?.position ?? employee?.Position ?? '').trim() || '-';
     const label = String(employee?.label ?? employee?.Label ?? '').trim() || '-';
 
     if (timecardPunchDayIndex === null || timecardPunchDayIndex < 0 || timecardPunchDayIndex > 6) {
@@ -14801,7 +14852,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       // Schedule rows can come from legacy records without shift; default working rows to morning.
       const shift = rowShift || inferredShift || 'early';
       if (shift !== 'early' && shift !== 'late') continue;
-      const { position, profilePosition, schedulePosition } = resolveDailyListPositionSource(profile?.position, row.position);
+      const { position, schedulePosition } = resolveDailyListPositionSource(profile?.position, row.position);
       const normalizedPosition = normalizeDailyListPositionKey(position);
       if (!normalizedPosition || !scheduleVisiblePositionSet.has(normalizedPosition)) continue;
       const item: DailyListRow = {
@@ -14812,7 +14863,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         shift,
         start_time: resolveShiftStartTime(shift, position, profile?.shiftTime || ''),
         scheduleOnly: isScheduleOnlyAgency(profile?.agency ?? ''),
-        profilePosition,
         schedulePosition
       };
       if (shift === 'late') countedLateRows.push(item);
@@ -15045,7 +15095,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       staff_id: string;
       name: string;
       agency: string;
-      profilePosition: string;
       schedulePosition: string;
     }> = [];
 
@@ -15059,23 +15108,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!isWorkingScheduleRow(row)) continue;
 
       const profile = employeeProfileByStaffId.get(staff);
-      const { position, profilePosition, schedulePosition } = resolveDailyListPositionSource(profile?.position, row.position);
-      const normalizedSchedulePosition = normalizeDailyListPositionKey(schedulePosition);
-      const normalizedProfilePosition = normalizeDailyListPositionKey(profilePosition);
-      if (
-        normalizedSchedulePosition &&
-        normalizedProfilePosition &&
-        normalizedSchedulePosition !== normalizedProfilePosition
-      ) {
-        positionMismatches.push({
-          staff_id: staff,
-          name: profile?.name || '',
-          agency: profile?.agency || '',
-          profilePosition,
-          schedulePosition
-        });
-      }
-
+      const { position, schedulePosition } = resolveDailyListPositionSource(profile?.position, row.position);
       if (includedStaff.has(staff)) continue;
 
       const rowShift = normalizeShiftValue(String(row.shift ?? '').trim());
@@ -15104,7 +15137,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       });
     }
 
-    positionMismatches.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     missingRows.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     return { missingRows, positionMismatches };
   }, [
@@ -15593,7 +15625,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
       if (!row || !isWorkingScheduleRow(row)) continue;
       const positionRaw =
-        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || String(row.position ?? '').trim();
+        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim();
       const normalizedPosition = normalizePositionKey(positionRaw);
       if (!normalizedPosition) continue;
       if (!scheduleVisiblePositionSet.has(normalizedPosition)) continue;
@@ -15652,7 +15684,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       // 如果排班不是工作状态，但没有打卡记录，也跳过
       if (row && !isWorkingScheduleRow(row) && !hasPunch && !activeStaffSet.has(staff)) continue;
       const positionRaw =
-        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || (row ? String(row.position ?? '').trim() : '');
+        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim();
       const position = normalizePositionKey(positionRaw);
       if (!position) continue;
       if (!scheduleVisiblePositionSet.has(position)) continue;
@@ -15875,7 +15907,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         staff,
         profile,
         employee,
-        positionRaw: String(profile?.position ?? '').trim() || String(employee.position ?? employee.Position ?? '').trim() || String(row?.position ?? '').trim(),
+        positionRaw: String(profile?.position ?? '').trim() || String(employee.position ?? employee.Position ?? '').trim(),
         shift,
         isOnClock: false
       });
@@ -15906,7 +15938,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
       const fallbackEmp = homeEmployeeByStaffId.get(staff);
       const baseState = row ? getScheduleBaseStateFromNote(row.note) : 'rest';
-      const position = String(row?.position ?? profile?.position ?? fallbackEmp?.position ?? fallbackEmp?.Position ?? '').trim();
+      const position = String(profile?.position ?? fallbackEmp?.position ?? fallbackEmp?.Position ?? '').trim();
       const normalizedPosition = normalizePositionKey(position);
       if (!normalizedPosition || !scheduleVisiblePositionSet.has(normalizedPosition)) continue;
       const agency = String(profile?.agency ?? fallbackEmp?.agency ?? fallbackEmp?.Agency ?? '').trim();
@@ -16864,7 +16896,7 @@ ${rowsToHtml(late)}
         const createdAt = new Date(`${operationalDate}T00:00:00`).toISOString();
         details.push({
           operational_date: operationalDate,
-          position: String(row?.position ?? employee.position ?? employee.Position ?? '').trim() || '-',
+          position: String(employee.position ?? employee.Position ?? '').trim() || '-',
           reason: state === 'absent' ? 'Absent' : 'Off Worked',
           reporter_staff_id: 'SYSTEM',
           created_at: createdAt
@@ -19146,9 +19178,11 @@ ${rowsToHtml(late)}
                   themeMode={themeMode}
                   employeesError={employeesError}
                   employeesFiltered={employeesFiltered}
+                  employeeSortByPosition={employeeSortByPosition}
                   employeeSortByLastPunchDesc={employeeSortByLastPunchDesc}
                   employeePunchMetaLoading={employeePunchMetaLoading}
                   employeeSortByHireDateDesc={employeeSortByHireDateDesc}
+                  onTogglePositionSort={toggleEmployeePositionSort}
                   onToggleSort={toggleEmployeeLastPunchSort}
                   onToggleHireDateSort={toggleEmployeeHireDateSort}
                   displayStaffId={displayStaffId}
