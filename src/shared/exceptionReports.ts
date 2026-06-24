@@ -611,7 +611,7 @@ export const validateExceptionReportInput = (input: ExceptionReportInput, option
   const borrowedQty = parseNonNegativeNumber(input.borrowed_qty);
   const missingQty = getShortPickMissingQty(input);
   if (!isOverPick && borrowedLocation && borrowedQty === null) errors.push('Borrowed qty is required when borrowed location is filled.');
-  if (!isOverPick && !borrowedLocation && trimText(input.borrowed_qty)) errors.push('Borrowed location is required when borrowed qty is filled.');
+  if (!isOverPick && !isShortPick && !borrowedLocation && trimText(input.borrowed_qty)) errors.push('Borrowed location is required when borrowed qty is filled.');
   if (input.extra_taken && !hasExceptionReplenishmentCandidate(input)) errors.push('Extra taken can only be marked when counted stock still needs replenishment.');
   if (!isOverPick && !isShortPick && input.inventory_adjustment && !borrowedLocation && !input.extra_taken) errors.push('Inventory adjustment requires borrowed inventory or extra taken.');
   if (isShortPick && input.short_picked && !hasNoReplenishmentStockConfirmation(input)) errors.push('No replenishment stock must be confirmed before marking Short Picked.');
