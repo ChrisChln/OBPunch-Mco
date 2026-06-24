@@ -2,12 +2,25 @@ import { useEffect, useMemo, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import BorderGlow from '../../components/reactBits/BorderGlow';
 import {
+  NewExceptionModal,
+  emptyForm,
+  findPresentEmployee,
+  formFromRecord,
+  formWithScopedFollowUp,
+  type PresentEmployeeOption
+} from '../../ExceptionPage';
+import {
   EXCEPTION_STATUS_LABELS,
   EXCEPTION_TYPE_LABELS,
   EXCEPTION_TYPES,
-  buildExceptionPrintPayload,
   formatExceptionType,
+  getExceptionReportWarnings,
   getExceptionReportNumber,
+  getShortPickMissingQty,
+  hasNoReplenishmentStockConfirmation,
+  hasOutstandingShortPickMissingQty,
+  validateExceptionReportInput,
+  type ExceptionReportInput,
   type ExceptionReportRecord,
   type ExceptionStatus,
   type ExceptionType
@@ -27,7 +40,7 @@ type ExceptionsPageProps = {
 
 type ResponsibilityDecision = 'picker' | 'packer' | 'all' | 'no_responsibility';
 
-const statusOptions: Array<'all' | ExceptionStatus> = ['all', 'Open', 'Processing', 'Counted', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Closed'];
+const statusOptions: Array<'all' | ExceptionStatus> = ['all', 'Open', 'Processing', 'Counted', 'Pending Adjustment', 'Short Picked', 'Resolved', 'Completed', 'Closed'];
 const typeOptions: Array<'all' | ExceptionType> = ['all', ...EXCEPTION_TYPES];
 
 const normalizeStaffId = (value: unknown) => String(value ?? '').trim().toUpperCase();
@@ -83,6 +96,13 @@ const statusCardTone: Record<ExceptionStatus, { backgroundColor: string; glowCol
     textClass: 'text-emerald-50',
     badgeClass: 'border-emerald-200/40 bg-emerald-200/12 text-emerald-100'
   },
+  Completed: {
+    backgroundColor: '#052e16',
+    glowColor: '132 199 89',
+    colors: ['#dcfce7', '#86efac', '#22c55e'],
+    textClass: 'text-lime-50',
+    badgeClass: 'border-lime-200/40 bg-lime-200/12 text-lime-100'
+  },
   Closed: {
     backgroundColor: '#020617',
     glowColor: '215 20 72',
@@ -100,6 +120,12 @@ const inputClass = (isLight: boolean) =>
 
 const panelClass = (isLight: boolean) =>
   ['rounded-3xl border p-4 shadow-sm', isLight ? 'border-slate-200 bg-white' : 'border-slate-900 bg-slate-950/70'].join(' ');
+
+const detailCardClass = (isLight: boolean) =>
+  ['rounded-2xl border px-3 py-2.5', isLight ? 'border-slate-200 bg-slate-50' : 'border-slate-800/80 bg-[#0b1020]'].join(' ');
+
+const sectionTitleClass = (isLight: boolean) =>
+  ['text-[11px] font-bold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ');
 
 const formatReviewDateTime = (value: unknown) => {
   const date = new Date(String(value ?? ''));
@@ -121,6 +147,15 @@ const employeeName = (employees: EmployeeRow[], value: unknown) => {
   return String(employee?.name ?? '').trim() || normalized;
 };
 
+const formatQty = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return '-';
+  const next = Number(value);
+  if (!Number.isFinite(next)) return String(value);
+  return Number.isInteger(next) ? String(next) : String(next);
+};
+
+const formatFlag = (value: boolean) => (value ? 'Yes' : 'No');
+
 const apiJson = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const res = await fetch(path, {
     ...init,
@@ -139,15 +174,29 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
   const [rows, setRows] = useState<ExceptionReportRecord[]>([]);
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
+  const [editingRow, setEditingRow] = useState<ExceptionReportRecord | null>(null);
   const [dateFilter, setDateFilter] = useState(todayDate());
   const [statusFilter, setStatusFilter] = useState<'all' | ExceptionStatus>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | ExceptionType>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [decision, setDecision] = useState<ResponsibilityDecision>('picker');
+  const [editForm, setEditForm] = useState<ExceptionReportInput>(() => emptyForm());
   const [resolutionNote, setResolutionNote] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
   const [message, setMessage] = useState<{ tone: 'success' | 'error' | 'idle'; text: string }>({ tone: 'idle', text: '' });
+
+  const adminEmployees = useMemo<PresentEmployeeOption[]>(
+    () =>
+      employees.map((employee) => ({
+        staff_id: String(employee.staff_id ?? '').trim().toUpperCase(),
+        name: String(employee.name ?? '').trim(),
+        position: String(employee.position ?? '').trim(),
+        agency: String(employee.agency ?? '').trim()
+      })),
+    [employees]
+  );
 
   const visibleRows = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -261,11 +310,65 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
       });
       setRows((current) => current.map((row) => (String(row.id) === String(data.row.id) ? data.row : row)));
       setSelectedId(String(data.row.id));
-      setMessage({ tone: 'success', text: 'Exception closed.' });
+      setMessage({ tone: 'success', text: 'Exception completed.' });
     } catch (error: any) {
-      setMessage({ tone: 'error', text: String(error?.message ?? error ?? 'Failed to close exception.') });
+      setMessage({ tone: 'error', text: String(error?.message ?? error ?? 'Failed to complete exception.') });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openEditSelected = (row: ExceptionReportRecord) => {
+    setEditingRow(row);
+    setEditForm(formFromRecord(row, ''));
+    setMessage({ tone: 'idle', text: '' });
+  };
+
+  const updateEditForm = (patch: Partial<ExceptionReportInput>) => {
+    setEditForm((current) => ({ ...current, ...patch }));
+  };
+
+  const saveEditSelected = async () => {
+    if (!supabase || !editingRow) return;
+    const scopedForm = formWithScopedFollowUp(editForm);
+    const validationErrors = validateExceptionReportInput(scopedForm, { requireCountByForQuantities: true });
+    if (validationErrors.length) {
+      setMessage({ tone: 'error', text: validationErrors[0] });
+      return;
+    }
+    const validationWarnings = getExceptionReportWarnings(scopedForm);
+    if (validationWarnings.length) window.alert(validationWarnings[0]);
+    setEditSaving(true);
+    setMessage({ tone: 'idle', text: '' });
+    try {
+      const sessionRes = await supabase.auth.getSession();
+      const token = sessionRes.data.session?.access_token;
+      if (!token) throw new Error('Admin session is required.');
+      const pickingOperator = findPresentEmployee(adminEmployees, editForm.picking_operator);
+      const packingRebinOperator = editForm.packing_rebin_operator ? findPresentEmployee(adminEmployees, editForm.packing_rebin_operator) : null;
+      const countBy = findPresentEmployee(adminEmployees, editForm.count_by);
+      const data = await apiJson<{ row: ExceptionReportRecord }>('/api/exception-reports', {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          ...scopedForm,
+          id: editingRow.id,
+          picking_operator: pickingOperator?.staff_id ?? editForm.picking_operator,
+          packing_rebin_operator: packingRebinOperator?.staff_id ?? editForm.packing_rebin_operator ?? '',
+          count_by: countBy?.staff_id ?? editForm.count_by,
+          submitted_by_lead_id: editForm.submitted_by_lead_id || editingRow.submitted_by_lead_id || userEmail
+        })
+      });
+      setRows((current) => current.map((row) => (String(row.id) === String(data.row.id) ? data.row : row)));
+      setSelectedId(String(data.row.id));
+      setEditingRow(data.row);
+      setEditForm(formFromRecord(data.row, ''));
+      setMessage({ tone: 'success', text: 'Exception updated.' });
+      setEditingRow(null);
+    } catch (error: any) {
+      setMessage({ tone: 'error', text: String(error?.message ?? error ?? 'Failed to update exception.') });
+    } finally {
+      setEditSaving(false);
     }
   };
 
@@ -279,6 +382,14 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
     const packerName = row.packing_rebin_operator ? employeeName(employees, row.packing_rebin_operator) : '';
     const hasAssignees = Boolean(pickerName || packerName);
     const tone = statusCardTone[row.status];
+    const missingQty = getShortPickMissingQty(row);
+    const qtySummary = [
+      `S ${formatQty(row.system_location_qty)}`,
+      `A ${formatQty(row.actual_qty)}`,
+      row.exception_type === 'short_pick' && missingQty !== null ? `M ${formatQty(missingQty)}` : ''
+    ]
+      .filter(Boolean)
+      .join(' · ');
     return (
       <BorderGlow
         key={row.id}
@@ -311,6 +422,7 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
               <div className="truncate text-2xl font-black">#{reportNumber}</div>
               <div className="mt-3 break-words text-sm font-black opacity-95">{row.product_barcode || row.picking_list_number || '-'}</div>
               {details ? <div className="mt-3 break-words text-sm font-semibold leading-6 text-current opacity-90">{details}</div> : null}
+              <div className="mt-3 text-[11px] font-black uppercase tracking-[0.18em] text-current opacity-70">{qtySummary}</div>
               {hasAssignees ? (
                 <div className="mt-5 grid gap-3 sm:grid-cols-2">
                   {pickerName ? (
@@ -342,6 +454,44 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
       </BorderGlow>
     );
   };
+
+  const selectedReportNumber = selected ? getExceptionReportNumber(selected) : '';
+  const selectedMissingQty = selected ? getShortPickMissingQty(selected) : null;
+  const selectedNoReplenishmentStock = selected ? hasNoReplenishmentStockConfirmation(selected) : false;
+  const selectedHasOutstandingMissingQty = selected ? hasOutstandingShortPickMissingQty(selected) : false;
+  const selectedFlow = !selected
+    ? '-'
+    : selected.exception_type === 'over_pick'
+      ? 'Over Pick Fix'
+      : selected.exception_type === 'short_pick'
+        ? selectedHasOutstandingMissingQty
+          ? 'Less Pick Replenishment'
+          : 'Less Pick Physical Fix'
+        : Number(selected.actual_qty ?? '') === 0
+          ? 'Stockout Follow-up'
+          : 'Review';
+  const selectedDetailRows = !selected
+    ? []
+    : [
+        { label: 'Product', value: String(selected.product_barcode ?? '').trim() || '-' },
+        { label: 'Picking List', value: String(selected.picking_list_number ?? '').trim() || '-' },
+        { label: 'Container', value: String(selected.picking_container ?? '').trim() || '-' },
+        { label: 'Picked Loc', value: String(selected.picked_location ?? '').trim() || '-' },
+        { label: 'System Qty', value: formatQty(selected.system_location_qty) },
+        { label: 'Actual', value: formatQty(selected.actual_qty) },
+        { label: 'Missing Qty', value: selected.exception_type === 'short_pick' ? formatQty(selectedMissingQty) : '-' },
+        { label: 'Count By', value: employeeName(employees, selected.count_by) }
+      ];
+  const selectedFollowUpRows = !selected
+    ? []
+    : [
+        { label: 'Borrowed Loc', value: String(selected.borrowed_location ?? '').trim() || '-' },
+        { label: 'Borrowed Qty', value: formatQty(selected.borrowed_qty) },
+        { label: 'Extra Taken', value: formatFlag(Boolean(selected.extra_taken)) },
+        { label: 'No Replen.', value: formatFlag(selectedNoReplenishmentStock) },
+        { label: 'Short Picked', value: formatFlag(Boolean(selected.short_picked)) },
+        { label: 'Inv Adj', value: formatFlag(Boolean(selected.inventory_adjustment)) }
+      ];
 
   return (
     <div className="p-4 sm:p-6">
@@ -415,18 +565,70 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className={['text-xs font-bold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Review</div>
-                  <div className="mt-1 text-3xl font-black">#{selected.id}</div>
+                  <div className="mt-1 text-3xl font-black">#{selectedReportNumber}</div>
+                  <div className={['mt-2 text-sm font-semibold', isLight ? 'text-slate-600' : 'text-slate-300'].join(' ')}>
+                    {formatExceptionType(selected.exception_type) || 'Unknown'} · {selectedFlow}
+                  </div>
                 </div>
-                <span className={['rounded-full border px-3 py-1 text-xs font-black', isLight ? 'border-slate-200 bg-white' : 'border-slate-700/80 bg-slate-950/60'].join(' ')}>{EXCEPTION_STATUS_LABELS[selected.status]}</span>
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  <span className={['rounded-full border px-3 py-1 text-xs font-black', isLight ? 'border-slate-200 bg-white' : 'border-slate-700/80 bg-slate-950/60'].join(' ')}>{EXCEPTION_STATUS_LABELS[selected.status]}</span>
+                  <button
+                    type="button"
+                    disabled={isLocked || isReadOnly || editSaving}
+                    onClick={() => openEditSelected(selected)}
+                    className={['h-9 rounded-xl border px-4 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-50', isLight ? 'border-slate-950 bg-slate-950 text-white hover:bg-slate-800' : 'border-cyan-300/30 bg-cyan-300/10 text-cyan-100 hover:border-cyan-200/70 hover:bg-cyan-300/15'].join(' ')}
+                  >
+                    Edit
+                  </button>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                {buildExceptionPrintPayload(selected).fields.map((field) => (
-                  <div key={field.label} className={['rounded-xl border px-3 py-2', isLight ? 'border-slate-100 bg-slate-50' : 'border-slate-800/80 bg-[#0b1020]'].join(' ')}>
-                    <div className={['text-[11px] font-bold uppercase tracking-[0.14em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{field.label}</div>
-                    <div className="mt-1 break-words text-sm font-black">{field.value}</div>
-                  </div>
-                ))}
+              <div className={['rounded-2xl border p-3', isLight ? 'border-slate-200 bg-slate-50/80' : 'border-slate-800/80 bg-[#0a1020]/80'].join(' ')}>
+                <div className={sectionTitleClass(isLight)}>Count Snapshot</div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {selectedDetailRows.map((field) => (
+                    <div key={field.label} className={detailCardClass(isLight)}>
+                      <div className={sectionTitleClass(isLight)}>{field.label}</div>
+                      <div className="mt-1 break-words text-sm font-black">{field.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className={['rounded-2xl border p-3', isLight ? 'border-slate-200 bg-slate-50/80' : 'border-slate-800/80 bg-[#0a1020]/80'].join(' ')}>
+                <div className={sectionTitleClass(isLight)}>Follow-up</div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {selectedFollowUpRows.map((field) => (
+                    <div key={field.label} className={detailCardClass(isLight)}>
+                      <div className={sectionTitleClass(isLight)}>{field.label}</div>
+                      <div className="mt-1 break-words text-sm font-black">{field.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className={['rounded-2xl border p-3', isLight ? 'border-slate-200 bg-slate-50/80' : 'border-slate-800/80 bg-[#0a1020]/80'].join(' ')}>
+                <div className={sectionTitleClass(isLight)}>People</div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {[
+                    { label: 'Picker', value: employeeName(employees, selected.picking_operator) },
+                    { label: 'Packing/Rebin', value: employeeName(employees, selected.packing_rebin_operator) },
+                    { label: 'Lead', value: employeeName(employees, selected.submitted_by_lead_id) },
+                    { label: 'Created', value: formatReviewDateTime(selected.created_at) }
+                  ].map((field) => (
+                    <div key={field.label} className={detailCardClass(isLight)}>
+                      <div className={sectionTitleClass(isLight)}>{field.label}</div>
+                      <div className="mt-1 break-words text-sm font-black">{field.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className={['rounded-2xl border p-3', isLight ? 'border-slate-200 bg-slate-50/80' : 'border-slate-800/80 bg-[#0a1020]/80'].join(' ')}>
+                <div className={sectionTitleClass(isLight)}>Resolution Note</div>
+                <div className={['mt-2 whitespace-pre-wrap break-words rounded-2xl border px-3 py-3 text-sm font-semibold', isLight ? 'border-slate-200 bg-white text-slate-700' : 'border-slate-800/80 bg-[#0b1020] text-slate-200'].join(' ')}>
+                  {String(selected.resolution_note ?? '').trim() || 'No note'}
+                </div>
               </div>
 
               <div className={['border-t pt-4', isLight ? 'border-slate-200' : 'border-slate-800/90'].join(' ')}>
@@ -462,7 +664,7 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
                   onClick={() => void closeSelected()}
                   className={['mt-3 h-11 w-full rounded-xl border text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-50', isLight ? 'border-slate-950 bg-slate-950 text-white hover:bg-slate-800' : 'border-slate-700/80 bg-[#100f17] text-white hover:border-slate-500/80 hover:bg-slate-900'].join(' ')}
                 >
-                  {saving ? 'Closing' : 'Close'}
+                  {saving ? 'Completing' : 'Complete'}
                 </button>
                 {userEmail ? <div className="mt-2 text-xs font-semibold text-slate-500">Reviewer: {userEmail}</div> : null}
               </div>
@@ -472,6 +674,19 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
           )}
         </aside>
       </div>
+      {editingRow ? (
+        <NewExceptionModal
+          mode="edit"
+          reportId={getExceptionReportNumber(editingRow)}
+          status={editingRow.status}
+          form={editForm}
+          employees={adminEmployees}
+          saving={editSaving}
+          onChange={updateEditForm}
+          onClose={() => setEditingRow(null)}
+          onSubmit={() => void saveEditSelected()}
+        />
+      ) : null}
     </div>
   );
 }

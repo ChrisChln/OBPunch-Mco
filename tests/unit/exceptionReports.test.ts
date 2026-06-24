@@ -51,6 +51,7 @@ describe('exceptionReports', () => {
       'Pending Adjustment': 'Pending Adjustment',
       'Short Picked': 'Short Picked',
       Resolved: 'Resolved',
+      Completed: 'Completed',
       Closed: 'Cancel'
     });
   });
@@ -230,12 +231,15 @@ describe('exceptionReports', () => {
     expect(isValidExceptionTransition('Counted', 'Pending Adjustment')).toBe(true);
     expect(isValidExceptionTransition('Counted', 'Resolved')).toBe(true);
     expect(isValidExceptionTransition('Pending Adjustment', 'Resolved')).toBe(true);
+    expect(isValidExceptionTransition('Resolved', 'Completed')).toBe(true);
     expect(isValidExceptionTransition('Resolved', 'Closed')).toBe(true);
     expect(isValidExceptionTransition('Open', 'Closed')).toBe(true);
     expect(isValidExceptionTransition('Closed', 'Open')).toBe(true);
+    expect(isValidExceptionTransition('Completed', 'Open')).toBe(true);
     expect(isValidExceptionTransition('Open', 'Resolved')).toBe(false);
     expect(isValidExceptionTransition('Resolved', 'Processing')).toBe(false);
     expect(isValidExceptionTransition('Closed', 'Processing')).toBe(false);
+    expect(isValidExceptionTransition('Completed', 'Processing')).toBe(false);
   });
 
   test('detects pending inventory adjustments after borrowing from another location', () => {

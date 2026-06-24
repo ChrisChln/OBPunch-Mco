@@ -1,4 +1,11 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizeStaffId } from '../lib/staffId';
+
+type RpcInvoker = Pick<SupabaseClient, 'rpc'>;
+type RpcResult<T> = {
+  data: T | null;
+  error: { message?: string | null } | null;
+};
 
 export const isNewHirePlaceholderStaffId = (value: string) => {
   const staff = String(value ?? '').trim().toUpperCase();
@@ -9,15 +16,29 @@ export const isNewHirePlaceholderStaffId = (value: string) => {
   return /^\d{4}[A-Z]+\d{3,}$/i.test(staff);
 };
 
-export const createManualTemporaryStaffId = (existingStaffIds: string[] = []) => {
+const TUS_ID_PATTERN = /^TUS(\d{7,})$/;
+
+export const buildTemporaryStaffId = (sequenceNumber: number) => `TUS${String(sequenceNumber).padStart(7, '0')}`;
+
+export const extractTemporaryStaffIdNumber = (value: string) => {
+  const match = String(value ?? '').trim().toUpperCase().match(TUS_ID_PATTERN);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+export const getHighestTemporaryStaffIdNumber = (existingStaffIds: string[] = []) => {
   let max = 0;
   for (const value of existingStaffIds) {
-    const match = String(value ?? '').trim().toUpperCase().match(/^TUS(\d{7,})$/);
-    if (!match) continue;
-    const n = Number(match[1]);
-    if (Number.isFinite(n)) max = Math.max(max, n);
+    const parsed = extractTemporaryStaffIdNumber(value);
+    if (parsed === null) continue;
+    max = Math.max(max, parsed);
   }
-  return `TUS${String(max + 1).padStart(7, '0')}`;
+  return max;
+};
+
+export const createManualTemporaryStaffId = (existingStaffIds: string[] = []) => {
+  return buildTemporaryStaffId(getHighestTemporaryStaffIdNumber(existingStaffIds) + 1);
 };
 
 export const resolveEmployeeEditStaffIds = (
@@ -35,4 +56,39 @@ export const resolveEmployeeEditStaffIds = (
     nextStaff,
     isPlaceholderOriginal
   };
+};
+
+const isMissingNextTempStaffIdRpc = (message: string) => {
+  const normalized = String(message ?? '').toLowerCase();
+  if (!normalized.includes('next_temp_staff_id')) return false;
+  return (
+    normalized.includes('could not find') ||
+    normalized.includes('schema cache') ||
+    normalized.includes('does not exist') ||
+    normalized.includes('not found')
+  );
+};
+
+export const allocateTemporaryStaffId = async (
+  supabase: RpcInvoker | null,
+  existingStaffIds: string[] = []
+) => {
+  if (!supabase) {
+    return createManualTemporaryStaffId(existingStaffIds);
+  }
+
+  const result = (await supabase.rpc('next_temp_staff_id')) as RpcResult<string>;
+  if (result.error) {
+    const message = String(result.error.message ?? 'Failed to allocate temp staff ID.');
+    if (isMissingNextTempStaffIdRpc(message)) {
+      return createManualTemporaryStaffId(existingStaffIds);
+    }
+    throw new Error(message);
+  }
+
+  const nextStaffId = String(result.data ?? '').trim().toUpperCase();
+  if (!extractTemporaryStaffIdNumber(nextStaffId)) {
+    throw new Error('Failed to allocate a valid temp staff ID.');
+  }
+  return nextStaffId;
 };

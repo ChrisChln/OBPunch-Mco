@@ -349,8 +349,15 @@ describe('api/exception-reports', () => {
     expect(res.body.row.status).toBe('Open');
   });
 
-  test('post requires count by when counted quantities are entered', async () => {
-    const insert = vi.fn();
+  test('post allows missing count by as a warning when counted quantities are entered', async () => {
+    const insert = vi.fn((rows: any[]) => ({
+      select: () => ({
+        single: async () => ({
+          data: { id: 19, status: 'Counted', ...rows[0] },
+          error: null
+        })
+      })
+    }));
     const serviceSupabase = {
       from: (table: string) => {
         expect(table).toBe('ob_exception_reports');
@@ -390,9 +397,10 @@ describe('api/exception-reports', () => {
       res
     );
 
-    expect(res.code).toBe(400);
-    expect(String(res.body?.error ?? '')).toContain('Count By USID is required');
-    expect(insert).not.toHaveBeenCalled();
+    expect(res.code).toBe(200);
+    expect(insert).toHaveBeenCalledTimes(1);
+    expect(insert.mock.calls[0][0][0].count_by).toBe('');
+    expect(res.body.row.status).toBe('Counted');
   });
 
   test('creates the eleventh exception report for the same date', async () => {
@@ -720,8 +728,14 @@ describe('api/exception-reports', () => {
     expect(updateException.mock.calls[0][0].actual_qty).toBeNull();
   });
 
-  test('lead patch requires count by when counted quantities are entered', async () => {
-    const updateException = vi.fn();
+  test('lead patch allows missing count by as a warning when counted quantities are entered', async () => {
+    const updateException = vi.fn((payload: any) => ({
+      eq: () => ({
+        select: () => ({
+          single: async () => ({ data: { id: 9, ...payload }, error: null })
+        })
+      })
+    }));
     const serviceSupabase = {
       from: (table: string) => {
         expect(table).toBe('ob_exception_reports');
@@ -769,9 +783,10 @@ describe('api/exception-reports', () => {
       res
     );
 
-    expect(res.code).toBe(400);
-    expect(String(res.body?.error ?? '')).toContain('Count By USID is required');
-    expect(updateException).not.toHaveBeenCalled();
+    expect(res.code).toBe(200);
+    expect(updateException).toHaveBeenCalledTimes(1);
+    expect(updateException.mock.calls[0][0].count_by).toBe('');
+    expect(updateException.mock.calls[0][0].status).toBe('Counted');
   });
 
   test('lead patch ignores manual resolved status until borrowed inventory is adjusted', async () => {
@@ -1060,7 +1075,7 @@ describe('api/exception-reports', () => {
 
     expect(res.code).toBe(200);
     expect(mistakeInsert).toHaveBeenCalledTimes(1);
-    expect(updateException.mock.calls[0][0].status).toBe('Closed');
+    expect(updateException.mock.calls[0][0].status).toBe('Completed');
     expect(updateException.mock.calls[0][0].responsibility_result).toBe('picker');
     expect(updateException.mock.calls[0][0].responsible_staff_id).toBe('US100');
     expect(updateException.mock.calls[0][0].mistake_report_id).toBe(91);
@@ -1146,7 +1161,7 @@ describe('api/exception-reports', () => {
 
     expect(res.code).toBe(200);
     expect(mistakeInsert).toHaveBeenCalledTimes(1);
-    expect(updateException.mock.calls[0][0].status).toBe('Closed');
+    expect(updateException.mock.calls[0][0].status).toBe('Completed');
     expect(updateException.mock.calls[0][0].responsibility_result).toBe('picker');
     expect(updateException.mock.calls[0][0].responsible_staff_id).toBe('US100');
     expect(updateException.mock.calls[0][0].mistake_report_id).toBe(92);
@@ -1232,7 +1247,7 @@ describe('api/exception-reports', () => {
 
     expect(res.code).toBe(200);
     expect(mistakeInsert).toHaveBeenCalledTimes(1);
-    expect(updateException.mock.calls[0][0].status).toBe('Closed');
+    expect(updateException.mock.calls[0][0].status).toBe('Completed');
     expect(updateException.mock.calls[0][0].responsibility_result).toBe('picker');
     expect(updateException.mock.calls[0][0].responsible_staff_id).toBe('US100');
     expect(updateException.mock.calls[0][0].mistake_report_id).toBe(93);
@@ -1450,6 +1465,41 @@ describe('api/exception-reports', () => {
     expect(String(res.body?.error ?? '')).toContain('Exception Lead PIN is not configured');
   });
 
+  test('present employee lookup reads from employee table instead of today punch records', async () => {
+    const serviceSupabase = {
+      from: (table: string) => {
+        if (table !== 'ob_employees') throw new Error(`Unexpected table ${table}`);
+        return {
+          select: () => ({
+            order: () => ({
+              limit: async () => ({
+                data: [
+                  { staff_id: 'us019589', name: 'Alice', position: 'Pick', agency: 'YEL' },
+                  { staff_id: 'TUS0000001', name: 'Temp One', position: 'Lead', agency: '' }
+                ],
+                error: null
+              })
+            })
+          })
+        };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'GET', headers: {}, query: { present: '1' } }, res);
+
+    expect(res.code).toBe(200);
+    expect(res.body.rows).toEqual([
+      { staff_id: 'US019589', name: 'Alice', position: 'Pick', agency: 'YEL' },
+      { staff_id: 'TUS0000001', name: 'Temp One', position: 'Lead', agency: '' }
+    ]);
+  });
+
   test('admin close creates one mistake report', async () => {
     const mistakeInsert = vi.fn(() => ({
       select: async () => ({ data: [{ id: 77 }], error: null })
@@ -1457,7 +1507,7 @@ describe('api/exception-reports', () => {
     const updateException = vi.fn((payload: any) => ({
       eq: () => ({
         select: () => ({
-          single: async () => ({ data: { id: 5, status: 'Closed', ...payload }, error: null })
+          single: async () => ({ data: { id: 5, status: 'Completed', ...payload }, error: null })
         })
       })
     }));
@@ -1547,7 +1597,7 @@ describe('api/exception-reports', () => {
     const updateException = vi.fn((payload: any) => ({
       eq: () => ({
         select: () => ({
-          single: async () => ({ data: { id: 6, status: 'Closed', ...payload }, error: null })
+          single: async () => ({ data: { id: 6, status: 'Completed', ...payload }, error: null })
         })
       })
     }));
@@ -1628,5 +1678,70 @@ describe('api/exception-reports', () => {
     expect(updateException.mock.calls[0][0].responsibility_result).toBe('all');
     expect(updateException.mock.calls[0][0].responsible_staff_id).toBeNull();
     expect(updateException.mock.calls[0][0].mistake_report_id).toBe(81);
+  });
+
+  test('lead patch can still cancel an exception without creating a mistake report', async () => {
+    const mistakeInsert = vi.fn(() => ({
+      select: async () => ({ data: [{ id: 99 }], error: null })
+    }));
+    const updateException = vi.fn((payload: any) => ({
+      eq: () => ({
+        select: () => ({
+          single: async () => ({ data: { id: 18, ...payload }, error: null })
+        })
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        if (table === 'ob_exception_reports') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: {
+                    id: 18,
+                    report_number: '202606180018',
+                    ...baseBody,
+                    exception_type: 'short_pick',
+                    status: 'Resolved',
+                    mistake_report_id: null,
+                    resolution_note: ''
+                  },
+                  error: null
+                })
+              })
+            }),
+            update: updateException
+          };
+        }
+        if (table === 'ob_mistake_reports') return { insert: mistakeInsert };
+        throw new Error(`Unexpected table ${table}`);
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler(
+      {
+        method: 'PATCH',
+        headers: { 'X-Exception-Lead-Pin': '1234' },
+        body: {
+          id: 18,
+          status: 'Closed',
+          exception_type: 'short_pick'
+        }
+      },
+      res
+    );
+
+    expect(res.code).toBe(200);
+    expect(mistakeInsert).not.toHaveBeenCalled();
+    expect(updateException.mock.calls[0][0].status).toBe('Closed');
+    expect(updateException.mock.calls[0][0].responsibility_result).toBe('pending');
+    expect(updateException.mock.calls[0][0].mistake_report_id).toBeNull();
   });
 });

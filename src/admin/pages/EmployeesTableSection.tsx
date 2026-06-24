@@ -18,9 +18,11 @@ type EmployeesTableSectionProps = {
   themeMode: 'dark' | 'light';
   employeesError: string | null;
   employeesFiltered: any[];
+  employeeSortByPosition: boolean;
   employeeSortByLastPunchDesc: boolean;
   employeePunchMetaLoading: boolean;
   employeeSortByHireDateDesc: boolean;
+  onTogglePositionSort: () => void;
   onToggleSort: () => void;
   onToggleHireDateSort: () => void;
   displayStaffId: (value: string) => string;
@@ -78,9 +80,11 @@ export default function EmployeesTableSection({
   themeMode,
   employeesError,
   employeesFiltered,
+  employeeSortByPosition,
   employeeSortByLastPunchDesc,
   employeePunchMetaLoading,
   employeeSortByHireDateDesc,
+  onTogglePositionSort,
   onToggleSort,
   onToggleHireDateSort,
   displayStaffId,
@@ -214,7 +218,20 @@ export default function EmployeesTableSection({
               <th className="w-[13%] px-2 py-3 whitespace-nowrap xl:px-3">Employee ID</th>
               <th className="w-[16%] px-2 py-3 xl:px-3">Name</th>
               <th className="hidden w-[8%] px-2 py-3 whitespace-nowrap lg:table-cell xl:px-3">Agency</th>
-              <th className="w-[10%] px-2 py-3 whitespace-nowrap xl:px-3">Position</th>
+              <th className="w-[10%] px-2 py-3 whitespace-nowrap xl:px-3">
+                <button
+                  type="button"
+                  onClick={onTogglePositionSort}
+                  className={[
+                    'inline-flex items-center gap-1 whitespace-nowrap text-xs uppercase tracking-[0.2em] transition',
+                    isLight ? 'text-slate-500 hover:text-slate-700' : 'text-slate-400 hover:text-slate-200'
+                  ].join(' ')}
+                  title={t('按岗位顺序排序', 'Sort by position order')}
+                >
+                  Position
+                  {employeeSortByPosition ? ' ↓' : ''}
+                </button>
+              </th>
               <th className="hidden w-[5%] px-2 py-3 whitespace-nowrap 2xl:table-cell xl:px-3">FT/PT</th>
               <th className="hidden w-[8%] px-2 py-3 whitespace-nowrap xl:table-cell xl:px-3">{t('标签', 'Label')}</th>
               <th className="hidden w-[8%] px-2 py-3 whitespace-nowrap 2xl:table-cell xl:px-3">{t('账号', 'Account')}</th>

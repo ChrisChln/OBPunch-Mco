@@ -45,7 +45,7 @@ import type {
 } from './types';
 
 type ModalState = 'new_hire' | 'termination' | 'driver_group' | 'employee_note' | 'payrate' | null;
-type NoticeTone = 'error' | 'info';
+type NoticeTone = 'error' | 'info' | 'success';
 
 type NoticeState = {
   title: string;
@@ -79,6 +79,10 @@ type DriverGroupFormState = {
   driverStaffId: string;
   memberStaffIds: string[];
   sourceStaffId: string;
+};
+
+type EditableAgencyNewHireRequest = AgencyNewHireRequestRow & {
+  work_date: string;
 };
 
 type SchedulePickerState = {
@@ -621,7 +625,7 @@ export default function AgencyAppPage() {
   const [shiftFilter, setShiftFilter] = useState<'all' | 'early' | 'late'>('all');
   const [modal, setModal] = useState<ModalState>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<AgencyEmployeeRow | null>(null);
-  const [selectedNewHire, setSelectedNewHire] = useState<AgencyNewHireRequestRow | null>(null);
+  const [selectedNewHire, setSelectedNewHire] = useState<EditableAgencyNewHireRequest | null>(null);
   const [selectedNoteEmployee, setSelectedNoteEmployee] = useState<AgencyEmployeeRow | null>(null);
   const [selectedPayrateTarget, setSelectedPayrateTarget] = useState<PayrateTarget | null>(null);
   const [payrateDraft, setPayrateDraft] = useState('');
@@ -663,7 +667,7 @@ export default function AgencyAppPage() {
   );
 
   const openNotice = useCallback((tone: NoticeTone, message: string, title?: string) => {
-    const fallbackTitle = tone === 'error' ? 'Error' : 'Notice';
+    const fallbackTitle = tone === 'error' ? 'Error' : tone === 'success' ? 'Saved' : 'Notice';
     setNotice({
       title: title?.trim() || fallbackTitle,
       message,
@@ -1036,11 +1040,11 @@ export default function AgencyAppPage() {
     setModal('new_hire');
   };
 
-  const openEditNewHire = (row: AgencyNewHireRequestRow) => {
+  const openEditNewHire = (row: EditableAgencyNewHireRequest) => {
     setSelectedNewHire(row);
     setNewHireForm({
       staffId: row.staff_id,
-      workDate: selectedDate,
+      workDate: row.work_date,
       position: String(row.position),
       shift: (row.shift === 'late' ? 'late' : 'early') as 'early' | 'late',
       agency: normalizeAgencyValue(row.agency),
@@ -1136,20 +1140,28 @@ export default function AgencyAppPage() {
       openNotice('error', 'No GAP for selected Agency / Position / Shift.');
       return;
     }
-    beginBusy(selectedNewHire ? 'Saving payrate' : 'Creating request');
+    beginBusy(selectedNewHire ? 'Saving request' : 'Creating request');
     try {
+      const normalizedPayrate = normalizeAgencyPayrateInput(newHireForm.payrate);
       if (selectedNewHire) {
-        await upsertAgencyPayrate(supabase, selectedNewHire.staff_id, selectedDate, normalizeAgencyPayrateInput(newHireForm.payrate));
+        await upsertAgencyNewHireDemand(supabase, {
+          ...newHireForm,
+          staffId: selectedNewHire.staff_id,
+          workDate: selectedNewHire.work_date,
+          payrate: normalizedPayrate
+        });
         closeModal();
         await refreshBoard();
+        openNotice('success', 'NEW request updated.');
         return;
       }
       await upsertAgencyNewHireDemand(supabase, {
         ...newHireForm,
-        payrate: normalizeAgencyPayrateInput(newHireForm.payrate)
+        payrate: normalizedPayrate
       });
       closeModal();
       await refreshBoard();
+      openNotice('success', 'NEW request created.');
     } catch (nextError) {
       openNotice('error', nextError instanceof Error ? nextError.message : 'New request save failed.');
     } finally {
@@ -1604,21 +1616,13 @@ export default function AgencyAppPage() {
     [employeeRows]
   );
 
-  const selectedDateNewHireRequests = useMemo<AgencyNewHireRequestRow[]>(
+  const selectedDateNewHireRequests = useMemo<EditableAgencyNewHireRequest[]>(
     () =>
       (weekSchedule?.new_hire_requests ?? [])
         .filter((row) => row.work_date === selectedDate)
         .map((row) => ({
-          staff_id: row.staff_id,
-          name: row.name,
-          agency: row.agency,
-          position: row.position,
-          shift: row.shift,
-          start_time: row.start_time,
-          label: row.label,
-          payrate: row.payrate,
-          state: '',
-          can_delete: row.can_delete
+          ...row,
+          state: ''
         })),
     [selectedDate, weekSchedule]
   );
@@ -2875,9 +2879,27 @@ export default function AgencyAppPage() {
 
       {notice ? (
         <div className="fixed right-5 top-5 z-[105] w-[min(420px,calc(100vw-2.5rem))]">
-          <div className="rounded-[24px] border border-rose-400/20 bg-slate-950/88 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+          <div
+            className={[
+              'rounded-[24px] border bg-slate-950/88 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl',
+              notice.tone === 'error'
+                ? 'border-rose-400/20'
+                : notice.tone === 'success'
+                  ? 'border-emerald-400/20'
+                  : 'border-sky-400/20'
+            ].join(' ')}
+          >
             <div className="flex items-start gap-3">
-              <div className="mt-1 h-2.5 w-2.5 rounded-full bg-rose-300 shadow-[0_0_18px_rgba(253,164,175,0.65)]" />
+              <div
+                className={[
+                  'mt-1 h-2.5 w-2.5 rounded-full',
+                  notice.tone === 'error'
+                    ? 'bg-rose-300 shadow-[0_0_18px_rgba(253,164,175,0.65)]'
+                    : notice.tone === 'success'
+                      ? 'bg-emerald-300 shadow-[0_0_18px_rgba(110,231,183,0.6)]'
+                      : 'bg-sky-300 shadow-[0_0_18px_rgba(125,211,252,0.6)]'
+                ].join(' ')}
+              />
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold text-white">{notice.title}</div>
                 <div className="mt-1 text-sm leading-6 text-slate-300">{notice.message}</div>

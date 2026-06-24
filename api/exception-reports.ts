@@ -207,7 +207,7 @@ const resolveResponsibilityTargets = (
   return { pickerStaffId, packerStaffId, targetStaffIds };
 };
 
-const createMistakeReportForExceptionClose = async (
+const createMistakeReportForExceptionCompletion = async (
   supabase: any,
   report: Record<string, unknown>,
   targetStaffIds: string[],
@@ -251,7 +251,7 @@ const createMistakeReportForExceptionClose = async (
   return { mistakeReportId: mistakeData[0]?.id ?? null, error: null };
 };
 
-const closeExceptionReport = async (
+const completeExceptionReport = async (
   supabase: any,
   report: Record<string, unknown>,
   responsibilityResult: string,
@@ -262,7 +262,7 @@ const closeExceptionReport = async (
   const targetRes = resolveResponsibilityTargets(report, responsibilityResult, responsibleStaffId);
   if ('error' in targetRes) return { statusCode: 400, error: targetRes.error };
 
-  const mistakeRes = await createMistakeReportForExceptionClose(supabase, report, targetRes.targetStaffIds, reporterStaffId);
+  const mistakeRes = await createMistakeReportForExceptionCompletion(supabase, report, targetRes.targetStaffIds, reporterStaffId);
   if (mistakeRes.error) {
     return {
       statusCode: /already been created/i.test(mistakeRes.error) ? 409 : 500,
@@ -272,7 +272,7 @@ const closeExceptionReport = async (
 
   const nowIso = new Date().toISOString();
   const result = await updateExceptionReport(supabase, String(report.id ?? ''), {
-    status: 'Closed',
+    status: 'Completed',
     responsibility_result: responsibilityResult,
     responsible_staff_id: targetRes.targetStaffIds.length === 1 ? targetRes.targetStaffIds[0] : null,
     mistake_report_id: mistakeRes.mistakeReportId,
@@ -321,57 +321,24 @@ const ensureAdminAccess = async (req: any, res: any, serviceSupabase: any, requi
 
 const handleGet = async (req: any, res: any, supabase: any) => {
   if (String(req.query?.present ?? '') === '1') {
-    const now = new Date();
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(now);
-    end.setHours(23, 59, 59, 999);
-
-    const punchRes = await supabase
-      .from('ob_punches')
-      .select('staff_id')
-      .gte('created_at', start.toISOString())
-      .lte('created_at', end.toISOString())
-      .limit(5000);
-    if (punchRes.error) {
-      res.status(500).json({ error: punchRes.error.message });
-      return;
-    }
-
-    const staffIds = Array.from(
-      new Set(((punchRes.data ?? []) as Array<{ staff_id?: string | null }>).map((row) => String(row.staff_id ?? '').trim().toUpperCase()).filter(Boolean))
-    ).sort((left, right) => left.localeCompare(right, 'en-US', { numeric: true }));
-
-    if (staffIds.length === 0) {
-      res.status(200).json({ rows: [] });
-      return;
-    }
-
     const employeeRes = await supabase
       .from(EMPLOYEE_TABLE)
       .select('staff_id, name, position, agency')
-      .in('staff_id', staffIds)
+      .order('staff_id', { ascending: true })
       .limit(5000);
     if (employeeRes.error) {
       res.status(500).json({ error: employeeRes.error.message });
       return;
     }
 
-    const employeeByStaff = new Map(
-      ((employeeRes.data ?? []) as Array<{ staff_id?: string | null; name?: string | null; position?: string | null; agency?: string | null }>).map((row) => [
-        String(row.staff_id ?? '').trim().toUpperCase(),
-        row
-      ])
-    );
-    const rows = staffIds.map((staffId) => {
-      const employee = employeeByStaff.get(staffId);
-      return {
-        staff_id: staffId,
-        name: String(employee?.name ?? '').trim(),
-        position: String(employee?.position ?? '').trim(),
-        agency: String(employee?.agency ?? '').trim()
-      };
-    });
+    const rows = ((employeeRes.data ?? []) as Array<{ staff_id?: string | null; name?: string | null; position?: string | null; agency?: string | null }>)
+      .map((row) => ({
+        staff_id: String(row.staff_id ?? '').trim().toUpperCase(),
+        name: String(row.name ?? '').trim(),
+        position: String(row.position ?? '').trim(),
+        agency: String(row.agency ?? '').trim()
+      }))
+      .filter((row) => Boolean(row.staff_id));
     res.status(200).json({ rows });
     return;
   }
@@ -456,11 +423,19 @@ const handlePost = async (req: any, res: any, supabase: any) => {
   res.status(500).json({ error: lastError?.message ?? 'Failed to create exception report.' });
 };
 
-const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => {
-  if (!ensureLeadPinConfigured(res)) return;
-  if (!hasLeadPin(req, body)) {
-    res.status(401).json({ error: 'Invalid Lead PIN.' });
-    return;
+const handleLeadPatch = async (
+  req: any,
+  res: any,
+  supabase: any,
+  body: any,
+  options: { skipLeadPin?: boolean } = {}
+) => {
+  if (!options.skipLeadPin) {
+    if (!ensureLeadPinConfigured(res)) return;
+    if (!hasLeadPin(req, body)) {
+      res.status(401).json({ error: 'Invalid Lead PIN.' });
+      return;
+    }
   }
 
   const id = String(body.id ?? '').trim();
@@ -525,7 +500,7 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
     return;
   }
   if (automaticClosure) {
-    const closeResult = await closeExceptionReport(
+    const closeResult = await completeExceptionReport(
       supabase,
       { ...currentRes.data, ...editedPayload, id },
       automaticClosure.responsibility_result,
@@ -558,7 +533,10 @@ const handleLeadPatch = async (req: any, res: any, supabase: any, body: any) => 
     updatePayload.responsible_staff_id = null;
     updatePayload.mistake_report_id = null;
   }
-  if (currentStatus === 'Closed' && nextStatus === 'Open') {
+  if (nextStatus === 'Completed') {
+    updatePayload.closed_at = null;
+  }
+  if ((currentStatus === 'Closed' || currentStatus === 'Completed') && nextStatus === 'Open') {
     updatePayload.processed_at = null;
     updatePayload.resolved_at = null;
     updatePayload.closed_at = null;
@@ -596,16 +574,20 @@ const handleAdminClose = async (req: any, res: any, supabase: any, body: any) =>
     res.status(404).json({ error: currentRes.error?.message ?? 'Exception report not found.' });
     return;
   }
+  if (currentRes.data.status === 'Completed') {
+    res.status(409).json({ error: 'Exception report is already completed.' });
+    return;
+  }
   if (currentRes.data.status === 'Closed') {
     res.status(409).json({ error: 'Exception report is already closed.' });
     return;
   }
   if (currentRes.data.status !== 'Resolved') {
-    res.status(400).json({ error: 'Only Resolved exception reports can be closed.' });
+    res.status(400).json({ error: 'Only Resolved exception reports can be completed.' });
     return;
   }
 
-  const closeResult = await closeExceptionReport(
+  const closeResult = await completeExceptionReport(
     supabase,
     currentRes.data,
     responsibilityResult,
@@ -648,6 +630,13 @@ export default async function handler(req: any, res: any) {
       if (!body) return;
       if (body.action === 'close') {
         await handleAdminClose(req, res, supabase, body);
+        return;
+      }
+      const token = getBearerToken(req);
+      if (token) {
+        const user = await ensureAdminAccess(req, res, supabase, 'operate');
+        if (!user) return;
+        await handleLeadPatch(req, res, supabase, body, { skipLeadPin: true });
         return;
       }
       await handleLeadPatch(req, res, supabase, body);
