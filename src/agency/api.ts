@@ -6,12 +6,14 @@ import type {
   AgencyWeekSchedule,
   AgencyScheduleState
 } from './types';
+import type { AgencyExistingEmployeeNameRecord } from './newHireValidation';
 import { normalizeAgencyPayrateInput } from './payrate';
 
 const PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
 const PUNCHES_TABLE = (import.meta.env.VITE_PUNCHES_TABLE as string | undefined) ?? 'ob_punches';
 const AGENCY_PAYRATES_TABLE = (import.meta.env.VITE_AGENCY_PAYRATES_TABLE as string | undefined) ?? 'ob_agency_payrates';
+const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
 
 const expectRpcSuccess = async <T>(promise: PromiseLike<{ data: T | null; error: { message: string } | null }>) => {
   const result = await promise;
@@ -28,6 +30,10 @@ type AgencyPayrateRow = {
 };
 
 const payrateKey = (staffId: string, workDate: string) => `${staffId}__${workDate}`;
+
+const normalizeEmployeeNameLookupInput = (value: unknown) => String(value ?? '').trim().replace(/\s+/g, ' ');
+
+const escapeLikeValue = (value: string) => value.replace(/[%_]/g, (token) => `\\${token}`);
 
 const fetchAgencyPayrates = async (supabase: SupabaseClient, staffIds: readonly string[], workDates: readonly string[]) => {
   const scopedStaffIds = Array.from(new Set(staffIds.map((item) => String(item ?? '').trim()).filter(Boolean)));
@@ -182,6 +188,32 @@ export const fetchAgencyUserDisplayName = async (supabase: SupabaseClient, userI
   const result = await supabase.from(PROFILE_TABLE).select('display_name').eq('user_id', userId).maybeSingle();
   if (result.error) return '';
   return String((result.data as { display_name?: string | null } | null)?.display_name ?? '').trim();
+};
+
+export const fetchAgencyExistingEmployeeNameRecords = async (
+  supabase: SupabaseClient,
+  employeeName: string
+): Promise<AgencyExistingEmployeeNameRecord[]> => {
+  const lookupName = normalizeEmployeeNameLookupInput(employeeName);
+  if (!lookupName) return [];
+
+  const result = await supabase
+    .from(EMPLOYEE_TABLE)
+    .select('staff_id, name, terminated_at')
+    .ilike('name', `%${escapeLikeValue(lookupName)}%`)
+    .limit(20);
+
+  if (result.error) {
+    throw new Error(String(result.error.message ?? 'Failed to validate employee name.'));
+  }
+
+  return Array.isArray(result.data)
+    ? result.data.map((row) => ({
+        staffId: String((row as { staff_id?: string | null }).staff_id ?? '').trim(),
+        name: String((row as { name?: string | null }).name ?? '').trim(),
+        terminatedAt: String((row as { terminated_at?: string | null }).terminated_at ?? '').trim() || null
+      }))
+    : [];
 };
 
 export const fetchAgencyAbsentMarkKeys = async (
