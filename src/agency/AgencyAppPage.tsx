@@ -21,6 +21,7 @@ import {
   deleteAgencyNewHireDemand,
   fetchAdminAccessContext,
   fetchAgencyAbsentMarkKeys,
+  fetchAgencyExistingEmployeeNameRecords,
   fetchAgencyPunchPresenceStaffIds,
   fetchAgencyScheduleWeek,
   fetchAgencyUserDisplayName,
@@ -32,7 +33,9 @@ import {
   upsertAgencyNewHireDemand
 } from './api';
 import { computeAgencySummaryCards, isAgencyWorklikeState } from './boardMetrics';
+import { DEFAULT_NEW_HIRE_ENTRY_TIME, normalizeAgencyEntryTime, resolveAgencyNewHireEntryTime } from './newHireEntryTime';
 import { buildDriverGroupWarnings, getNextDriverGroupCode } from './driverGroups';
+import { findAgencyNewHireNameConflict, type AgencyNewHireNameConflict } from './newHireValidation';
 import { normalizeAgencyNote } from './notes';
 import { formatAgencyPayrate, normalizeAgencyPayrateInput } from './payrate';
 import type {
@@ -52,6 +55,11 @@ type NoticeState = {
   message: string;
   tone: NoticeTone;
 } | null;
+
+type NewHireNameValidationState = {
+  status: 'idle' | 'checking' | 'valid' | 'invalid';
+  message: string;
+};
 
 type PayrateTarget = {
   staffId: string;
@@ -309,6 +317,25 @@ const agencyStatusChipClass = (status: AgencyEmployeeRow['agencyStatus']) =>
     ? 'border-emerald-400/35 bg-emerald-500/12 text-emerald-100'
     : 'border-amber-400/35 bg-amber-500/12 text-amber-100';
 
+const getAgencyNewHireNameConflictMessage = (conflict: AgencyNewHireNameConflict) => {
+  const displayName = conflict.name || conflict.staffId || 'Employee';
+  if (conflict.type === 'scheduled_employee') {
+    return `${displayName} is already on the Agency board.`;
+  }
+  if (conflict.type === 'new_hire_request') {
+    return `${displayName} is already in NEW requests.`;
+  }
+  if (conflict.type === 'departed_employee_record') {
+    return `${displayName} is an old employee. Rehire in Admin before adding.`;
+  }
+  return `${displayName} already exists in employee records.`;
+};
+
+const idleNewHireNameValidationState = (): NewHireNameValidationState => ({
+  status: 'idle',
+  message: ''
+});
+
 const formatStartTime = (value: string) => {
   const match = String(value ?? '').trim().match(/^(\d{1,2}):(\d{2})$/);
   if (!match) return '-';
@@ -320,9 +347,7 @@ const formatStartTime = (value: string) => {
 };
 
 const formatNewHireStartTime = (value: string) => {
-  const normalized = formatStartTime(value);
-  if (normalized !== '-') return normalized;
-  return '09:00';
+  return normalizeAgencyEntryTime(value);
 };
 
 const toCsvCell = (value: unknown) => {
@@ -653,6 +678,7 @@ export default function AgencyAppPage() {
     lockedShift: false,
     lockedWorkDate: false
   });
+  const [newHireNameValidation, setNewHireNameValidation] = useState<NewHireNameValidationState>(idleNewHireNameValidationState);
   const [schedulePicker, setSchedulePicker] = useState<SchedulePickerState>({
     open: false,
     staffId: '',
@@ -665,6 +691,7 @@ export default function AgencyAppPage() {
   const [compactScheduleView, setCompactScheduleView] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth <= MOBILE_SCHEDULE_MAX_WIDTH : false
   );
+  const deferredNewHireEmployeeName = useDeferredValue(newHireForm.employeeName);
 
   const openNotice = useCallback((tone: NoticeTone, message: string, title?: string) => {
     const fallbackTitle = tone === 'error' ? 'Error' : tone === 'success' ? 'Saved' : 'Notice';
@@ -1027,7 +1054,12 @@ export default function AgencyAppPage() {
       shift: msgShift,
       agency: msgAgency,
       label: '',
-      entryTime: '09:00',
+      entryTime: resolveAgencyNewHireEntryTime({
+        employees: employeeRows,
+        agency: msgAgency,
+        position: msgPosition,
+        shift: msgShift
+      }),
       note: 'NEW',
       payrate: '',
       count: 1,
@@ -1049,7 +1081,13 @@ export default function AgencyAppPage() {
       shift: (row.shift === 'late' ? 'late' : 'early') as 'early' | 'late',
       agency: normalizeAgencyValue(row.agency),
       label: '',
-      entryTime: '09:00',
+      entryTime: resolveAgencyNewHireEntryTime({
+        employees: employeeRows,
+        newHireRequest: row,
+        agency: normalizeAgencyValue(row.agency),
+        position: String(row.position),
+        shift: (row.shift === 'late' ? 'late' : 'early') as 'early' | 'late'
+      }),
       note: 'NEW',
       payrate: String(row.payrate ?? ''),
       count: 1,
@@ -1142,12 +1180,26 @@ export default function AgencyAppPage() {
     }
     beginBusy(selectedNewHire ? 'Saving request' : 'Creating request');
     try {
+      const existingEmployeeRecords = await fetchAgencyExistingEmployeeNameRecords(supabase, newHireForm.employeeName);
+      const conflict = findAgencyNewHireNameConflict(newHireForm.employeeName, {
+        scheduledEmployees: employeeRows,
+        newHireRequests: selectedDateNewHireRequests,
+        existingEmployeeRecords,
+        ignoreNewHireStaffId: selectedNewHire?.staff_id ?? null
+      });
+      if (conflict) {
+        openNotice('error', getAgencyNewHireNameConflictMessage(conflict));
+        return;
+      }
+
       const normalizedPayrate = normalizeAgencyPayrateInput(newHireForm.payrate);
+      const normalizedEntryTime = normalizeAgencyEntryTime(newHireForm.entryTime, DEFAULT_NEW_HIRE_ENTRY_TIME);
       if (selectedNewHire) {
         await upsertAgencyNewHireDemand(supabase, {
           ...newHireForm,
           staffId: selectedNewHire.staff_id,
           workDate: selectedNewHire.work_date,
+          entryTime: normalizedEntryTime,
           payrate: normalizedPayrate
         });
         closeModal();
@@ -1157,6 +1209,7 @@ export default function AgencyAppPage() {
       }
       await upsertAgencyNewHireDemand(supabase, {
         ...newHireForm,
+        entryTime: normalizedEntryTime,
         payrate: normalizedPayrate
       });
       closeModal();
@@ -1939,6 +1992,67 @@ export default function AgencyAppPage() {
     newHireGapGroups
   ]);
 
+  useEffect(() => {
+    if (modal !== 'new_hire' || !supabase) {
+      setNewHireNameValidation(idleNewHireNameValidationState());
+      return;
+    }
+
+    const employeeName = String(deferredNewHireEmployeeName ?? '').trim();
+    if (!employeeName) {
+      setNewHireNameValidation(idleNewHireNameValidationState());
+      return;
+    }
+
+    let active = true;
+    setNewHireNameValidation({ status: 'checking', message: 'Checking name...' });
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const existingEmployeeRecords = await fetchAgencyExistingEmployeeNameRecords(supabase, employeeName);
+          if (!active) return;
+          const conflict = findAgencyNewHireNameConflict(employeeName, {
+            scheduledEmployees: employeeRows,
+            newHireRequests: selectedDateNewHireRequests,
+            existingEmployeeRecords,
+            ignoreNewHireStaffId: selectedNewHire?.staff_id ?? null
+          });
+          if (!active) return;
+          if (conflict) {
+            setNewHireNameValidation({
+              status: 'invalid',
+              message: getAgencyNewHireNameConflictMessage(conflict)
+            });
+            return;
+          }
+          setNewHireNameValidation({
+            status: 'valid',
+            message: 'Name available.'
+          });
+        } catch (nextError) {
+          if (!active) return;
+          setNewHireNameValidation({
+            status: 'invalid',
+            message: nextError instanceof Error ? nextError.message : 'Name validation failed.'
+          });
+        }
+      })();
+    }, 250);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [
+    deferredNewHireEmployeeName,
+    employeeRows,
+    modal,
+    selectedDateNewHireRequests,
+    selectedNewHire?.staff_id,
+    supabase
+  ]);
+
   const derivedSummaryCards = useMemo(
     () =>
       computeAgencySummaryCards({
@@ -1968,6 +2082,8 @@ export default function AgencyAppPage() {
     Boolean(selectedNoteEmployee) && normalizeAgencyNote(selectedNoteDraft) !== normalizeAgencyNote(selectedNoteEmployee?.agency_note);
   const selectedNoteSaving = selectedNoteStaffId ? savingNoteStaffIds.has(selectedNoteStaffId) : false;
   const isNewHirePayrateInvalid = Boolean(String(newHireForm.payrate ?? '').trim()) && !normalizeAgencyPayrateInput(newHireForm.payrate);
+  const isNewHireNameInvalid = newHireNameValidation.status === 'invalid';
+  const isNewHireNameChecking = newHireNameValidation.status === 'checking';
   const isPayrateDraftInvalid = Boolean(String(payrateDraft ?? '').trim()) && !normalizeAgencyPayrateInput(payrateDraft);
   const selectedDriverGroupEmployee = driverGroupForm.sourceStaffId
     ? employeeRows.find((employee) => employee.staff_id === driverGroupForm.sourceStaffId) ?? null
@@ -2579,6 +2695,22 @@ export default function AgencyAppPage() {
               </select>
             )}
           </div>
+          {String(newHireForm.employeeName ?? '').trim() ? (
+            <div
+              className={[
+                'text-xs',
+                isNewHireNameInvalid
+                  ? 'text-rose-300'
+                  : isNewHireNameChecking
+                    ? 'text-slate-400'
+                    : newHireNameValidation.status === 'valid'
+                      ? 'text-emerald-300'
+                      : 'text-slate-400'
+              ].join(' ')}
+            >
+              {newHireNameValidation.message}
+            </div>
+          ) : null}
           <div className="grid gap-4 md:grid-cols-2">
             {newHireForm.lockedPosition ? (
               <div className={[inputClass, 'flex items-center pl-3'].join(' ')}>
@@ -2615,10 +2747,16 @@ export default function AgencyAppPage() {
               </select>
             )}
             <input
-              value="09:00"
-              type="text"
+              value={newHireForm.entryTime}
+              type="time"
               className={inputClass}
-              readOnly
+              onChange={(event) => setNewHireForm((prev) => ({ ...prev, entryTime: event.target.value }))}
+              onBlur={() =>
+                setNewHireForm((prev) => ({
+                  ...prev,
+                  entryTime: normalizeAgencyEntryTime(prev.entryTime, DEFAULT_NEW_HIRE_ENTRY_TIME)
+                }))
+              }
               aria-label="Entry time"
             />
             <input
@@ -2661,6 +2799,8 @@ export default function AgencyAppPage() {
               !String(newHireForm.agency ?? '').trim() ||
               !String(newHireForm.position ?? '').trim() ||
               !String(newHireForm.employeeName ?? '').trim() ||
+              isNewHireNameInvalid ||
+              isNewHireNameChecking ||
               isNewHirePayrateInvalid ||
               (!selectedNewHire && newHireSelectedOpenSlots <= 0)
             }
