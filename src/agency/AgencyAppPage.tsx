@@ -21,6 +21,7 @@ import {
   deleteAgencyNewHireDemand,
   fetchAdminAccessContext,
   fetchAgencyAbsentMarkKeys,
+  fetchAgencyDepartedEmployees,
   fetchAgencyExistingEmployeeNameRecords,
   fetchAgencyPunchPresenceStaffIds,
   fetchAgencyScheduleWeek,
@@ -33,6 +34,7 @@ import {
   upsertAgencyNewHireDemand
 } from './api';
 import { computeAgencySummaryCards, isAgencyWorklikeState } from './boardMetrics';
+import DepartedEmployeesModal from './DepartedEmployeesModal';
 import { DEFAULT_NEW_HIRE_ENTRY_TIME, normalizeAgencyEntryTime, resolveAgencyNewHireEntryTime } from './newHireEntryTime';
 import { buildDriverGroupWarnings, getNextDriverGroupCode } from './driverGroups';
 import { findAgencyNewHireNameConflict, type AgencyNewHireNameConflict } from './newHireValidation';
@@ -40,6 +42,7 @@ import { normalizeAgencyNote } from './notes';
 import { formatAgencyPayrate, normalizeAgencyPayrateInput } from './payrate';
 import type {
   AgencyBoard,
+  AgencyDepartedEmployeeRow,
   AgencyEmployeeRow,
   AgencyNewHireRequestRow,
   AgencyScheduleState,
@@ -653,6 +656,10 @@ export default function AgencyAppPage() {
   const [selectedNewHire, setSelectedNewHire] = useState<EditableAgencyNewHireRequest | null>(null);
   const [selectedNoteEmployee, setSelectedNoteEmployee] = useState<AgencyEmployeeRow | null>(null);
   const [selectedPayrateTarget, setSelectedPayrateTarget] = useState<PayrateTarget | null>(null);
+  const [departedEmployeesOpen, setDepartedEmployeesOpen] = useState(false);
+  const [departedEmployees, setDepartedEmployees] = useState<AgencyDepartedEmployeeRow[]>([]);
+  const [departedEmployeesLoading, setDepartedEmployeesLoading] = useState(false);
+  const [departedEmployeesError, setDepartedEmployeesError] = useState<string | null>(null);
   const [payrateDraft, setPayrateDraft] = useState('');
   const [driverGroupForm, setDriverGroupForm] = useState<DriverGroupFormState>({
     code: '1',
@@ -1221,6 +1228,26 @@ export default function AgencyAppPage() {
       endBusy();
     }
   };
+
+  const fetchDepartedEmployeesList = useCallback(async () => {
+    if (!supabase || !canViewAgency) return;
+    setDepartedEmployeesLoading(true);
+    setDepartedEmployeesError(null);
+    try {
+      const rows = await fetchAgencyDepartedEmployees(supabase, access?.managed_agencies ?? []);
+      setDepartedEmployees(rows);
+    } catch (nextError) {
+      setDepartedEmployees([]);
+      setDepartedEmployeesError(nextError instanceof Error ? nextError.message : 'Failed to load departed employees.');
+    } finally {
+      setDepartedEmployeesLoading(false);
+    }
+  }, [access?.managed_agencies, canViewAgency, supabase]);
+
+  const openDepartedEmployees = useCallback(async () => {
+    setDepartedEmployeesOpen(true);
+    await fetchDepartedEmployeesList();
+  }, [fetchDepartedEmployeesList]);
 
   const submitPayrate = async () => {
     if (!supabase || !canOperateAgency || !selectedPayrateTarget) return;
@@ -2286,6 +2313,14 @@ export default function AgencyAppPage() {
                 <h2 className="font-display text-3xl tracking-[0.04em] text-white">Employees</h2>
                 {user ? (
                   <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:justify-end">
+                    <button
+                      type="button"
+                      onClick={() => void openDepartedEmployees()}
+                      className={buttonClass}
+                      disabled={busy || !canViewAgency}
+                    >
+                      Departed
+                    </button>
                     <input
                       type="date"
                       value={selectedDate}
@@ -3016,6 +3051,15 @@ export default function AgencyAppPage() {
           </div>
         </div>
       </Modal>
+
+      <DepartedEmployeesModal
+        open={departedEmployeesOpen}
+        rows={departedEmployees}
+        loading={departedEmployeesLoading}
+        error={departedEmployeesError}
+        onClose={() => setDepartedEmployeesOpen(false)}
+        onRefresh={() => fetchDepartedEmployeesList()}
+      />
 
       {notice ? (
         <div className="fixed right-5 top-5 z-[105] w-[min(420px,calc(100vw-2.5rem))]">
