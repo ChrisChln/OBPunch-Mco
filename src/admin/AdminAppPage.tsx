@@ -19,7 +19,12 @@ import {
   saveLabelToneMap
 } from '../lib/labelTone';
 import { matchesAuditSearch } from './auditSearch';
-import { allocateTemporaryStaffId, isNewHirePlaceholderStaffId, resolveEmployeeEditStaffIds } from './tempStaffIds';
+import {
+  allocateTemporaryStaffId,
+  isNewHirePlaceholderStaffId,
+  resolveEmployeeEditStaffIds,
+  shouldAllocateTemporaryStaffIdOnEdit
+} from './tempStaffIds';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import AdminHeader from './components/AdminHeader';
@@ -8896,8 +8901,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     const originalStaffRaw = String(employeeEditOriginalStaffId ?? '').trim();
     const nextStaffInputRaw = String(employeeEditStaffId ?? '').trim();
-    const { originalStaff, nextStaff, isPlaceholderOriginal } = resolveEmployeeEditStaffIds(originalStaffRaw, nextStaffInputRaw);
-    if (!originalStaff || !nextStaff) return;
+    const { originalStaff, nextStaff: resolvedNextStaff, isPlaceholderOriginal } = resolveEmployeeEditStaffIds(originalStaffRaw, nextStaffInputRaw);
+    if (!originalStaff || !resolvedNextStaff) return;
+    let nextStaff = resolvedNextStaff;
+    if (shouldAllocateTemporaryStaffIdOnEdit(originalStaffRaw, nextStaffInputRaw)) {
+      try {
+        nextStaff = await allocateTemporaryStaffId(
+          supabase,
+          employees.map((row) => String(row.staff_id ?? '').trim())
+        );
+      } catch (nextError) {
+        setEmployeesError(nextError instanceof Error ? nextError.message : 'Failed to allocate temp staff ID.');
+        return;
+      }
+    }
     if (!isPlaceholderOriginal && originalStaff !== nextStaff && !isValidStaffIdValue(nextStaff) && !isNewHirePlaceholderStaffId(nextStaff)) {
       setEmployeesError('Invalid staff ID format (e.g. US010454).');
       return;
