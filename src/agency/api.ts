@@ -2,10 +2,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizeAdminAccessContext, type AdminAccessContext } from '../shared/adminAccess';
 import type {
   AgencyBoard,
+  AgencyDepartedEmployeeRow,
   AgencyUpsertNewHireInput,
   AgencyWeekSchedule,
   AgencyScheduleState
 } from './types';
+import { filterAgencyDepartedEmployees } from './departedEmployees';
 import type { AgencyExistingEmployeeNameRecord } from './newHireValidation';
 import { normalizeAgencyPayrateInput } from './payrate';
 
@@ -214,6 +216,49 @@ export const fetchAgencyExistingEmployeeNameRecords = async (
         terminatedAt: String((row as { terminated_at?: string | null }).terminated_at ?? '').trim() || null
       }))
     : [];
+};
+
+export const fetchAgencyDepartedEmployees = async (
+  supabase: SupabaseClient,
+  managedAgencies: string[]
+): Promise<AgencyDepartedEmployeeRow[]> => {
+  let result: { data: Record<string, unknown>[] | null; error: { message?: string | null } | null } = await supabase
+    .from(EMPLOYEE_TABLE)
+    .select('staff_id, name, agency, position, shift, shift_time, terminated_at')
+    .not('terminated_at', 'is', null)
+    .order('terminated_at', { ascending: false })
+    .limit(1000) as { data: Record<string, unknown>[] | null; error: { message?: string | null } | null };
+
+  if (result.error) {
+    result = await supabase
+      .from(EMPLOYEE_TABLE)
+      .select('staff_id, name, "Agency", "Position", shift, shift_time, terminated_at')
+      .not('terminated_at', 'is', null)
+      .order('terminated_at', { ascending: false })
+      .limit(1000) as { data: Record<string, unknown>[] | null; error: { message?: string | null } | null };
+  }
+
+  if (result.error) {
+    throw new Error(String(result.error.message ?? 'Failed to load departed employees.'));
+  }
+
+  const rows = Array.isArray(result.data)
+    ? result.data.map((row) => ({
+        staff_id: String((row as { staff_id?: string | null }).staff_id ?? '').trim(),
+        name: String((row as { name?: string | null }).name ?? '').trim(),
+        agency: String((row as { agency?: string | null; Agency?: string | null }).agency ?? (row as { Agency?: string | null }).Agency ?? '').trim(),
+        position: String((row as { position?: string | null; Position?: string | null }).position ?? (row as { Position?: string | null }).Position ?? '').trim(),
+        shift: (String((row as { shift?: string | null }).shift ?? '').trim() === 'late'
+          ? 'late'
+          : String((row as { shift?: string | null }).shift ?? '').trim() === 'early'
+            ? 'early'
+            : '') as 'early' | 'late' | '',
+        start_time: String((row as { shift_time?: string | null }).shift_time ?? '').trim(),
+        terminated_at: String((row as { terminated_at?: string | null }).terminated_at ?? '').trim()
+      }))
+    : [];
+
+  return filterAgencyDepartedEmployees(rows, managedAgencies);
 };
 
 export const fetchAgencyAbsentMarkKeys = async (

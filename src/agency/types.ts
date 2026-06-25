@@ -118,6 +118,16 @@ export type AgencyNewHireRequestRow = {
   can_delete: boolean;
 };
 
+export type AgencyDepartedEmployeeRow = {
+  staff_id: string;
+  name: string;
+  agency: string;
+  position: string;
+  shift: 'early' | 'late' | '';
+  start_time: string;
+  terminated_at: string;
+};
+
 export type AgencyLogRow = {
   id: string | number;
   created_at: string;
