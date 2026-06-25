@@ -10,6 +10,7 @@ import {
   DAILY_LIST_LIGHTS_KEY,
   createEmptyDailyListLightFlags,
   normalizeDailyListLightPosition,
+  readDailyListLightsFromRows,
   readDailyListLightsForDate,
   type DailyListLightFlags
 } from '../shared/dailyListLights';
@@ -20,6 +21,8 @@ import {
   deleteAgencyNewHireDemand,
   fetchAdminAccessContext,
   fetchAgencyAbsentMarkKeys,
+  fetchAgencyDepartedEmployees,
+  fetchAgencyExistingEmployeeNameRecords,
   fetchAgencyPunchPresenceStaffIds,
   fetchAgencyScheduleWeek,
   fetchAgencyUserDisplayName,
@@ -27,13 +30,19 @@ import {
   setAgencyScheduleState,
   upsertAgencyEmployeeNote,
   upsertAgencyDriverGroup,
+  upsertAgencyPayrate,
   upsertAgencyNewHireDemand
 } from './api';
 import { computeAgencySummaryCards, isAgencyWorklikeState } from './boardMetrics';
+import DepartedEmployeesModal from './DepartedEmployeesModal';
+import { DEFAULT_NEW_HIRE_ENTRY_TIME, normalizeAgencyEntryTime, resolveAgencyNewHireEntryTime } from './newHireEntryTime';
 import { buildDriverGroupWarnings, getNextDriverGroupCode } from './driverGroups';
+import { findAgencyNewHireNameConflict, type AgencyNewHireNameConflict } from './newHireValidation';
 import { normalizeAgencyNote } from './notes';
+import { formatAgencyPayrate, normalizeAgencyPayrateInput } from './payrate';
 import type {
   AgencyBoard,
+  AgencyDepartedEmployeeRow,
   AgencyEmployeeRow,
   AgencyNewHireRequestRow,
   AgencyScheduleState,
@@ -41,14 +50,26 @@ import type {
   AgencyWeekSchedule
 } from './types';
 
-type ModalState = 'new_hire' | 'termination' | 'driver_group' | 'employee_note' | null;
-type NoticeTone = 'error' | 'info';
+type ModalState = 'new_hire' | 'termination' | 'driver_group' | 'employee_note' | 'payrate' | null;
+type NoticeTone = 'error' | 'info' | 'success';
 
 type NoticeState = {
   title: string;
   message: string;
   tone: NoticeTone;
 } | null;
+
+type NewHireNameValidationState = {
+  status: 'idle' | 'checking' | 'valid' | 'invalid';
+  message: string;
+};
+
+type PayrateTarget = {
+  staffId: string;
+  name: string;
+  workDate: string;
+  payrate: string;
+};
 
 type DeleteNewHireConfirmState = {
   staffId: string;
@@ -71,6 +92,10 @@ type DriverGroupFormState = {
   sourceStaffId: string;
 };
 
+type EditableAgencyNewHireRequest = AgencyNewHireRequestRow & {
+  work_date: string;
+};
+
 type SchedulePickerState = {
   open: boolean;
   staffId: string;
@@ -90,6 +115,8 @@ type SchedulePickerOption = {
 const EMPLOYEE_RENDER_PAGE_SIZE = 80;
 const MOBILE_SCHEDULE_MAX_WIDTH = 900;
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
+const DAILY_LIST_LIGHTS_TABLE =
+  (import.meta.env.VITE_DAILY_LIST_LIGHTS_TABLE as string | undefined) ?? 'ob_daily_list_position_lights';
 const DAY_CUTOFF_HOUR_RAW = Number(import.meta.env.VITE_DAY_CUTOFF_HOUR ?? 5);
 const DAY_CUTOFF_HOUR = Number.isFinite(DAY_CUTOFF_HOUR_RAW) ? Math.min(Math.max(DAY_CUTOFF_HOUR_RAW, 0), 23) : 5;
 const TIMECARD_ABSENT_VISIBLE_HOUR_RAW = Number(import.meta.env.VITE_TIMECARD_ABSENT_VISIBLE_HOUR ?? 12);
@@ -293,6 +320,25 @@ const agencyStatusChipClass = (status: AgencyEmployeeRow['agencyStatus']) =>
     ? 'border-emerald-400/35 bg-emerald-500/12 text-emerald-100'
     : 'border-amber-400/35 bg-amber-500/12 text-amber-100';
 
+const getAgencyNewHireNameConflictMessage = (conflict: AgencyNewHireNameConflict) => {
+  const displayName = conflict.name || conflict.staffId || 'Employee';
+  if (conflict.type === 'scheduled_employee') {
+    return `${displayName} is already on the Agency board.`;
+  }
+  if (conflict.type === 'new_hire_request') {
+    return `${displayName} is already in NEW requests.`;
+  }
+  if (conflict.type === 'departed_employee_record') {
+    return `${displayName} is an old employee. Rehire in Admin before adding.`;
+  }
+  return `${displayName} already exists in employee records.`;
+};
+
+const idleNewHireNameValidationState = (): NewHireNameValidationState => ({
+  status: 'idle',
+  message: ''
+});
+
 const formatStartTime = (value: string) => {
   const match = String(value ?? '').trim().match(/^(\d{1,2}):(\d{2})$/);
   if (!match) return '-';
@@ -304,9 +350,7 @@ const formatStartTime = (value: string) => {
 };
 
 const formatNewHireStartTime = (value: string) => {
-  const normalized = formatStartTime(value);
-  if (normalized !== '-') return normalized;
-  return '09:00';
+  return normalizeAgencyEntryTime(value);
 };
 
 const toCsvCell = (value: unknown) => {
@@ -609,8 +653,14 @@ export default function AgencyAppPage() {
   const [shiftFilter, setShiftFilter] = useState<'all' | 'early' | 'late'>('all');
   const [modal, setModal] = useState<ModalState>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<AgencyEmployeeRow | null>(null);
-  const [selectedNewHire, setSelectedNewHire] = useState<AgencyNewHireRequestRow | null>(null);
+  const [selectedNewHire, setSelectedNewHire] = useState<EditableAgencyNewHireRequest | null>(null);
   const [selectedNoteEmployee, setSelectedNoteEmployee] = useState<AgencyEmployeeRow | null>(null);
+  const [selectedPayrateTarget, setSelectedPayrateTarget] = useState<PayrateTarget | null>(null);
+  const [departedEmployeesOpen, setDepartedEmployeesOpen] = useState(false);
+  const [departedEmployees, setDepartedEmployees] = useState<AgencyDepartedEmployeeRow[]>([]);
+  const [departedEmployeesLoading, setDepartedEmployeesLoading] = useState(false);
+  const [departedEmployeesError, setDepartedEmployeesError] = useState<string | null>(null);
+  const [payrateDraft, setPayrateDraft] = useState('');
   const [driverGroupForm, setDriverGroupForm] = useState<DriverGroupFormState>({
     code: '1',
     driverStaffId: '',
@@ -627,6 +677,7 @@ export default function AgencyAppPage() {
     label: '',
     entryTime: '',
     note: '',
+    payrate: '',
     count: 1,
     employeeName: '',
     lockedAgency: false,
@@ -634,6 +685,7 @@ export default function AgencyAppPage() {
     lockedShift: false,
     lockedWorkDate: false
   });
+  const [newHireNameValidation, setNewHireNameValidation] = useState<NewHireNameValidationState>(idleNewHireNameValidationState);
   const [schedulePicker, setSchedulePicker] = useState<SchedulePickerState>({
     open: false,
     staffId: '',
@@ -646,9 +698,10 @@ export default function AgencyAppPage() {
   const [compactScheduleView, setCompactScheduleView] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth <= MOBILE_SCHEDULE_MAX_WIDTH : false
   );
+  const deferredNewHireEmployeeName = useDeferredValue(newHireForm.employeeName);
 
   const openNotice = useCallback((tone: NoticeTone, message: string, title?: string) => {
-    const fallbackTitle = tone === 'error' ? 'Error' : 'Notice';
+    const fallbackTitle = tone === 'error' ? 'Error' : tone === 'success' ? 'Saved' : 'Notice';
     setNotice({
       title: title?.trim() || fallbackTitle,
       message,
@@ -814,6 +867,16 @@ export default function AgencyAppPage() {
         setDailyListLightFlags(createEmptyDailyListLightFlags());
         return;
       }
+      const tableRes = await supabase
+        .from(DAILY_LIST_LIGHTS_TABLE)
+        .select('work_date, position, enabled, updated_at, operator')
+        .eq('work_date', selectedDate);
+      if (!active) return;
+      if (!tableRes.error && Array.isArray(tableRes.data) && tableRes.data.length > 0) {
+        setDailyListLightFlags(readDailyListLightsFromRows(tableRes.data));
+        return;
+      }
+
       const res = await supabase
         .from(APP_SETTINGS_TABLE)
         .select('value')
@@ -998,8 +1061,14 @@ export default function AgencyAppPage() {
       shift: msgShift,
       agency: msgAgency,
       label: '',
-      entryTime: '09:00',
+      entryTime: resolveAgencyNewHireEntryTime({
+        employees: employeeRows,
+        agency: msgAgency,
+        position: msgPosition,
+        shift: msgShift
+      }),
       note: 'NEW',
+      payrate: '',
       count: 1,
       employeeName: '',
       lockedAgency: hasLockedAgency,
@@ -1010,17 +1079,24 @@ export default function AgencyAppPage() {
     setModal('new_hire');
   };
 
-  const openEditNewHire = (row: AgencyNewHireRequestRow) => {
+  const openEditNewHire = (row: EditableAgencyNewHireRequest) => {
     setSelectedNewHire(row);
     setNewHireForm({
       staffId: row.staff_id,
-      workDate: selectedDate,
+      workDate: row.work_date,
       position: String(row.position),
       shift: (row.shift === 'late' ? 'late' : 'early') as 'early' | 'late',
       agency: normalizeAgencyValue(row.agency),
       label: '',
-      entryTime: '09:00',
+      entryTime: resolveAgencyNewHireEntryTime({
+        employees: employeeRows,
+        newHireRequest: row,
+        agency: normalizeAgencyValue(row.agency),
+        position: String(row.position),
+        shift: (row.shift === 'late' ? 'late' : 'early') as 'early' | 'late'
+      }),
       note: 'NEW',
+      payrate: String(row.payrate ?? ''),
       count: 1,
       employeeName: String(row.name ?? ''),
       lockedAgency: true,
@@ -1036,6 +1112,8 @@ export default function AgencyAppPage() {
     setSelectedEmployee(null);
     setSelectedNewHire(null);
     setSelectedNoteEmployee(null);
+    setSelectedPayrateTarget(null);
+    setPayrateDraft('');
     setTerminationReason('');
   };
 
@@ -1087,6 +1165,12 @@ export default function AgencyAppPage() {
     setModal('employee_note');
   };
 
+  const openPayrateModal = (target: PayrateTarget) => {
+    setSelectedPayrateTarget(target);
+    setPayrateDraft(target.payrate);
+    setModal('payrate');
+  };
+
   const requestCancelTermination = (employee: AgencyEmployeeRow) => {
     const displayName = String(employee.name ?? '').trim() || employee.staff_id;
     setCancelTerminationConfirm({
@@ -1103,11 +1187,82 @@ export default function AgencyAppPage() {
     }
     beginBusy(selectedNewHire ? 'Saving request' : 'Creating request');
     try {
-      await upsertAgencyNewHireDemand(supabase, newHireForm);
+      const existingEmployeeRecords = await fetchAgencyExistingEmployeeNameRecords(supabase, newHireForm.employeeName);
+      const conflict = findAgencyNewHireNameConflict(newHireForm.employeeName, {
+        scheduledEmployees: employeeRows,
+        newHireRequests: selectedDateNewHireRequests,
+        existingEmployeeRecords,
+        ignoreNewHireStaffId: selectedNewHire?.staff_id ?? null
+      });
+      if (conflict) {
+        openNotice('error', getAgencyNewHireNameConflictMessage(conflict));
+        return;
+      }
+
+      const normalizedPayrate = normalizeAgencyPayrateInput(newHireForm.payrate);
+      const normalizedEntryTime = normalizeAgencyEntryTime(newHireForm.entryTime, DEFAULT_NEW_HIRE_ENTRY_TIME);
+      if (selectedNewHire) {
+        await upsertAgencyNewHireDemand(supabase, {
+          ...newHireForm,
+          staffId: selectedNewHire.staff_id,
+          workDate: selectedNewHire.work_date,
+          entryTime: normalizedEntryTime,
+          payrate: normalizedPayrate
+        });
+        closeModal();
+        await refreshBoard();
+        openNotice('success', 'NEW request updated.');
+        return;
+      }
+      await upsertAgencyNewHireDemand(supabase, {
+        ...newHireForm,
+        entryTime: normalizedEntryTime,
+        payrate: normalizedPayrate
+      });
+      closeModal();
+      await refreshBoard();
+      openNotice('success', 'NEW request created.');
+    } catch (nextError) {
+      openNotice('error', nextError instanceof Error ? nextError.message : 'New request save failed.');
+    } finally {
+      endBusy();
+    }
+  };
+
+  const fetchDepartedEmployeesList = useCallback(async () => {
+    if (!supabase || !canViewAgency) return;
+    setDepartedEmployeesLoading(true);
+    setDepartedEmployeesError(null);
+    try {
+      const rows = await fetchAgencyDepartedEmployees(supabase, access?.managed_agencies ?? []);
+      setDepartedEmployees(rows);
+    } catch (nextError) {
+      setDepartedEmployees([]);
+      setDepartedEmployeesError(nextError instanceof Error ? nextError.message : 'Failed to load departed employees.');
+    } finally {
+      setDepartedEmployeesLoading(false);
+    }
+  }, [access?.managed_agencies, canViewAgency, supabase]);
+
+  const openDepartedEmployees = useCallback(async () => {
+    setDepartedEmployeesOpen(true);
+    await fetchDepartedEmployeesList();
+  }, [fetchDepartedEmployeesList]);
+
+  const submitPayrate = async () => {
+    if (!supabase || !canOperateAgency || !selectedPayrateTarget) return;
+    const normalizedPayrate = normalizeAgencyPayrateInput(payrateDraft);
+    if (String(payrateDraft ?? '').trim() && !normalizedPayrate) {
+      openNotice('error', 'Invalid payrate.');
+      return;
+    }
+    beginBusy('Saving payrate');
+    try {
+      await upsertAgencyPayrate(supabase, selectedPayrateTarget.staffId, selectedPayrateTarget.workDate, normalizedPayrate);
       closeModal();
       await refreshBoard();
     } catch (nextError) {
-      openNotice('error', nextError instanceof Error ? nextError.message : 'New request save failed.');
+      openNotice('error', nextError instanceof Error ? nextError.message : 'Payrate save failed.');
     } finally {
       endBusy();
     }
@@ -1425,6 +1580,7 @@ export default function AgencyAppPage() {
     1 +
     1 +
     1 +
+    1 +
     (showStartTimeColumn ? 1 : 0);
 
   const scheduleCellByStaffDate = useMemo(() => {
@@ -1481,6 +1637,7 @@ export default function AgencyAppPage() {
         shift: row.shift,
         start_time: row.start_time,
         label: row.label,
+        payrate: row.payrate,
         state: row.days.find((item) => item.work_date === selectedDate)?.state ?? 'rest',
         fixed_work_count: weeklyWorkCountByStaffId.get(row.staff_id) ?? row.fixed_work_count,
         has_absent: absentMarkKeys.has(`${row.staff_id}__${selectedDate}`),
@@ -1539,20 +1696,13 @@ export default function AgencyAppPage() {
     [employeeRows]
   );
 
-  const selectedDateNewHireRequests = useMemo<AgencyNewHireRequestRow[]>(
+  const selectedDateNewHireRequests = useMemo<EditableAgencyNewHireRequest[]>(
     () =>
       (weekSchedule?.new_hire_requests ?? [])
         .filter((row) => row.work_date === selectedDate)
         .map((row) => ({
-          staff_id: row.staff_id,
-          name: row.name,
-          agency: row.agency,
-          position: row.position,
-          shift: row.shift,
-          start_time: row.start_time,
-          label: row.label,
-          state: '',
-          can_delete: row.can_delete
+          ...row,
+          state: ''
         })),
     [selectedDate, weekSchedule]
   );
@@ -1693,6 +1843,7 @@ export default function AgencyAppPage() {
           agency: String(employee.agency ?? '').trim(),
           position: String(employee.position ?? '').trim(),
           shift: shiftLabel(employee.shift),
+          payrate: formatAgencyPayrate(employee.payrate),
           startTime: formatStartTime(employee.start_time),
           state: stateLabel(state)
         };
@@ -1703,6 +1854,7 @@ export default function AgencyAppPage() {
         agency: string;
         position: string;
         shift: string;
+        payrate: string;
         startTime: string;
         state: string;
       } => row !== null);
@@ -1718,7 +1870,7 @@ export default function AgencyAppPage() {
   ]);
 
   const exportSelectedDateWorkList = useCallback(async () => {
-    const header = ['Date', 'USID', 'Name', 'Agency', 'Position', 'Shift', 'Start Time', 'State'];
+    const header = ['Date', 'USID', 'Name', 'Agency', 'Position', 'Shift', 'Payrate', 'Start Time', 'State'];
     const rows = selectedDateWorkExportRows.map((row) => [
       selectedDate,
       row.staffId,
@@ -1726,13 +1878,14 @@ export default function AgencyAppPage() {
       row.agency,
       row.position,
       row.shift,
+      row.payrate,
       row.startTime,
       row.state
     ]);
     try {
       const XLSX = await import('xlsx');
       const worksheet = XLSX.utils.aoa_to_sheet([header, ...rows]);
-      worksheet['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+      worksheet['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Work List');
       XLSX.writeFile(workbook, `agency-worklist-${selectedDate}.xlsx`);
@@ -1866,6 +2019,67 @@ export default function AgencyAppPage() {
     newHireGapGroups
   ]);
 
+  useEffect(() => {
+    if (modal !== 'new_hire' || !supabase) {
+      setNewHireNameValidation(idleNewHireNameValidationState());
+      return;
+    }
+
+    const employeeName = String(deferredNewHireEmployeeName ?? '').trim();
+    if (!employeeName) {
+      setNewHireNameValidation(idleNewHireNameValidationState());
+      return;
+    }
+
+    let active = true;
+    setNewHireNameValidation({ status: 'checking', message: 'Checking name...' });
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const existingEmployeeRecords = await fetchAgencyExistingEmployeeNameRecords(supabase, employeeName);
+          if (!active) return;
+          const conflict = findAgencyNewHireNameConflict(employeeName, {
+            scheduledEmployees: employeeRows,
+            newHireRequests: selectedDateNewHireRequests,
+            existingEmployeeRecords,
+            ignoreNewHireStaffId: selectedNewHire?.staff_id ?? null
+          });
+          if (!active) return;
+          if (conflict) {
+            setNewHireNameValidation({
+              status: 'invalid',
+              message: getAgencyNewHireNameConflictMessage(conflict)
+            });
+            return;
+          }
+          setNewHireNameValidation({
+            status: 'valid',
+            message: 'Name available.'
+          });
+        } catch (nextError) {
+          if (!active) return;
+          setNewHireNameValidation({
+            status: 'invalid',
+            message: nextError instanceof Error ? nextError.message : 'Name validation failed.'
+          });
+        }
+      })();
+    }, 250);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [
+    deferredNewHireEmployeeName,
+    employeeRows,
+    modal,
+    selectedDateNewHireRequests,
+    selectedNewHire?.staff_id,
+    supabase
+  ]);
+
   const derivedSummaryCards = useMemo(
     () =>
       computeAgencySummaryCards({
@@ -1894,6 +2108,10 @@ export default function AgencyAppPage() {
   const selectedNoteDirty =
     Boolean(selectedNoteEmployee) && normalizeAgencyNote(selectedNoteDraft) !== normalizeAgencyNote(selectedNoteEmployee?.agency_note);
   const selectedNoteSaving = selectedNoteStaffId ? savingNoteStaffIds.has(selectedNoteStaffId) : false;
+  const isNewHirePayrateInvalid = Boolean(String(newHireForm.payrate ?? '').trim()) && !normalizeAgencyPayrateInput(newHireForm.payrate);
+  const isNewHireNameInvalid = newHireNameValidation.status === 'invalid';
+  const isNewHireNameChecking = newHireNameValidation.status === 'checking';
+  const isPayrateDraftInvalid = Boolean(String(payrateDraft ?? '').trim()) && !normalizeAgencyPayrateInput(payrateDraft);
   const selectedDriverGroupEmployee = driverGroupForm.sourceStaffId
     ? employeeRows.find((employee) => employee.staff_id === driverGroupForm.sourceStaffId) ?? null
     : null;
@@ -2015,18 +2233,19 @@ export default function AgencyAppPage() {
                   {filteredNewHireRequests.length === 0 && gapsByGroupOnSelectedDate.length === 0 ? <div className="text-sm text-slate-400">No new requests.</div> : null}
                   {filteredNewHireRequests.length > 0 ? (
                     <div className="overflow-x-auto rounded-[22px] border border-white/10 bg-white/[0.03]">
-                      <div className="min-w-[900px]">
-                        <div className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_96px_180px] items-center gap-3 px-4 py-2 text-[11px] uppercase tracking-[0.16em] text-slate-400">
+                      <div className="min-w-[980px]">
+                        <div className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_88px_96px_180px] items-center gap-3 px-4 py-2 text-[11px] uppercase tracking-[0.16em] text-slate-400">
                           <div>Name</div>
                           <div>Agency</div>
                           <div>Position</div>
                           <div>Shift</div>
+                          <div className="text-right">Payrate</div>
                           <div className="text-center">Start Time</div>
                           <div className="text-right">Actions</div>
                         </div>
                         <div className="h-px bg-white/10" />
                         {filteredNewHireRequests.map((row) => (
-                          <div key={row.staff_id} className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_96px_180px] items-center gap-3 px-4 py-4">
+                          <div key={row.staff_id} className="grid grid-cols-[minmax(180px,2fr)_minmax(110px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_88px_96px_180px] items-center gap-3 px-4 py-4">
                             <div className="min-w-0 text-sm text-slate-100">
                               <span className="block truncate">{String(row.name ?? '').trim() || '-'}</span>
                             </div>
@@ -2044,6 +2263,23 @@ export default function AgencyAppPage() {
                               <GlowLabelChip tone={getGlowToneForShift(row.shift)} className="min-w-[52px]">
                                 {shiftLabel(row.shift)}
                               </GlowLabelChip>
+                            </div>
+                            <div className="text-right">
+                              <button
+                                type="button"
+                                className="h-8 rounded-lg border border-white/10 bg-white/5 px-2 text-right font-mono text-sm text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={busy || !canOperateAgency}
+                                onClick={() =>
+                                  openPayrateModal({
+                                    staffId: row.staff_id,
+                                    name: String(row.name ?? '').trim() || row.staff_id,
+                                    workDate: selectedDate,
+                                    payrate: row.payrate
+                                  })
+                                }
+                              >
+                                {formatAgencyPayrate(row.payrate)}
+                              </button>
                             </div>
                             <div className="text-center font-mono text-sm text-slate-300">
                               {formatNewHireStartTime(row.start_time)}
@@ -2077,6 +2313,14 @@ export default function AgencyAppPage() {
                 <h2 className="font-display text-3xl tracking-[0.04em] text-white">Employees</h2>
                 {user ? (
                   <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:justify-end">
+                    <button
+                      type="button"
+                      onClick={() => void openDepartedEmployees()}
+                      className={buttonClass}
+                      disabled={busy || !canViewAgency}
+                    >
+                      Departed
+                    </button>
                     <input
                       type="date"
                       value={selectedDate}
@@ -2198,6 +2442,7 @@ export default function AgencyAppPage() {
                       <th className={[compactScheduleView ? 'w-[88px]' : 'w-[84px]', 'px-1 py-2'].join(' ')}>Position</th>
                       <th className={[compactScheduleView ? 'w-[66px]' : 'w-[60px]', 'px-1 py-2 text-center'].join(' ')}>Shift</th>
                       <th className={[compactScheduleView ? 'w-[128px]' : 'w-[116px]', 'px-1 py-2 text-center'].join(' ')}>Status</th>
+                      <th className="w-[76px] px-1 py-2 text-right">Payrate</th>
                       {showStartTimeColumn ? <th className="w-[68px] px-1 py-2 text-center">Start</th> : null}
                       {visibleWeekDates.map((workDate) => (
                         <th
@@ -2342,6 +2587,23 @@ export default function AgencyAppPage() {
                             <span>{agencyStatusLabel(employee.agencyStatus)}</span>
                           </span>
                         </td>
+                        <td className="px-1 py-2 text-right">
+                          <button
+                            type="button"
+                            className="h-8 rounded-lg border border-white/10 bg-white/5 px-2 text-right font-mono text-xs text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={busy || !canOperateAgency}
+                            onClick={() =>
+                              openPayrateModal({
+                                staffId: employee.staff_id,
+                                name: String(employee.name ?? '').trim() || employee.staff_id,
+                                workDate: selectedDate,
+                                payrate: employee.payrate
+                              })
+                            }
+                          >
+                            {formatAgencyPayrate(employee.payrate)}
+                          </button>
+                        </td>
                         {showStartTimeColumn ? (
                           <td className="px-1 py-2 text-center font-mono text-slate-300">
                             {formatStartTime(employee.start_time)}
@@ -2468,6 +2730,22 @@ export default function AgencyAppPage() {
               </select>
             )}
           </div>
+          {String(newHireForm.employeeName ?? '').trim() ? (
+            <div
+              className={[
+                'text-xs',
+                isNewHireNameInvalid
+                  ? 'text-rose-300'
+                  : isNewHireNameChecking
+                    ? 'text-slate-400'
+                    : newHireNameValidation.status === 'valid'
+                      ? 'text-emerald-300'
+                      : 'text-slate-400'
+              ].join(' ')}
+            >
+              {newHireNameValidation.message}
+            </div>
+          ) : null}
           <div className="grid gap-4 md:grid-cols-2">
             {newHireForm.lockedPosition ? (
               <div className={[inputClass, 'flex items-center pl-3'].join(' ')}>
@@ -2504,11 +2782,26 @@ export default function AgencyAppPage() {
               </select>
             )}
             <input
-              value="09:00"
-              type="text"
+              value={newHireForm.entryTime}
+              type="time"
               className={inputClass}
-              readOnly
+              onChange={(event) => setNewHireForm((prev) => ({ ...prev, entryTime: event.target.value }))}
+              onBlur={() =>
+                setNewHireForm((prev) => ({
+                  ...prev,
+                  entryTime: normalizeAgencyEntryTime(prev.entryTime, DEFAULT_NEW_HIRE_ENTRY_TIME)
+                }))
+              }
               aria-label="Entry time"
+            />
+            <input
+              value={newHireForm.payrate}
+              type="text"
+              inputMode="decimal"
+              onChange={(event) => setNewHireForm((prev) => ({ ...prev, payrate: event.target.value }))}
+              onBlur={() => setNewHireForm((prev) => ({ ...prev, payrate: normalizeAgencyPayrateInput(prev.payrate) }))}
+              placeholder="Payrate"
+              className={inputClass}
             />
             {newHireForm.lockedWorkDate ? (
               <div className={[inputClass, 'flex items-center pl-3'].join(' ')}>
@@ -2541,6 +2834,9 @@ export default function AgencyAppPage() {
               !String(newHireForm.agency ?? '').trim() ||
               !String(newHireForm.position ?? '').trim() ||
               !String(newHireForm.employeeName ?? '').trim() ||
+              isNewHireNameInvalid ||
+              isNewHireNameChecking ||
+              isNewHirePayrateInvalid ||
               (!selectedNewHire && newHireSelectedOpenSlots <= 0)
             }
           >
@@ -2589,6 +2885,35 @@ export default function AgencyAppPage() {
               }}
               className={neonButtonClass}
               disabled={!canOperateAgency || selectedNoteSaving || !selectedNoteDirty}
+            >
+              <Save className="mr-2 h-4 w-4" />
+              Save
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={modal === 'payrate'} title="Payrate">
+        <div className="space-y-4">
+          <div className="text-sm font-semibold text-white">
+            {selectedPayrateTarget ? `${selectedPayrateTarget.name} (${selectedPayrateTarget.staffId})` : '-'}
+          </div>
+          <input
+            value={payrateDraft}
+            type="text"
+            inputMode="decimal"
+            onChange={(event) => setPayrateDraft(event.target.value)}
+            onBlur={() => setPayrateDraft((current) => normalizeAgencyPayrateInput(current))}
+            placeholder="Payrate"
+            className={inputClass}
+          />
+          <div className="flex justify-end gap-3">
+            <button type="button" onClick={closeModal} className={buttonClass}>Close</button>
+            <button
+              type="button"
+              onClick={() => void submitPayrate()}
+              className={neonButtonClass}
+              disabled={!canOperateAgency || busy || isPayrateDraftInvalid}
             >
               <Save className="mr-2 h-4 w-4" />
               Save
@@ -2727,11 +3052,38 @@ export default function AgencyAppPage() {
         </div>
       </Modal>
 
+      <DepartedEmployeesModal
+        open={departedEmployeesOpen}
+        rows={departedEmployees}
+        loading={departedEmployeesLoading}
+        error={departedEmployeesError}
+        onClose={() => setDepartedEmployeesOpen(false)}
+        onRefresh={() => fetchDepartedEmployeesList()}
+      />
+
       {notice ? (
         <div className="fixed right-5 top-5 z-[105] w-[min(420px,calc(100vw-2.5rem))]">
-          <div className="rounded-[24px] border border-rose-400/20 bg-slate-950/88 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+          <div
+            className={[
+              'rounded-[24px] border bg-slate-950/88 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl',
+              notice.tone === 'error'
+                ? 'border-rose-400/20'
+                : notice.tone === 'success'
+                  ? 'border-emerald-400/20'
+                  : 'border-sky-400/20'
+            ].join(' ')}
+          >
             <div className="flex items-start gap-3">
-              <div className="mt-1 h-2.5 w-2.5 rounded-full bg-rose-300 shadow-[0_0_18px_rgba(253,164,175,0.65)]" />
+              <div
+                className={[
+                  'mt-1 h-2.5 w-2.5 rounded-full',
+                  notice.tone === 'error'
+                    ? 'bg-rose-300 shadow-[0_0_18px_rgba(253,164,175,0.65)]'
+                    : notice.tone === 'success'
+                      ? 'bg-emerald-300 shadow-[0_0_18px_rgba(110,231,183,0.6)]'
+                      : 'bg-sky-300 shadow-[0_0_18px_rgba(125,211,252,0.6)]'
+                ].join(' ')}
+              />
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold text-white">{notice.title}</div>
                 <div className="mt-1 text-sm leading-6 text-slate-300">{notice.message}</div>

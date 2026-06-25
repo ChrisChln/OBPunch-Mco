@@ -17,6 +17,7 @@ export const ADMIN_MODULE_KEYS = [
   'forecast',
   'prediction_model',
   'efficiency',
+  'exceptions',
   'agency'
 ] as const;
 
@@ -318,5 +319,4 @@ export const canUnlockPunchScreen = (context: AdminAccessContext | null | undefi
   if (!context) return false;
   return context.role === 'level1' || context.role === 'level2';
 };
-
 

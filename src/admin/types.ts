@@ -16,7 +16,8 @@ export type AdminPage =
   | 'devices'
   | 'forecast'
   | 'prediction_model'
-  | 'efficiency';
+  | 'efficiency'
+  | 'exceptions';
 
 export type StatusTone = 'idle' | 'pending' | 'success' | 'error';
 

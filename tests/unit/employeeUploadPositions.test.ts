@@ -86,6 +86,25 @@ describe('employee upload position validation', () => {
     ]);
   });
 
+  test('normalizes common uploaded shift_time formats', () => {
+    const result = buildEmployeeUploadRows(
+      [
+        { staff_id: 'US000011', position: 'Shipping', shift_time: '8：00' },
+        { staff_id: 'US000012', position: 'Shipping', shift_time: '08:00:00' },
+        { staff_id: 'US000013', position: 'Shipping', shift_time: '08:00-17:00' },
+        { staff_id: 'US000014', position: 'Shipping', shift_time: '0.3333333333' }
+      ],
+      positions
+    );
+
+    expect(result.rows.map((row) => ({ staff_id: row.staff_id, shift_time: row.shift_time }))).toEqual([
+      { staff_id: 'US000011', shift_time: '08:00' },
+      { staff_id: 'US000012', shift_time: '08:00' },
+      { staff_id: 'US000013', shift_time: '08:00' },
+      { staff_id: 'US000014', shift_time: '08:00' }
+    ]);
+  });
+
   test('does not flag generated temporary new-hire IDs as modified USIDs', () => {
     const result = detectEmployeeImportIdentityConflicts(
       [

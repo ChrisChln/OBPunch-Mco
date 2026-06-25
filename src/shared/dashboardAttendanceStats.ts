@@ -9,6 +9,7 @@ export type DashboardAttendanceStat = {
   present: number;
   onClock: number;
   offWorked: number;
+  workHours: number;
 };
 
 export type DashboardAttendanceSummary = Record<string, DashboardAttendanceStat>;
@@ -21,6 +22,7 @@ export type DashboardAttendanceRow = {
   hasPunch: boolean;
   isOnClock: boolean;
   attendance?: DashboardAttendanceStatus;
+  workHours?: number;
 };
 
 export const DASHBOARD_COVERAGE_DEPARTMENTS = ['OB', 'IB', 'INV'] as const;
@@ -31,6 +33,7 @@ export type DashboardDepartmentCoverageCard = {
   shift: DashboardAttendanceShift;
   expected: number;
   present: number;
+  workHours: number;
 };
 
 export type DashboardPositionAttendanceCard = {
@@ -56,7 +59,8 @@ export const createDashboardAttendanceStat = (): DashboardAttendanceStat => ({
   expected: 0,
   present: 0,
   onClock: 0,
-  offWorked: 0
+  offWorked: 0,
+  workHours: 0
 });
 
 export const getDashboardAttendanceStatKey = (shift: DashboardAttendanceShift, position: string) => `${shift}:${position}`;
@@ -66,6 +70,7 @@ export const buildDashboardAttendanceStats = (rows: readonly DashboardAttendance
   const presentByKey = new Map<string, Set<string>>();
   const onClockByKey = new Map<string, Set<string>>();
   const offWorkedByKey = new Map<string, Set<string>>();
+  const workHoursByKey = new Map<string, Map<string, number>>();
 
   for (const row of rows) {
     const staffId = String(row.staffId ?? '').trim();
@@ -92,21 +97,30 @@ export const buildDashboardAttendanceStats = (rows: readonly DashboardAttendance
       if (!offWorkedByKey.has(key)) offWorkedByKey.set(key, new Set());
       offWorkedByKey.get(key)?.add(staffId);
     }
+
+    const workHours = Math.max(0, Number(row.workHours ?? 0));
+    if (Number.isFinite(workHours) && workHours > 0) {
+      if (!workHoursByKey.has(key)) workHoursByKey.set(key, new Map());
+      workHoursByKey.get(key)?.set(staffId, workHours);
+    }
   }
 
   const keys = new Set([
     ...expectedByKey.keys(),
     ...presentByKey.keys(),
     ...onClockByKey.keys(),
-    ...offWorkedByKey.keys()
+    ...offWorkedByKey.keys(),
+    ...workHoursByKey.keys()
   ]);
   const stats: DashboardAttendanceSummary = {};
   for (const key of keys) {
+    const workHoursByStaff = workHoursByKey.get(key);
     stats[key] = {
       expected: expectedByKey.get(key)?.size ?? 0,
       present: presentByKey.get(key)?.size ?? 0,
       onClock: onClockByKey.get(key)?.size ?? 0,
-      offWorked: offWorkedByKey.get(key)?.size ?? 0
+      offWorked: offWorkedByKey.get(key)?.size ?? 0,
+      workHours: workHoursByStaff ? Array.from(workHoursByStaff.values()).reduce((sum, value) => sum + value, 0) : 0
     };
   }
   return stats;
@@ -137,7 +151,7 @@ export const buildDashboardDepartmentCoverageCards = ({
   const cards = new Map<string, DashboardDepartmentCoverageCard>();
   for (const shift of ['early', 'late'] as const) {
     for (const department of DASHBOARD_COVERAGE_DEPARTMENTS) {
-      cards.set(`${department}:${shift}`, { department, shift, expected: 0, present: 0 });
+      cards.set(`${department}:${shift}`, { department, shift, expected: 0, present: 0, workHours: 0 });
     }
   }
 
@@ -152,6 +166,7 @@ export const buildDashboardDepartmentCoverageCards = ({
       if (!card) continue;
       card.expected += Number(expected || 0);
       card.present += Number(stat.present || 0);
+      card.workHours += Number(stat.workHours || 0);
     }
   }
 

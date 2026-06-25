@@ -4,7 +4,10 @@ import {
   LABEL_TONE_CLASS_BY_KEY,
   LABEL_TONE_KEYS,
   LABEL_TONE_STORAGE_KEY,
+  buildLabelToneRows,
   loadLabelToneMap,
+  normalizeLabelToneMap,
+  readLabelToneMapFromRows,
   saveLabelToneMap
 } from '../../src/lib/labelTone';
 
@@ -77,6 +80,44 @@ describe('labelTone', () => {
   test('falls back to slate tone class', () => {
     expect(getLabelToneClass('unknown', {})).toBe(LABEL_TONE_CLASS_BY_KEY.slate);
     expect(getLabelToneClass('', { blue: LABEL_TONE_KEYS[0] })).toBe(LABEL_TONE_CLASS_BY_KEY.slate);
+  });
+
+  test('normalizes label tone maps from external values', () => {
+    expect(
+      normalizeLabelToneMap({
+        Blue: 'sky',
+        '  Lead  ': 'rose',
+        Missing: 'invalid',
+        Empty: null
+      })
+    ).toEqual({ blue: 'sky', lead: 'rose' });
+  });
+
+  test('builds and reads dedicated label tone rows', () => {
+    const rows = buildLabelToneRows(
+      {
+        Blue: 'sky',
+        Lead: 'rose',
+        Invalid: 'missing' as (typeof LABEL_TONE_KEYS)[number]
+      },
+      { updatedAt: '2026-06-15T12:00:00.000Z', operator: 'ops@example.com' }
+    );
+
+    expect(rows).toEqual([
+      {
+        label: 'blue',
+        tone: 'sky',
+        updated_at: '2026-06-15T12:00:00.000Z',
+        operator: 'ops@example.com'
+      },
+      {
+        label: 'lead',
+        tone: 'rose',
+        updated_at: '2026-06-15T12:00:00.000Z',
+        operator: 'ops@example.com'
+      }
+    ]);
+    expect(readLabelToneMapFromRows(rows)).toEqual({ blue: 'sky', lead: 'rose' });
   });
 
   test('returns mapped tone class when label exists', () => {

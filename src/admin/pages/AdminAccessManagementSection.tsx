@@ -64,6 +64,7 @@ const MODULE_LABELS: Record<AdminModuleKey, { zh: string; en: string }> = {
   prediction_model: { zh: '预测模型', en: 'Model' },
   efficiency: { zh: '人效', en: 'Efficiency' },
   permissions: { zh: '权限', en: 'Permissions' },
+  exceptions: { zh: '异常单', en: 'Exceptions' },
   agency: { zh: 'Agency', en: 'Agency' }
 };
 
@@ -841,4 +842,3 @@ export default function AdminAccessManagementSection({
     </section>
   );
 }
-
