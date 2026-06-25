@@ -4,8 +4,10 @@ import {
   createManualTemporaryStaffId,
   extractTemporaryStaffIdNumber,
   getHighestTemporaryStaffIdNumber,
+  isGeneratedTemporaryStaffId,
   isNewHirePlaceholderStaffId,
-  resolveEmployeeEditStaffIds
+  resolveEmployeeEditStaffIds,
+  shouldAllocateTemporaryStaffIdOnEdit
 } from '../../src/admin/tempStaffIds';
 
 describe('temporary staff ids', () => {
@@ -39,6 +41,18 @@ describe('temporary staff ids', () => {
     expect(isNewHirePlaceholderStaffId('TUS0000001')).toBe(true);
     expect(isNewHirePlaceholderStaffId('TEMP-USID-TEST-0001')).toBe(true);
     expect(isNewHirePlaceholderStaffId('US010454')).toBe(false);
+  });
+
+  test('distinguishes generated temporary ids from agency placeholders', () => {
+    expect(isGeneratedTemporaryStaffId('TUS0000001')).toBe(true);
+    expect(isGeneratedTemporaryStaffId('TEMP-USID-TEST-0001')).toBe(true);
+    expect(isGeneratedTemporaryStaffId('0625PACK002')).toBe(false);
+  });
+
+  test('allocates a TUS id when editing a placeholder with no entered USID', () => {
+    expect(shouldAllocateTemporaryStaffIdOnEdit('0625PACK002', '')).toBe(true);
+    expect(shouldAllocateTemporaryStaffIdOnEdit('TUS0000082', '')).toBe(false);
+    expect(shouldAllocateTemporaryStaffIdOnEdit('0625PACK002', 'US012345')).toBe(false);
   });
 
   test('allocates the next TUS id from rpc when available', async () => {

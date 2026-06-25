@@ -17,8 +17,11 @@ export const isNewHirePlaceholderStaffId = (value: string) => {
 };
 
 const TUS_ID_PATTERN = /^TUS(\d{7,})$/;
+const GENERATED_TEMP_ID_PATTERN = /^(?:TUS\d{7,}|TEMP-USID-[A-Z0-9]+-\d{4,})$/i;
 
 export const buildTemporaryStaffId = (sequenceNumber: number) => `TUS${String(sequenceNumber).padStart(7, '0')}`;
+
+export const isGeneratedTemporaryStaffId = (value: string) => GENERATED_TEMP_ID_PATTERN.test(String(value ?? '').trim());
 
 export const extractTemporaryStaffIdNumber = (value: string) => {
   const match = String(value ?? '').trim().toUpperCase().match(TUS_ID_PATTERN);
@@ -56,6 +59,16 @@ export const resolveEmployeeEditStaffIds = (
     nextStaff,
     isPlaceholderOriginal
   };
+};
+
+export const shouldAllocateTemporaryStaffIdOnEdit = (
+  originalStaffRaw: string,
+  nextStaffInputRaw: string
+) => {
+  const originalTrimmed = String(originalStaffRaw ?? '').trim();
+  if (!isNewHirePlaceholderStaffId(originalTrimmed)) return false;
+  if (String(nextStaffInputRaw ?? '').trim()) return false;
+  return !isGeneratedTemporaryStaffId(originalTrimmed);
 };
 
 const isMissingNextTempStaffIdRpc = (message: string) => {
