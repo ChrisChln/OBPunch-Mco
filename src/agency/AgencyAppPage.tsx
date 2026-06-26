@@ -35,6 +35,7 @@ import {
 } from './api';
 import { computeAgencySummaryCards, isAgencyWorklikeState } from './boardMetrics';
 import DepartedEmployeesModal from './DepartedEmployeesModal';
+import { shouldShowAgencyLiveAbsent } from './liveAbsent';
 import { DEFAULT_NEW_HIRE_ENTRY_TIME, normalizeAgencyEntryTime, resolveAgencyNewHireEntryTime } from './newHireEntryTime';
 import { buildDriverGroupWarnings, getNextDriverGroupCode } from './driverGroups';
 import { findAgencyNewHireNameConflict, type AgencyNewHireNameConflict } from './newHireValidation';
@@ -227,28 +228,6 @@ const isAgencyDeadlineLockedState = (
   workDate: string,
   context: ReturnType<typeof getNewYorkNowContext>
 ) => isAgencyScheduleCutoffPassed(shift, workDate, context);
-
-const shouldShowAgencyLiveAbsent = ({
-  shift,
-  workDate,
-  state,
-  operationalDate,
-  currentMinutes,
-  hasPunch
-}: {
-  shift: AgencyShift | '';
-  workDate: string;
-  state: AgencyScheduleState;
-  operationalDate: string;
-  currentMinutes: number;
-  hasPunch: boolean;
-}) => {
-  if (!isWorklikeState(state)) return false;
-  if (workDate !== operationalDate) return false;
-  if (hasPunch) return false;
-  if (shift === 'late') return currentMinutes >= 16 * 60 + 30;
-  return currentMinutes >= TIMECARD_ABSENT_VISIBLE_HOUR * 60;
-};
 
 const stateLabel = (state: AgencyScheduleState) => {
   if (state === 'new') return 'NEW';
@@ -651,6 +630,7 @@ export default function AgencyAppPage() {
   const [agencyFilter, setAgencyFilter] = useState('all');
   const [positionFilter, setPositionFilter] = useState('all');
   const [shiftFilter, setShiftFilter] = useState<'all' | 'early' | 'late'>('all');
+  const [absentOnly, setAbsentOnly] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<AgencyEmployeeRow | null>(null);
   const [selectedNewHire, setSelectedNewHire] = useState<EditableAgencyNewHireRequest | null>(null);
@@ -1765,17 +1745,49 @@ export default function AgencyAppPage() {
 
   const activeFilterQuery = deferredSearchQuery.trim().toLowerCase();
 
+  const selectedDateAbsentStaffIds = useMemo(() => {
+    const absentStaffIds = new Set<string>();
+    for (const employee of employeeRows) {
+      const key = `${employee.staff_id}__${selectedDate}`;
+      const cell = scheduleCellByStaffDate.get(key);
+      const state = scheduleStateOverrides.get(key) ?? cell?.state ?? 'rest';
+      const hasAbsentMark = absentMarkKeys.has(key);
+      const showLiveAbsent = shouldShowAgencyLiveAbsent({
+        shift: employee.shift,
+        startTime: employee.start_time,
+        workDate: selectedDate,
+        state,
+        operationalDate: operationalNowContext.operationalDate,
+        currentMinutes: operationalNowContext.minutes,
+        hasPunch: currentOperationalPunchStaffIds.has(employee.staff_id),
+        earlyShiftFallbackMinutes: TIMECARD_ABSENT_VISIBLE_HOUR * 60
+      });
+      if (hasAbsentMark || showLiveAbsent) absentStaffIds.add(employee.staff_id);
+    }
+    return absentStaffIds;
+  }, [
+    absentMarkKeys,
+    currentOperationalPunchStaffIds,
+    employeeRows,
+    operationalNowContext.minutes,
+    operationalNowContext.operationalDate,
+    scheduleCellByStaffDate,
+    scheduleStateOverrides,
+    selectedDate
+  ]);
+
   const filteredEmployees = useMemo(() => {
     return employeeRows.filter((employee) => {
       if (agencyFilter !== 'all' && employee.agency !== agencyFilter) return false;
       if (positionFilter !== 'all' && employee.position !== positionFilter) return false;
       if (shiftFilter !== 'all' && employee.shift !== shiftFilter) return false;
+      if (absentOnly && !selectedDateAbsentStaffIds.has(employee.staff_id)) return false;
       if (!activeFilterQuery) return true;
       const name = String(employee.name ?? '').toLowerCase();
       const staffId = String(employee.staff_id ?? '').toLowerCase();
       return name.includes(activeFilterQuery) || staffId.includes(activeFilterQuery);
     });
-  }, [activeFilterQuery, agencyFilter, employeeRows, positionFilter, shiftFilter]);
+  }, [absentOnly, activeFilterQuery, agencyFilter, employeeRows, positionFilter, selectedDateAbsentStaffIds, shiftFilter]);
 
   const [visibleEmployeeCount, setVisibleEmployeeCount] = useState(EMPLOYEE_RENDER_PAGE_SIZE);
 
@@ -1830,11 +1842,13 @@ export default function AgencyAppPage() {
         const hasAbsentMark = absentMarkKeys.has(overrideKey);
         const showLiveAbsent = shouldShowAgencyLiveAbsent({
           shift: employee.shift,
+          startTime: employee.start_time,
           workDate: selectedDate,
           state,
           operationalDate: operationalNowContext.operationalDate,
           currentMinutes: operationalNowContext.minutes,
-          hasPunch: currentOperationalPunchStaffIds.has(employee.staff_id)
+          hasPunch: currentOperationalPunchStaffIds.has(employee.staff_id),
+          earlyShiftFallbackMinutes: TIMECARD_ABSENT_VISIBLE_HOUR * 60
         });
         if (hasAbsentMark || showLiveAbsent) return null;
         return {
@@ -2311,13 +2325,22 @@ export default function AgencyAppPage() {
             <section className={cardClass}>
               <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
                 <h2 className="font-display text-3xl tracking-[0.04em] text-white">Employees</h2>
-                {user ? (
-                  <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:justify-end">
-                    <button
-                      type="button"
-                      onClick={() => void openDepartedEmployees()}
-                      className={buttonClass}
-                      disabled={busy || !canViewAgency}
+                  {user ? (
+                    <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:justify-end">
+                      <label className="inline-flex h-10 items-center gap-3 rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white transition hover:border-white/20">
+                        <input
+                          type="checkbox"
+                          checked={absentOnly}
+                          onChange={(event) => setAbsentOnly(event.target.checked)}
+                          className="h-4 w-4 rounded border border-white/20 bg-transparent accent-white"
+                        />
+                        <span>Absent</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => void openDepartedEmployees()}
+                        className={buttonClass}
+                        disabled={busy || !canViewAgency}
                     >
                       Departed
                     </button>
@@ -2367,12 +2390,12 @@ export default function AgencyAppPage() {
                     </option>
                   ))}
                 </select>
-                <select value={shiftFilter} onChange={(event) => setShiftFilter((event.target.value as 'all' | 'early' | 'late') || 'all')} className={inputClass}>
-                  <option value="all">All Shift</option>
-                  <option value="early">Morning</option>
-                  <option value="late">Night</option>
-                </select>
-              </div>
+                  <select value={shiftFilter} onChange={(event) => setShiftFilter((event.target.value as 'all' | 'early' | 'late') || 'all')} className={inputClass}>
+                    <option value="all">All Shift</option>
+                    <option value="early">Morning</option>
+                    <option value="late">Night</option>
+                  </select>
+                </div>
               {showDriverGroupControls ? (
                 <div className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2613,14 +2636,16 @@ export default function AgencyAppPage() {
                           const cell = scheduleCellByStaffDate.get(`${employee.staff_id}__${workDate}`);
                           const state = scheduleStateOverrides.get(`${employee.staff_id}__${workDate}`) ?? cell?.state ?? 'rest';
                           const hasAbsentMark = absentMarkKeys.has(`${employee.staff_id}__${workDate}`);
-                          const showLiveAbsent = shouldShowAgencyLiveAbsent({
-                            shift: employee.shift,
-                            workDate,
-                            state,
-                            operationalDate: operationalNowContext.operationalDate,
-                            currentMinutes: operationalNowContext.minutes,
-                            hasPunch: currentOperationalPunchStaffIds.has(employee.staff_id)
-                          });
+                            const showLiveAbsent = shouldShowAgencyLiveAbsent({
+                              shift: employee.shift,
+                              startTime: employee.start_time,
+                              workDate,
+                              state,
+                              operationalDate: operationalNowContext.operationalDate,
+                              currentMinutes: operationalNowContext.minutes,
+                              hasPunch: currentOperationalPunchStaffIds.has(employee.staff_id),
+                              earlyShiftFallbackMinutes: TIMECARD_ABSENT_VISIBLE_HOUR * 60
+                            });
                           const baseState = cell?.base_state ?? state;
                           const isSelectedWorkDate = workDate === selectedDate;
                           const cellOptions = canOperateAgency ? getCellOptions(employee, state, baseState, workDate) : [];
