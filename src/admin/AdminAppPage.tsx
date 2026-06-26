@@ -58,6 +58,7 @@ import PredictionModelPage from './pages/PredictionModelPage';
 import EfficiencyPage from './pages/EfficiencyPage';
 import WorkHourComparisonPage from './pages/WorkHourComparisonPage';
 import LeaveApprovalPage from './pages/LeaveApprovalPage';
+import { summarizeAttendancePunchRows } from './homeAttendance';
 import TodoPage from './pages/TodoPage';
 import ExceptionsPage from './pages/ExceptionsPage';
 import AppDialog from '../components/AppDialog';
@@ -1418,6 +1419,9 @@ export default function AdminAppPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const isLocked = Boolean(busy);
   const [busyVisible, setBusyVisible] = useState(false);
+  const [homePanelLoading, setHomePanelLoading] = useState(false);
+  const [homePanelLoadingStage, setHomePanelLoadingStage] = useState<'syncing' | 'finalizing'>('syncing');
+  const homePanelLoadingTokenRef = useRef(0);
   const timecardFetchSeqRef = useRef(0);
   const punchesFetchSeqRef = useRef(0);
   const attendanceFetchSeqRef = useRef(0);
@@ -1464,6 +1468,7 @@ export default function AdminAppPage() {
   const scheduleRenderFilterKeyRef = useRef('');
   const scheduleTableScrollRef = useRef<HTMLDivElement | null>(null);
   type EmployeeColumnMode = 'lower' | 'cased';
+  type EmployeeFetchProfile = 'full' | 'home';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
   const dailyCapacityRequestRef = useRef(0);
@@ -2970,6 +2975,14 @@ export default function AdminAppPage() {
     employeeColumnModeRef.current = 'cased';
     return 'cased';
   };
+  const buildEmployeeSelectColumns = (mode: EmployeeColumnMode, profile: EmployeeFetchProfile) => {
+    if (profile === 'home') {
+      return mode === 'cased'
+        ? 'id, staff_id, name, "Agency", "Position", shift, "Label", "WorkAccount", "ShiftTime", active, terminated_at, created_at'
+        : 'id, staff_id, name, agency, position, shift, label, work_account, shift_time, active, terminated_at, created_at';
+    }
+    return '*';
+  };
 
   const normalizePositionKey = (value: string) => {
     const resolved = resolvePositionName(value, allPositionNames);
@@ -3100,8 +3113,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const pageSize = 1000;
-      const latestByStaff = new Map<string, { action: 'IN' | 'OUT'; at: string }>();
-      const firstInByStaff = new Map<string, { at: string }>();
       const runAttendanceQuery = async <T,>(queryFactory: () => PromiseLike<{ data: T | null; error: any }>) => {
         let lastRes = await queryFactory();
         if (!lastRes.error) return lastRes;
@@ -3133,40 +3144,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         setAttendanceError(normalizeAttendanceFetchError(latestPunchRowsRes.error));
         return;
       }
-      for (const r of latestPunchRowsRes.rows) {
-        const staff = String(r.staff_id ?? '').trim();
-        if (!staff || latestByStaff.has(staff)) continue;
-        const action = String(r.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-        const at = String(r.created_at ?? '').trim();
-        if (!at) continue;
-        latestByStaff.set(staff, { action, at });
-      }
-
-      const firstPunchRowsRes = await fetchAllPagedRows<any>({
-        pageSize,
-        shouldStop: () => seq !== attendanceFetchSeqRef.current,
-        stopError: STALE_TIMECARD_REQUEST,
-        fetchPage: async (from, to) =>
-          await runAttendanceQuery(() =>
-            supabase
-              .from('ob_punches')
-              .select('staff_id, created_at, id')
-              .order('created_at', { ascending: true })
-              .range(from, to)
-          )
-      });
-      if (firstPunchRowsRes.error) {
-        if (firstPunchRowsRes.error === STALE_TIMECARD_REQUEST) return;
-        setAttendanceError(normalizeAttendanceFetchError(firstPunchRowsRes.error));
-        return;
-      }
-      for (const r of firstPunchRowsRes.rows) {
-        const staff = normalizeStaffId(String(r.staff_id ?? '').trim());
-        if (!staff || firstInByStaff.has(staff)) continue;
-        const at = String(r.created_at ?? '').trim();
-        if (!at) continue;
-        firstInByStaff.set(staff, { at });
-      }
+      const { latestByStaff, firstInByStaff } = summarizeAttendancePunchRows(latestPunchRowsRes.rows, normalizeStaffId);
 
       const activeStaff = Array.from(latestByStaff.entries())
         .filter(([, v]) => v.action === 'IN')
@@ -3291,6 +3269,21 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }, 180);
     return () => window.clearTimeout(timer);
   }, [busy]);
+  const beginHomePanelLoading = () => {
+    const nextToken = homePanelLoadingTokenRef.current + 1;
+    homePanelLoadingTokenRef.current = nextToken;
+    setHomePanelLoadingStage('syncing');
+    setHomePanelLoading(true);
+    return nextToken;
+  };
+  const advanceHomePanelLoading = (token: number, stage: 'syncing' | 'finalizing') => {
+    if (homePanelLoadingTokenRef.current !== token) return;
+    setHomePanelLoadingStage(stage);
+  };
+  const finishHomePanelLoading = (token: number) => {
+    if (homePanelLoadingTokenRef.current !== token) return;
+    setHomePanelLoading(false);
+  };
 
   const resolveDailyListLightsTargetDate = (targetDateOverride?: string) => {
     const fallbackDate = toDateOnly(addDays(new Date(serverTime), 1));
@@ -5756,25 +5749,34 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
   const refreshHomePanel = async (options?: { lockUi?: boolean }) => {
     const lockUi = options?.lockUi ?? true;
-    await fetchSchedule({ weekOffsetOverride: 0, lockUi: false });
-    const latestEmployees = await fetchEmployees({
-      reset: true,
-      search: '',
-      agency: '',
-      position: '',
-      labels: [],
-      lockUi,
-      includePunchMeta: false,
-      streamPartialState: false
-    });
-    await fetchRealtimeAttendance();
-    // Home dashboard should use current week punch presence, independent of Schedule page week navigation.
-    await fetchSchedulePunchPresence({
-      employeesOverride: latestEmployees,
-      weekOffsetOverride: 0,
-      mode: 'operational_day',
-      keepPreviousWhileLoading: true
-    });
+    const loadingToken = beginHomePanelLoading();
+    try {
+      const [, latestEmployees] = await Promise.all([
+        fetchSchedule({ weekOffsetOverride: 0, lockUi: false }),
+        fetchEmployees({
+          reset: true,
+          search: '',
+          agency: '',
+          position: '',
+          labels: [],
+          lockUi,
+          includePunchMeta: false,
+          streamPartialState: false,
+          profile: 'home'
+        }),
+        fetchRealtimeAttendance()
+      ]);
+      advanceHomePanelLoading(loadingToken, 'finalizing');
+      // Home dashboard should use current week punch presence, independent of Schedule page week navigation.
+      await fetchSchedulePunchPresence({
+        employeesOverride: latestEmployees,
+        weekOffsetOverride: 0,
+        mode: 'operational_day',
+        keepPreviousWhileLoading: true
+      });
+    } finally {
+      finishHomePanelLoading(loadingToken);
+    }
   };
 
   const scheduleWeekRolloverInFlightRef = useRef(false);
@@ -6046,6 +6048,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const operationalPunchesByStaffId: Record<string, Array<{ action: 'IN' | 'OUT'; created_at: string }>> = {};
 
     if (mode === 'operational_day') {
+      const staffBatches = chunk(Array.from(staffSet), 120);
+      if (staffBatches.length === 0) {
+        if (!isStale()) {
+          setSchedulePunchPresenceKeys(new Set());
+          setScheduleFirstInByStaffDayKey({});
+          setHomePunchesByStaffId({});
+          setSchedulePunchPresenceReady(true);
+          setSchedulePunchPresenceWeekOffset(options?.weekOffsetOverride ?? scheduleWeekOffset);
+        }
+        return;
+      }
       const now = new Date(serverTime);
       const operationalStart = new Date(now);
       operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
@@ -6054,51 +6067,54 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       const dayIndex = (operationalStart.getDay() + 6) % 7;
 
-      const res = await fetchAllPagedRows<any>({
-        pageSize: 1000,
-        shouldStop: isStale,
-        fetchPage: async (from, to) =>
-          await supabase
-            .from('ob_punches')
-            .select('staff_id, action, created_at')
-            .gte('created_at', operationalStart.toISOString())
-            .lte('created_at', now.toISOString())
-            .order('created_at', { ascending: true })
-            .range(from, to)
-      });
+      for (const batch of staffBatches) {
+        const res = await fetchAllPagedRows<any>({
+          pageSize: 1000,
+          shouldStop: isStale,
+          fetchPage: async (from, to) =>
+            await supabase
+              .from('ob_punches')
+              .select('staff_id, action, created_at')
+              .in('staff_id', batch)
+              .gte('created_at', operationalStart.toISOString())
+              .lte('created_at', now.toISOString())
+              .order('created_at', { ascending: true })
+              .range(from, to)
+        });
 
-      if (res.error) {
-        if (!isStale()) {
-          if (!keepPreviousWhileLoading) {
-            setSchedulePunchPresenceKeys(new Set());
-            setScheduleFirstInByStaffDayKey({});
-            setHomePunchesByStaffId({});
-            setSchedulePunchPresenceReady(false);
-            setSchedulePunchPresenceWeekOffset(null);
+        if (res.error) {
+          if (!isStale()) {
+            if (!keepPreviousWhileLoading) {
+              setSchedulePunchPresenceKeys(new Set());
+              setScheduleFirstInByStaffDayKey({});
+              setHomePunchesByStaffId({});
+              setSchedulePunchPresenceReady(false);
+              setSchedulePunchPresenceWeekOffset(null);
+            }
           }
+          return;
         }
-        return;
-      }
 
-      for (const row of res.rows) {
-        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-        if (!staff || !isAttendanceQueryableStaffId(staff)) continue;
-        const at = new Date(String((row as any).created_at ?? ''));
-        if (Number.isNaN(at.getTime())) continue;
-        const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-        // Keep the home dashboard consistent with its visible punch list:
-        // exact-cutoff OUT events are hidden from display, so they should not
-        // independently make someone count as having punched for the day.
-        if (isExactOperationalCutoffOut(at.toISOString(), action)) continue;
-        found.add(`${staff}__${dayIndex}`);
-        const list = operationalPunchesByStaffId[staff] ?? [];
-        list.push({ action, created_at: at.toISOString() });
-        operationalPunchesByStaffId[staff] = list;
-        if (action === 'IN') {
-          const firstInKey = `${staff}__${dayIndex}`;
-          const prev = firstInByDayKey[firstInKey];
-          if (!prev || at.getTime() < new Date(prev).getTime()) {
-            firstInByDayKey[firstInKey] = at.toISOString();
+        for (const row of res.rows) {
+          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+          if (!staff || !isAttendanceQueryableStaffId(staff)) continue;
+          const at = new Date(String((row as any).created_at ?? ''));
+          if (Number.isNaN(at.getTime())) continue;
+          const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+          // Keep the home dashboard consistent with its visible punch list:
+          // exact-cutoff OUT events are hidden from display, so they should not
+          // independently make someone count as having punched for the day.
+          if (isExactOperationalCutoffOut(at.toISOString(), action)) continue;
+          found.add(`${staff}__${dayIndex}`);
+          const list = operationalPunchesByStaffId[staff] ?? [];
+          list.push({ action, created_at: at.toISOString() });
+          operationalPunchesByStaffId[staff] = list;
+          if (action === 'IN') {
+            const firstInKey = `${staff}__${dayIndex}`;
+            const prev = firstInByDayKey[firstInKey];
+            if (!prev || at.getTime() < new Date(prev).getTime()) {
+              firstInByDayKey[firstInKey] = at.toISOString();
+            }
           }
         }
       }
@@ -6950,7 +6966,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     reset: _reset,
     lockUi: lockUiOption,
     includePunchMeta = false,
-    streamPartialState = true
+    streamPartialState = true,
+    profile = 'full'
   }: {
     reset: boolean;
     search?: string;
@@ -6960,6 +6977,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     lockUi?: boolean;
     includePunchMeta?: boolean;
     streamPartialState?: boolean;
+    profile?: EmployeeFetchProfile;
   }): Promise<EmployeeRow[] | null> => {
     if (!supabase) {
       setEmployeesError('缺少 Supabase 配置。');
@@ -6976,10 +6994,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const firstPageSize = 60;
       const nextPageSize = 200;
 
-      const build = (_mode: EmployeeColumnMode, from: number, to: number) => {
-        // Use wildcard select to tolerate mixed legacy schemas:
-        // some deployments use "Agency"/"Position"/"Label", others use lower-case.
-        return supabase.from(EMPLOYEE_TABLE).select('*').order('staff_id', { ascending: true }).range(from, to);
+      const build = (mode: EmployeeColumnMode, from: number, to: number) => {
+        const selectColumns = buildEmployeeSelectColumns(mode, profile);
+        return supabase.from(EMPLOYEE_TABLE).select(selectColumns).order('staff_id', { ascending: true }).range(from, to);
       };
 
       const mode = await resolveEmployeeColumnMode();
@@ -16378,6 +16395,12 @@ ${rowsToHtml(late)}
       });
     });
   };
+  const handleDisabledNewHireRequestClick = () => {
+    setStatus({
+      tone: 'idle',
+      message: t('如需新人需求请联系HR', 'If you need new hire requests, please contact HR')
+    });
+  };
 
   const exportScheduleTemplate = async () => {
     await runLocked('schedule_export', async () => {
@@ -18752,13 +18775,14 @@ ${rowsToHtml(late)}
                                 </button>
                                 <button
                                   type="button"
-                                  disabled={isLocked}
-                                  onClick={() => setDailyListNewHireOpen(true)}
+                                  aria-disabled="true"
+                                  onClick={handleDisabledNewHireRequestClick}
+                                  title={t('如需新人需求请联系HR', 'If you need new hire requests, please contact HR')}
                                   className={[
-                                    'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50',
+                                    'rounded-xl px-3 py-1.5 text-xs font-semibold opacity-50 transition',
                                     themeMode === 'light'
-                                      ? 'border border-slate-300 bg-white text-slate-900 hover:bg-slate-100'
-                                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                      ? 'cursor-not-allowed border border-slate-300 bg-white text-slate-900'
+                                      : 'cursor-not-allowed bg-white/10 text-slate-200'
                                   ].join(' ')}
                                 >
                                   {t('新人需求', 'New Request')}
@@ -19902,7 +19926,27 @@ ${rowsToHtml(late)}
             document.body
           )}
 
-        <BusyOverlay visible={busyVisible} themeMode={themeMode} t={t} />
+        <BusyOverlay
+          visible={busyVisible || (page === 'home' && homePanelLoading)}
+          themeMode={themeMode}
+          t={t}
+          titleZh={page === 'home' && homePanelLoading ? '看板同步中' : '处理中...'}
+          titleEn={page === 'home' && homePanelLoading ? 'Syncing Dashboard' : 'Processing...'}
+          detailZh={
+            page === 'home' && homePanelLoading
+              ? homePanelLoadingStage === 'finalizing'
+                ? '正在校准出勤与覆盖率'
+                : '正在加载排班、员工和打卡'
+              : undefined
+          }
+          detailEn={
+            page === 'home' && homePanelLoading
+              ? homePanelLoadingStage === 'finalizing'
+                ? 'Finalizing attendance and coverage'
+                : 'Loading schedules, roster, and punches'
+              : undefined
+          }
+        />
 
         {user && userDisplayNamePromptOpen && (
           <div className={['fixed inset-0 z-[80] flex items-center justify-center px-4', themeMode === 'light' ? 'bg-slate-900/30' : 'bg-black/70'].join(' ')}>
