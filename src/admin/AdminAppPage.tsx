@@ -83,6 +83,7 @@ import {
   type DailyListLightPosition
 } from '../shared/dailyListLights';
 import { isScheduleOnlyAgency } from '../shared/agencyRules';
+import { getScheduleMistakeDateRange } from '../shared/scheduleMistakes';
 import {
   createAdminAccessRequest,
   fetchAdminAccessContext,
@@ -6454,8 +6455,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
 
-    const endDate = toDateOnly(serverTime);
-    const startDate = toDateOnly(addDays(serverTime, -6));
+    const mistakeDateRange = getScheduleMistakeDateRange(currentOperationalDate);
+    if (!mistakeDateRange) {
+      if (requestId === scheduleMistakeRequestRef.current) {
+        setScheduleMistakeByStaffId({});
+        setScheduleMistakeDetailsByStaffId({});
+      }
+      return;
+    }
+
+    const { endDate, startDate } = mistakeDateRange;
     const countByStaff = new Map<string, number>();
     const detailByStaff = new Map<string, ScheduleMistakeDetail[]>();
     for (const batch of chunk(staffIds, 200)) {
@@ -13050,7 +13059,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (page !== 'schedule') return;
     void fetchScheduleUph();
     void fetchScheduleMistakeCounts();
-  }, [page, employees]);
+  }, [page, employees, toDateOnly(serverTime), serverTime.getHours()]);
 
   useEffect(() => {
     if (page !== 'schedule') return;
