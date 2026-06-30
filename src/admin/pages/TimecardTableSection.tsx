@@ -12,6 +12,7 @@ type TimecardTableSectionProps = {
   themeMode: 'light' | 'dark';
   isLocked: boolean;
   timecardLoading: boolean;
+  timecardLoadingProgress: number;
   serverTime: Date;
   timecardWeekOffset: number;
   timecardWeekStart: Date;
@@ -51,6 +52,7 @@ export default function TimecardTableSection({
   themeMode,
   isLocked,
   timecardLoading,
+  timecardLoadingProgress,
   serverTime,
   timecardWeekOffset,
   timecardWeekStart,
@@ -77,6 +79,7 @@ export default function TimecardTableSection({
   renderAuditSummary
 }: TimecardTableSectionProps) {
   const isLight = themeMode === 'light';
+  const loadingProgressValue = Math.max(0, Math.min(100, Math.round(timecardLoadingProgress)));
   const containerRef = useRef<HTMLDivElement | null>(null);
   const scrollRafRef = useRef<number | null>(null);
   const [visibleStartIndex, setVisibleStartIndex] = useState(0);
@@ -470,11 +473,43 @@ export default function TimecardTableSection({
       {timecardLoading ? (
         <div
           className={[
-            'pointer-events-none absolute inset-0 z-30 overflow-hidden rounded-2xl border backdrop-blur-sm',
-            isLight ? 'border-slate-200/90 bg-white/80' : 'border-white/10 bg-slate-950/70'
+            'pointer-events-none absolute inset-0 z-30 flex items-center justify-center rounded-2xl border px-6 backdrop-blur-sm',
+            isLight ? 'border-slate-200/90 bg-white/82' : 'border-white/10 bg-slate-950/78'
           ].join(' ')}
         >
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-transparent via-neon to-transparent opacity-80" />
+          <div
+            className={[
+              'w-full max-w-md rounded-2xl border px-5 py-4 shadow-2xl',
+              isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-slate-950/90 text-white'
+            ].join(' ')}
+          >
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className={['text-sm font-semibold tracking-[0.12em]', isLight ? 'text-slate-800' : 'text-slate-100'].join(' ')}>
+                  {t('时间卡同步中', 'Syncing Timecard')}
+                </div>
+                <div className={['mt-1 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                  {t('正在加载打卡、排班和标记', 'Loading punches, schedules, and marks')}
+                </div>
+              </div>
+              <div className={['text-sm font-semibold tabular-nums', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
+                {loadingProgressValue}%
+              </div>
+            </div>
+            <div
+              className={['mt-4 h-2 overflow-hidden rounded-full', isLight ? 'bg-slate-200' : 'bg-white/12'].join(' ')}
+              role="progressbar"
+              aria-label={t('时间卡同步进度', 'Timecard sync progress')}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={loadingProgressValue}
+            >
+              <span
+                className="block h-full rounded-full bg-neon shadow-[0_0_18px_rgba(34,211,238,0.42)] transition-[width] duration-300 ease-out"
+                style={{ width: `${loadingProgressValue}%` }}
+              />
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

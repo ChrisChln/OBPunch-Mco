@@ -2250,6 +2250,7 @@ export default function AdminAppPage() {
   const [timecardRows, setTimecardRows] = useState<TimecardRow[]>([]);
   const [timecardError, setTimecardError] = useState<string | null>(null);
   const [timecardLoading, setTimecardLoading] = useState(false);
+  const [timecardLoadingProgress, setTimecardLoadingProgress] = useState(0);
   const [timecardSearch, setTimecardSearch] = useState('');
   const [timecardAgency, setTimecardAgency] = useState<string[]>([]);
   const [timecardKnownAgencyOptions, setTimecardKnownAgencyOptions] = useState<string[]>([]);
@@ -10676,10 +10677,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const positionValues = normalizeTimecardFilterValues(position, timecardPosition);
     const missingOnly = missingEmployeeOnly ?? timecardMissingEmployeeOnly;
     const shouldDeferLateSync = deferLateSync ?? true;
+    const advanceTimecardLoadingProgress = (progress: number) => {
+      if (requestId !== timecardFetchSeqRef.current) return;
+      const nextProgress = Math.max(0, Math.min(100, progress));
+      setTimecardLoadingProgress((current) => Math.max(current, nextProgress));
+    };
+    setTimecardLoadingProgress(0);
     setTimecardLoading(true);
     const finishLoading = () => {
       if (requestId === timecardFetchSeqRef.current) {
-        setTimecardLoading(false);
+        setTimecardLoadingProgress(100);
+        window.setTimeout(() => {
+          if (requestId !== timecardFetchSeqRef.current) return;
+          setTimecardLoading(false);
+        }, 180);
       }
     };
 
@@ -11331,6 +11342,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       if (missingOnly) {
         const punchesRes = await fetchPunchesInRange();
+        advanceTimecardLoadingProgress(28);
         if (punchesRes.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: punchesRes.error };
         }
@@ -11360,6 +11372,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
 
         const profilesRes = await fetchProfilesByStaffId(allStaffIds);
+        advanceTimecardLoadingProgress(48);
         if (profilesRes.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: profilesRes.error };
         }
@@ -11389,6 +11402,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           fetchScheduledByStaff(staffIds),
           fetchAttendanceMarksByStaff(staffIds)
         ]);
+        advanceTimecardLoadingProgress(74);
         if (scheduledRes.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: scheduledRes.error };
         }
@@ -11416,11 +11430,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           });
         });
 
+        advanceTimecardLoadingProgress(92);
         return { rows, hasMore: false, error: null as string | null };
       }
 
       const cachedWeek = timecardWeekCacheRef.current;
       if (cachedWeek && cachedWeek.weekKey === weekStartDate) {
+        advanceTimecardLoadingProgress(70);
         const viewEmployees = filterEmployeesForView(cachedWeek.allEmployees);
         const now = new Date(serverTime);
         const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
@@ -11442,6 +11458,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             capEnd
           })
         );
+        advanceTimecardLoadingProgress(92);
         return { rows, hasMore: false, error: null as string | null };
       }
 
@@ -11449,6 +11466,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         fetchPunchesInRange(),
         fetchActiveStaffIdsForWeek()
       ]);
+      advanceTimecardLoadingProgress(38);
       if (isStale()) {
         return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
       }
@@ -11479,6 +11497,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const profilesRes = await fetchProfilesByStaffId(activeStaffIds);
+      advanceTimecardLoadingProgress(55);
       if (profilesRes.error) {
         return { rows: [] as TimecardRow[], hasMore: false, error: profilesRes.error };
       }
@@ -11508,6 +11527,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         fetchScheduledByStaff(activeStaffIds),
         fetchAttendanceMarksByStaff(activeStaffIds)
       ]);
+      advanceTimecardLoadingProgress(74);
       if (isStale()) {
         return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
       }
@@ -11529,6 +11549,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       let lateMarksSynced = false;
       if (!shouldDeferLateSync) {
         try {
+          advanceTimecardLoadingProgress(82);
           lateByStaffDayKey = (
             await syncLateMarksForWeek({
               weekStart,
@@ -11547,6 +11568,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           console.warn('[timecard] sync late marks failed:', error);
         }
       }
+      advanceTimecardLoadingProgress(88);
 
       timecardWeekCacheRef.current = {
         weekKey: weekStartDate,
@@ -11584,6 +11606,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         });
       });
 
+      advanceTimecardLoadingProgress(94);
       return { rows, hasMore: false, error: null as string | null };
     };
 
@@ -19598,6 +19621,7 @@ ${rowsToHtml(late)}
                   themeMode={themeMode}
                   isLocked={timecardReadOnly}
                   timecardLoading={timecardLoading}
+                  timecardLoadingProgress={timecardLoadingProgress}
                   serverTime={serverTime}
                   timecardWeekOffset={timecardWeekOffset}
                   timecardWeekStart={timecardWeekStart}
