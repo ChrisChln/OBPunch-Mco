@@ -425,7 +425,7 @@ function HomeDashboardPage({
     () =>
       homeRosterRowsCurrent.map((row) => ({
         ...row,
-        label: String(row.label ?? '').trim() || (row.position ? `${row.position} Lead` : '-'),
+        label: String(row.label ?? '').trim(),
         mistake_count_7d: Number(row.mistake_count_7d ?? 0),
         attendance: row.attendance ?? 'Normal',
         punches: Array.isArray(row.punches) ? row.punches : []

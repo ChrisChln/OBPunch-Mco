@@ -389,6 +389,18 @@ export const reviewEmployeeTerminationRequest = async (
     })
   );
 
+export const cancelPendingEmployeeTerminationRequests = async (
+  supabase: SupabaseClient,
+  staffId: string,
+  reviewNote = ''
+): Promise<{ staff_id: string; cancelled_count: number }> =>
+  expectRpcSuccess(
+    supabase.rpc('cancel_pending_employee_termination_requests', {
+      p_staff_id: staffId,
+      p_review_note: reviewNote
+    })
+  );
+
 export const normalizeAdminAccessModulesForSave = (
   modules: Array<{ module_key: string; access_level: string }>
 ): Array<{ module_key: AdminModuleKey; access_level: AdminModuleAccessLevel }> =>

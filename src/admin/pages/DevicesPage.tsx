@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
-import { Pencil, Power, Printer } from 'lucide-react';
+import { Download, Pencil, Power, Printer } from 'lucide-react';
 import type { DeviceLabelPrintPayload, DeviceRow, DeviceType } from '../types';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -30,6 +30,7 @@ type DevicesPageProps = {
   onDeviceFileSelected: (file: File | null) => void | Promise<void>;
   uploadDevices: () => void | Promise<void>;
   onDownloadDeviceTemplate: () => void | Promise<void>;
+  onExportDevices: () => void | Promise<void>;
   deviceUploadError: string | null;
   deviceSearch: string;
   setDeviceSearch: (value: string) => void;
@@ -75,6 +76,7 @@ export default function DevicesPage({
   onDeviceFileSelected,
   uploadDevices,
   onDownloadDeviceTemplate,
+  onExportDevices,
   deviceUploadError,
   deviceSearch,
   setDeviceSearch,
@@ -241,6 +243,15 @@ export default function DevicesPage({
                 className="h-11 rounded-2xl bg-white/10 px-5 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {t('下载模版', 'Download template')}
+              </button>
+              <button
+                type="button"
+                disabled={isLocked || deviceRowsFiltered.length === 0}
+                onClick={() => void onExportDevices()}
+                className="inline-flex h-11 items-center gap-2 rounded-2xl bg-white/10 px-5 text-sm font-medium text-slate-200 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Download className="h-4 w-4" aria-hidden="true" />
+                {t('导出', 'Export')}
               </button>
             </div>
             {deviceUploadError && <p className="mt-3 text-sm text-ember">{deviceUploadError}</p>}

@@ -8,6 +8,7 @@ type BusyOverlayProps = {
   titleEn?: string;
   detailZh?: string;
   detailEn?: string;
+  progress?: number | null;
 };
 
 export default function BusyOverlay({
@@ -17,9 +18,12 @@ export default function BusyOverlay({
   titleZh = '处理中...',
   titleEn = 'Processing...',
   detailZh,
-  detailEn
+  detailEn,
+  progress = null
 }: BusyOverlayProps) {
   if (!visible) return null;
+  const hasProgress = typeof progress === 'number' && Number.isFinite(progress);
+  const progressValue = hasProgress ? Math.max(0, Math.min(100, Math.round(progress))) : 0;
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-sm">
       <div
@@ -37,20 +41,32 @@ export default function BusyOverlay({
             <div className="text-sm font-semibold tracking-[0.18em] text-slate-200/80">
               {t(titleZh, titleEn)}
             </div>
-            {detailZh && detailEn ? (
-              <div className="mt-1 text-sm text-slate-300/75">{t(detailZh, detailEn)}</div>
-            ) : null}
+            <div className="mt-1 flex items-center gap-3">
+              {detailZh && detailEn ? (
+                <div className="min-w-0 flex-1 truncate text-sm text-slate-300/75">{t(detailZh, detailEn)}</div>
+              ) : null}
+              {hasProgress ? (
+                <div className={['shrink-0 text-xs font-semibold tabular-nums', themeMode === 'light' ? 'text-slate-500' : 'text-slate-300/75'].join(' ')}>
+                  {progressValue}%
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          <span className="h-1.5 rounded-full bg-neon/80 shadow-[0_0_16px_rgba(34,211,238,0.45)] animate-pulse" />
+        <div
+          className={[
+            'mt-4 h-1.5 overflow-hidden rounded-full',
+            themeMode === 'light' ? 'bg-slate-200' : 'bg-white/18'
+          ].join(' ')}
+          role="progressbar"
+          aria-label={t(titleZh, titleEn)}
+          aria-valuemin={hasProgress ? 0 : undefined}
+          aria-valuemax={hasProgress ? 100 : undefined}
+          aria-valuenow={hasProgress ? progressValue : undefined}
+        >
           <span
-            className="h-1.5 rounded-full bg-white/30 animate-pulse"
-            style={{ animationDelay: '120ms' }}
-          />
-          <span
-            className="h-1.5 rounded-full bg-white/15 animate-pulse"
-            style={{ animationDelay: '240ms' }}
+            className={['block h-full rounded-full bg-neon/85 shadow-[0_0_16px_rgba(34,211,238,0.45)] transition-[width] duration-300 ease-out', hasProgress ? '' : 'w-[36%] animate-pulse'].join(' ')}
+            style={hasProgress ? { width: `${progressValue}%` } : undefined}
           />
         </div>
       </div>

@@ -382,7 +382,7 @@ export default function EmployeesTableSection({
                         {position || '-'}
                       </span>
                     ) : (
-                      <GlowLabelChip tone={getGlowToneForPosition(position)} className="min-w-[54px] uppercase tracking-[0.12em]">
+                      <GlowLabelChip tone={getGlowToneForPosition(position)} className="min-w-[54px] uppercase tracking-[0.12em]" glowSeed={`${staff}:position:${position || '-'}`}>
                         {position || '-'}
                       </GlowLabelChip>
                     )}
@@ -400,7 +400,7 @@ export default function EmployeesTableSection({
                           <span className="truncate">{label}</span>
                         </span>
                       ) : (
-                        <GlowLabelChip tone={getScheduleLabelTone(label)} className="max-w-[90px]">
+                        <GlowLabelChip tone={getScheduleLabelTone(label)} className="max-w-[90px]" glowSeed={`${staff}:label:${label}`}>
                           <span className="truncate">{label}</span>
                         </GlowLabelChip>
                       )
@@ -424,7 +424,7 @@ export default function EmployeesTableSection({
                         {shiftLabel}
                       </span>
                     ) : (
-                      <GlowLabelChip tone={getGlowToneForShift(shift)} className="min-w-[52px] uppercase tracking-[0.12em]" title={shiftTitle}>
+                      <GlowLabelChip tone={getGlowToneForShift(shift)} className="min-w-[52px] uppercase tracking-[0.12em]" title={shiftTitle} glowSeed={`${staff}:shift:${shift || '-'}`}>
                         {shiftLabel}
                       </GlowLabelChip>
                     )}
