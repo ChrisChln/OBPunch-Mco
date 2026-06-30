@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import BorderGlow from '../../components/reactBits/BorderGlow';
+import BusyOverlay from '../components/BusyOverlay';
 import {
   NewExceptionModal,
   emptyForm,
@@ -492,9 +493,38 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
         { label: 'Short Picked', value: formatFlag(Boolean(selected.short_picked)) },
         { label: 'Inv Adj', value: formatFlag(Boolean(selected.inventory_adjustment)) }
       ];
+  const busyOverlay = useMemo(() => {
+    if (saving || editSaving) {
+      return {
+        titleZh: '异常单保存中',
+        titleEn: 'Saving Exception',
+        detailZh: '正在写入异常单状态',
+        detailEn: 'Updating exception report'
+      };
+    }
+    if (loading) {
+      return {
+        titleZh: '异常单加载中',
+        titleEn: 'Loading Exceptions',
+        detailZh: '正在加载异常单和员工资料',
+        detailEn: 'Loading reports and employees'
+      };
+    }
+    return null;
+  }, [editSaving, loading, saving]);
 
   return (
-    <div className="p-4 sm:p-6">
+    <>
+      <BusyOverlay
+        visible={Boolean(busyOverlay)}
+        themeMode={themeMode}
+        t={t}
+        titleZh={busyOverlay?.titleZh}
+        titleEn={busyOverlay?.titleEn}
+        detailZh={busyOverlay?.detailZh}
+        detailEn={busyOverlay?.detailEn}
+      />
+      <div className="p-4 sm:p-6">
       <div className="mb-5 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div>
           <div className={['text-xs font-bold uppercase tracking-[0.22em]', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Admin</div>
@@ -687,6 +717,7 @@ export default function ExceptionsPage({ t, themeMode, isLocked, isReadOnly, sup
           onSubmit={() => void saveEditSelected()}
         />
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }
