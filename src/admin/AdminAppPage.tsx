@@ -4983,6 +4983,127 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   };
 
+  const exportDevices = async () => {
+    await runLocked('devices_export', async () => {
+      const rows = deviceRowsFiltered;
+      if (rows.length === 0) {
+        setStatus({ tone: 'error', message: t('暂无可导出的设备数据。', 'No device data to export.') });
+        return;
+      }
+
+      const headers = [
+        t('设备名', 'Device name'),
+        'SN',
+        t('类型', 'Type'),
+        t('岗位', 'Position'),
+        t('状态', 'Status'),
+        t('当前借用人ID', 'Current borrower ID'),
+        t('当前借用人', 'Current borrower'),
+        t('借出时间', 'Borrowed at'),
+        t('最后使用者', 'Last user'),
+        t('最后借还时间', 'Last loan at'),
+        t('盘点时间', 'Counted at'),
+        t('启用', 'Active'),
+        t('备注', 'Note'),
+        t('创建时间', 'Created at'),
+        t('更新时间', 'Updated at')
+      ];
+
+      const body = rows.map((row) => {
+        const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
+        const borrowed = deviceCurrentBorrowBySn.get(sn);
+        const active = row.active !== false;
+        const countedAtMs = Date.parse(parseDeviceCountedAtFromNote(row.note)) || 0;
+        const lastLoanAt = String(deviceLastLoanAtBySn.get(sn) ?? '').trim();
+        const status = !active
+          ? t('停用', 'Disabled')
+          : borrowed
+            ? t('借用中', 'Borrowed')
+            : t('空闲', 'Available');
+        return [
+          String(row.device_name ?? row.name ?? '').trim() || '-',
+          sn || '-',
+          normalizeDeviceType(String(row.device_type ?? row.type ?? '')),
+          String(row.position ?? '').trim() || '-',
+          status,
+          String(borrowed?.staff_id ?? '').trim() || '-',
+          String(borrowed?.staff_name ?? '').trim() || '-',
+          String(borrowed?.created_at ?? '').trim() || '-',
+          deviceLastUserBySn.get(sn) ?? '-',
+          lastLoanAt || '-',
+          countedAtMs > 0 ? new Date(countedAtMs).toISOString() : '-',
+          active ? 'TRUE' : 'FALSE',
+          String(row.note ?? '').trim() || '-',
+          String(row.created_at ?? '').trim() || '-',
+          String(row.updated_at ?? '').trim() || '-'
+        ];
+      });
+
+      const filename = `ob_devices_${toDateOnly(serverTime)}.xlsx`;
+      try {
+        const XLSX = await import('xlsx');
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...body]);
+        ws['!cols'] = [
+          { wch: 18 },
+          { wch: 18 },
+          { wch: 16 },
+          { wch: 16 },
+          { wch: 14 },
+          { wch: 18 },
+          { wch: 18 },
+          { wch: 24 },
+          { wch: 18 },
+          { wch: 24 },
+          { wch: 24 },
+          { wch: 10 },
+          { wch: 28 },
+          { wch: 24 },
+          { wch: 24 }
+        ];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'devices');
+        XLSX.writeFile(wb, filename);
+        setStatus({ tone: 'success', message: t(`已导出：${filename}`, `Exported: ${filename}`) });
+      } catch {
+        const csvName = filename.replace(/\.xlsx$/i, '.csv');
+        const csv = [headers, ...body]
+          .map((line) =>
+            line
+              .map((cell) => {
+                const value = String(cell ?? '');
+                if (value.includes('"') || value.includes(',') || value.includes('\n')) return `"${value.replace(/"/g, '""')}"`;
+                return value;
+              })
+              .join(',')
+          )
+          .join('\n');
+        const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = csvName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setStatus({ tone: 'success', message: t(`已导出：${csvName}`, `Exported: ${csvName}`) });
+      }
+
+      await writeAudit({
+        action: 'device_export',
+        target: DEVICE_TABLE,
+        payload: {
+          exported_rows: rows.length,
+          search: deviceSearch.trim() || null,
+          type: deviceFilterType || null,
+          department: deviceFilterDepartment,
+          position: deviceFilterPosition || null,
+          borrowed_only: deviceBorrowedOnly
+        }
+      });
+    });
+  };
+
   const fetchSchedule = async (options?: { weekOffsetOverride?: number; lockUi?: boolean }) => {
     if (!supabase) {
       setScheduleError('缺少 Supabase 配置。');
@@ -17117,6 +17238,7 @@ ${rowsToHtml(late)}
                 onDeviceFileSelected={onDeviceFileSelected}
                 uploadDevices={uploadDevices}
                 onDownloadDeviceTemplate={downloadDeviceTemplate}
+                onExportDevices={exportDevices}
                 deviceUploadError={deviceUploadError}
                 deviceSearch={deviceSearch}
                 setDeviceSearch={setDeviceSearch}
