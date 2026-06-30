@@ -44,6 +44,15 @@ export const normalizeExplicitPositionToneMap = (value: unknown): PositionToneMa
   return next;
 };
 
+export const mergeLegacyPositionToneMap = (
+  current: PositionToneMap,
+  legacy: PositionToneMap,
+  authoritativePositions: readonly string[]
+): PositionToneMap => {
+  if (authoritativePositions.length === 0) return { ...legacy, ...current };
+  return { ...legacy, ...current };
+};
+
 export const getPositionToneFromMap = (value: unknown, toneMap?: Partial<PositionToneMap>) => {
   const key = normalizePositionToneKey(value);
   return (key ? toneMap?.[key] : undefined) ?? getDefaultPositionToneKey(value);

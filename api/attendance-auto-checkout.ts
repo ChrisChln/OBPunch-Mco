@@ -1,5 +1,5 @@
-import { createServiceSupabase, ensureCron } from './_forecastShared';
-import { runAttendanceAutoCheckout } from './_attendanceAutoCheckoutCore';
+import { createServiceSupabase, ensureCron } from './_forecastShared.js';
+import { runAttendanceAutoCheckout } from './_attendanceAutoCheckoutCore.js';
 
 export default async function handler(req: any, res: any) {
   if (!ensureCron(req, res)) return;

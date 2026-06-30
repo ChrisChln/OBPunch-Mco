@@ -16,6 +16,7 @@ export type AgencyEmployeeRow = {
   shift: 'early' | 'late' | '';
   start_time: string;
   label: string;
+  payrate: string;
   state: string;
   agencyStatus: 'ready' | 'wait_confirm';
   fixed_work_count: number;
@@ -57,6 +58,7 @@ export type AgencyWeekNewHireRequest = {
   shift: 'early' | 'late' | '';
   start_time: string;
   label: string;
+  payrate: string;
   work_date: string;
   can_delete: boolean;
 };
@@ -69,6 +71,7 @@ export type AgencyWeekScheduleRow = {
   shift: 'early' | 'late' | '';
   start_time: string;
   label: string;
+  payrate: string;
   fixed_work_count: number;
   termination_status: string | null;
   driver_group_code: string;
@@ -110,8 +113,19 @@ export type AgencyNewHireRequestRow = {
   shift: 'early' | 'late' | '';
   start_time: string;
   label: string;
+  payrate: string;
   state: string;
   can_delete: boolean;
+};
+
+export type AgencyDepartedEmployeeRow = {
+  staff_id: string;
+  name: string;
+  agency: string;
+  position: string;
+  shift: 'early' | 'late' | '';
+  start_time: string;
+  terminated_at: string;
 };
 
 export type AgencyLogRow = {
@@ -144,6 +158,7 @@ export type AgencyUpsertNewHireInput = {
   label: string;
   entryTime: string;
   note: string;
+  payrate: string;
   count: number;
   employeeName: string;
   lockedAgency?: boolean;

@@ -43,7 +43,8 @@ describe('dashboard attendance stats', () => {
       expected: 2,
       present: 2,
       onClock: 1,
-      offWorked: 1
+      offWorked: 1,
+      workHours: 0
     });
   });
 
@@ -55,7 +56,8 @@ describe('dashboard attendance stats', () => {
         shift: 'late',
         isExpected: true,
         hasPunch: true,
-        isOnClock: true
+        isOnClock: true,
+        workHours: 4.25
       },
       {
         staffId: 'US001',
@@ -63,7 +65,8 @@ describe('dashboard attendance stats', () => {
         shift: 'late',
         isExpected: true,
         hasPunch: true,
-        isOnClock: true
+        isOnClock: true,
+        workHours: 4.25
       }
     ]);
 
@@ -71,7 +74,8 @@ describe('dashboard attendance stats', () => {
       expected: 1,
       present: 1,
       onClock: 1,
-      offWorked: 0
+      offWorked: 0,
+      workHours: 4.25
     });
   });
 
@@ -83,7 +87,8 @@ describe('dashboard attendance stats', () => {
         shift: 'early',
         isExpected: true,
         hasPunch: true,
-        isOnClock: true
+        isOnClock: true,
+        workHours: 6.5
       },
       {
         staffId: 'US002',
@@ -99,7 +104,8 @@ describe('dashboard attendance stats', () => {
         shift: 'early',
         isExpected: true,
         hasPunch: true,
-        isOnClock: true
+        isOnClock: true,
+        workHours: 7.25
       },
       {
         staffId: 'US004',
@@ -107,7 +113,8 @@ describe('dashboard attendance stats', () => {
         shift: 'late',
         isExpected: true,
         hasPunch: true,
-        isOnClock: true
+        isOnClock: true,
+        workHours: 8
       }
     ]);
 
@@ -123,12 +130,12 @@ describe('dashboard attendance stats', () => {
         stats
       })
     ).toEqual([
-      { department: 'OB', shift: 'early', expected: 1, present: 1 },
-      { department: 'IB', shift: 'early', expected: 1, present: 0 },
-      { department: 'INV', shift: 'early', expected: 1, present: 1 },
-      { department: 'OB', shift: 'late', expected: 1, present: 1 },
-      { department: 'IB', shift: 'late', expected: 0, present: 0 },
-      { department: 'INV', shift: 'late', expected: 0, present: 0 }
+      { department: 'OB', shift: 'early', expected: 1, present: 1, workHours: 6.5 },
+      { department: 'IB', shift: 'early', expected: 1, present: 0, workHours: 0 },
+      { department: 'INV', shift: 'early', expected: 1, present: 1, workHours: 7.25 },
+      { department: 'OB', shift: 'late', expected: 1, present: 1, workHours: 8 },
+      { department: 'IB', shift: 'late', expected: 0, present: 0, workHours: 0 },
+      { department: 'INV', shift: 'late', expected: 0, present: 0, workHours: 0 }
     ]);
   });
 

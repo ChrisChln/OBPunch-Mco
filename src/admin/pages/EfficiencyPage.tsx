@@ -2,6 +2,7 @@
 import type { ReactNode } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createPortal } from 'react-dom';
+import BusyOverlay from '../components/BusyOverlay';
 import type { ForecastModelRow } from '../forecast';
 import { calculateForecast, getIsoWeekday } from '../forecast';
 
@@ -880,9 +881,46 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
     setSaving(false);
     setMessage(mode === 'create' || !selectedTemplateId ? t('模板已创建。', 'Template created.') : t('模板已保存。', 'Template saved.'));
   };
+  const busyOverlay = useMemo(() => {
+    if (saving) {
+      return {
+        titleZh: '人效保存中',
+        titleEn: 'Saving Efficiency',
+        detailZh: '正在保存模板参数',
+        detailEn: 'Saving template parameters'
+      };
+    }
+    if (forecastLoading) {
+      return {
+        titleZh: '预测加载中',
+        titleEn: 'Loading Forecast',
+        detailZh: '正在同步预测和安排',
+        detailEn: 'Syncing forecast and plan'
+      };
+    }
+    if (loading) {
+      return {
+        titleZh: '人效加载中',
+        titleEn: 'Loading Efficiency',
+        detailZh: '正在加载模板',
+        detailEn: 'Loading templates'
+      };
+    }
+    return null;
+  }, [forecastLoading, loading, saving]);
 
   return (
-    <section className="px-6 py-6">
+    <>
+      <BusyOverlay
+        visible={Boolean(busyOverlay)}
+        themeMode={themeMode}
+        t={t}
+        titleZh={busyOverlay?.titleZh}
+        titleEn={busyOverlay?.titleEn}
+        detailZh={busyOverlay?.detailZh}
+        detailEn={busyOverlay?.detailEn}
+      />
+      <section className="px-6 py-6">
       <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
         <div className="grid h-full gap-4">
           <h2 className={['font-display text-3xl tracking-[0.06em]', isLight ? 'text-slate-900' : 'text-white'].join(' ')}>
@@ -1278,6 +1316,7 @@ export default function EfficiencyPage({ t, isLocked, supabase, themeMode, serve
         </div>,
         document.body
       ) : null}
-    </section>
+      </section>
+    </>
   );
 }

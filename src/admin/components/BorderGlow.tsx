@@ -19,6 +19,7 @@ type BorderGlowProps = {
   staticGlow?: boolean;
   interactive?: boolean;
   cssAutoRotate?: boolean;
+  glowSeed?: string;
 };
 
 const parseHsl = (hslStr: string): { h: number; s: number; l: number } => {
@@ -46,6 +47,20 @@ const GRADIENT_KEYS = ['--gradient-one', '--gradient-two', '--gradient-three', '
 const COLOR_MAP = [0, 1, 2, 0, 1, 2, 1];
 const DEFAULT_COLORS = ['#c084fc', '#f472b6', '#38bdf8'];
 const AUTO_ROTATE_FRAME_INTERVAL = 1000 / 24;
+
+const hashSeed = (seed: string): number => {
+  let hash = 2166136261;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const getSeededUnit = (seed: string, salt: number): number => {
+  const next = hashSeed(`${seed}:${salt}`);
+  return next / 4294967295;
+};
 
 const buildGradientVars = (colors: string[]): Record<string, string> => {
   const safeColors = colors.length ? colors : ['#c084fc', '#f472b6', '#38bdf8'];
@@ -208,13 +223,29 @@ export default function BorderGlow({
   fillOpacity = 0.5,
   staticGlow = false,
   interactive = true,
-  cssAutoRotate = true
+  cssAutoRotate = true,
+  glowSeed
 }: BorderGlowProps) {
   const cardRef = useRef<HTMLDivElement>(null);
-  const rotateDelayRef = useRef(-Math.random() * Math.max(rotateDuration, 1000));
-  const staticAngleRef = useRef(`${Math.round(Math.random() * 360)}deg`);
-  const staticArcRef = useRef(`${48 + Math.round(Math.random() * 22)}deg`);
-  const staticSparkRef = useRef((0.88 + Math.random() * 0.28).toFixed(2));
+  const seededValues = useMemo(() => {
+    if (!glowSeed) return null;
+    return {
+      rotateDelay: -getSeededUnit(glowSeed, 1) * Math.max(rotateDuration, 1000),
+      staticAngle: `${Math.round(getSeededUnit(glowSeed, 2) * 360)}deg`,
+      staticArc: `${48 + Math.round(getSeededUnit(glowSeed, 3) * 22)}deg`,
+      staticSpark: (0.88 + getSeededUnit(glowSeed, 4) * 0.28).toFixed(2)
+    };
+  }, [glowSeed, rotateDuration]);
+  const rotateDelayRef = useRef(seededValues?.rotateDelay ?? -Math.random() * Math.max(rotateDuration, 1000));
+  const staticAngleRef = useRef(seededValues?.staticAngle ?? `${Math.round(Math.random() * 360)}deg`);
+  const staticArcRef = useRef(seededValues?.staticArc ?? `${48 + Math.round(Math.random() * 22)}deg`);
+  const staticSparkRef = useRef(seededValues?.staticSpark ?? (0.88 + Math.random() * 0.28).toFixed(2));
+  if (seededValues) {
+    rotateDelayRef.current = seededValues.rotateDelay;
+    staticAngleRef.current = seededValues.staticAngle;
+    staticArcRef.current = seededValues.staticArc;
+    staticSparkRef.current = seededValues.staticSpark;
+  }
   const styleVars = useMemo(
     () =>
       ({

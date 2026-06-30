@@ -1,5 +1,7 @@
 ﻿import { useEffect, useRef, type RefObject } from 'react';
 
+import { MagicMultiSelect } from '../../components/MagicSelectControls';
+
 type TranslateFn = (zh: string, en: string) => string;
 
 type EmployeesToolbarProps = {
@@ -46,12 +48,6 @@ type EmployeeMultiSelectOption<Value extends string = string> = {
   badgeClass?: string;
 };
 
-function buildEmployeeMultiSelectLabel(allLabel: string, selected: string[]) {
-  if (selected.length === 0) return allLabel;
-  if (selected.length === 1) return selected[0];
-  return `${selected.length} selected`;
-}
-
 function EmployeeMultiSelect<Value extends string>({
   label,
   allLabel,
@@ -69,129 +65,18 @@ function EmployeeMultiSelect<Value extends string>({
   disabled: boolean;
   isLight: boolean;
 }) {
-  const detailsRef = useRef<HTMLDetailsElement | null>(null);
-  const selectedSet = new Set(selected);
-
-  useEffect(() => {
-    const onPointerDown = (event: MouseEvent | TouchEvent) => {
-      const root = detailsRef.current;
-      if (!root || !root.open) return;
-      const target = event.target as Node | null;
-      if (target && root.contains(target)) return;
-      root.open = false;
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      const root = detailsRef.current;
-      if (root?.open) root.open = false;
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('touchstart', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('touchstart', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, []);
-
-  const toggleValue = (value: Value) => {
-    onChange(selectedSet.has(value) ? selected.filter((item) => item !== value) : [...selected, value]);
-  };
-
-  const optionClass = (active: boolean) =>
-    [
-      'flex cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-sm transition',
-      active
-        ? isLight
-          ? 'border-emerald-700/50 bg-emerald-100 text-emerald-900'
-          : 'border-neon/50 bg-neon/10 text-neon'
-        : isLight
-          ? 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
-          : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
-    ].join(' ');
-
   return (
     <div>
       <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{label}</label>
-      <details ref={detailsRef} className="relative mt-2">
-        <summary
-          className={[
-            'flex h-[46px] cursor-pointer list-none items-center justify-between rounded-2xl border px-4 text-sm outline-none transition',
-            isLight ? 'border-slate-300 bg-white text-slate-800 shadow-sm hover:border-slate-400' : 'border-white/10 bg-black/30 text-white hover:border-white/20',
-            disabled ? 'pointer-events-none cursor-not-allowed opacity-60' : ''
-          ].join(' ')}
-        >
-          <span className="truncate">{buildEmployeeMultiSelectLabel(allLabel, selected)}</span>
-          <span className={['ml-3 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{selected.length}</span>
-        </summary>
-        <div
-          className={[
-            'absolute z-30 mt-2 w-full rounded-2xl border p-3',
-            isLight
-              ? 'border-slate-200 bg-white shadow-[0_18px_40px_rgba(15,23,42,0.16)]'
-              : 'border-slate-700 bg-slate-900 shadow-[0_18px_40px_rgba(0,0,0,0.45)]'
-          ].join(' ')}
-        >
-          <div className={['mb-2 flex items-center justify-between text-[11px]', isLight ? 'text-slate-500' : 'text-slate-300'].join(' ')}>
-            <span>Multi-select</span>
-            <button
-              type="button"
-              disabled={disabled || selected.length === 0}
-              onClick={(event) => {
-                event.preventDefault();
-                onChange([]);
-              }}
-              className={[
-                'min-w-[52px] rounded-md border px-2 py-1 text-[12px] font-medium leading-none transition disabled:cursor-not-allowed disabled:opacity-50',
-                isLight
-                  ? 'border-slate-300 bg-white text-slate-600 shadow-sm hover:border-slate-400 hover:bg-slate-50'
-                  : 'border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700'
-              ].join(' ')}
-            >
-              Clear
-            </button>
-          </div>
-          <div className="max-h-56 space-y-1 overflow-auto pr-1">
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => onChange([])}
-              onKeyDown={(event) => {
-                if (event.key !== 'Enter' && event.key !== ' ') return;
-                event.preventDefault();
-                onChange([]);
-              }}
-              className={optionClass(selected.length === 0)}
-            >
-              <span className="inline-flex max-w-[80%] items-center truncate rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">
-                {allLabel}
-              </span>
-            </div>
-            {options.map((option) => {
-              const active = selectedSet.has(option.value);
-              return (
-                <div
-                  key={option.value}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => toggleValue(option.value)}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return;
-                    event.preventDefault();
-                    toggleValue(option.value);
-                  }}
-                  className={optionClass(active)}
-                >
-                  <span className={['inline-flex max-w-[80%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold', option.badgeClass ?? 'border-white/20'].join(' ')}>
-                    {option.label}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </details>
+      <MagicMultiSelect
+        selected={selected}
+        options={options}
+        onChange={onChange}
+        allLabel={allLabel}
+        disabled={disabled}
+        tone={isLight ? 'light' : 'dark'}
+        className="mt-2"
+      />
     </div>
   );
 }
@@ -262,14 +147,14 @@ export default function EmployeesToolbar({
   }, []);
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
         <h2 className="font-display text-2xl tracking-[0.08em]">{t('员工信息', 'Employees')}</h2>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center justify-start gap-2 sm:justify-end">
           <button
             type="button"
             disabled={isLocked || employeeBadgeBatchPrinting || employeeBadgeBatchSelectedStaffIds.length === 0}
             onClick={() => void onPrintSelectedBadgeBatch()}
-            className="admin-btn admin-btn-toolbar admin-btn-primary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-primary inline-flex items-center justify-center px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
             {employeeBadgeBatchPrinting
               ? t('生成中...', 'Generating...')
@@ -279,7 +164,7 @@ export default function EmployeesToolbar({
             type="button"
             disabled={isLocked || employeeBadgeBatchPrinting || employeeBadgeBatchSelectedStaffIds.length === 0}
             onClick={() => setEmployeeBadgeBatchSelectedStaffIds([])}
-            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('清空已选', 'Clear selected')}
           </button>
@@ -300,7 +185,7 @@ export default function EmployeesToolbar({
             type="button"
             disabled={writeLocked}
             onClick={() => fileInputRef.current?.click()}
-            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('导入', 'Import')}
           </button>
@@ -308,7 +193,7 @@ export default function EmployeesToolbar({
             type="button"
             disabled={isLocked}
             onClick={() => void exportEmployees()}
-            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('导出', 'Export')}
           </button>
@@ -316,7 +201,7 @@ export default function EmployeesToolbar({
             type="button"
             disabled={isLocked}
             onClick={() => void openDepartedEmployees()}
-            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('离职员工', 'Departed')}
           </button>
@@ -324,7 +209,7 @@ export default function EmployeesToolbar({
             type="button"
             disabled={writeLocked}
             onClick={() => setEmployeeAddOpen(true)}
-            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('新增员工', 'Add employee')}
           </button>
@@ -332,7 +217,7 @@ export default function EmployeesToolbar({
             type="button"
             disabled={isLocked}
             onClick={() => void fetchEmployees({ reset: true })}
-            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('刷新', 'Refresh')}
           </button>
@@ -348,7 +233,7 @@ export default function EmployeesToolbar({
               setEmployeeLabels([]);
               void fetchEmployees({ reset: true, search: '', agency: '', position: '', labels: [] });
             }}
-            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-4 disabled:cursor-not-allowed disabled:opacity-60"
+            className="admin-btn admin-btn-toolbar admin-btn-secondary inline-flex items-center justify-center px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t('清空筛选', 'Clear filters')}
           </button>
@@ -364,7 +249,7 @@ export default function EmployeesToolbar({
             onChange={(e) => setEmployeeSearch(e.target.value)}
             disabled={isLocked}
             placeholder={t('通过ID/名字/标签/工作账号搜索', 'Search by id / name / label / work account')}
-            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
+            className="magic-field-auto mt-2 w-full px-4 py-3 text-base disabled:cursor-not-allowed disabled:opacity-60"
           />
         </div>
         <EmployeeMultiSelect
@@ -411,10 +296,8 @@ export default function EmployeesToolbar({
           <details ref={labelDetailsRef} className="relative mt-2">
             <summary
               className={[
-                'flex h-[46px] cursor-pointer list-none items-center justify-between rounded-2xl border px-4 text-sm outline-none transition',
-                isLight
-                  ? 'border-slate-300 bg-white text-slate-800 shadow-sm hover:border-slate-400'
-                  : 'border-white/10 bg-black/30 text-white hover:border-white/20',
+                'magic-field-auto flex h-[46px] cursor-pointer list-none items-center justify-between px-4 text-sm outline-none',
+                isLight ? 'text-slate-900' : 'text-white',
                 isLocked ? 'pointer-events-none cursor-not-allowed opacity-60' : ''
               ].join(' ')}
             >
@@ -429,7 +312,7 @@ export default function EmployeesToolbar({
             </summary>
             <div
               className={[
-                'absolute z-30 mt-2 w-full rounded-2xl border p-3',
+                'magic-select-menu-glow absolute z-30 mt-2 w-full rounded-2xl border p-3',
                 isLight
                   ? 'border-slate-200 bg-[#fffdf8] shadow-[0_18px_40px_rgba(15,23,42,0.14)]'
                   : 'border-slate-700 bg-slate-900 shadow-[0_18px_40px_rgba(0,0,0,0.45)]'
@@ -454,7 +337,7 @@ export default function EmployeesToolbar({
                   {t('清空', 'Clear')}
                 </button>
               </div>
-              <div className="max-h-56 space-y-1 overflow-auto pr-1">
+              <div role="listbox" aria-multiselectable="true" className="magic-select-menu max-h-56 space-y-1 overflow-auto pr-1">
                 {employeeFilterLabelOptions.length === 0 ? (
                   <p
                     className={[

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import type { LabelToneKey } from '../../lib/labelTone';
 import { POSITION_DEPARTMENTS, normalizePositionDepartment, type PositionDepartment } from '../../shared/positions';
 import {
@@ -16,6 +16,7 @@ import {
   getDashboardDepartmentTonePosition,
 } from '../../shared/dashboardAttendanceStats';
 import ElectricBorder from '../../components/ElectricBorder';
+import { MagicMultiSelect } from '../../components/MagicSelectControls';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -37,6 +38,7 @@ type HomeDashboardPageProps = {
   t: TranslateFn;
   themeMode: 'light' | 'dark';
   homeCardStats: Record<string, { early: number; late: number; active: number }>;
+  homeWorkHoursByPositionShift: Record<string, { early: number; late: number }>;
   homeExpectedPositionSummaryCards: Array<{ position: string; early: number; late: number; total: number }>;
   getHomeCardToneClass: (value: string, toneMap?: Partial<Record<string, LabelToneKey>>) => string;
   getHomeChipToneClass: (value: string, toneMap?: Partial<Record<string, LabelToneKey>>) => string;
@@ -95,6 +97,36 @@ const isRowOnClock = (row: HomeRosterRow) => {
   return punches[punches.length - 1]?.action === 'IN';
 };
 
+const computeWorkHoursFromPunches = (punches: Array<{ action: 'IN' | 'OUT'; created_at: string }>, capEnd: Date) => {
+  if (!punches.length) return 0;
+  const capEndMs = capEnd.getTime();
+  if (!Number.isFinite(capEndMs)) return 0;
+  let totalMs = 0;
+  let currentInMs: number | null = null;
+  for (const punch of punches) {
+    const atMs = Date.parse(String(punch.created_at ?? ''));
+    if (!Number.isFinite(atMs)) continue;
+    if (punch.action === 'IN') {
+      currentInMs = atMs;
+      continue;
+    }
+    if (punch.action === 'OUT') {
+      if (currentInMs !== null && atMs > currentInMs) totalMs += atMs - currentInMs;
+      currentInMs = null;
+    }
+  }
+  if (currentInMs !== null && capEndMs > currentInMs) totalMs += capEndMs - currentInMs;
+  return totalMs / 3600000;
+};
+
+const formatDashboardHours = (value: number) => {
+  const rounded = Math.round(Math.max(0, Number(value) || 0) * 100) / 100;
+  return rounded.toLocaleString('en-US', {
+    minimumFractionDigits: rounded % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2
+  });
+};
+
 const formatShiftLabel = (value: string) => {
   const v = normalizeShiftValue(value);
   if (v === 'early') return 'Morning';
@@ -106,12 +138,6 @@ type DashboardMultiSelectOption<Value extends string = string> = {
   value: Value;
   label: string;
   badgeClass?: string;
-};
-
-const buildDashboardMultiSelectLabel = (allLabel: string, selected: string[]) => {
-  if (selected.length === 0) return allLabel;
-  if (selected.length === 1) return selected[0];
-  return `${selected.length} selected`;
 };
 
 function DashboardMultiSelect<Value extends string>({
@@ -127,110 +153,13 @@ function DashboardMultiSelect<Value extends string>({
   onChange: (value: Value[]) => void;
   isLight: boolean;
 }) {
-  const detailsRef = useRef<HTMLDetailsElement | null>(null);
-  const selectedSet = new Set(selected);
-
-  useEffect(() => {
-    const onPointerDown = (event: MouseEvent | TouchEvent) => {
-      const root = detailsRef.current;
-      if (!root || !root.open) return;
-      const target = event.target as Node | null;
-      if (target && root.contains(target)) return;
-      root.open = false;
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      const root = detailsRef.current;
-      if (root?.open) root.open = false;
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('touchstart', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('touchstart', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, []);
-
-  const toggleValue = (value: Value) => {
-    onChange(selectedSet.has(value) ? selected.filter((item) => item !== value) : [...selected, value]);
-  };
-
-  const optionClass = (active: boolean) =>
-    [
-      'flex w-full cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm transition',
-      active
-        ? isLight
-          ? 'border-emerald-700/50 bg-emerald-100 text-emerald-900'
-          : 'border-neon/50 bg-neon/10 text-neon'
-        : isLight
-          ? 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
-          : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
-    ].join(' ');
-
-  return (
-    <details ref={detailsRef} className="relative">
-      <summary
-        className={[
-          'flex h-12 cursor-pointer list-none items-center justify-between rounded-[20px] border px-4 text-sm outline-none transition',
-          isLight ? 'border-slate-200 bg-white text-slate-800 hover:border-slate-300' : 'border-white/10 bg-white/[0.04] text-stone-100 hover:border-white/20'
-        ].join(' ')}
-      >
-        <span className="truncate">{buildDashboardMultiSelectLabel(allLabel, selected)}</span>
-        <span className={['ml-3 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{selected.length}</span>
-      </summary>
-      <div
-        className={[
-          'absolute z-40 mt-2 w-full rounded-2xl border p-3',
-          isLight
-            ? 'border-slate-200 bg-white shadow-[0_18px_40px_rgba(15,23,42,0.16)]'
-            : 'border-slate-700 bg-slate-900 shadow-[0_18px_40px_rgba(0,0,0,0.45)]'
-        ].join(' ')}
-      >
-        <div className={['mb-2 flex items-center justify-between text-[11px]', isLight ? 'text-slate-500' : 'text-slate-300'].join(' ')}>
-          <span>Multi-select</span>
-          <button
-            type="button"
-            disabled={selected.length === 0}
-            onClick={(event) => {
-              event.preventDefault();
-              onChange([]);
-            }}
-            className={[
-              'min-w-[52px] rounded-md border px-2 py-1 text-[12px] font-medium leading-none transition disabled:cursor-not-allowed disabled:opacity-50',
-              isLight
-                ? 'border-slate-300 bg-white text-slate-600 shadow-sm hover:border-slate-400 hover:bg-slate-50'
-                : 'border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700'
-            ].join(' ')}
-          >
-            Clear
-          </button>
-        </div>
-        <div className="max-h-56 space-y-1 overflow-auto pr-1">
-          <button type="button" className={optionClass(selected.length === 0)} onClick={() => onChange([])}>
-            <span className="inline-flex max-w-[80%] items-center truncate rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">{allLabel}</span>
-          </button>
-          {options.map((option) => {
-            const active = selectedSet.has(option.value);
-            return (
-              <button key={option.value} type="button" className={optionClass(active)} onClick={() => toggleValue(option.value)}>
-                <span className={['inline-flex max-w-[80%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold', option.badgeClass ?? 'border-white/20'].join(' ')}>
-                  {option.label}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </details>
-  );
+  return <MagicMultiSelect selected={selected} options={options} onChange={onChange} allLabel={allLabel} tone={isLight ? 'light' : 'dark'} />;
 }
 
 const getHomeShiftBadgeClass = (value: '' | 'early' | 'late') => {
-  if (value === 'early') return 'badge-elevated-dark label-glow-chip border-amber-300/30 bg-amber-400/[0.13] text-amber-100';
-  if (value === 'late') return 'badge-elevated-dark label-glow-chip border-indigo-300/30 bg-indigo-400/[0.13] text-indigo-100';
-  return 'badge-elevated-dark label-glow-chip border-white/12 bg-white/[0.05] text-slate-200';
+  if (value === 'early') return 'badge-elevated-dark border-amber-300/30 bg-amber-400/[0.13] text-amber-100';
+  if (value === 'late') return 'badge-elevated-dark border-indigo-300/30 bg-indigo-400/[0.13] text-indigo-100';
+  return 'badge-elevated-dark border-white/12 bg-white/[0.05] text-slate-200';
 };
 
 const formatTimeOnly = (iso: string) => {
@@ -340,6 +269,7 @@ function HomeDashboardPage({
   t,
   themeMode: _themeMode,
   homeCardStats,
+  homeWorkHoursByPositionShift,
   homeExpectedPositionSummaryCards,
   getHomeCardToneClass: _getHomeCardToneClass,
   getHomeChipToneClass: _getHomeChipToneClass,
@@ -383,7 +313,7 @@ function HomeDashboardPage({
   );
 
   const homeAttendanceStats = useMemo(() => {
-    const rows = homeRosterRowsCurrent
+    const rowInputs = homeRosterRowsCurrent
       .map((row) => {
         const position = normalizePositionKey(row.position, homeDashboardPositionNames);
         const shift = normalizeShiftValue(row.shift);
@@ -395,12 +325,40 @@ function HomeDashboardPage({
           isExpected: row.attendance !== 'Off Worked',
           hasPunch: hasPunchLog(row),
           isOnClock: isRowOnClock(row),
-          attendance: row.attendance
+          attendance: row.attendance,
+          workHours: computeWorkHoursFromPunches(row.punches ?? [], new Date())
         };
       })
       .filter((row): row is NonNullable<typeof row> => Boolean(row));
-    return buildDashboardAttendanceStats(rows);
-  }, [homeRosterRowsCurrent, homeDashboardPositionNames]);
+    const stats = buildDashboardAttendanceStats(rowInputs);
+    for (const position of cardPositions) {
+      const live = homeCardStats[position];
+      if (!live) continue;
+      for (const shift of ['early', 'late'] as const) {
+        const key = `${shift}:${position}`;
+        const current = stats[key] ?? {
+          expected: summaryByPosition.get(position)?.[shift] ?? 0,
+          present: 0,
+          onClock: 0,
+          offWorked: 0,
+          workHours: 0
+        };
+        stats[key] = {
+          ...current,
+          present: Number(live[shift] ?? 0),
+          workHours: Number(homeWorkHoursByPositionShift[position]?.[shift] ?? current.workHours ?? 0)
+        };
+      }
+    }
+    return stats;
+  }, [
+    cardPositions,
+    homeCardStats,
+    homeWorkHoursByPositionShift,
+    homeRosterRowsCurrent,
+    homeDashboardPositionNames,
+    summaryByPosition
+  ]);
 
   const departmentCoverageCards = useMemo(
     () =>
@@ -467,7 +425,7 @@ function HomeDashboardPage({
     () =>
       homeRosterRowsCurrent.map((row) => ({
         ...row,
-        label: String(row.label ?? '').trim() || (row.position ? `${row.position} Lead` : '-'),
+        label: String(row.label ?? '').trim(),
         mistake_count_7d: Number(row.mistake_count_7d ?? 0),
         attendance: row.attendance ?? 'Normal',
         punches: Array.isArray(row.punches) ? row.punches : []
@@ -560,13 +518,19 @@ function HomeDashboardPage({
                   ].join(' ')}
                 >
                   <div className="flex items-end justify-between gap-4">
-                    <div>
+                    <div className="min-w-0">
                       <div className={['text-[11px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>{getDashboardDepartmentLabel(card.department)} {isMorning ? 'Morning' : 'Night'}</div>
                       <div className="mt-3 flex items-end gap-3">
                         <span className={['text-3xl font-semibold tracking-[-0.03em]', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : isLight ? 'text-slate-800' : 'text-stone-50'].join(' ')}>{card.present}/{card.expected}</span>
                         <span className={['pb-1 text-sm font-semibold', isOverPlan ? (isLight ? 'text-rose-600' : 'text-rose-300') : isLight ? (ratio < 80 ? 'text-rose-500' : ratio >= 90 ? getAttendanceCardValueClassLight(tonePosition) : 'text-slate-500') : ratio < 80 ? 'text-rose-300' : ratio >= 90 ? getAttendanceCardValueClass(tonePosition) : 'text-stone-300'].join(' ')}>
                           {card.expected > 0 ? `${ratio.toFixed(1)}% coverage` : '0.0% coverage'}
                         </span>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className={['text-[10px] font-semibold uppercase tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-stone-400'].join(' ')}>{t('总工时', 'Hours')}</div>
+                      <div className={['mt-2 text-2xl font-semibold leading-none', isLight ? getAttendanceCardValueClassLight(tonePosition) : getAttendanceCardValueClass(tonePosition)].join(' ')}>
+                        {formatDashboardHours(card.workHours)}
                       </div>
                     </div>
                   </div>

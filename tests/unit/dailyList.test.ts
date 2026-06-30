@@ -109,7 +109,7 @@ describe('dailyList', () => {
     expect(filterDailyListCountedRows(rows, normalizePosition)).toEqual([]);
   });
 
-  test('uses employee profile position before schedule row position', () => {
+  test('uses only employee profile position and ignores schedule row position fallback', () => {
     expect(resolveDailyListPositionSource('Pick', 'Receive')).toEqual({
       position: 'Pick',
       profilePosition: 'Pick',
@@ -117,7 +117,7 @@ describe('dailyList', () => {
     });
 
     expect(resolveDailyListPositionSource('', 'Receive')).toEqual({
-      position: 'Receive',
+      position: '',
       profilePosition: '',
       schedulePosition: 'Receive'
     });

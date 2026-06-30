@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createSupabaseClient } from '../lib/supabase';
 import { isValidPunchStaffId, normalizeStaffId } from '../lib/staffId';
 import { appSound, type AppSoundKind } from '../lib/sound';
+import { normalizePositionName } from '../shared/positions';
 
 type DeviceType = string; // 现在支持任意自定义设备类型值
 type LoanAction = 'borrow' | 'return';
@@ -41,9 +42,6 @@ type TempAccountAssignmentRow = {
   staff_id?: string | null;
   source_temp_staff_id?: string | null;
 };
-
-const ALLOWED_POSITIONS = ['Pick', 'Pack', 'Rebin', 'Preship', 'Transfer', 'FLEX TEAM'] as const;
-type AllowedPosition = (typeof ALLOWED_POSITIONS)[number];
 
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
@@ -86,33 +84,8 @@ const playDeviceSound = (kind: AppSoundKind) => {
   void appSound.play(kind);
 };
 
-const getDevicePositionToneClass = (value: string) => {
-  const pos = String(value ?? '').trim().toLowerCase();
-  if (pos === 'pick') return 'border-sky-300/22 bg-gradient-to-br from-sky-400/[0.14] via-sky-300/[0.05] to-transparent';
-  if (pos === 'pack') return 'border-rose-300/22 bg-gradient-to-br from-rose-400/[0.14] via-rose-300/[0.05] to-transparent';
-  if (pos === 'rebin') return 'border-emerald-300/22 bg-gradient-to-br from-emerald-400/[0.14] via-emerald-300/[0.05] to-transparent';
-  if (pos === 'preship') return 'border-amber-300/22 bg-gradient-to-br from-amber-400/[0.14] via-amber-300/[0.05] to-transparent';
-  if (pos === 'transfer') return 'border-violet-300/22 bg-gradient-to-br from-violet-400/[0.14] via-violet-300/[0.05] to-transparent';
-  if (
-    pos === '兜底组' ||
-    pos === '兜底' ||
-    pos === 'flex team（机动组）' ||
-    pos === 'flex team' ||
-    pos === 'flexteam' ||
-    pos === 'wrap-up team' ||
-    pos === 'wrap up team' ||
-    pos === 'wrapup team' ||
-    pos === 'fallback' ||
-    pos === 'backup'
-  ) {
-    return 'border-slate-300/22 bg-gradient-to-br from-slate-400/[0.14] via-slate-300/[0.05] to-transparent';
-  }
-  return 'border-white/12 bg-white/[0.03]';
-};
-
-const getDeviceStatusCardClass = (statusTone: 'available' | 'counting' | 'overdue' | 'borrowed', position: string) => {
-  const positionTone = getDevicePositionToneClass(position);
-  if (statusTone === 'available') return positionTone;
+const getDeviceStatusCardClass = (statusTone: 'available' | 'counting' | 'overdue' | 'borrowed') => {
+  if (statusTone === 'available') return 'border-emerald-300/35 bg-gradient-to-br from-emerald-400/[0.18] via-emerald-300/[0.07] to-transparent';
   if (statusTone === 'counting') return 'border-sky-300/25 bg-gradient-to-br from-sky-400/[0.16] via-sky-300/[0.06] to-transparent';
   if (statusTone === 'overdue') return 'border-rose-300/25 bg-gradient-to-br from-rose-400/[0.16] via-rose-300/[0.06] to-transparent';
   return 'border-amber-300/25 bg-gradient-to-br from-amber-400/[0.16] via-amber-300/[0.06] to-transparent';
@@ -121,7 +94,7 @@ const getDeviceStatusCardClass = (statusTone: 'available' | 'counting' | 'overdu
 export default function DeviceApp() {
   type SavedFilters = {
     search: string;
-    positionFilter: AllowedPosition | '';
+    positionFilter: string;
     typeFilter: DeviceType | '';
     borrowedOnly: boolean;
   };
@@ -138,13 +111,10 @@ export default function DeviceApp() {
         typeFilter?: string;
         borrowedOnly?: boolean;
       };
-      const position =
-        ALLOWED_POSITIONS.includes(parsed.positionFilter as AllowedPosition) ? (parsed.positionFilter as AllowedPosition) : '';
-      const type = parsed.typeFilter === 'PDA' || parsed.typeFilter === 'CART' ? (parsed.typeFilter as DeviceType) : '';
       return {
         search: String(parsed.search ?? ''),
-        positionFilter: position,
-        typeFilter: type,
+        positionFilter: normalizePositionName(parsed.positionFilter),
+        typeFilter: String(parsed.typeFilter ?? '').trim() ? normalizeDeviceType(parsed.typeFilter) : '',
         borrowedOnly: Boolean(parsed.borrowedOnly)
       };
     } catch {
@@ -156,7 +126,7 @@ export default function DeviceApp() {
   const [staffIdInput, setStaffIdInput] = useState('');
   const [snInput, setSnInput] = useState('');
   const [search, setSearch] = useState(savedFilters.search);
-  const [positionFilter, setPositionFilter] = useState<AllowedPosition | ''>(savedFilters.positionFilter);
+  const [positionFilter, setPositionFilter] = useState(savedFilters.positionFilter);
   const [typeFilter, setTypeFilter] = useState<DeviceType | ''>(savedFilters.typeFilter);
   const [borrowedOnly, setBorrowedOnly] = useState(savedFilters.borrowedOnly);
   const [devices, setDevices] = useState<DeviceRow[]>([]);
@@ -248,11 +218,32 @@ export default function DeviceApp() {
         device_name: String(row.device_name ?? '').trim() || null,
         device_sn: normalizeDeviceSn(String(row.device_sn ?? '')),
         device_type: normalizeDeviceType(row.device_type),
-        position: String(row.position ?? '').trim() || null,
+        position: normalizePositionName(row.position) || null,
         active: row.active !== false
       }))
       .filter((row) => row.device_sn);
   }, [devices]);
+
+  const positionOptions = useMemo(() => {
+    const byKey = new Map<string, string>();
+    for (const row of canonicalDevices) {
+      const position = normalizePositionName(row.position);
+      if (position) byKey.set(position.toLowerCase(), position);
+    }
+    const selected = normalizePositionName(positionFilter);
+    if (selected && !byKey.has(selected.toLowerCase())) byKey.set(selected.toLowerCase(), selected);
+    return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b, 'en-US', { sensitivity: 'base' }));
+  }, [canonicalDevices, positionFilter]);
+
+  const typeOptions = useMemo(() => {
+    const byKey = new Map<string, DeviceType>();
+    for (const row of canonicalDevices) {
+      const type = normalizeDeviceType(row.device_type);
+      if (type) byKey.set(type.toLowerCase(), type);
+    }
+    if (typeFilter && !byKey.has(typeFilter.toLowerCase())) byKey.set(typeFilter.toLowerCase(), typeFilter);
+    return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b, 'en-US', { sensitivity: 'base' }));
+  }, [canonicalDevices, typeFilter]);
 
   const canonicalLoans = useMemo(() => {
     return loans
@@ -327,7 +318,7 @@ export default function DeviceApp() {
     return canonicalDevices
       .filter((row) => {
         if (row.active === false) return false;
-        const position = String(row.position ?? '').trim() as AllowedPosition | '';
+        const position = normalizePositionName(row.position);
         const type = normalizeDeviceType(row.device_type);
         if (!q) return true;
         const holder = currentBorrowBySn.get(row.device_sn!);
@@ -342,7 +333,7 @@ export default function DeviceApp() {
       })
       .filter((row) => {
         if (row.active === false) return false;
-        const position = String(row.position ?? '').trim() as AllowedPosition | '';
+        const position = normalizePositionName(row.position);
         const type = normalizeDeviceType(row.device_type);
         const holder = currentBorrowBySn.get(row.device_sn!);
         const matchesPosition = !positionFilter || position === positionFilter;
@@ -894,11 +885,11 @@ export default function DeviceApp() {
             <div className="mb-4 grid gap-2 sm:grid-cols-3">
               <select
                 value={positionFilter}
-                onChange={(e) => setPositionFilter((e.target.value as AllowedPosition | '') ?? '')}
+                onChange={(e) => setPositionFilter(normalizePositionName(e.target.value))}
                 className="h-11 rounded-[18px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-100 outline-none transition focus:border-white/20"
               >
                 <option value="">All positions</option>
-                {ALLOWED_POSITIONS.map((pos) => (
+                {positionOptions.map((pos) => (
                   <option key={pos} value={pos}>
                     {pos}
                   </option>
@@ -910,8 +901,11 @@ export default function DeviceApp() {
                 className="h-11 rounded-[18px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-100 outline-none transition focus:border-white/20"
               >
                 <option value="">All types</option>
-                <option value="PDA">PDA</option>
-                <option value="CART">CART</option>
+                {typeOptions.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
               </select>
               <label className="flex h-11 items-center gap-2 rounded-[18px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-200">
                 <input
@@ -939,10 +933,10 @@ export default function DeviceApp() {
                   : borrowAgeMs >= BORROW_OVERDUE_MS
                     ? 'overdue'
                     : 'borrowed';
-                const cardClass = getDeviceStatusCardClass(statusTone, String(row.position ?? ''));
+                const cardClass = getDeviceStatusCardClass(statusTone);
                 const statusTextClass =
                   statusTone === 'available'
-                    ? 'text-stone-100'
+                    ? 'text-emerald-100'
                     : statusTone === 'counting'
                       ? 'text-sky-100'
                     : statusTone === 'overdue'

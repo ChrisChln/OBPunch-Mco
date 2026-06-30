@@ -10,6 +10,7 @@ import {
   HiCube,
   HiCurrencyDollar,
   HiDocumentText,
+  HiExclamationTriangle,
   HiFolder,
   HiHome,
   HiShieldCheck,
@@ -60,7 +61,8 @@ const PAGE_ICONS: Record<AdminPage, IconType> = {
   devices: HiCube,
   forecast: HiChartPie,
   prediction_model: HiCog6Tooth,
-  efficiency: HiCurrencyDollar
+  efficiency: HiCurrencyDollar,
+  exceptions: HiExclamationTriangle
 };
 
 const NAV_ITEMS: NavItem[] = [
@@ -71,6 +73,7 @@ const NAV_ITEMS: NavItem[] = [
   { page: 'accounts', label: (t) => t('账号管理', 'Accounts') },
   { page: 'permissions', label: (t) => t('权限', 'Permissions') },
   { page: 'timecard', label: (t) => t('时间卡', 'Timecard') },
+  { page: 'exceptions', label: (t) => t('异常单', 'Exceptions') },
   { page: 'schedule', label: (t) => t('排班', 'Schedule'), badge: 'schedule' },
   { page: 'leave_approval', label: (t) => t('请假审批', 'Leave Approval'), badge: 'leave' },
   { page: 'work_hour_comparison', label: (t) => t('工时对比', 'Work Hour Comparison') },

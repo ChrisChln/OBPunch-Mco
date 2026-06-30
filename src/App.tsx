@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronDown, Clock3, LayoutDashboard, LogIn, LogOut, Shield, UserRound, Waypoints } from 'lucide-react';
+import { AlertCircle, ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronDown, Clock3, LayoutDashboard, LogIn, LogOut, PackagePlus, Shield, UserRound, Waypoints } from 'lucide-react';
 import { createSupabaseClient, createSupabaseClientWithCredentials } from './lib/supabase';
 import { isValidPunchStaffId, normalizeStaffId } from './lib/staffId';
 import { submitPunchToApi } from './lib/punchApi';
 import { formatPunchFailureSummary } from './lib/punchDisplay';
-import { LABEL_TONE_KEYS, type LabelToneKey, loadLabelToneMap } from './lib/labelTone';
 import { getBarcodePromptGroupKey, getBarcodePrompts, getRandomBarcodePromptIndex } from './lib/barcodePrompt';
 import { appSound, type AppSoundKind } from './lib/sound';
 import { isScheduleOnlyAgency } from './shared/agencyRules';
@@ -143,6 +142,17 @@ type DeviceActionFeedback = {
   title: string;
   detail: string;
 };
+type DeviceLookupResult =
+  | {
+      exists: true;
+      active: boolean;
+      deviceName: string;
+    }
+  | {
+      exists: false;
+      active: false;
+      deviceName: string;
+    };
 type PunchBoardDeviceStatus = {
   text: string;
   tone: 'none' | 'borrowed' | 'overdue';
@@ -159,13 +169,10 @@ const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | 
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
   (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
-const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
 const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
 const OBUP_REPORT_DETAILS_TABLE =
   (import.meta.env.VITE_OBUP_REPORT_DETAILS_TABLE as string | undefined) ?? 'report_details';
 const OBUP_ACCOUNT_LINKS_TABLE = (import.meta.env.VITE_OBUP_ACCOUNT_LINKS_TABLE as string | undefined) ?? 'account_links';
-const SCHEDULE_LABEL_TONES_KEY = 'schedule_label_tones_v1';
-const SCHEDULE_POSITION_TONES_KEY = 'schedule_position_tones_v1';
 const SCHEDULE_REST_NOTE = '__rest__';
 const SCHEDULE_LEAVE_NOTE = '__leave__';
 const SCHEDULE_TEMP_REST_NOTE = '__temp_rest__';
@@ -517,6 +524,7 @@ export default function App() {
   const punchMenuRef = useRef<HTMLDivElement | null>(null);
   const deviceBorrowStaffRef = useRef<HTMLInputElement | null>(null);
   const deviceBorrowSnRef = useRef<HTMLInputElement | null>(null);
+  const punchDeviceBorrowStaffRef = useRef<HTMLInputElement | null>(null);
   const deviceReturnSnRef = useRef<HTMLInputElement | null>(null);
   const statusToastTimerRef = useRef<number | null>(null);
   const punchBoardUphFetchSeqRef = useRef(0);
@@ -638,15 +646,6 @@ export default function App() {
   >({});
   const [, setPunchBoardDeviceStatusByStaffId] = useState<Record<string, PunchBoardDeviceStatus>>({});
   const [, setPunchBoardUphByStaffId] = useState<Record<string, number | null>>({});
-  const [, setLabelToneByName] = useState<Record<string, LabelToneKey>>(() => loadLabelToneMap());
-  const [, setSchedulePositionToneByPosition] = useState<Record<string, LabelToneKey>>({
-    Pick: 'sky',
-    Pack: 'emerald',
-    Rebin: 'amber',
-    Preship: 'rose',
-    Transfer: 'violet',
-    'FLEX TEAM': 'slate'
-  });
   const [dailyRoster, setDailyRoster] = useState<DailyRosterItem[]>([]);
   const [, setDailyRosterError] = useState<string | null>(null);
   const [, setRosterShiftByStaffId] = useState<Record<string, '' | 'early' | 'late'>>({});
@@ -667,11 +666,6 @@ export default function App() {
       return fallback;
     }
   });
-  useEffect(() => {
-    const sync = () => setLabelToneByName(loadLabelToneMap());
-    window.addEventListener('storage', sync);
-    return () => window.removeEventListener('storage', sync);
-  }, []);
   const [lastPunchAction, setLastPunchAction] = useState<PunchAction | null>(null);
   const [lastPunchActionError, setLastPunchActionError] = useState<string | null>(null);
   const [lastPunchSummary, setLastPunchSummary] = useState<PunchDisplaySummary | null>(null);
@@ -683,6 +677,7 @@ export default function App() {
   } | null>(null);
   const [deviceBorrowStaffId, setDeviceBorrowStaffId] = useState('');
   const [deviceBorrowSn, setDeviceBorrowSn] = useState('');
+  const [deviceBorrowPrompt, setDeviceBorrowPrompt] = useState<{ sn: string; name: string } | null>(null);
   const [deviceReturnSn, setDeviceReturnSn] = useState('');
   const [deviceQuickBusy, setDeviceQuickBusy] = useState<'' | 'borrow' | 'return'>('');
   const [, setDeviceQuickError] = useState<string | null>(null);
@@ -1279,6 +1274,36 @@ export default function App() {
     return name || sn;
   };
 
+  const lookupDeviceBySn = async (snRaw: string): Promise<{ device: DeviceLookupResult; error: string | null }> => {
+    if (!supabase) {
+      return { device: { exists: false, active: false, deviceName: '' }, error: 'Missing Supabase configuration.' };
+    }
+    const sn = normalizeDeviceSn(snRaw);
+    if (!sn) {
+      return { device: { exists: false, active: false, deviceName: '' }, error: null };
+    }
+    const deviceRes = await supabase
+      .from(DEVICE_TABLE)
+      .select('device_name, active')
+      .eq('device_sn', sn)
+      .maybeSingle();
+    if (deviceRes.error) {
+      return { device: { exists: false, active: false, deviceName: '' }, error: deviceRes.error.message };
+    }
+    if (!deviceRes.data) {
+      return { device: { exists: false, active: false, deviceName: '' }, error: null };
+    }
+    const row = deviceRes.data as { device_name?: unknown; active?: unknown };
+    return {
+      device: {
+        exists: true,
+        active: row.active !== false,
+        deviceName: String(row.device_name ?? '').trim() || sn
+      },
+      error: null
+    };
+  };
+
   const submitDeviceQuickAction = async (mode: 'borrow' | 'return') => {
     const actionName = mode === 'borrow' ? 'Borrow' : 'Return';
     const reportDeviceFailure = (message: string) => {
@@ -1294,8 +1319,12 @@ export default function App() {
       setUiStatus({ tone: 'error', message });
       if (mode === 'borrow') {
         setDeviceBorrowStaffId('');
-        setDeviceBorrowSn('');
-        window.setTimeout(() => deviceBorrowStaffRef.current?.focus(), 0);
+        if (!deviceBorrowPrompt) setDeviceBorrowSn('');
+        window.setTimeout(() => {
+          const target = deviceBorrowPrompt ? punchDeviceBorrowStaffRef.current : deviceBorrowStaffRef.current;
+          target?.focus();
+          target?.select();
+        }, 0);
       } else {
         setDeviceReturnSn('');
         window.setTimeout(() => deviceReturnSnRef.current?.focus(), 0);
@@ -1317,7 +1346,30 @@ export default function App() {
       reportDeviceFailure('Device SN is required.');
       return;
     }
+    const deviceLookup = await lookupDeviceBySn(sn);
+    if (deviceLookup.error) {
+      reportDeviceFailure(deviceLookup.error);
+      return;
+    }
+    if (!deviceLookup.device.exists) {
+      reportDeviceFailure(`Device not found: ${sn}`);
+      return;
+    }
+    if (!deviceLookup.device.active) {
+      reportDeviceFailure(`Device disabled: ${sn}`);
+      return;
+    }
     if (mode === 'borrow') {
+      const currentHolder = await resolveBorrowerBySn(sn);
+      if (!currentHolder.error) {
+        const holderName = await resolveStaffDisplayName(currentHolder.staffId);
+        reportDeviceFailure(`Already borrowed: ${sn} (${holderName || currentHolder.staffId})`);
+        return;
+      }
+      if (!/no active borrowed record/i.test(currentHolder.error)) {
+        reportDeviceFailure(currentHolder.error);
+        return;
+      }
       staffId = normalizeStaffId(deviceBorrowStaffId);
       if (!isValidPunchStaffId(staffId)) {
         reportDeviceFailure('Invalid staff ID.');
@@ -1358,7 +1410,12 @@ export default function App() {
     if (mode === 'borrow') {
       setDeviceBorrowStaffId('');
       setDeviceBorrowSn('');
-      deviceBorrowStaffRef.current?.focus();
+      setDeviceBorrowPrompt(null);
+      if (deviceBorrowPrompt) {
+        inputRef.current?.focus();
+      } else {
+        deviceBorrowStaffRef.current?.focus();
+      }
       playSound('successIn');
     } else {
       setDeviceReturnSn('');
@@ -1398,7 +1455,36 @@ export default function App() {
     const holder = await resolveBorrowerBySn(sn);
     if (holder.error) {
       if (/no active borrowed record/i.test(holder.error)) {
-        return false;
+        const deviceLookup = await lookupDeviceBySn(sn);
+        if (deviceLookup.error) {
+          setUiStatus({ tone: 'error', message: deviceLookup.error });
+          setLastPunchSummary({ status: 'error', message: deviceLookup.error, at: new Date().toISOString() });
+          playError();
+          clearPunchInputAfterError();
+          return true;
+        }
+        if (!deviceLookup.device.exists) {
+          return false;
+        }
+        if (!deviceLookup.device.active) {
+          const message = `Device disabled: ${sn}`;
+          setUiStatus({ tone: 'error', message });
+          setLastPunchSummary({ status: 'error', message, at: new Date().toISOString() });
+          playError();
+          clearPunchInputAfterError();
+          return true;
+        }
+        setDeviceQuickError(null);
+        setDeviceBorrowSn(sn);
+        setDeviceBorrowStaffId('');
+        setDeviceBorrowPrompt({ sn, name: deviceLookup.device.deviceName });
+        setStaffId('');
+        setUiStatus({ tone: 'pending', message: `Borrow device · ${sn}` });
+        window.setTimeout(() => {
+          punchDeviceBorrowStaffRef.current?.focus();
+          punchDeviceBorrowStaffRef.current?.select();
+        }, 0);
+        return true;
       }
       setUiStatus({ tone: 'error', message: holder.error });
       setLastPunchSummary({ status: 'error', message: holder.error, at: new Date().toISOString() });
@@ -1441,7 +1527,7 @@ export default function App() {
         setStaffId('');
         window.setTimeout(() => inputRef.current?.focus(), 0);
         playSound('successOut');
-        setUiStatus({ tone: 'success', message: `Returned 路 ${sn}` });
+        setUiStatus({ tone: 'success', message: `Returned · ${sn}` });
         const [staffName, deviceName] = await Promise.all([
           resolveStaffDisplayName(holder.staffId),
           resolveDeviceDisplayName(sn)
@@ -1452,7 +1538,7 @@ export default function App() {
           mode: 'return',
           status: 'success',
           title: 'Return success',
-          detail: `${staffName} 路 ${deviceName}`
+          detail: `${staffName} · ${deviceName}`
         });
         void fetchDeviceQuickLogs();
         void fetchPunchBoardDeviceStatus(punchBoard.map((row) => row.staff_id));
@@ -2413,62 +2499,6 @@ const fetchPunchBoardUph = async (
       // ignore local persistence failures
     }
   };
-  const normalizeLabelToneMap = (value: unknown): Record<string, LabelToneKey> => {
-    const raw = (value ?? {}) as Record<string, unknown>;
-    const next: Record<string, LabelToneKey> = {};
-    for (const [k, v] of Object.entries(raw)) {
-      const name = String(k ?? '').trim().toLowerCase();
-      const tone = String(v ?? '').trim() as LabelToneKey;
-      if (!name || !LABEL_TONE_KEYS.includes(tone)) continue;
-      next[name] = tone;
-    }
-    return next;
-  };
-  const normalizePositionToneMap = (value: unknown): Record<string, LabelToneKey> => {
-    const raw = (value ?? {}) as Record<string, unknown>;
-    const next: Record<string, LabelToneKey> = {
-      Pick: 'sky',
-      Pack: 'emerald',
-      Rebin: 'amber',
-      Preship: 'rose',
-      Transfer: 'violet',
-      'FLEX TEAM': 'slate'
-    };
-    for (const [pos, rawTone] of Object.entries(raw)) {
-      const key = String(pos ?? '').trim();
-      const tone = String(rawTone ?? '').trim() as LabelToneKey;
-      if (!key) continue;
-      if (!LABEL_TONE_KEYS.includes(tone)) continue;
-      next[key] = tone;
-    }
-    return next;
-  };
-  const fetchSchedulePositionToneSetting = async () => {
-    if (!supabase) return;
-    const res = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('key, value, updated_at')
-      .eq('key', SCHEDULE_POSITION_TONES_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    if (res.error) return;
-    const row = (((res.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-    const value = (row?.value ?? {}) as Record<string, unknown>;
-    setSchedulePositionToneByPosition(normalizePositionToneMap(value.tones ?? {}));
-  };
-  const fetchScheduleLabelToneSetting = async () => {
-    if (!supabase) return;
-    const res = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('key, value, updated_at')
-      .eq('key', SCHEDULE_LABEL_TONES_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    if (res.error) return;
-    const row = (((res.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-    const value = (row?.value ?? {}) as Record<string, unknown>;
-    setLabelToneByName(normalizeLabelToneMap(value.tones ?? {}));
-  };
   const fetchRosterShiftByPunches = async (staffIds: string[]) => {
     if (!supabase || staffIds.length === 0) {
       setRosterShiftByStaffId({});
@@ -2705,8 +2735,6 @@ const fetchPunchBoardUph = async (
       void fetchAbsentRoster();
       void fetchPunchBoard();
       void fetchDeviceQuickLogs();
-      void fetchScheduleLabelToneSetting();
-      void fetchSchedulePositionToneSetting();
       void fetchDailyRoster();
     };
 
@@ -3433,6 +3461,17 @@ const fetchPunchBoardUph = async (
                           type="button"
                           onClick={() => {
                             setPunchMenuOpen(false);
+                            window.location.href = '/exception';
+                          }}
+                          className="flex w-full cursor-pointer items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm text-slate-800 transition hover:bg-slate-100"
+                        >
+                          <PackagePlus className="h-4 w-4 text-violet-600" />
+                          <span>Outbound Exception</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPunchMenuOpen(false);
                             window.location.href = '/device.html';
                           }}
                           className="flex w-full cursor-pointer items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm text-slate-800 transition hover:bg-slate-100"
@@ -3919,6 +3958,64 @@ const fetchPunchBoardUph = async (
               </div>
             </div>
           </section>
+        )}
+
+        {deviceBorrowPrompt && (
+          <div className="fixed inset-0 z-[118] flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-[24px] border border-slate-200 bg-white p-5 shadow-[0_28px_90px_rgba(15,23,42,0.26)]">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Device</div>
+                  <div className="mt-1 text-2xl font-semibold tracking-normal text-slate-950">Borrow Device</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeviceBorrowPrompt(null);
+                    setDeviceBorrowStaffId('');
+                    setDeviceBorrowSn('');
+                    setStaffId('');
+                    window.setTimeout(() => inputRef.current?.focus(), 0);
+                  }}
+                  className="inline-flex h-9 items-center rounded-[14px] bg-white px-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="mt-5 rounded-[18px] bg-slate-50 p-4 ring-1 ring-slate-200">
+                <div className="truncate text-sm font-semibold text-slate-950">{deviceBorrowPrompt.name}</div>
+                <div className="mt-1 text-xs font-medium text-slate-500">SN {deviceBorrowPrompt.sn}</div>
+              </div>
+              <label className="mt-5 grid gap-2">
+                <span className="text-xs font-medium text-slate-500">USID</span>
+                <input
+                  ref={punchDeviceBorrowStaffRef}
+                  value={deviceBorrowStaffId}
+                  onChange={(event) => setDeviceBorrowStaffId(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void submitDeviceQuickAction('borrow');
+                    }
+                  }}
+                  inputMode="text"
+                  autoCapitalize="characters"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="Scan USID"
+                  className="h-14 rounded-[16px] border border-slate-200 bg-white px-4 text-xl font-semibold tracking-normal text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:ring-4 focus:ring-slate-200"
+                />
+              </label>
+              <button
+                type="button"
+                disabled={isLocked || deviceQuickBusy !== ''}
+                onClick={() => void submitDeviceQuickAction('borrow')}
+                className="mt-4 inline-flex h-12 w-full cursor-pointer items-center justify-center rounded-[16px] bg-slate-950 text-sm font-semibold text-white shadow-[0_14px_32px_rgba(15,23,42,0.18)] transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {deviceQuickBusy === 'borrow' ? 'Submitting...' : 'Borrow'}
+              </button>
+            </div>
+          </div>
         )}
 
         {busyVisible && (
