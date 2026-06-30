@@ -6200,54 +6200,51 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       const dayIndex = (operationalStart.getDay() + 6) % 7;
 
-      for (const batch of staffBatches) {
-        const res = await fetchAllPagedRows<any>({
-          pageSize: 1000,
-          shouldStop: isStale,
-          fetchPage: async (from, to) =>
-            await supabase
-              .from('ob_punches')
-              .select('staff_id, action, created_at')
-              .in('staff_id', batch)
-              .gte('created_at', operationalStart.toISOString())
-              .lte('created_at', now.toISOString())
-              .order('created_at', { ascending: true })
-              .range(from, to)
-        });
+      const res = await fetchAllPagedRows<any>({
+        pageSize: 1000,
+        shouldStop: isStale,
+        fetchPage: async (from, to) =>
+          await supabase
+            .from('ob_punches')
+            .select('staff_id, action, created_at')
+            .gte('created_at', operationalStart.toISOString())
+            .lte('created_at', now.toISOString())
+            .order('created_at', { ascending: true })
+            .range(from, to)
+      });
 
-        if (res.error) {
-          if (!isStale()) {
-            if (!keepPreviousWhileLoading) {
-              setSchedulePunchPresenceKeys(new Set());
-              setScheduleFirstInByStaffDayKey({});
-              setHomePunchesByStaffId({});
-              setSchedulePunchPresenceReady(false);
-              setSchedulePunchPresenceWeekOffset(null);
-            }
+      if (res.error) {
+        if (!isStale()) {
+          if (!keepPreviousWhileLoading) {
+            setSchedulePunchPresenceKeys(new Set());
+            setScheduleFirstInByStaffDayKey({});
+            setHomePunchesByStaffId({});
+            setSchedulePunchPresenceReady(false);
+            setSchedulePunchPresenceWeekOffset(null);
           }
-          return;
         }
+        return;
+      }
 
-        for (const row of res.rows) {
-          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-          if (!staff || !isAttendanceQueryableStaffId(staff)) continue;
-          const at = new Date(String((row as any).created_at ?? ''));
-          if (Number.isNaN(at.getTime())) continue;
-          const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-          // Keep the home dashboard consistent with its visible punch list:
-          // exact-cutoff OUT events are hidden from display, so they should not
-          // independently make someone count as having punched for the day.
-          if (isExactOperationalCutoffOut(at.toISOString(), action)) continue;
-          found.add(`${staff}__${dayIndex}`);
-          const list = operationalPunchesByStaffId[staff] ?? [];
-          list.push({ action, created_at: at.toISOString() });
-          operationalPunchesByStaffId[staff] = list;
-          if (action === 'IN') {
-            const firstInKey = `${staff}__${dayIndex}`;
-            const prev = firstInByDayKey[firstInKey];
-            if (!prev || at.getTime() < new Date(prev).getTime()) {
-              firstInByDayKey[firstInKey] = at.toISOString();
-            }
+      for (const row of res.rows) {
+        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+        if (!staff || !isAttendanceQueryableStaffId(staff)) continue;
+        const at = new Date(String((row as any).created_at ?? ''));
+        if (Number.isNaN(at.getTime())) continue;
+        const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+        // Keep the home dashboard consistent with its visible punch list:
+        // exact-cutoff OUT events are hidden from display, so they should not
+        // independently make someone count as having punched for the day.
+        if (isExactOperationalCutoffOut(at.toISOString(), action)) continue;
+        found.add(`${staff}__${dayIndex}`);
+        const list = operationalPunchesByStaffId[staff] ?? [];
+        list.push({ action, created_at: at.toISOString() });
+        operationalPunchesByStaffId[staff] = list;
+        if (action === 'IN') {
+          const firstInKey = `${staff}__${dayIndex}`;
+          const prev = firstInByDayKey[firstInKey];
+          if (!prev || at.getTime() < new Date(prev).getTime()) {
+            firstInByDayKey[firstInKey] = at.toISOString();
           }
         }
       }
