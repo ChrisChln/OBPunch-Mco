@@ -144,6 +144,17 @@ const isMissingOptionalExceptionColumnError = (error: any) =>
   String(error?.code ?? '') === 'PGRST204' &&
   /item_rows|extra_taken/i.test(String(error?.message ?? error?.details ?? ''));
 
+const isExceptionTypeConstraintError = (error: any) =>
+  String(error?.code ?? '') === '23514' &&
+  /ob_exception_reports_exception_type_check/i.test(
+    String(error?.message ?? error?.details ?? '')
+  );
+
+const exceptionDatabaseErrorMessage = (error: any) =>
+  isExceptionTypeConstraintError(error)
+    ? 'Database migration is missing for Other exception type. Apply sql/2026-06-19_add_other_exception_type.sql.'
+    : String(error?.message ?? 'Failed to save exception report.');
+
 const withoutOptionalExceptionColumns = <T extends Record<string, unknown>>(payload: T, error: any) => {
   const missing = String(error?.message ?? error?.details ?? '');
   if (/item_rows/i.test(missing)) {
@@ -400,7 +411,7 @@ const handlePost = async (req: any, res: any, supabase: any) => {
   const atomicResult = await insertExceptionReportAtomic(supabase, payload, status);
   if (atomicResult) {
     if (atomicResult.error) {
-      res.status(500).json({ error: atomicResult.error.message });
+      res.status(500).json({ error: exceptionDatabaseErrorMessage(atomicResult.error) });
       return;
     }
     res.status(200).json({ row: atomicResult.data });
@@ -420,7 +431,7 @@ const handlePost = async (req: any, res: any, supabase: any) => {
     if (!isUniqueConstraintError(result.error)) break;
     minimumSequence = parseExceptionReportSequence(reportNumber, payload.report_date) + 1;
   }
-  res.status(500).json({ error: lastError?.message ?? 'Failed to create exception report.' });
+  res.status(500).json({ error: exceptionDatabaseErrorMessage(lastError) });
 };
 
 const handleLeadPatch = async (
@@ -547,7 +558,7 @@ const handleLeadPatch = async (
 
   const result = await updateExceptionReport(supabase, id, updatePayload);
   if (result.error) {
-    res.status(500).json({ error: result.error.message });
+    res.status(500).json({ error: exceptionDatabaseErrorMessage(result.error) });
     return;
   }
   res.status(200).json({ row: result.data });

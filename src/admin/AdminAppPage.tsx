@@ -34,6 +34,7 @@ import BusyOverlay from './components/BusyOverlay';
 import AdminLoginPanel from './components/AdminLoginPanel';
 import ScheduleToolbar from './components/ScheduleToolbar';
 import { matchesScheduleDriverFilter, normalizeScheduleDriverFilterValue } from './scheduleDriverFilter';
+import { getScheduleEmployeeAccountEmail, resolveScheduleEmployeeDisplayName } from './scheduleDisplayName';
 import DailyListNewHireModal from './components/DailyListNewHireModal';
 import AdminUserAvatar from './components/AdminUserAvatar';
 import DevicesPage from './pages/DevicesPage';
@@ -2323,6 +2324,7 @@ export default function AdminAppPage() {
   const [scheduleLateByStaffDayKey, setScheduleLateByStaffDayKey] = useState<Record<string, LateMarkView>>({});
   const [scheduleDriverGroupByStaffId, setScheduleDriverGroupByStaffId] = useState<Record<string, ScheduleDriverGroupInfo>>({});
   const [scheduleAgencyNoteByStaffId, setScheduleAgencyNoteByStaffId] = useState<Record<string, string>>({});
+  const [scheduleRegisteredNameByEmail, setScheduleRegisteredNameByEmail] = useState<Record<string, string>>({});
   const [scheduleMistakeDraft, setScheduleMistakeDraft] = useState<ScheduleMistakeDraft>({
     open: false,
     staff_id: '',
@@ -4256,25 +4258,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     };
   };
 
-  const changeScheduleWeek = (nextOffset: number, source: string) => {
-    const previousWeek = getWeekAuditPayload(scheduleWeekOffset);
+  const changeScheduleWeek = (nextOffset: number, _source: string) => {
     const nextWeek = getWeekAuditPayload(nextOffset);
     setScheduleWorkDayFilter(null);
     setScheduleWeekOffset(nextOffset);
     setScheduleWeekInput(nextWeek.week_start);
-    void writeAudit({
-      action: 'schedule_week_switch',
-      target: SCHEDULE_TABLE,
-      payload: {
-        source,
-        previous_week_offset: previousWeek.week_offset,
-        previous_week_start: previousWeek.week_start,
-        previous_week_end: previousWeek.week_end,
-        next_week_offset: nextWeek.week_offset,
-        next_week_start: nextWeek.week_start,
-        next_week_end: nextWeek.week_end
-      }
-    });
   };
 
   const openScheduleDailyList = (_source: string) => {
@@ -4301,24 +4289,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     await refreshSchedulePanel();
   };
 
-  const changeTimecardWeek = async (nextOffset: number, source: string) => {
-    const previousWeek = getWeekAuditPayload(timecardWeekOffset);
+  const changeTimecardWeek = async (nextOffset: number, _source: string) => {
     const nextWeek = getWeekAuditPayload(nextOffset);
     setTimecardWeekOffset(nextOffset);
     setTimecardWeekInput(nextWeek.week_start);
-    void writeAudit({
-      action: 'timecard_week_switch',
-      target: 'timecard',
-      payload: {
-        source,
-        previous_week_offset: previousWeek.week_offset,
-        previous_week_start: previousWeek.week_start,
-        previous_week_end: previousWeek.week_end,
-        next_week_offset: nextWeek.week_offset,
-        next_week_start: nextWeek.week_start,
-        next_week_end: nextWeek.week_end
-      }
-    });
     await fetchTimecard({ reset: true, weekOffset: nextOffset, lockUi: false });
   };
 
@@ -15031,20 +15005,24 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     return next;
   }, [scheduleRecommendedAdjustedByDate, selectedSchedulePositionSet, deferredScheduleShift]);
+  const getScheduleEmployeeDisplayName = useCallback(
+    (employee: EmployeeRow) => resolveScheduleEmployeeDisplayName(employee, scheduleRegisteredNameByEmail),
+    [scheduleRegisteredNameByEmail]
+  );
   const employeeProfileByStaffId = useMemo(() => {
     const map = new Map<string, { name: string; agency: string; position: string; shiftTime: string }>();
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff) continue;
       map.set(staff, {
-        name: String(employee.name ?? '').trim(),
+        name: getScheduleEmployeeDisplayName(employee),
         agency: String(employee.agency ?? employee.Agency ?? '').trim(),
         position: String(employee.position ?? employee.Position ?? '').trim(),
         shiftTime: normalizeShiftTimeValue((employee as any).shift_time ?? (employee as any).ShiftTime ?? '')
       });
     }
     return map;
-  }, [employees]);
+  }, [employees, getScheduleEmployeeDisplayName]);
   const scheduleOnlyStaffIds = useMemo(() => {
     const next = new Set<string>();
     for (const employee of employees) {
@@ -15055,6 +15033,44 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     return next;
   }, [employees]);
+  useEffect(() => {
+    if (!supabase || page !== 'schedule') return;
+    const emails = Array.from(
+      new Set(
+        employees
+          .filter((employee) => isScheduleOnlyAgency(String(employee.agency ?? employee.Agency ?? '').trim()))
+          .map(getScheduleEmployeeAccountEmail)
+          .filter(Boolean)
+      )
+    );
+    if (emails.length === 0) return;
+    const missingEmails = emails.filter((email) => !scheduleRegisteredNameByEmail[email]);
+    if (missingEmails.length === 0) return;
+
+    let cancelled = false;
+    const loadRegisteredNames = async () => {
+      const res = await supabase
+        .from(USER_PROFILE_TABLE)
+        .select('user_email, display_name')
+        .in('user_email', missingEmails as any);
+      if (cancelled || res.error) return;
+
+      const next: Record<string, string> = {};
+      for (const row of ((res.data as any[]) ?? [])) {
+        const email = String(row?.user_email ?? '').trim().toLowerCase();
+        const displayName = String(row?.display_name ?? '').trim();
+        if (!email || !displayName) continue;
+        next[email] = displayName;
+      }
+      if (Object.keys(next).length === 0) return;
+      setScheduleRegisteredNameByEmail((current) => ({ ...current, ...next }));
+    };
+    void loadRegisteredNames();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [employees, page, scheduleRegisteredNameByEmail, supabase]);
   const tomorrowDailyList = useMemo(() => {
     const parsedTarget =
       /^\d{4}-\d{2}-\d{2}$/.test(dailyListDateInput)
@@ -15684,7 +15700,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       ? scheduleEmployeesBase
       : scheduleEmployeesBase.filter((employee) => {
           const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-          const name = String(employee.name ?? '').trim();
+          const name = getScheduleEmployeeDisplayName(employee);
           const position = String(employee.position ?? employee.Position ?? '').trim();
           return [staff, name, position].join(' ').toLowerCase().includes(search);
         });
@@ -15704,7 +15720,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!hasA && hasB) return 1;
       return staffA.localeCompare(staffB, 'en-US');
     });
-  }, [page, scheduleEmployeesBase, deferredScheduleSearch, pendingTerminationRequestsByStaffId, scheduleSortByUphDesc, scheduleUphByStaffId]);
+  }, [page, scheduleEmployeesBase, deferredScheduleSearch, pendingTerminationRequestsByStaffId, scheduleSortByUphDesc, scheduleUphByStaffId, getScheduleEmployeeDisplayName]);
   const scheduleEmployeesRendered = useMemo(
     () => scheduleEmployeesFiltered.slice(0, Math.max(0, scheduleRenderCount)),
     [scheduleEmployeesFiltered, scheduleRenderCount]
@@ -16630,7 +16646,7 @@ ${rowsToHtml(late)}
           .sort((a, b) => String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US'))
           .map((employee) => {
             const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-            const name = String(employee.name ?? '').trim();
+            const name = getScheduleEmployeeDisplayName(employee);
             const dayCells = Array.from({ length: 7 }, (_, dayIndex) => {
               const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
               if (!row) return '休息';
@@ -16747,7 +16763,7 @@ ${rowsToHtml(late)}
         if (shift !== 'early' && shift !== 'late') return null;
         return {
           staff_id: staff,
-          name: String(employee.name ?? '').trim(),
+          name: getScheduleEmployeeDisplayName(employee),
           agency: String(employee.agency ?? employee.Agency ?? '').trim(),
           label: String(employee.label ?? employee.Label ?? '').trim(),
           shift
@@ -17941,7 +17957,7 @@ ${rowsToHtml(late)}
                       <tbody>
                         {scheduleEmployeesRendered.map((employee, renderedIndex) => {
                           const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-                          const name = String(employee.name ?? '').trim();
+                          const name = getScheduleEmployeeDisplayName(employee);
                           const agency = String(employee.agency ?? employee.Agency ?? '').trim();
                           const attendanceTrackingDisabled = scheduleOnlyStaffIds.has(staff);
                           const position = String(employee.position ?? employee.Position ?? '').trim();
@@ -18331,7 +18347,7 @@ ${rowsToHtml(late)}
                                   row &&
                                   !String(row.note ?? '').trim() &&
                                   isNewHirePlaceholderStaffId(staff) &&
-                                  isNewHirePlaceholderName(String(employee.name ?? '').trim()) &&
+                                  isNewHirePlaceholderName(name) &&
                                   isNewHireFirstWorkDate(staff, scheduleDays[dayIndex] as Date);
                                 const displayState: ScheduleDisplayState = isImplicitNew ? 'new' : state;
                                 const scheduleAuditKey = `${staff}__${getTemplateDateByDayIndex(dayIndex, scheduleWeekOffset)}`;

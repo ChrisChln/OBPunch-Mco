@@ -3341,7 +3341,7 @@ const fetchPunchBoardUph = async (
                       type="button"
                       onClick={() => void doUnlockPunchScreen()}
                       disabled={unlockBusy || unlockEmail.trim() === '' || unlockPassword === ''}
-                      className="mt-2 h-14 w-full rounded-[20px] bg-neon text-base font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-60"
+                      className="obp-primary-button mt-2 h-14 w-full rounded-[20px] border border-[#9eff00]/70 bg-[#9eff00] text-base font-semibold text-slate-950 shadow-[0_0_0_1px_rgba(158,255,0,0.18),0_18px_42px_rgba(158,255,0,0.28)] transition hover:-translate-y-0.5 hover:bg-[#b6ff33] hover:shadow-[0_24px_52px_rgba(158,255,0,0.34)] focus:outline-none focus:ring-2 focus:ring-[#9eff00]/45 focus:ring-offset-2 focus:ring-offset-[#06090a] disabled:translate-y-0 disabled:cursor-not-allowed disabled:border-white/14 disabled:bg-white/[0.09] disabled:text-slate-300 disabled:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
                     >
                       {unlockBusy ? 'Verifying...' : 'Unlock Punch Screen'}
                     </button>

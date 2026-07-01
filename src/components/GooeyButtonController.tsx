@@ -87,6 +87,7 @@ const shouldStyleTarget = (element: MagicTarget) => {
   if (isHeaderAvatarButton(element)) return false;
   const className = element.className;
   const classText = typeof className === 'string' ? className : '';
+  if (classText.includes('obp-primary-button')) return false;
   const isSmallChip = CHIP_CLASS_HINTS.some((hint) => classText.includes(hint));
   if (element.closest('table') && (isSmallChip || (classText.includes('w-full') && classText.includes('text-left')))) return false;
   if (element.closest('.absolute') && (classText.includes('w-full') || classText.includes('text-left'))) return false;
