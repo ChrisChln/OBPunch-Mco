@@ -1214,7 +1214,11 @@ export default function AgencyAppPage() {
     setDepartedEmployeesLoading(true);
     setDepartedEmployeesError(null);
     try {
-      const rows = await fetchAgencyDepartedEmployees(supabase, access?.managed_agencies ?? []);
+      const visibleAgencies = Array.from(
+        new Set((weekSchedule?.employees ?? []).map((employee) => normalizeAgencyValue(employee.agency)).filter(Boolean))
+      );
+      const scopedAgencies = Array.from(new Set([...(access?.managed_agencies ?? []), ...visibleAgencies].map(normalizeAgencyValue).filter(Boolean)));
+      const rows = await fetchAgencyDepartedEmployees(supabase, scopedAgencies);
       setDepartedEmployees(rows);
     } catch (nextError) {
       setDepartedEmployees([]);
@@ -1222,7 +1226,7 @@ export default function AgencyAppPage() {
     } finally {
       setDepartedEmployeesLoading(false);
     }
-  }, [access?.managed_agencies, canViewAgency, supabase]);
+  }, [access?.managed_agencies, canViewAgency, supabase, weekSchedule]);
 
   const openDepartedEmployees = useCallback(async () => {
     setDepartedEmployeesOpen(true);

@@ -3,8 +3,10 @@ import {
   buildEffectiveModuleMap,
   canManageAdminAccess,
   canReviewTerminationRequests,
+  filterRowsByManagedAgencyAccess,
   filterRowsByPositionAccess,
   getDefaultModuleAccess,
+  hasManagedAgencyAccess,
   hasPositionAccess,
   hasModuleAccess,
   normalizeAdminAccessContext,
@@ -164,6 +166,35 @@ describe('adminAccess', () => {
       rows[0],
       rows[2]
     ]);
+  });
+
+  test('filters rows by managed agency scope', () => {
+    const context = normalizeAdminAccessContext({
+      user_id: 'u8',
+      role: 'level3',
+      managed_agencies: ['Lyneer'],
+      modules: [{ module_key: 'employees', access_level: 'view' }]
+    });
+    const rows = [
+      { staff_id: 'US1', agency: ' lyneer ' },
+      { staff_id: 'US2', agency: 'Central' },
+      { staff_id: 'US3', agency: '' }
+    ];
+
+    expect(hasManagedAgencyAccess(context, 'LYNEER')).toBe(true);
+    expect(filterRowsByManagedAgencyAccess(context, rows, (row) => row.agency)).toEqual([rows[0]]);
+  });
+
+  test('treats empty managed agency scope as all agencies', () => {
+    const context = normalizeAdminAccessContext({
+      user_id: 'u9',
+      role: 'level3',
+      managed_agencies: [],
+      modules: [{ module_key: 'employees', access_level: 'view' }]
+    });
+
+    expect(hasManagedAgencyAccess(context, '')).toBe(true);
+    expect(filterRowsByManagedAgencyAccess(context, [{ agency: '' }, { agency: 'Prime' }], (row) => row.agency)).toHaveLength(2);
   });
 
   test('normalizes malformed position scopes to all access', () => {

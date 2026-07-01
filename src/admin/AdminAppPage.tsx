@@ -67,6 +67,7 @@ import ElectricBorder from '../components/ElectricBorder';
 import {
   canManageAdminAccess,
   canReviewTerminationRequests,
+  filterRowsByManagedAgencyAccess,
   filterRowsByPositionAccess,
   getModuleMapFromContext,
   hasPositionAccess,
@@ -7237,13 +7238,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               : 'staff_id, name, agency, position, active, terminated_at';
           return includeTerminationType ? `${base}, termination_type` : base;
         };
-        const run = async (mode: EmployeeColumnMode, includeTerminationType: boolean) =>
-          await supabase
-            .from(EMPLOYEE_TABLE)
-            .select(buildSelect(mode, includeTerminationType))
-            .not('terminated_at', 'is', null)
-            .order('terminated_at', { ascending: false })
-            .limit(1000);
+        const run = async (mode: EmployeeColumnMode, includeTerminationType: boolean) => {
+          const rows: EmployeeRow[] = [];
+          const pageSize = 1000;
+          for (let from = 0; ; from += pageSize) {
+            const to = from + pageSize - 1;
+            const result = await supabase
+              .from(EMPLOYEE_TABLE)
+              .select(buildSelect(mode, includeTerminationType))
+              .not('terminated_at', 'is', null)
+              .order('terminated_at', { ascending: false })
+              .range(from, to);
+            if (result.error) return { data: rows, error: result.error };
+            const pageRows = ((result.data as EmployeeRow[] | null) ?? []).filter((row) =>
+              String(row.terminated_at ?? '').trim()
+            );
+            rows.push(...pageRows);
+            if (pageRows.length < pageSize) return { data: rows, error: null };
+          }
+        };
         let mode = await resolveEmployeeColumnMode();
         let res = await run(mode, true);
         if (res.error) {
@@ -7260,7 +7273,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           setDepartedEmployeesError(res.error.message);
           return;
         }
-        setDepartedEmployees(((res.data as EmployeeRow[] | null) ?? []).filter((row) => String(row.terminated_at ?? '').trim()));
+        const positionScopedRows = filterRowsByPositionAccess(
+          adminAccessContext,
+          'employees',
+          res.data ?? [],
+          (row) => String(row.position ?? row.Position ?? '').trim()
+        );
+        const agencyScopedRows = filterRowsByManagedAgencyAccess(
+          adminAccessContext,
+          positionScopedRows,
+          (row) => String(row.agency ?? row.Agency ?? '').trim()
+        );
+        setDepartedEmployees(agencyScopedRows);
       } finally {
         setDepartedEmployeesLoading(false);
       }

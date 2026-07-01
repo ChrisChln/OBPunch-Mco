@@ -262,6 +262,26 @@ export const filterRowsByPositionAccess = <T>(
   required: Exclude<AdminModuleAccessLevel, 'hidden'> = 'view'
 ) => rows.filter((row) => hasPositionAccess(context, moduleKey, getPosition(row), required));
 
+const normalizeManagedAgencyKey = (value: unknown) => String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+export const hasManagedAgencyAccess = (
+  context: AdminAccessContext | null | undefined,
+  agency: unknown
+) => {
+  if (!context || !context.is_active) return false;
+  const managedAgencies = (context.managed_agencies ?? []).map(normalizeManagedAgencyKey).filter(Boolean);
+  if (managedAgencies.length === 0) return true;
+  const normalizedAgency = normalizeManagedAgencyKey(agency);
+  if (!normalizedAgency) return false;
+  return managedAgencies.includes(normalizedAgency);
+};
+
+export const filterRowsByManagedAgencyAccess = <T>(
+  context: AdminAccessContext | null | undefined,
+  rows: T[],
+  getAgency: (row: T) => unknown
+) => rows.filter((row) => hasManagedAgencyAccess(context, getAgency(row)));
+
 export const normalizeAdminAccessContext = (
   payload: unknown,
   fallbackEmail?: string | null
@@ -319,4 +339,3 @@ export const canUnlockPunchScreen = (context: AdminAccessContext | null | undefi
   if (!context) return false;
   return context.role === 'level1' || context.role === 'level2';
 };
-

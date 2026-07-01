@@ -16,6 +16,7 @@ const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as s
 const PUNCHES_TABLE = (import.meta.env.VITE_PUNCHES_TABLE as string | undefined) ?? 'ob_punches';
 const AGENCY_PAYRATES_TABLE = (import.meta.env.VITE_AGENCY_PAYRATES_TABLE as string | undefined) ?? 'ob_agency_payrates';
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
+const DEPARTED_EMPLOYEE_PAGE_SIZE = 1000;
 
 const expectRpcSuccess = async <T>(promise: PromiseLike<{ data: T | null; error: { message: string } | null }>) => {
   const result = await promise;
@@ -32,6 +33,14 @@ type AgencyPayrateRow = {
 };
 
 const payrateKey = (staffId: string, workDate: string) => `${staffId}__${workDate}`;
+
+const readFirstText = (row: Record<string, unknown>, keys: string[]) => {
+  for (const key of keys) {
+    const value = String(row[key] ?? '').trim();
+    if (value) return value;
+  }
+  return '';
+};
 
 const normalizeEmployeeNameLookupInput = (value: unknown) => String(value ?? '').trim().replace(/\s+/g, ' ');
 
@@ -222,41 +231,52 @@ export const fetchAgencyDepartedEmployees = async (
   supabase: SupabaseClient,
   managedAgencies: string[]
 ): Promise<AgencyDepartedEmployeeRow[]> => {
-  let result: { data: Record<string, unknown>[] | null; error: { message?: string | null } | null } = await supabase
-    .from(EMPLOYEE_TABLE)
-    .select('staff_id, name, agency, position, shift, shift_time, terminated_at')
-    .not('terminated_at', 'is', null)
-    .order('terminated_at', { ascending: false })
-    .limit(1000) as { data: Record<string, unknown>[] | null; error: { message?: string | null } | null };
+  const fetchPages = async (selectColumns: string) => {
+    const rows: Record<string, unknown>[] = [];
+    for (let from = 0; ; from += DEPARTED_EMPLOYEE_PAGE_SIZE) {
+      const to = from + DEPARTED_EMPLOYEE_PAGE_SIZE - 1;
+      const result = await supabase
+        .from(EMPLOYEE_TABLE)
+        .select(selectColumns)
+        .not('terminated_at', 'is', null)
+        .order('terminated_at', { ascending: false })
+        .range(from, to) as { data: Record<string, unknown>[] | null; error: { message?: string | null } | null };
+      if (result.error) return { rows, error: result.error };
+
+      const pageRows = Array.isArray(result.data) ? result.data : [];
+      rows.push(...pageRows);
+      if (pageRows.length < DEPARTED_EMPLOYEE_PAGE_SIZE) return { rows, error: null };
+    }
+  };
+
+  let result = await fetchPages('staff_id, name, agency, "Agency", position, "Position", shift, shift_time, terminated_at');
 
   if (result.error) {
-    result = await supabase
-      .from(EMPLOYEE_TABLE)
-      .select('staff_id, name, "Agency", "Position", shift, shift_time, terminated_at')
-      .not('terminated_at', 'is', null)
-      .order('terminated_at', { ascending: false })
-      .limit(1000) as { data: Record<string, unknown>[] | null; error: { message?: string | null } | null };
+    result = await fetchPages('staff_id, name, agency, position, shift, shift_time, terminated_at');
+  }
+
+  if (result.error) {
+    result = await fetchPages('staff_id, name, "Agency", "Position", shift, shift_time, terminated_at');
   }
 
   if (result.error) {
     throw new Error(String(result.error.message ?? 'Failed to load departed employees.'));
   }
 
-  const rows = Array.isArray(result.data)
-    ? result.data.map((row) => ({
-        staff_id: String((row as { staff_id?: string | null }).staff_id ?? '').trim(),
-        name: String((row as { name?: string | null }).name ?? '').trim(),
-        agency: String((row as { agency?: string | null; Agency?: string | null }).agency ?? (row as { Agency?: string | null }).Agency ?? '').trim(),
-        position: String((row as { position?: string | null; Position?: string | null }).position ?? (row as { Position?: string | null }).Position ?? '').trim(),
-        shift: (String((row as { shift?: string | null }).shift ?? '').trim() === 'late'
+  const rows = result.rows
+    .map((row) => ({
+        staff_id: readFirstText(row, ['staff_id']),
+        name: readFirstText(row, ['name']),
+        agency: readFirstText(row, ['agency', 'Agency']),
+        position: readFirstText(row, ['position', 'Position']),
+        shift: (readFirstText(row, ['shift']) === 'late'
           ? 'late'
-          : String((row as { shift?: string | null }).shift ?? '').trim() === 'early'
+          : readFirstText(row, ['shift']) === 'early'
             ? 'early'
             : '') as 'early' | 'late' | '',
-        start_time: String((row as { shift_time?: string | null }).shift_time ?? '').trim(),
-        terminated_at: String((row as { terminated_at?: string | null }).terminated_at ?? '').trim()
-      }))
-    : [];
+        start_time: readFirstText(row, ['shift_time']),
+        terminated_at: readFirstText(row, ['terminated_at'])
+      }));
 
   return filterAgencyDepartedEmployees(rows, managedAgencies);
 };

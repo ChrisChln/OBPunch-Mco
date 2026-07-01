@@ -18,7 +18,7 @@ describe('filterAgencyDepartedEmployees', () => {
     const result = filterAgencyDepartedEmployees(
       [
         makeRow({ staff_id: 'US1', agency: 'Central' }),
-        makeRow({ staff_id: 'US2', agency: 'Lyneer' })
+        makeRow({ staff_id: 'US2', agency: ' lyneer ' })
       ],
       ['Lyneer']
     );
