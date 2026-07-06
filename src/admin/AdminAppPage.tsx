@@ -16976,7 +16976,7 @@ ${rowsToHtml(late)}
             />
           </main>
         ) : (
-          <div className="grid h-screen max-h-screen overflow-hidden grid-rows-[64px_minmax(0,1fr)]">
+          <div className="grid h-screen max-h-screen min-w-0 max-w-full overflow-hidden grid-rows-[64px_minmax(0,1fr)]">
             <AdminHeader
               t={t}
               isLocked={isLocked}
@@ -16997,7 +16997,7 @@ ${rowsToHtml(late)}
               onLogout={doLogout}
             />
 
-            <div className="flex min-h-0 flex-1">
+            <div className="flex min-h-0 min-w-0 max-w-full flex-1 overflow-hidden">
               <AdminNav
                 page={page}
                 isLocked={isLocked}
@@ -17012,7 +17012,7 @@ ${rowsToHtml(late)}
 
               <main
                 className={[
-                  'flex-1 min-w-0 min-h-0',
+                  'flex-1 min-w-0 min-h-0 max-w-full',
                   themeMode === 'light'
                     ? 'bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.12),transparent_28%),linear-gradient(180deg,rgba(245,247,255,0.95),rgba(242,245,255,0.98))] text-slate-900'
                     : 'bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.14),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(139,92,246,0.12),transparent_26%),linear-gradient(180deg,rgba(7,10,16,0.98),rgba(10,14,22,0.98))] text-slate-100',
@@ -17020,7 +17020,7 @@ ${rowsToHtml(late)}
                   'px-0 py-0 [scrollbar-gutter:stable]'
                 ].join(' ')}
               >
-                <div className="flex h-full min-h-0 w-full flex-col gap-6">
+                <div className="flex h-full min-h-0 min-w-0 w-full max-w-full flex-col gap-6">
                   {status.message ? (
                     <div className="pointer-events-none fixed left-4 top-20 z-[80] w-[min(calc(100vw-2rem),34rem)] md:left-24">
                       <div
