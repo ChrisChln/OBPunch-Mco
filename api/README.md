@@ -28,6 +28,9 @@
     - `时间戳记` / `Timestamp`
     - `sheet_id` / `sheet_name` / `row_number`（推荐，用于生成稳定唯一键）
 - `GET /api/attendance-auto-checkout`：定时任务端点。按纽约时间 05:00 运营日截止点，为刚结束运营日内最后一条仍是 `IN` 的员工补写 `OUT`。支持 `dry_run=true`、`cutoff_hour`、`lookback_hours`。
+- `GET /api/dashboard-attendance-snapshot`：Dashboard 出勤快照端点。支持 `mode=expected|actual`、`work_date=YYYY-MM-DD`、`dry_run=true`。
+- `GET /api/dashboard-attendance-snapshot-expected`：定时任务端点。默认在纽约 05:00 运营日截止前写入当前运营日的各岗位应到快照。
+- Dashboard 历史实到、在岗、休息出勤和工时继续由打卡流水推导，不通过定时任务固化。
 
 返回：
 - 200: { status: 'ok' }
@@ -37,8 +40,6 @@
 在 Vercel/Netlify 等平台上部署时将环境变量注入到运行环境。不要在前端暴露 `SUPABASE_SERVICE_ROLE_KEY`。
 前台打卡依赖 `/api/punch`。本地只运行 `npm run dev` 时 Vite 不会直接提供 serverless API；需要通过 Vercel dev/API 服务或部署环境测试完整打卡写入。
 Google Sheet 直连建议用 Apps Script 调用 `/api/leave-sync`，示例脚本见 `scripts/google-leave-sync.gs`。
-
-
 
 
 

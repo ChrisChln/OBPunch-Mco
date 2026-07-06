@@ -366,27 +366,11 @@ const syncAgencyNewHirePayrate = async (
   if (scopedStaffIds.length === 0 || !scopedWorkDate) return;
 
   const payrate = normalizeAgencyPayrateInput(payrateInput);
-  if (!payrate) {
-    const result = await supabase
-      .from(AGENCY_PAYRATES_TABLE)
-      .delete()
-      .in('staff_id', scopedStaffIds)
-      .eq('work_date', scopedWorkDate);
-    if (result.error) {
-      throw new Error(String(result.error.message ?? 'Failed to clear agency payrate.'));
-    }
-    return;
-  }
-
-  const result = await supabase.from(AGENCY_PAYRATES_TABLE).upsert(
-    scopedStaffIds.map((staffId) => ({
-      staff_id: staffId,
-      work_date: scopedWorkDate,
-      payrate,
-      updated_at: new Date().toISOString()
-    })),
-    { onConflict: 'staff_id,work_date' }
-  );
+  const result = await supabase.rpc('save_agency_payrates', {
+    p_staff_ids: scopedStaffIds,
+    p_work_date: scopedWorkDate,
+    p_payrate: payrate || null
+  });
   if (result.error) {
     throw new Error(String(result.error.message ?? 'Failed to save agency payrate.'));
   }

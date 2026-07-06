@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ElectricBorder from '../../components/ElectricBorder';
-import GlowLabelChip, { getGlowToneForPosition, getGlowToneForShift } from '../../components/GlowLabelChip';
+import GlowLabelChip, { getGlowToneForShift } from '../../components/GlowLabelChip';
+import type { LabelToneKey } from '../../lib/labelTone';
 import AdminUserAvatar from '../components/AdminUserAvatar';
 import type { AdminUserIdentityView } from '../adminIdentity';
 import { getTimecardCellHoursText, getTimecardTotalHoursText } from '../timecardDisplay';
@@ -20,6 +21,7 @@ type TimecardTableSectionProps = {
   addDays: (date: Date, days: number) => Date;
   toDateOnly: (date: Date) => string;
   formatHours: (value: number) => string;
+  getSchedulePositionTone: (position: string) => LabelToneKey;
   getSchedulePositionBadgeClass: (position: string) => string;
   timecardDayTotalHours: number[];
   timecardDayAttendanceCount: number[];
@@ -60,6 +62,7 @@ export default function TimecardTableSection({
   addDays,
   toDateOnly,
   formatHours,
+  getSchedulePositionTone,
   getSchedulePositionBadgeClass,
   timecardDayTotalHours,
   timecardDayAttendanceCount,
@@ -213,7 +216,7 @@ export default function TimecardTableSection({
             {row.position || '-'}
           </span>
         ) : (
-          <GlowLabelChip tone={getGlowToneForPosition(row.position)} className="min-w-[54px] uppercase tracking-[0.12em]">
+          <GlowLabelChip tone={getSchedulePositionTone(row.position)} className="min-w-[54px] uppercase tracking-[0.12em]">
             {row.position || '-'}
           </GlowLabelChip>
         )}

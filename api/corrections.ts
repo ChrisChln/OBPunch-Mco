@@ -57,6 +57,12 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
+    const employee = ((employeeRes.data ?? []) as Array<{ staff_id?: string | null }>)[0] ?? null;
+    if (!employee?.staff_id) {
+      res.status(404).json({ error: `Employee not registered: ${staffId}` });
+      return;
+    }
+
     const { error } = await supabase.from('ob_punches').insert([
       {
         staff_id: staffId,
@@ -79,7 +85,6 @@ export default async function handler(req: any, res: any) {
     res.status(500).json({ error: err?.message ?? String(err) });
   }
 }
-
 
 
 

@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
@@ -34,7 +34,8 @@ import BusyOverlay from './components/BusyOverlay';
 import AdminLoginPanel from './components/AdminLoginPanel';
 import ScheduleToolbar from './components/ScheduleToolbar';
 import { matchesScheduleDriverFilter, normalizeScheduleDriverFilterValue } from './scheduleDriverFilter';
-import { getScheduleEmployeeAccountEmail, resolveScheduleEmployeeDisplayName } from './scheduleDisplayName';
+import { getScheduleEmployeeProfileEmail, resolveScheduleEmployeeDisplayName } from './scheduleDisplayName';
+import { buildHiddenJdlStaffIdsForAccounts } from './jdlAdminScheduleStaff';
 import DailyListNewHireModal from './components/DailyListNewHireModal';
 import AdminUserAvatar from './components/AdminUserAvatar';
 import DevicesPage from './pages/DevicesPage';
@@ -119,6 +120,7 @@ import {
 import { useScheduleRealtime } from './useScheduleRealtime';
 import { shouldEnableEmployeeRealtime, useEmployeeRealtime } from './useEmployeeRealtime';
 import { sortEmployeesByPositionOrder } from './employeePositionSort';
+import { sortScheduleEmployees } from './scheduleEmployeeSort';
 import {
   activatePlannedScheduleNote,
   buildDailyPlannedActivationUpserts,
@@ -477,13 +479,6 @@ const normalizeWorkAccountKey = (value: string) => {
   const allDigits = raw.match(/\d{5,}/g);
   if (allDigits && allDigits.length > 0) return allDigits[allDigits.length - 1];
   return raw.replace(/\s+/g, '');
-};
-
-const buildJdlStaffIdCandidatesForAccount = (email: string, userId: string) => {
-  const userToken = String(userId ?? '').replace(/-/g, '').slice(0, 8).toUpperCase();
-  const emailPrefix = String(email ?? '').split('@')[0] ?? '';
-  const base = emailPrefix.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || `USER${userToken}`;
-  return [base, `${base}${userToken}`].filter(Boolean);
 };
 
 const parseUph = (value: unknown) => {
@@ -1646,24 +1641,17 @@ export default function AdminAppPage() {
     () => canManageAdminAccess(adminAccessContext),
     [adminAccessContext]
   );
-  const inactiveJdlStaffIds = useMemo(() => {
-    const next = new Set<string>();
-    for (const account of adminAccessAccounts) {
-      if (account.is_active) continue;
-      for (const staff of buildJdlStaffIdCandidatesForAccount(account.user_email, account.user_id)) {
-        const normalized = normalizeStaffId(staff);
-        if (normalized) next.add(normalized);
-      }
-    }
-    return next;
-  }, [adminAccessAccounts]);
+  const hiddenJdlStaffIds = useMemo(
+    () => buildHiddenJdlStaffIdsForAccounts(adminAccessAccounts, normalizeStaffId),
+    [adminAccessAccounts]
+  );
   const isInactiveJdlEmployee = useCallback(
     (employee: EmployeeRow | null | undefined) => {
       const staff = normalizeStaffId(String(employee?.staff_id ?? '').trim());
       const agency = String(employee?.agency ?? employee?.Agency ?? '').trim();
-      return Boolean(staff && isScheduleOnlyAgency(agency) && inactiveJdlStaffIds.has(staff));
+      return Boolean(staff && isScheduleOnlyAgency(agency) && hiddenJdlStaffIds.has(staff));
     },
-    [inactiveJdlStaffIds]
+    [hiddenJdlStaffIds]
   );
   const pendingTerminationRequestsByStaffId = useMemo(() => {
     const map = new Map<string, TerminationRequestRecord>();
@@ -2281,11 +2269,15 @@ export default function AdminAppPage() {
   const [timecardPunchPendingAddRows, setTimecardPunchPendingAddRows] = useState<PunchRow[]>([]);
   const [timecardPunchPendingDeleteIds, setTimecardPunchPendingDeleteIds] = useState<string[]>([]);
   const [timecardPunchAddOpen, setTimecardPunchAddOpen] = useState(false);
+  const [timecardPunchAddMenuOpen, setTimecardPunchAddMenuOpen] = useState(false);
   const [timecardPunchEdits, setTimecardPunchEdits] = useState<Record<string, { action: 'IN' | 'OUT'; atLocal: string }>>({});
   const [timecardPunchDraggingId, setTimecardPunchDraggingId] = useState<string | null>(null);
   const [timecardPunchDragOverId, setTimecardPunchDragOverId] = useState<string | null>(null);
   const [timecardPunchOrderIds, setTimecardPunchOrderIds] = useState<string[]>([]);
-  const [timecardPunchNew, setTimecardPunchNew] = useState<{ inAtLocal: string; outAtLocal: string }>({
+  const [timecardPunchAddMode, setTimecardPunchAddMode] = useState<'single' | 'pair'>('single');
+  const [timecardPunchNew, setTimecardPunchNew] = useState<{ action: 'IN' | 'OUT'; atLocal: string; inAtLocal: string; outAtLocal: string }>({
+    action: 'IN',
+    atLocal: '',
     inAtLocal: '',
     outAtLocal: ''
   });
@@ -2335,7 +2327,6 @@ export default function AdminAppPage() {
     saving: false
   });
   const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
-  const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
   const [schedulePrintDate, setSchedulePrintDate] = useState(() => toDateOnly(new Date()));
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [scheduleSearchInput, setScheduleSearchInput] = useState('');
@@ -4263,7 +4254,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const nextWeek = getWeekAuditPayload(nextOffset);
     setScheduleWorkDayFilter(null);
     setScheduleWeekOffset(nextOffset);
-    setScheduleWeekInput(nextWeek.week_start);
+    setSchedulePrintDate(nextWeek.week_start);
+  };
+
+  const selectScheduleDate = (dateOnly: string) => {
+    setSchedulePrintDate(dateOnly);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) return;
+    const parsed = new Date(`${dateOnly}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return;
+    const weekStart = startOfWeekMonday(parsed);
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const offset = Math.round((weekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
+    setScheduleWorkDayFilter(null);
+    setScheduleWeekOffset(offset);
   };
 
   const openScheduleDailyList = (_source: string) => {
@@ -9042,7 +9045,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const normalized = normalizePositionKey(payload.position);
     setEmployeeEditPosition((normalized ?? '') as string);
     setEmployeeEditEmploymentType(normalizeEmploymentTypeValue(payload.employmentType));
-    setEmployeeEditShift(payload.shift);
+    setEmployeeEditShift(normalizeShiftValue(String(payload.shift ?? '').trim()));
     setEmployeeEditShiftTime(normalizeShiftTimeValue(payload.shiftTime));
     setEmployeeEditLabel(payload.label);
     setEmployeeEditWorkAccount(payload.workAccount);
@@ -12198,13 +12201,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   };
 
-  const fetchPunchRowsForTimecard = async (staffId: string, dayIndex: number | null) => {
+  const fetchPunchRowsForTimecard = async (staffId: string, dayIndex: number | null, weekOffsetOverride = timecardWeekOffset) => {
     if (!supabase) {
       return { rows: [] as PunchRow[], error: '缺少 Supabase 配置。' };
     }
 
     const baseWeekStart = startOfWeekMonday(serverTime);
-    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+    const weekStart = addDays(baseWeekStart, weekOffsetOverride * 7);
 
     const dayRange =
       dayIndex === null ? getDayRange(weekStart, 0, 7) : getDayRange(weekStart, dayIndex);
@@ -12240,7 +12243,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return { rows, error: null as string | null };
   };
 
-  const openTimecardPunchModal = async (staffId: string, dayIndex: number | null) => {
+  const openTimecardPunchModal = async (staffId: string, dayIndex: number | null, weekOffsetOverride = timecardWeekOffset) => {
     const staff = staffId.trim();
     if (!staff) return;
     const staffKey = normalizeStaffId(staff);
@@ -12264,15 +12267,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setTimecardPunchPendingAddRows([]);
     setTimecardPunchPendingDeleteIds([]);
     setTimecardPunchAddOpen(false);
+    setTimecardPunchAddMenuOpen(false);
     setTimecardPunchEdits({});
     setTimecardPunchDraggingId(null);
     setTimecardPunchDragOverId(null);
     setTimecardPunchOrderIds([]);
+    setTimecardPunchAddMode('single');
     const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
-    setTimecardPunchNew({ inAtLocal: nowLocal, outAtLocal: nowLocal });
+    setTimecardPunchNew({ action: 'IN', atLocal: nowLocal, inAtLocal: nowLocal, outAtLocal: nowLocal });
 
     const requestId = ++timecardPunchFetchSeqRef.current;
-    const res = await fetchPunchRowsForTimecard(staff, dayIndex);
+    const res = await fetchPunchRowsForTimecard(staff, dayIndex, weekOffsetOverride);
     if (requestId !== timecardPunchFetchSeqRef.current) return;
     if (res.error) {
       setTimecardPunchError(res.error);
@@ -12319,7 +12324,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     setTimecardWeekOffset(weekOffset);
     setTimecardWeekInput(dateOnly);
-    await fetchTimecard({
+    void fetchTimecard({
       reset: true,
       weekOffset,
       search: staff,
@@ -12329,7 +12334,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       lockUi: false,
       deferLateSync: false
     });
-    await openTimecardPunchModal(staff, dayIndex);
+    await openTimecardPunchModal(staff, dayIndex, weekOffset);
   };
 
   const closeTimecardPunchModal = () => {
@@ -12342,11 +12347,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setTimecardPunchPendingAddRows([]);
     setTimecardPunchPendingDeleteIds([]);
     setTimecardPunchAddOpen(false);
+    setTimecardPunchAddMenuOpen(false);
     setTimecardPunchEdits({});
     setTimecardPunchDraggingId(null);
     setTimecardPunchDragOverId(null);
     setTimecardPunchOrderIds([]);
-    setTimecardPunchNew({ inAtLocal: '', outAtLocal: '' });
+    setTimecardPunchAddMode('single');
+    setTimecardPunchNew({ action: 'IN', atLocal: '', inAtLocal: '', outAtLocal: '' });
   };
 
   const notifyTimecardPunchSaved = (staffId: string, workDate: string) => {
@@ -12362,6 +12369,129 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         }
       })
     );
+  };
+
+  const timecardPunchInputClass = [
+    'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+    themeMode === 'light'
+      ? 'border border-slate-300 bg-white text-slate-900'
+      : 'border border-white/10 bg-black/30 text-white'
+  ].join(' ');
+
+  const timecardPunchActionSelectClass = (action: 'IN' | 'OUT') =>
+    [
+      'mt-2 h-11 w-full rounded-2xl border px-4 font-display text-base tracking-[0.08em] outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+      themeMode === 'light'
+        ? action === 'IN'
+          ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+          : 'border-rose-300 bg-rose-50 text-rose-700'
+        : action === 'IN'
+          ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200'
+          : 'border-rose-400/40 bg-rose-500/10 text-rose-200'
+    ].join(' ');
+
+  const getTimecardPunchActionSelectStyle = (action: 'IN' | 'OUT'): CSSProperties & { WebkitTextFillColor?: string } => {
+    const tone = action === 'IN'
+      ? { text: '#34d399', border: 'rgba(52, 211, 153, 0.45)', bg: 'rgba(16, 185, 129, 0.10)' }
+      : { text: '#fb7185', border: 'rgba(251, 113, 133, 0.45)', bg: 'rgba(244, 63, 94, 0.10)' };
+
+    return {
+      color: tone.text,
+      WebkitTextFillColor: tone.text,
+      borderColor: tone.border,
+      backgroundColor: tone.bg
+    };
+  };
+
+  const renderTimecardPunchAddPanel = () => (
+    <div
+      className={[
+        'rounded-2xl px-4 py-4',
+        themeMode === 'light' ? 'border border-neon/50 bg-emerald-50' : 'border border-neon/40 bg-black/30 shadow-glow'
+      ].join(' ')}
+    >
+      {timecardPunchAddMode === 'single' ? (
+        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_7rem] lg:items-end">
+          <div>
+            <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Action</div>
+            <select
+            value={timecardPunchNew.action}
+            disabled={isLocked}
+            onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, action: e.target.value === 'OUT' ? 'OUT' : 'IN' }))}
+            className={timecardPunchActionSelectClass(timecardPunchNew.action)}
+            style={getTimecardPunchActionSelectStyle(timecardPunchNew.action)}
+          >
+              <option value="IN" className="bg-slate-950 text-emerald-300">IN</option>
+              <option value="OUT" className="bg-slate-950 text-rose-300">OUT</option>
+            </select>
+          </div>
+          <div>
+            <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Time</div>
+            <input
+              value={timecardPunchNew.atLocal}
+              disabled={isLocked}
+              onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, atLocal: e.target.value }))}
+              type="datetime-local"
+              className={timecardPunchInputClass}
+            />
+          </div>
+          <button
+            type="button"
+            disabled={isLocked}
+            onClick={() => void addSingleTimecardPunchRow()}
+            className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t('添加', 'Add')}
+          </button>
+        </div>
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_7rem] lg:items-end">
+          <div>
+            <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>IN Time</div>
+            <input
+              value={timecardPunchNew.inAtLocal}
+              disabled={isLocked}
+              onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, inAtLocal: e.target.value }))}
+              type="datetime-local"
+              className={timecardPunchInputClass}
+            />
+          </div>
+          <div>
+            <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>OUT Time</div>
+            <input
+              value={timecardPunchNew.outAtLocal}
+              disabled={isLocked}
+              onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, outAtLocal: e.target.value }))}
+              type="datetime-local"
+              className={timecardPunchInputClass}
+            />
+          </div>
+          <button
+            type="button"
+            disabled={isLocked}
+            onClick={() => void addTimecardPunchRow()}
+            className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t('添加', 'Add')}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  const openTimecardPunchAddForm = (mode: 'single' | 'pair') => {
+    setTimecardPunchAddMode(mode);
+    setTimecardPunchAddMenuOpen(false);
+    setTimecardPunchAddOpen(true);
+  };
+
+  const toggleTimecardPunchAddMenu = () => {
+    if (timecardPunchAddOpen) {
+      setTimecardPunchAddOpen(false);
+      setTimecardPunchAddMenuOpen(false);
+      return;
+    }
+    setTimecardPunchAddMenuOpen((prev) => !prev);
   };
 
   const renderTimecardPunchModal = () => {
@@ -12408,19 +12538,31 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             </div>
             <div className="flex items-center gap-2">
               {!timecardPunchReadOnly && (
-                <button
-                  type="button"
-                  disabled={isLocked}
-                  onClick={() => setTimecardPunchAddOpen((prev) => !prev)}
-                  className={[
-                    'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-                    themeMode === 'light'
-                      ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                  ].join(' ')}
-                >
-                  {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
-                </button>
+                <div className="relative">
+                  <button
+                    type="button"
+                    disabled={isLocked}
+                    onClick={toggleTimecardPunchAddMenu}
+                    className={[
+                      'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                      themeMode === 'light'
+                        ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                    ].join(' ')}
+                  >
+                    {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
+                  </button>
+                  {timecardPunchAddMenuOpen ? (
+                    <div className={['absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-2xl border p-1 shadow-2xl', themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950'].join(' ')}>
+                      <button type="button" onClick={() => openTimecardPunchAddForm('single')} className={['block h-10 w-full rounded-xl px-3 text-left text-sm font-semibold', themeMode === 'light' ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-200 hover:bg-white/10'].join(' ')}>
+                        {t('单条', 'Single')}
+                      </button>
+                      <button type="button" onClick={() => openTimecardPunchAddForm('pair')} className={['block h-10 w-full rounded-xl px-3 text-left text-sm font-semibold', themeMode === 'light' ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-200 hover:bg-white/10'].join(' ')}>
+                        {t('一组', 'Pair')}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               )}
               {!timecardPunchReadOnly && (
                 <button
@@ -12449,56 +12591,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           </div>
 
           <div className="flex-1 overflow-y-auto px-6 py-5">
-            {!timecardPunchReadOnly && timecardPunchAddOpen && (
-              <div
-                className={[
-                  'rounded-2xl px-4 py-4',
-                  themeMode === 'light' ? 'border border-neon/50 bg-emerald-50' : 'border border-neon/40 bg-black/30 shadow-glow'
-                ].join(' ')}
-              >
-                <div className="grid gap-3 md:grid-cols-[1fr_1fr_7rem] md:items-end">
-                  <div>
-                    <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>IN Time</div>
-                    <input
-                      value={timecardPunchNew.inAtLocal}
-                      disabled={isLocked}
-                      onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, inAtLocal: e.target.value }))}
-                      type="datetime-local"
-                      className={[
-                        'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                        themeMode === 'light'
-                          ? 'border border-slate-300 bg-white text-slate-900'
-                          : 'border border-white/10 bg-black/30 text-white'
-                      ].join(' ')}
-                    />
-                  </div>
-                  <div>
-                    <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>OUT Time</div>
-                    <input
-                      value={timecardPunchNew.outAtLocal}
-                      disabled={isLocked}
-                      onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, outAtLocal: e.target.value }))}
-                      type="datetime-local"
-                      className={[
-                        'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                        themeMode === 'light'
-                          ? 'border border-slate-300 bg-white text-slate-900'
-                          : 'border border-white/10 bg-black/30 text-white'
-                      ].join(' ')}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isLocked}
-                    onClick={() => void addTimecardPunchRow()}
-                    className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {t('添加', 'Add')}
-                  </button>
-                </div>
-                <p className={['mt-3 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{t('手动一次添加一组 IN / OUT 打卡记录。', 'Add one IN/OUT pair manually.')}</p>
-              </div>
-            )}
+            {!timecardPunchReadOnly && timecardPunchAddOpen && renderTimecardPunchAddPanel()}
 
             {timecardPunchError && <p className="text-sm text-ember">{t('操作失败：', 'Failed: ')}{timecardPunchError}</p>}
             {!timecardPunchError && timecardPunchRowsVisible.length === 0 && (
@@ -12615,11 +12708,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
                                 : themeMode === 'light'
                                   ? 'border border-slate-300 bg-white'
                                   : 'border border-white/10 bg-black/30',
-                              edit.action === 'IN' ? 'text-mint' : 'text-ember'
+                              edit.action === 'IN'
+                                ? themeMode === 'light'
+                                  ? 'text-emerald-700'
+                                  : 'text-emerald-300'
+                                : themeMode === 'light'
+                                  ? 'text-rose-700'
+                                  : 'text-rose-300'
                             ].join(' ')}
+                            style={getTimecardPunchActionSelectStyle(edit.action)}
                           >
-                            <option value="IN">IN</option>
-                            <option value="OUT">OUT</option>
+                            <option value="IN" className="bg-slate-950 text-emerald-300">IN</option>
+                            <option value="OUT" className="bg-slate-950 text-rose-300">OUT</option>
                           </select>
                         </div>
                         <div>
@@ -12672,6 +12772,59 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     );
   };
 
+  const getTimecardPunchAddDayRange = () => {
+    if (timecardPunchDayIndex === null || timecardPunchDayIndex < 0 || timecardPunchDayIndex > 6) return null;
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+    return getDayRange(weekStart, timecardPunchDayIndex);
+  };
+
+  const ensureTimecardPunchAddTimeInRange = (createdAt: string) => {
+    const dayRange = getTimecardPunchAddDayRange();
+    if (!dayRange) return { ok: false as const, error: '仅支持在单天视图新增打卡。' };
+    const ms = new Date(createdAt).getTime();
+    const startMs = dayRange.start.getTime();
+    const endMs = dayRange.end.getTime();
+    if (ms < startMs || ms >= endMs) {
+      const startText = formatTime(dayRange.start);
+      const endText = formatTime(dayRange.end);
+      return { ok: false as const, error: `时间必须在单天范围内（${startText} ~ ${endText}，允许跨夜）。` };
+    }
+    return { ok: true as const };
+  };
+
+  const addSingleTimecardPunchRow = async () => {
+    if (!timecardCanOperate) {
+      setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
+      return;
+    }
+    const staff = timecardPunchStaffId;
+    if (!staff) return;
+
+    const createdAt = parseLocalDateTimeInputValue(timecardPunchNew.atLocal);
+    if (!createdAt) {
+      setTimecardPunchError('时间格式不正确。');
+      return;
+    }
+    const rangeCheck = ensureTimecardPunchAddTimeInRange(createdAt);
+    if (!rangeCheck.ok) {
+      setTimecardPunchError(rangeCheck.error);
+      return;
+    }
+
+    const tempId = `tmp_add_${Date.now()}_${timecardPunchNew.action.toLowerCase()}_${Math.random().toString(36).slice(2, 8)}`;
+    const stagedRow: PunchRow = { id: tempId, staff_id: staff, action: timecardPunchNew.action, created_at: createdAt };
+    setTimecardPunchError(null);
+    setTimecardPunchPendingAddRows((prev) => [...prev, stagedRow]);
+    setTimecardPunchEdits((prev) => ({
+      ...prev,
+      [tempId]: { action: timecardPunchNew.action, atLocal: timecardPunchNew.atLocal }
+    }));
+    const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
+    setTimecardPunchNew((prev) => ({ ...prev, atLocal: nowLocal }));
+    setStatus({ tone: 'idle', message: t('已暂存新增，请点击保存全部提交。', 'Add staged. Click Save all to apply.') });
+  };
+
   const addTimecardPunchRow = async () => {
     if (!timecardCanOperate) {
       setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
@@ -12692,21 +12845,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setTimecardPunchError('OUT 时间必须晚于 IN 时间。');
       return;
     }
-    if (timecardPunchDayIndex === null || timecardPunchDayIndex < 0 || timecardPunchDayIndex > 6) {
-      setTimecardPunchError('仅支持在单天视图新增打卡。');
+    const inRangeCheck = ensureTimecardPunchAddTimeInRange(inCreatedAt);
+    if (!inRangeCheck.ok) {
+      setTimecardPunchError(inRangeCheck.error);
       return;
     }
-    const baseWeekStart = startOfWeekMonday(serverTime);
-    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
-    const dayRange = getDayRange(weekStart, timecardPunchDayIndex);
-    const inMs = new Date(inCreatedAt).getTime();
-    const outMs = new Date(outCreatedAt).getTime();
-    const startMs = dayRange.start.getTime();
-    const endMs = dayRange.end.getTime();
-    if (inMs < startMs || inMs >= endMs || outMs < startMs || outMs >= endMs) {
-      const startText = formatTime(dayRange.start);
-      const endText = formatTime(dayRange.end);
-      setTimecardPunchError(`时间必须在单天范围内（${startText} ~ ${endText}，允许跨夜）。`);
+    const outRangeCheck = ensureTimecardPunchAddTimeInRange(outCreatedAt);
+    if (!outRangeCheck.ok) {
+      setTimecardPunchError(outRangeCheck.error);
       return;
     }
     const inTempId = `tmp_add_${Date.now()}_in_${Math.random().toString(36).slice(2, 8)}`;
@@ -12723,7 +12869,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       [outTempId]: { action: 'OUT', atLocal: timecardPunchNew.outAtLocal }
     }));
     const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
-    setTimecardPunchNew({ inAtLocal: nowLocal, outAtLocal: nowLocal });
+    setTimecardPunchNew({ action: 'IN', atLocal: nowLocal, inAtLocal: nowLocal, outAtLocal: nowLocal });
     setStatus({ tone: 'idle', message: t('已暂存新增，请点击保存全部提交。', 'Add staged. Click Save all to apply.') });
   };
 
@@ -14086,16 +14232,35 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   }, [page, employeesAllowedByPositionScope, employeeFilterNeedles, employeeShiftByStaffId, getDepartmentForPosition, isInactiveJdlEmployee]);
 
+  const compareEmployeeJdlPriority = useCallback((a: EmployeeRow, b: EmployeeRow) => {
+    const agencyA = String(a.agency ?? a.Agency ?? '').trim().toLowerCase();
+    const agencyB = String(b.agency ?? b.Agency ?? '').trim().toLowerCase();
+    const isJdlA = agencyA === 'jdl';
+    const isJdlB = agencyB === 'jdl';
+    if (isJdlA === isJdlB) return 0;
+    return isJdlA ? -1 : 1;
+  }, []);
+
+  const employeesAfterJdlPrioritySort = useMemo(() => {
+    return employeesAfterFilter
+      .map((employee, index) => ({ employee, index }))
+      .sort((a, b) => compareEmployeeJdlPriority(a.employee, b.employee) || a.index - b.index)
+      .map((entry) => entry.employee);
+  }, [employeesAfterFilter, compareEmployeeJdlPriority]);
+
   // Step 3: Apply position sorting (optional, depends on filtered rows + sort flag)
   const employeesAfterPositionSort = useMemo(() => {
-    if (!employeeSortByPosition) return employeesAfterFilter;
-    return sortEmployeesByPositionOrder(employeesAfterFilter, activePositionNames, normalizeStaffId);
-  }, [employeesAfterFilter, employeeSortByPosition, activePositionNames, normalizeStaffId]);
+    if (!employeeSortByPosition) return employeesAfterJdlPrioritySort;
+    return sortEmployeesByPositionOrder(employeesAfterJdlPrioritySort, activePositionNames, normalizeStaffId, compareEmployeeJdlPriority);
+  }, [employeesAfterJdlPrioritySort, employeeSortByPosition, activePositionNames, normalizeStaffId, compareEmployeeJdlPriority]);
 
   // Step 4: Apply hire date sorting (optional, depends on position-sorted rows + sort flag)
   const employeesAfterHireDateSort = useMemo(() => {
     if (!employeeSortByHireDateDesc) return employeesAfterPositionSort;
     return [...employeesAfterPositionSort].sort((a, b) => {
+      const priorityCompare = compareEmployeeJdlPriority(a, b);
+      if (priorityCompare !== 0) return priorityCompare;
+
       const atA = Date.parse(String(a.created_at ?? ''));
       const atB = Date.parse(String(b.created_at ?? ''));
       const valA = Number.isFinite(atA) ? atA : -1;
@@ -14105,7 +14270,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
       return staffA.localeCompare(staffB, 'en-US');
     });
-  }, [employeesAfterPositionSort, employeeSortByHireDateDesc, normalizeStaffId]);
+  }, [employeesAfterPositionSort, employeeSortByHireDateDesc, normalizeStaffId, compareEmployeeJdlPriority]);
 
   // Step 5: Apply punch time sorting (optional, depends on hire-date sorted rows + sort flag)
   const employeesFiltered = useMemo(() => {
@@ -14120,6 +14285,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return Math.max(0, Math.floor((nowMs - dt.getTime()) / dayMs));
     };
     return [...employeesAfterHireDateSort].sort((a, b) => {
+      const priorityCompare = compareEmployeeJdlPriority(a, b);
+      if (priorityCompare !== 0) return priorityCompare;
+
       const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
       const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
       const daysA = daysAgoForStaff(staffA);
@@ -14129,7 +14297,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (valA !== valB) return valB - valA;
       return staffA.localeCompare(staffB, 'en-US');
     });
-  }, [employeesAfterHireDateSort, employeeSortByLastPunchDesc, employeeLastPunchAtByStaffId, employeeLastPunchSortNowMs]);
+  }, [employeesAfterHireDateSort, employeeSortByLastPunchDesc, employeeLastPunchAtByStaffId, employeeLastPunchSortNowMs, compareEmployeeJdlPriority]);
 
   const toggleEmployeeLastPunchSort = async () => {
     if (employeeSortByLastPunchDesc) {
@@ -15058,12 +15226,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return next;
   }, [employees]);
   useEffect(() => {
-    if (!supabase || page !== 'schedule') return;
+    if (!supabase || (page !== 'schedule' && page !== 'employees')) return;
     const emails = Array.from(
       new Set(
         employees
           .filter((employee) => isScheduleOnlyAgency(String(employee.agency ?? employee.Agency ?? '').trim()))
-          .map(getScheduleEmployeeAccountEmail)
+          .map(getScheduleEmployeeProfileEmail)
           .filter(Boolean)
       )
     );
@@ -15615,6 +15783,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     getPositionBadgeClass(position, schedulePositionToneByPosition);
   const getSchedulePositionBadgeClassLight = (position: string) =>
     getPositionBadgeClassLight(position, schedulePositionToneByPosition);
+  const getSchedulePositionTone = (position: string): LabelToneKey =>
+    getPositionToneFromMap(position, schedulePositionToneByPosition);
   const scheduleLabelDefaultToneByName = useMemo(() => {
     const positionCountByLabel: Record<string, Record<string, number>> = {};
     for (const employee of employees) {
@@ -15728,21 +15898,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           const position = String(employee.position ?? employee.Position ?? '').trim();
           return [staff, name, position].join(' ').toLowerCase().includes(search);
         });
-    return [...filtered].sort((a, b) => {
-      const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
-      const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
-      const pendingA = pendingTerminationRequestsByStaffId.has(staffA);
-      const pendingB = pendingTerminationRequestsByStaffId.has(staffB);
-      if (pendingA !== pendingB) return pendingA ? -1 : 1;
-      if (!scheduleSortByUphDesc) return staffA.localeCompare(staffB, 'en-US');
-      const rawA = Number(scheduleUphByStaffId[staffA]);
-      const rawB = Number(scheduleUphByStaffId[staffB]);
-      const hasA = Number.isFinite(rawA);
-      const hasB = Number.isFinite(rawB);
-      if (hasA && hasB && rawA !== rawB) return rawB - rawA;
-      if (hasA && !hasB) return -1;
-      if (!hasA && hasB) return 1;
-      return staffA.localeCompare(staffB, 'en-US');
+    return sortScheduleEmployees(filtered, {
+      normalizeStaffId,
+      pendingStaffIds: pendingTerminationRequestsByStaffId,
+      sortByUphDesc: scheduleSortByUphDesc,
+      uphByStaffId: scheduleUphByStaffId
     });
   }, [page, scheduleEmployeesBase, deferredScheduleSearch, pendingTerminationRequestsByStaffId, scheduleSortByUphDesc, scheduleUphByStaffId, getScheduleEmployeeDisplayName]);
   const scheduleEmployeesRendered = useMemo(
@@ -17319,6 +17479,7 @@ ${rowsToHtml(late)}
                 getHomeChipToneClass={getHomeChipToneClass}
                 getScheduleLabelTone={getScheduleLabelTone}
                 getScheduleTableLabelBadgeClass={getScheduleTableLabelBadgeClass}
+                getSchedulePositionTone={getSchedulePositionTone}
                 getHomePanelToneClass={getHomePanelToneClass}
                 getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                 getScheduleTablePositionBadgeClass={getScheduleTablePositionBadgeClass}
@@ -17514,7 +17675,7 @@ ${rowsToHtml(late)}
                   changeScheduleWeek={changeScheduleWeek}
                   openScheduleDailyList={openScheduleDailyList}
                   schedulePrintDate={schedulePrintDate}
-                  setSchedulePrintDate={setSchedulePrintDate}
+                  setSchedulePrintDate={selectScheduleDate}
                   scheduleEmployeesFilteredLength={scheduleEmployeesFiltered.length}
                   printScheduleSignInSheet={printScheduleSignInSheet}
                   exportScheduleTemplate={exportScheduleTemplate}
@@ -17522,25 +17683,6 @@ ${rowsToHtml(late)}
                 />
 
                 <div className="mt-5 grid gap-4 md:grid-cols-12 xl:grid-cols-[repeat(16,minmax(0,1fr))]">
-                  <div className="md:col-span-2">
-                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('周', 'Week')}</label>
-                    <input
-                      type="date"
-                      value={scheduleWeekInput}
-                      disabled={isLocked}
-                      onChange={(e) => setScheduleWeekInput(e.target.value)}
-                      onBlur={() => {
-                        if (!/^\d{4}-\d{2}-\d{2}$/.test(scheduleWeekInput)) return;
-                        const parsed = new Date(`${scheduleWeekInput}T00:00:00`);
-                        if (Number.isNaN(parsed.getTime())) return;
-                        const weekStart = startOfWeekMonday(parsed);
-                        const baseWeekStart = startOfWeekMonday(serverTime);
-                        const offset = Math.round((weekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
-                        changeScheduleWeek(offset, 'date_input');
-                      }}
-                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                  </div>
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('搜索', 'Search')}</label>
                     <input
@@ -17903,16 +18045,35 @@ ${rowsToHtml(late)}
                     className="mx-auto mt-4 min-h-[320px] max-h-[68vh] overflow-x-hidden overflow-y-auto rounded-2xl border border-white/10 bg-black/30 pr-3 pb-2"
                   >
                     <table className="mx-auto w-full table-fixed text-center text-xs leading-tight">
+                      <colgroup>
+                        <col className="w-[44px]" />
+                        <col className="w-[88px]" />
+                        <col className="w-[124px]" />
+                        <col className="w-[74px]" />
+                        <col className="w-[82px]" />
+                        <col className="w-[74px]" />
+                        <col className="w-[74px]" />
+                        <col className="w-[88px]" />
+                        <col className="w-[64px]" />
+                        <col className="w-[56px]" />
+                        <col className="w-[64px]" />
+                        <col className="w-[58px]" />
+                        <col className="w-[58px]" />
+                        {scheduleDays.map((day) => (
+                          <col key={`schedule-col-${toDateOnly(day)}`} className="w-[72px]" />
+                        ))}
+                        <col className="w-[52px]" />
+                      </colgroup>
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
-                          <th className="sticky top-0 z-20 w-[44px] bg-slate-950/95 pl-4 pr-1 py-2 text-left backdrop-blur">NO.</th>
+                          <th className="sticky top-0 z-20 bg-slate-950/95 px-1 py-2 text-center backdrop-blur">NO.</th>
                           <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('工号', 'ID')}</th>
                           <th className="sticky top-0 z-20 w-[124px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('姓名', 'Name')}</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">{t('工作天数', 'Work Days')}</th>
                           <th className="sticky top-0 z-20 w-[82px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('中介', 'Agency')}</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">Driver</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('岗位', 'Position')}</th>
-                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('标签', 'Label')}</th>
+                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('标签', 'Label')}</th>
                           <th className="sticky top-0 z-20 w-[64px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('班次', 'Shift')}</th>
                           <th className="sticky top-0 z-20 w-[56px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
                             <button
@@ -18063,8 +18224,8 @@ ${rowsToHtml(late)}
                           const effectiveWorkDays = workDays + restWorkedBonusDays - absentPenaltyDays;
                           const scheduleRowClass = hasPendingTermination
                             ? themeMode === 'light'
-                              ? 'border-b border-slate-300 bg-slate-200/85 text-slate-700 transition-colors hover:bg-slate-200 last:border-0'
-                              : 'border-b border-white/5 bg-slate-800/70 text-slate-200 transition-colors hover:bg-slate-800 last:border-0'
+                              ? 'border-b border-slate-300 bg-slate-200/85 text-slate-700 transition-colors hover:bg-slate-100 last:border-0'
+                              : 'border-b border-white/5 bg-slate-800/70 text-slate-200 transition-colors hover:bg-slate-700/80 last:border-0'
                             : 'border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-0';
                           const scheduleBodyTextClass = hasPendingTermination
                             ? themeMode === 'light'
@@ -18078,9 +18239,9 @@ ${rowsToHtml(late)}
 
                           return (
                             <tr className={scheduleRowClass} key={staff}>
-                              <td className="pl-4 pr-1 py-2 font-mono text-[10px] tabular-nums text-slate-400">{renderedIndex + 1}</td>
-                              <td className={['px-1 py-2 font-mono', scheduleBodyTextClass].join(' ')}>{staff}</td>
-                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
+                              <td className="px-1 py-2 text-center font-mono text-[10px] tabular-nums text-slate-400">{renderedIndex + 1}</td>
+                              <td className={['px-1 py-2 text-left font-mono', scheduleBodyTextClass].join(' ')}>{staff}</td>
+                              <td className={['px-1 py-2 text-left', scheduleBodyTextClass].join(' ')}>
                                 <div className="relative inline-flex max-w-full items-start">
                                   <span
                                     className="group relative inline-flex max-w-full items-start pr-2"
@@ -18116,7 +18277,7 @@ ${rowsToHtml(late)}
                                   'min-w-[38px] px-1.5 py-0.5 tabular-nums'
                                 )}
                               </td>
-                              <td className={['px-1 py-2 truncate', scheduleBodyTextClass].join(' ')}>{agency || '-'}</td>
+                              <td className={['px-1 py-2 truncate text-left', scheduleBodyTextClass].join(' ')}>{agency || '-'}</td>
                               <td className="px-1 py-2 text-center">
                                 {scheduleDriverInfo ? (
                                   <span
@@ -18134,7 +18295,7 @@ ${rowsToHtml(late)}
                                   <span className={scheduleBodyTextClass} />
                                 )}
                               </td>
-                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
+                              <td className={['px-1 py-2 text-center', scheduleBodyTextClass].join(' ')}>
                                 {position ? (
                                   <BorderGlow
                                     className="admin-position-badge-glow admin-schedule-badge-glow"
@@ -18163,7 +18324,7 @@ ${rowsToHtml(late)}
                                   renderScheduleEmptyPill()
                                 )}
                               </td>
-                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
+                              <td className={['px-1 py-2 text-center', scheduleBodyTextClass].join(' ')}>
                                 {canEditScheduleLabel && !label ? (
                                   <span
                                     className="relative inline-flex align-middle"
@@ -19465,6 +19626,8 @@ ${rowsToHtml(late)}
                   onToggleSort={toggleEmployeeLastPunchSort}
                   onToggleHireDateSort={toggleEmployeeHireDateSort}
                   displayStaffId={displayStaffId}
+                  getEmployeeDisplayName={getScheduleEmployeeDisplayName}
+                  getSchedulePositionTone={getSchedulePositionTone}
                   getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                   getScheduleLabelTone={getScheduleLabelTone}
                   getScheduleLabelToneClass={getScheduleLabelToneClass}
@@ -19669,6 +19832,7 @@ ${rowsToHtml(late)}
                   addDays={addDays}
                   toDateOnly={toDateOnly}
                   formatHours={formatHours}
+                  getSchedulePositionTone={getSchedulePositionTone}
                   getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                   timecardDayTotalHours={timecardDayTotalHours}
                   timecardDayAttendanceCount={timecardDayAttendanceCount}
@@ -19742,19 +19906,31 @@ ${rowsToHtml(late)}
                           </div>
                           <div className="flex items-center gap-2">
                             {!timecardPunchReadOnly && (
-                              <button
-                                type="button"
-                                disabled={isLocked}
-                                onClick={() => setTimecardPunchAddOpen((prev) => !prev)}
-                                className={[
-                                  'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-                                  themeMode === 'light'
-                                    ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
-                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                                ].join(' ')}
-                              >
-                                {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
-                              </button>
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  disabled={isLocked}
+                                  onClick={toggleTimecardPunchAddMenu}
+                                  className={[
+                                    'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                                    themeMode === 'light'
+                                      ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                  ].join(' ')}
+                                >
+                                  {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
+                                </button>
+                                {timecardPunchAddMenuOpen ? (
+                                  <div className={['absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-2xl border p-1 shadow-2xl', themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950'].join(' ')}>
+                                    <button type="button" onClick={() => openTimecardPunchAddForm('single')} className={['block h-10 w-full rounded-xl px-3 text-left text-sm font-semibold', themeMode === 'light' ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-200 hover:bg-white/10'].join(' ')}>
+                                      {t('单条', 'Single')}
+                                    </button>
+                                    <button type="button" onClick={() => openTimecardPunchAddForm('pair')} className={['block h-10 w-full rounded-xl px-3 text-left text-sm font-semibold', themeMode === 'light' ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-200 hover:bg-white/10'].join(' ')}>
+                                      {t('一组', 'Pair')}
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
                             )}
                             {!timecardPunchReadOnly && (
                               <button
@@ -19783,56 +19959,7 @@ ${rowsToHtml(late)}
                         </div>
 
                         <div className="flex-1 overflow-y-auto px-6 py-5">
-                          {!timecardPunchReadOnly && timecardPunchAddOpen && (
-                            <div
-                              className={[
-                                'rounded-2xl px-4 py-4',
-                                themeMode === 'light' ? 'border border-neon/50 bg-emerald-50' : 'border border-neon/40 bg-black/30 shadow-glow'
-                              ].join(' ')}
-                            >
-                              <div className="grid gap-3 md:grid-cols-[1fr_1fr_7rem] md:items-end">
-                                <div>
-                                  <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>IN Time</div>
-                                  <input
-                                    value={timecardPunchNew.inAtLocal}
-                                    disabled={isLocked}
-                                    onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, inAtLocal: e.target.value }))}
-                                    type="datetime-local"
-                                    className={[
-                                      'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                                      themeMode === 'light'
-                                        ? 'border border-slate-300 bg-white text-slate-900'
-                                        : 'border border-white/10 bg-black/30 text-white'
-                                    ].join(' ')}
-                                  />
-                                </div>
-                                <div>
-                                  <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>OUT Time</div>
-                                  <input
-                                    value={timecardPunchNew.outAtLocal}
-                                    disabled={isLocked}
-                                    onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, outAtLocal: e.target.value }))}
-                                    type="datetime-local"
-                                    className={[
-                                      'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                                      themeMode === 'light'
-                                        ? 'border border-slate-300 bg-white text-slate-900'
-                                        : 'border border-white/10 bg-black/30 text-white'
-                                    ].join(' ')}
-                                  />
-                                </div>
-                                <button
-                                  type="button"
-                                  disabled={isLocked}
-                                  onClick={() => void addTimecardPunchRow()}
-                                  className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                  {t('添加', 'Add')}
-                                </button>
-                              </div>
-                              <p className={['mt-3 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{t('手动一次添加一组 IN / OUT 打卡记录。', 'Add one IN/OUT pair manually.')}</p>
-                            </div>
-                          )}
+                          {!timecardPunchReadOnly && timecardPunchAddOpen && renderTimecardPunchAddPanel()}
 
                         {timecardPunchError && <p className="text-sm text-ember">{t('操作失败：', 'Failed: ')}{timecardPunchError}</p>}
                         {!timecardPunchError && timecardPunchRowsVisible.length === 0 && (
@@ -19949,11 +20076,18 @@ ${rowsToHtml(late)}
                                             : themeMode === 'light'
                                               ? 'border border-slate-300 bg-white'
                                               : 'border border-white/10 bg-black/30',
-                                          edit.action === 'IN' ? 'text-mint' : 'text-ember'
+                                          edit.action === 'IN'
+                                            ? themeMode === 'light'
+                                              ? 'text-emerald-700'
+                                              : 'text-emerald-300'
+                                            : themeMode === 'light'
+                                              ? 'text-rose-700'
+                                              : 'text-rose-300'
                                         ].join(' ')}
+                                        style={getTimecardPunchActionSelectStyle(edit.action)}
                                       >
-                                        <option value="IN">IN</option>
-                                        <option value="OUT">OUT</option>
+                                        <option value="IN" className="bg-slate-950 text-emerald-300">IN</option>
+                                        <option value="OUT" className="bg-slate-950 text-rose-300">OUT</option>
                                       </select>
                                     </div>
                                     <div>

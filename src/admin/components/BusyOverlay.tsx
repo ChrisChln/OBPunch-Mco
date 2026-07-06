@@ -1,3 +1,5 @@
+import { useDeterminateLoadingProgress } from '../../components/useDeterminateLoadingProgress';
+
 type TranslateFn = (zh: string, en: string) => string;
 
 type BusyOverlayProps = {
@@ -21,9 +23,10 @@ export default function BusyOverlay({
   detailEn,
   progress = null
 }: BusyOverlayProps) {
-  if (!visible) return null;
-  const hasProgress = typeof progress === 'number' && Number.isFinite(progress);
-  const progressValue = hasProgress ? Math.max(0, Math.min(100, Math.round(progress))) : 0;
+  const { renderVisible, progressValue } = useDeterminateLoadingProgress(visible, { progress });
+
+  if (!renderVisible) return null;
+
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-sm">
       <div
@@ -37,7 +40,7 @@ export default function BusyOverlay({
             <span className="absolute inset-1 rounded-xl border border-neon/20" />
             <span className="h-6 w-6 animate-spin rounded-full border-2 border-neon/20 border-t-neon" />
           </span>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold tracking-[0.18em] text-slate-200/80">
               {t(titleZh, titleEn)}
             </div>
@@ -45,11 +48,9 @@ export default function BusyOverlay({
               {detailZh && detailEn ? (
                 <div className="min-w-0 flex-1 truncate text-sm text-slate-300/75">{t(detailZh, detailEn)}</div>
               ) : null}
-              {hasProgress ? (
-                <div className={['shrink-0 text-xs font-semibold tabular-nums', themeMode === 'light' ? 'text-slate-500' : 'text-slate-300/75'].join(' ')}>
-                  {progressValue}%
-                </div>
-              ) : null}
+              <div className={['shrink-0 text-xs font-semibold tabular-nums', themeMode === 'light' ? 'text-slate-500' : 'text-slate-300/75'].join(' ')}>
+                {progressValue}%
+              </div>
             </div>
           </div>
         </div>
@@ -60,13 +61,13 @@ export default function BusyOverlay({
           ].join(' ')}
           role="progressbar"
           aria-label={t(titleZh, titleEn)}
-          aria-valuemin={hasProgress ? 0 : undefined}
-          aria-valuemax={hasProgress ? 100 : undefined}
-          aria-valuenow={hasProgress ? progressValue : undefined}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progressValue}
         >
           <span
-            className={['block h-full rounded-full bg-neon/85 shadow-[0_0_16px_rgba(34,211,238,0.45)] transition-[width] duration-300 ease-out', hasProgress ? '' : 'w-[36%] animate-pulse'].join(' ')}
-            style={hasProgress ? { width: `${progressValue}%` } : undefined}
+            className="block h-full rounded-full bg-neon/85 shadow-[0_0_16px_rgba(34,211,238,0.45)] transition-[width] duration-300 ease-out"
+            style={{ width: `${progressValue}%` }}
           />
         </div>
       </div>

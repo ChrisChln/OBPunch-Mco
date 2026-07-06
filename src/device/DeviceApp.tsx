@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createSupabaseClient } from '../lib/supabase';
 import { isValidPunchStaffId, normalizeStaffId } from '../lib/staffId';
 import { appSound, type AppSoundKind } from '../lib/sound';
+import { resolveTempStaffAlias } from '../lib/tempStaffAlias';
 import { normalizePositionName } from '../shared/positions';
 
 type DeviceType = string; // 现在支持任意自定义设备类型值
@@ -38,16 +39,9 @@ type EmployeeRow = {
   name?: string | null;
 };
 
-type TempAccountAssignmentRow = {
-  staff_id?: string | null;
-  source_temp_staff_id?: string | null;
-};
-
 const DEVICE_TABLE = (import.meta.env.VITE_DEVICE_TABLE as string | undefined) ?? 'ob_devices';
 const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | undefined) ?? 'ob_device_loans';
 const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
-const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
-  (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
 const BORROW_OVERDUE_MS = 8 * 60 * 60 * 1000;
 const COUNTING_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_FILTERS_STORAGE_KEY = 'ob_device_filters_v1';
@@ -187,23 +181,16 @@ export default function DeviceApp() {
       const employee = ((employeeRes.data as EmployeeRow[] | null) ?? [])[0] ?? null;
       if (employee) return { staffId: currentStaffId, employee, error: null };
 
-      const bindingRes = await supabase
-        .from(TEMP_ACCOUNT_ASSIGNMENT_TABLE)
-        .select('staff_id, source_temp_staff_id, created_at')
-        .eq('source_temp_staff_id', currentStaffId)
-        .order('created_at', { ascending: false })
-        .limit(1);
+      const bindingRes = await resolveTempStaffAlias(supabase, currentStaffId);
       if (bindingRes.error) {
         return {
           staffId: currentStaffId,
           employee: null,
-          error: `Failed to verify temporary account binding: ${bindingRes.error.message}`
+          error: `Failed to verify temporary account binding: ${bindingRes.error}`
         };
       }
 
-      const boundStaffId = normalizeStaffId(
-        String(((bindingRes.data as TempAccountAssignmentRow[] | null) ?? [])[0]?.staff_id ?? '')
-      );
+      const boundStaffId = normalizeStaffId(bindingRes.staffId ?? '');
       if (!boundStaffId || boundStaffId === currentStaffId) break;
       currentStaffId = boundStaffId;
     }

@@ -83,7 +83,7 @@ export default function ScheduleToolbar({
           value={schedulePrintDate}
           disabled={writeLocked}
           onChange={setSchedulePrintDate}
-          title={t('签到表日期', 'Sign-in print date')}
+          title={t('排班日期', 'Schedule date')}
         />
 
         <button

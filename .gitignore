@@ -23,5 +23,8 @@ coverage/
 playwright-report/
 test-results/
 blob-report/
+.playwright-cli/
+__pycache__/
+*.pyc
 
 .vercel

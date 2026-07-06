@@ -331,6 +331,17 @@ const ensureAdminAccess = async (req: any, res: any, serviceSupabase: any, requi
 };
 
 const handleGet = async (req: any, res: any, supabase: any) => {
+  const token = getBearerToken(req);
+  if (!token && !ensureLeadPinConfigured(res)) return;
+  if (!token && !hasLeadPin(req)) {
+    res.status(401).json({ error: 'Lead PIN or admin authorization is required.' });
+    return;
+  }
+  if (token) {
+    const user = await ensureAdminAccess(req, res, supabase, 'view');
+    if (!user) return;
+  }
+
   if (String(req.query?.present ?? '') === '1') {
     const employeeRes = await supabase
       .from(EMPLOYEE_TABLE)
@@ -352,17 +363,6 @@ const handleGet = async (req: any, res: any, supabase: any) => {
       .filter((row) => Boolean(row.staff_id));
     res.status(200).json({ rows });
     return;
-  }
-
-  const token = getBearerToken(req);
-  if (!token && !ensureLeadPinConfigured(res)) return;
-  if (!token && !hasLeadPin(req)) {
-    res.status(401).json({ error: 'Lead PIN or admin authorization is required.' });
-    return;
-  }
-  if (token) {
-    const user = await ensureAdminAccess(req, res, supabase, 'view');
-    if (!user) return;
   }
 
   const id = String(req.query?.id ?? '').trim();

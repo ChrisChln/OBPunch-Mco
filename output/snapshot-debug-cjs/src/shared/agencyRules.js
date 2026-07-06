@@ -1,0 +1,10 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.shouldTrackAttendanceForAgency = exports.isScheduleOnlyAgency = exports.SCHEDULE_ONLY_AGENCY_KEYS = exports.SCHEDULE_ONLY_AGENCIES = void 0;
+const normalizeAgencyKey = (value) => String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+exports.SCHEDULE_ONLY_AGENCIES = ['JDL', '自顾'];
+exports.SCHEDULE_ONLY_AGENCY_KEYS = new Set(exports.SCHEDULE_ONLY_AGENCIES.map(normalizeAgencyKey));
+const isScheduleOnlyAgency = (value) => exports.SCHEDULE_ONLY_AGENCY_KEYS.has(normalizeAgencyKey(value));
+exports.isScheduleOnlyAgency = isScheduleOnlyAgency;
+const shouldTrackAttendanceForAgency = (value) => !(0, exports.isScheduleOnlyAgency)(value);
+exports.shouldTrackAttendanceForAgency = shouldTrackAttendanceForAgency;

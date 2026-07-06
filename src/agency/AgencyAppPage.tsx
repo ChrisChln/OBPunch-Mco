@@ -3,6 +3,7 @@ import type { User } from '@supabase/supabase-js';
 import { Check, Hourglass, Plus, Save, Trash2, Users } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import GlowLabelChip, { getGlowToneForPosition, getGlowToneForShift } from '../components/GlowLabelChip';
+import { useDeterminateLoadingProgress } from '../components/useDeterminateLoadingProgress';
 import { createSupabaseClient } from '../lib/supabase';
 import { hasModuleAccess, getModuleMapFromContext, type AdminAccessContext } from '../shared/adminAccess';
 import { addDays, startOfWeekMonday, toDateOnly, type AgencyShift } from '../shared/agencyShared';
@@ -50,6 +51,7 @@ import type {
   AgencyUpsertNewHireInput,
   AgencyWeekSchedule
 } from './types';
+import { agencyButtonClass, agencyInputClass, agencyPrimaryButtonClass } from './uiClasses';
 
 type ModalState = 'new_hire' | 'termination' | 'driver_group' | 'employee_note' | 'payrate' | null;
 type NoticeTone = 'error' | 'info' | 'success';
@@ -392,12 +394,9 @@ const isCurrentTempWorkState = (state: AgencyScheduleState) => state === 'temp_w
 const isReplacementState = (state: AgencyScheduleState) => state === 'planned_temp_work';
 
 const cardClass = 'rounded-[28px] border border-white/10 bg-black/20 p-5 shadow-[0_18px_40px_rgba(0,0,0,0.25)]';
-const inputClass =
-  'h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-[#9eff00]';
-const buttonClass =
-  'inline-flex h-10 items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-medium text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50';
-const neonButtonClass =
-  'obp-primary-button inline-flex h-10 items-center justify-center rounded-2xl border border-[#9eff00]/70 bg-[#9eff00] px-4 text-sm font-semibold text-slate-950 shadow-[0_0_0_1px_rgba(158,255,0,0.16),0_14px_32px_rgba(158,255,0,0.22)] transition hover:-translate-y-0.5 hover:bg-[#b6ff33] hover:shadow-[0_18px_40px_rgba(158,255,0,0.3)] focus:outline-none focus:ring-2 focus:ring-[#9eff00]/45 focus:ring-offset-2 focus:ring-offset-[#06090a] disabled:translate-y-0 disabled:cursor-not-allowed disabled:border-white/14 disabled:bg-white/[0.09] disabled:text-slate-300 disabled:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]';
+const inputClass = agencyInputClass;
+const buttonClass = agencyButtonClass;
+const neonButtonClass = agencyPrimaryButtonClass;
 const selectedDateColumnClass =
   'bg-white/[0.03] shadow-[inset_3px_0_0_rgba(255,255,255,0.95),inset_-3px_0_0_rgba(255,255,255,0.95)]';
 const selectedDateHeaderLabelClass =
@@ -428,7 +427,9 @@ const Modal = ({
 };
 
 const LoadingOverlay = ({ open, label }: { open: boolean; label: string }) => {
-  if (!open || typeof document === 'undefined') return null;
+  const { renderVisible, progressValue } = useDeterminateLoadingProgress(open);
+
+  if (!renderVisible || typeof document === 'undefined') return null;
   return createPortal(
     <div className="pointer-events-none fixed inset-0 z-[110] flex items-center justify-center px-6">
       <div className="agency-loading-shell">
@@ -441,8 +442,24 @@ const LoadingOverlay = ({ open, label }: { open: boolean; label: string }) => {
           <div className="agency-loading-dot agency-loading-dot-c" />
         </div>
         <div className="agency-loading-copy">
-          <div className="agency-loading-label">Working</div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="agency-loading-label">Working</div>
+            <div className="shrink-0 text-xs font-black tabular-nums text-lime-200/80">{progressValue}%</div>
+          </div>
           <div className="agency-loading-text">{label}</div>
+          <div
+            className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/12"
+            role="progressbar"
+            aria-label="Agency loading progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressValue}
+          >
+            <div
+              className="h-full rounded-full bg-lime-300 shadow-[0_0_16px_rgba(190,242,100,0.42)] transition-[width] duration-300 ease-out"
+              style={{ width: `${progressValue}%` }}
+            />
+          </div>
         </div>
       </div>
     </div>,

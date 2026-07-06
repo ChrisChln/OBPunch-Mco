@@ -70,6 +70,35 @@ describe('api/exception-reports', () => {
     expect(String(res.body?.error ?? '')).toContain('Invalid Lead PIN');
   });
 
+  test('rejects present employee list without Lead PIN or admin authorization', async () => {
+    const select = vi.fn(() => ({
+      order: () => ({
+        limit: async () => ({
+          data: [{ staff_id: 'US010454', name: 'Test User', position: 'OB', agency: 'MCO' }],
+          error: null
+        })
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_employees');
+        return { select };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'GET', headers: {}, query: { present: '1' } }, res);
+
+    expect(res.code).toBe(401);
+    expect(String(res.body?.error ?? '')).toContain('Lead PIN or admin authorization is required');
+    expect(select).not.toHaveBeenCalled();
+  });
+
   test('creates exception reports with product barcode', async () => {
     const select = vi.fn(() => ({
       gte: () => ({
@@ -1540,7 +1569,7 @@ describe('api/exception-reports', () => {
 
     const { default: handler } = await import('../../api/exception-reports');
     const res = createRes();
-    await handler({ method: 'GET', headers: {}, query: { present: '1' } }, res);
+    await handler({ method: 'GET', headers: {}, query: { present: '1', lead_pin: '1234' } }, res);
 
     expect(res.code).toBe(200);
     expect(res.body.rows).toEqual([

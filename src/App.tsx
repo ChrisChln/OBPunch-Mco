@@ -6,10 +6,12 @@ import { submitPunchToApi } from './lib/punchApi';
 import { formatPunchFailureSummary } from './lib/punchDisplay';
 import { getBarcodePromptGroupKey, getBarcodePrompts, getRandomBarcodePromptIndex } from './lib/barcodePrompt';
 import { appSound, type AppSoundKind } from './lib/sound';
+import { resolveTempStaffAlias } from './lib/tempStaffAlias';
 import { isScheduleOnlyAgency } from './shared/agencyRules';
 import { canUnlockPunchScreen, normalizeAdminAccessContext } from './shared/adminAccess';
 import { isEmployeeTerminated } from './shared/employeeStatus';
 import { TimeOfDayLottie, type AmbientPeriod } from './components/TimeOfDayLottie';
+import { useDeterminateLoadingProgress } from './components/useDeterminateLoadingProgress';
 
 type PunchAction = 'IN' | 'OUT';
 
@@ -167,8 +169,6 @@ const DEVICE_LOANS_TABLE = (import.meta.env.VITE_DEVICE_LOANS_TABLE as string | 
 const EMPLOYEE_REQUESTS_TABLE = (import.meta.env.VITE_EMPLOYEE_REQUESTS_TABLE as string | undefined) ?? 'ob_employee_requests';
 const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
-const TEMP_ACCOUNT_ASSIGNMENT_TABLE =
-  (import.meta.env.VITE_TEMP_ACCOUNT_ASSIGNMENT_TABLE as string | undefined) ?? 'ob_temp_account_assignments';
 const OBUP_REPORTS_TABLE = (import.meta.env.VITE_OBUP_REPORTS_TABLE as string | undefined) ?? 'reports';
 const OBUP_REPORT_DETAILS_TABLE =
   (import.meta.env.VITE_OBUP_REPORT_DETAILS_TABLE as string | undefined) ?? 'report_details';
@@ -717,6 +717,7 @@ export default function App() {
     [dailyRoster]
   );
   const [lastPunchActionLoading, setLastPunchActionLoading] = useState(false);
+  const busyOverlayProgress = useDeterminateLoadingProgress(busyVisible);
 
   const [editName, setEditName] = useState('');
   const [editDept, setEditDept] = useState('');
@@ -926,14 +927,6 @@ export default function App() {
     return { action, error: null as string | null };
   };
 
-  const isMissingTempAssignmentSchemaError = (message: string) => {
-    const text = String(message ?? '').toLowerCase();
-    return (
-      (text.includes(TEMP_ACCOUNT_ASSIGNMENT_TABLE.toLowerCase()) || text.includes('source_temp_staff_id')) &&
-      (text.includes('schema cache') || text.includes('does not exist'))
-    );
-  };
-
   const resolvePunchStaffId = async (staff: string) => {
     if (!supabase) {
       return { staffId: staff, error: 'Missing Supabase configuration.' };
@@ -945,18 +938,12 @@ export default function App() {
       if (!current || visited.has(current)) break;
       visited.add(current);
 
-      const res = await supabase
-        .from(TEMP_ACCOUNT_ASSIGNMENT_TABLE)
-        .select('staff_id, source_temp_staff_id, created_at')
-        .eq('source_temp_staff_id', current)
-        .order('created_at', { ascending: false })
-        .limit(1);
+      const res = await resolveTempStaffAlias(supabase, current);
       if (res.error) {
-        if (isMissingTempAssignmentSchemaError(res.error.message)) break;
-        return { staffId: current, error: res.error.message };
+        return { staffId: current, error: res.error };
       }
 
-      const next = normalizeStaffId(String(((res.data as any[] | null) ?? [])[0]?.staff_id ?? '').trim());
+      const next = normalizeStaffId(String(res.staffId ?? '').trim());
       if (!next || next === current) break;
       current = next;
     }
@@ -4018,11 +4005,37 @@ const fetchPunchBoardUph = async (
           </div>
         )}
 
-        {busyVisible && (
+        {busyOverlayProgress.renderVisible && (
           <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-sm">
-            <div className="glass flex items-center gap-3 rounded-2xl px-5 py-4 shadow-2xl">
-              <span className="h-5 w-5 animate-spin rounded-full border-2 border-neon/25 border-t-neon" />
-              <span className="text-sm font-semibold text-slate-100">Processing request...</span>
+            <div className="glass w-full max-w-sm rounded-[28px] border border-white/10 px-6 py-5 shadow-2xl">
+              <div className="flex items-center gap-4">
+                <span className="relative flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5">
+                  <span className="absolute inset-1 rounded-xl border border-neon/20" />
+                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-neon/20 border-t-neon" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold tracking-[0.14em] text-slate-100">Processing</div>
+                  <div className="mt-1 flex items-center justify-between gap-3">
+                    <span className="truncate text-sm text-slate-300/75">Request locked</span>
+                    <span className="shrink-0 text-xs font-semibold tabular-nums text-slate-300/75">
+                      {busyOverlayProgress.progressValue}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div
+                className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/18"
+                role="progressbar"
+                aria-label="Request progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={busyOverlayProgress.progressValue}
+              >
+                <span
+                  className="block h-full rounded-full bg-neon/85 shadow-[0_0_16px_rgba(34,211,238,0.45)] transition-[width] duration-300 ease-out"
+                  style={{ width: `${busyOverlayProgress.progressValue}%` }}
+                />
+              </div>
             </div>
           </div>
         )}
