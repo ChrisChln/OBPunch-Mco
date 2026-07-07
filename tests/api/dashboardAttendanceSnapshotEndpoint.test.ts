@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 const ensureCronMock = vi.fn();
 const createServiceSupabaseMock = vi.fn();
 const runDashboardAttendanceSnapshotMock = vi.fn();
+const runAttendanceAutoCheckoutMock = vi.fn();
 
 vi.mock('../../api/_forecastShared.js', () => ({
   ensureCron: ensureCronMock,
@@ -11,6 +12,10 @@ vi.mock('../../api/_forecastShared.js', () => ({
 
 vi.mock('../../api/_dashboardAttendanceSnapshotCore.js', () => ({
   runDashboardAttendanceSnapshot: runDashboardAttendanceSnapshotMock
+}));
+
+vi.mock('../../api/_attendanceAutoCheckoutCore.js', () => ({
+  runAttendanceAutoCheckout: runAttendanceAutoCheckoutMock
 }));
 
 const createResponse = () => {
@@ -48,24 +53,25 @@ describe('dashboard attendance snapshot endpoint', () => {
 
   test('stops when cron authorization fails', async () => {
     ensureCronMock.mockReturnValue(false);
-    const { default: handler } = await import('../../api/dashboard-attendance-snapshot');
+    const { default: handler } = await import('../../api/attendance-auto-checkout');
     const res = createResponse();
 
-    await handler({ method: 'GET', query: {} }, res);
+    await handler({ method: 'GET', query: { job: 'dashboard-attendance-snapshot' } }, res);
 
     expect(createServiceSupabaseMock).not.toHaveBeenCalled();
     expect(runDashboardAttendanceSnapshotMock).not.toHaveBeenCalled();
   });
 
-  test('passes dry run and date options to the snapshot core', async () => {
+  test('routes dashboard snapshot jobs through the shared cron endpoint', async () => {
     ensureCronMock.mockReturnValue(true);
-    const { default: handler } = await import('../../api/dashboard-attendance-snapshot');
+    const { default: handler } = await import('../../api/attendance-auto-checkout');
     const res = createResponse();
 
     await handler(
       {
         method: 'GET',
         query: {
+          job: 'dashboard-attendance-snapshot',
           mode: 'actual',
           work_date: '2026-07-06',
           dry_run: 'true'
@@ -82,6 +88,7 @@ describe('dashboard attendance snapshot endpoint', () => {
         dryRun: true
       })
     );
+    expect(runAttendanceAutoCheckoutMock).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.body).toEqual(expect.objectContaining({ status: 'ok', dry_run: true }));
   });
