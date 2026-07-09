@@ -7,6 +7,16 @@ export const formatRoundedHours = (value: number) => {
 const toLocalDateKey = (value: Date) =>
   `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
 
+const padDateTimePart = (value: number) => String(value).padStart(2, '0');
+
+export const formatTimecardPunchExportDateTime = (value: Date) => {
+  if (Number.isNaN(value.getTime())) return '';
+  return [
+    `${value.getFullYear()}-${padDateTimePart(value.getMonth() + 1)}-${padDateTimePart(value.getDate())}`,
+    `${padDateTimePart(value.getHours())}:${padDateTimePart(value.getMinutes())}:${padDateTimePart(value.getSeconds())}`
+  ].join(' ');
+};
+
 export const getTimecardCellHoursText = (options: {
   hours: number;
   punchCount: number;

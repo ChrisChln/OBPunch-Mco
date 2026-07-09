@@ -130,7 +130,13 @@ import {
   shouldRunWeeklyScheduleReset,
   shouldRunWeeklyScheduleRollover
 } from './scheduleWeek';
-import { buildTimecardExportDailyPeopleRow, formatRoundedHours, getTimecardExportDayCellText, getTimecardTerminatedByDay } from './timecardDisplay';
+import {
+  buildTimecardExportDailyPeopleRow,
+  formatRoundedHours,
+  formatTimecardPunchExportDateTime,
+  getTimecardExportDayCellText,
+  getTimecardTerminatedByDay
+} from './timecardDisplay';
 import {
   getDefaultPositionToneKey,
   getPositionToneFromMap,
@@ -12144,7 +12150,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const profile = staffToProfile.get(staff) ?? { name: '', agency: '', position: '' };
         const times: string[] = [];
         for (const item of list) {
-          const timeText = formatTime(new Date(item.at));
+          const timeText = formatTimecardPunchExportDateTime(new Date(item.at));
           times.push(timeText);
         }
         maxPairs = Math.max(maxPairs, Math.ceil(times.length / 2));

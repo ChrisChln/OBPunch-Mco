@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   buildTimecardExportDailyPeopleRow,
+  formatTimecardPunchExportDateTime,
   formatRoundedHours,
   getTimecardCellHoursText,
   getTimecardExportDayCellText,
@@ -13,6 +14,10 @@ describe('timecardDisplay', () => {
     expect(formatRoundedHours(8)).toBe('8');
     expect(formatRoundedHours(8.156)).toBe('8.16');
     expect(formatRoundedHours(8.1)).toBe('8.1');
+  });
+
+  test('formats punch export timestamps with hyphenated date and seconds', () => {
+    expect(formatTimecardPunchExportDateTime(new Date(2026, 6, 6, 6, 55, 0))).toBe('2026-07-06 06:55:00');
   });
 
   test('shows 0 for a day with punch activity that rounds down below 0.01h', () => {
