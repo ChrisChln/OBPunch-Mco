@@ -160,6 +160,9 @@ export const getDashboardSnapshotWorkDate = (options: DashboardAttendanceSnapsho
   const timezone = options.timezone || DEFAULT_TIMEZONE;
   const cutoffHour = clampHour(options.cutoffHour, DEFAULT_CUTOFF_HOUR);
   if (options.workDate && isDateOnly(options.workDate)) return options.workDate;
+  if (options.mode === 'expected') {
+    return addDaysDateOnly(getDateOnlyInTimeZone(options.now ?? new Date(), timezone), -1);
+  }
   return getOperationalDate(options.now ?? new Date(), timezone, cutoffHour);
 };
 

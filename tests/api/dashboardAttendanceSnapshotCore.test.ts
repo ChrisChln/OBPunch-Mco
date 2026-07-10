@@ -89,6 +89,17 @@ describe('dashboard attendance snapshot core', () => {
     ).toBe('2026-07-04');
   });
 
+  test('expected snapshots still write yesterday when Vercel runs the cron after cutoff', () => {
+    expect(
+      getDashboardSnapshotWorkDate({
+        mode: 'expected',
+        now: new Date('2026-07-10T09:34:00.000Z'),
+        timezone: 'America/New_York',
+        cutoffHour: 5
+      })
+    ).toBe('2026-07-09');
+  });
+
   test('actual snapshots before cutoff write the same operational date as expected', () => {
     expect(
       getDashboardSnapshotWorkDate({
