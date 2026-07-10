@@ -130,7 +130,13 @@ import {
   shouldRunWeeklyScheduleReset,
   shouldRunWeeklyScheduleRollover
 } from './scheduleWeek';
-import { buildTimecardExportDailyPeopleRow, formatRoundedHours, getTimecardExportDayCellText, getTimecardTerminatedByDay } from './timecardDisplay';
+import {
+  buildTimecardExportDailyPeopleRow,
+  formatRoundedHours,
+  formatTimecardPunchExportDateTime,
+  getTimecardExportDayCellText,
+  getTimecardTerminatedByDay
+} from './timecardDisplay';
 import {
   getDefaultPositionToneKey,
   getPositionToneFromMap,
@@ -12144,7 +12150,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const profile = staffToProfile.get(staff) ?? { name: '', agency: '', position: '' };
         const times: string[] = [];
         for (const item of list) {
-          const timeText = formatTime(new Date(item.at));
+          const timeText = formatTimecardPunchExportDateTime(new Date(item.at));
           times.push(timeText);
         }
         maxPairs = Math.max(maxPairs, Math.ceil(times.length / 2));
@@ -12167,6 +12173,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       try {
         const XLSX = await import('xlsx');
         const ws = XLSX.utils.aoa_to_sheet([headers, ...paddedBody]);
+        const timeColumnStart = 4;
+        for (let rowIndex = 1; rowIndex <= paddedBody.length; rowIndex += 1) {
+          for (let columnIndex = timeColumnStart; columnIndex < headers.length; columnIndex += 1) {
+            const cellAddress = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+            const cell = ws[cellAddress];
+            if (!cell) continue;
+            cell.t = 's';
+            cell.z = '@';
+          }
+        }
+        ws['!cols'] = headers.map((_, index) => ({ wch: index >= timeColumnStart ? 20 : 14 }));
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'daily_punches');
         const filename = `ob_punches_${timecardWeekInput}.xlsx`;
