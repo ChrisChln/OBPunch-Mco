@@ -1,7 +1,7 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useCallback, type UIEvent } from 'react';
-import GlowLabelChip, { getGlowToneForPosition, getGlowToneForShift } from '../../components/GlowLabelChip';
+import GlowLabelChip, { getGlowToneForShift } from '../../components/GlowLabelChip';
 import type { LabelToneKey } from '../../lib/labelTone';
 import { isScheduleOnlyAgency } from '../../shared/agencyRules';
 
@@ -11,13 +11,14 @@ const DEFAULT_WORK_PASSWORD = 'Helloworld2!';
 const resolveDefaultWorkPassword = (workAccount: string, workPassword: string) =>
   workAccount && !workPassword ? DEFAULT_WORK_PASSWORD : workPassword;
 const normalizeEmploymentType = (value: unknown): 'FT' | 'PT' => String(value ?? '').trim().toUpperCase() === 'PT' ? 'PT' : 'FT';
+type EmployeeTableRow = Record<string, unknown>;
 
 type EmployeesTableSectionProps = {
   t: TranslateFn;
   isLocked: boolean;
   themeMode: 'dark' | 'light';
   employeesError: string | null;
-  employeesFiltered: any[];
+  employeesFiltered: EmployeeTableRow[];
   employeeSortByPosition: boolean;
   employeeSortByLastPunchDesc: boolean;
   employeePunchMetaLoading: boolean;
@@ -26,6 +27,8 @@ type EmployeesTableSectionProps = {
   onToggleSort: () => void;
   onToggleHireDateSort: () => void;
   displayStaffId: (value: string) => string;
+  getEmployeeDisplayName: (employee: EmployeeTableRow) => string;
+  getSchedulePositionTone: (position: string) => LabelToneKey;
   getSchedulePositionBadgeClass: (position: string) => string;
   getScheduleLabelTone: (label: string) => LabelToneKey;
   getScheduleLabelToneClass: (label: string) => string;
@@ -88,6 +91,8 @@ export default function EmployeesTableSection({
   onToggleSort,
   onToggleHireDateSort,
   displayStaffId,
+  getEmployeeDisplayName,
+  getSchedulePositionTone,
   getSchedulePositionBadgeClass,
   getScheduleLabelTone,
   getScheduleLabelToneClass,
@@ -277,7 +282,7 @@ export default function EmployeesTableSection({
             )}
             {employeesVisible.map((e) => {
               const staff = String(e.staff_id ?? '').trim();
-              const name = String(e.name ?? '').trim();
+              const name = getEmployeeDisplayName(e).trim() || String(e.name ?? '').trim();
               const agency = String(e.agency ?? e.Agency ?? '').trim();
               const isProtectedAgencyEmployee = isScheduleOnlyAgency(agency);
               const position = String(e.position ?? e.Position ?? '').trim();
@@ -313,7 +318,7 @@ export default function EmployeesTableSection({
                 }
               }
               const shift = shiftInfo?.shift || scheduledShift || dbShift || weeklyScheduledShift || '';
-              const shiftLabel = shift === 'early' ? t('白班', 'Day') : shift === 'late' ? t('晚班', 'Night') : '-';
+              const shiftLabel = shift === 'early' ? t('白班', 'Day') : shift === 'late' ? t('夜班', 'Night') : '-';
               const lastPunchAt = String(employeeLastPunchAtByStaffId[staff] ?? '').trim();
               let lastPunchDaysText = '-';
               if (lastPunchAt) {
@@ -325,12 +330,12 @@ export default function EmployeesTableSection({
               }
               const shiftTitle = shiftInfo
                 ? t(
-                    `近${shiftAnalysisDays}天：白班 ${shiftInfo.earlyHours.toFixed(1)}h / 晚班 ${shiftInfo.lateHours.toFixed(1)}h`,
+                    `近${shiftAnalysisDays}天：白班 ${shiftInfo.earlyHours.toFixed(1)}h / 夜班 ${shiftInfo.lateHours.toFixed(1)}h`,
                     `Last ${shiftAnalysisDays}d: Day ${shiftInfo.earlyHours.toFixed(1)}h / Night ${shiftInfo.lateHours.toFixed(1)}h`
                   )
                 : scheduledShift
                   ? t(
-                      `当前排班：${scheduledShift === 'early' ? '白班' : '晚班'}`,
+                      `当前排班：${scheduledShift === 'early' ? '白班' : '夜班'}`,
                       `Scheduled now: ${scheduledShift === 'early' ? 'Day' : 'Night'}`
                     )
                   : '';
@@ -382,7 +387,7 @@ export default function EmployeesTableSection({
                         {position || '-'}
                       </span>
                     ) : (
-                      <GlowLabelChip tone={getGlowToneForPosition(position)} className="min-w-[54px] uppercase tracking-[0.12em]">
+                      <GlowLabelChip tone={getSchedulePositionTone(position)} className="min-w-[54px] uppercase tracking-[0.12em]" glowSeed={`${staff}:position:${position || '-'}`}>
                         {position || '-'}
                       </GlowLabelChip>
                     )}
@@ -400,7 +405,7 @@ export default function EmployeesTableSection({
                           <span className="truncate">{label}</span>
                         </span>
                       ) : (
-                        <GlowLabelChip tone={getScheduleLabelTone(label)} className="max-w-[90px]">
+                        <GlowLabelChip tone={getScheduleLabelTone(label)} className="max-w-[90px]" glowSeed={`${staff}:label:${label}`}>
                           <span className="truncate">{label}</span>
                         </GlowLabelChip>
                       )
@@ -424,7 +429,7 @@ export default function EmployeesTableSection({
                         {shiftLabel}
                       </span>
                     ) : (
-                      <GlowLabelChip tone={getGlowToneForShift(shift)} className="min-w-[52px] uppercase tracking-[0.12em]" title={shiftTitle}>
+                      <GlowLabelChip tone={getGlowToneForShift(shift)} className="min-w-[52px] uppercase tracking-[0.12em]" title={shiftTitle} glowSeed={`${staff}:shift:${shift || '-'}`}>
                         {shiftLabel}
                       </GlowLabelChip>
                     )}

@@ -4,7 +4,8 @@ import { resolveDashboardStaffPosition } from '../../src/DashboardPage';
 import {
   buildDashboardAttendanceStats,
   buildDashboardDepartmentAttendanceGroups,
-  buildDashboardDepartmentCoverageCards
+  buildDashboardDepartmentCoverageCards,
+  mergeDashboardAttendanceActualsIntoExpected
 } from '../../src/shared/dashboardAttendanceStats';
 
 describe('dashboard attendance stats', () => {
@@ -191,5 +192,36 @@ describe('dashboard attendance stats', () => {
   test('uses employee profile position before schedule snapshot position', () => {
     expect(resolveDashboardStaffPosition('Receive', 'Pick', ['Pick', 'Receive'])).toBe('Pick');
     expect(resolveDashboardStaffPosition('Receive', '', ['Pick', 'Receive'])).toBe('Receive');
+  });
+
+  test('keeps expected from snapshots while replacing actual counts and hours from punch logs', () => {
+    const merged = mergeDashboardAttendanceActualsIntoExpected(
+      {
+        'early:Pick': {
+          expected: 36,
+          present: 0,
+          onClock: 0,
+          offWorked: 0,
+          workHours: 0
+        }
+      },
+      {
+        'early:Pick': {
+          expected: 0,
+          present: 8,
+          onClock: 3,
+          offWorked: 1,
+          workHours: 61.5
+        }
+      }
+    );
+
+    expect(merged['early:Pick']).toEqual({
+      expected: 36,
+      present: 8,
+      onClock: 3,
+      offWorked: 1,
+      workHours: 61.5
+    });
   });
 });

@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import BusyOverlay from '../components/BusyOverlay';
 import StyledDateInput from '../components/StyledDateInput';
 import { isValidStaffId, normalizeStaffId } from '../../lib/staffId';
 import { chunkArray, prepareWorkHourUploadRows, type ParsedUploadRow } from '../workHourImport';
@@ -1434,9 +1435,54 @@ export default function WorkHourComparisonPage({
   const buttonPrimaryClass = isLight
     ? 'admin-btn h-10 rounded-2xl bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60'
     : 'admin-btn admin-btn-primary h-10 px-4 text-sm font-semibold text-slate-950 disabled:opacity-60';
+  const busyOverlay = useMemo(() => {
+    if (uploading) {
+      return {
+        titleZh: '工时导入中',
+        titleEn: 'Importing Hours',
+        detailZh: '正在解析并写入 IAMS 工时',
+        detailEn: 'Parsing and saving IAMS hours'
+      };
+    }
+    if (markFixedLoading) {
+      return {
+        titleZh: '状态保存中',
+        titleEn: 'Saving Status',
+        detailZh: '正在标记工时差异',
+        detailEn: 'Marking the discrepancy'
+      };
+    }
+    if (openCalibrationLoading || punchFlowLoading) {
+      return {
+        titleZh: '打卡记录加载中',
+        titleEn: 'Loading Punches',
+        detailZh: '正在读取员工打卡流水',
+        detailEn: 'Loading employee punch flow'
+      };
+    }
+    if (loading) {
+      return {
+        titleZh: '工时加载中',
+        titleEn: 'Loading Hours',
+        detailZh: '正在汇总系统工时和 IAMS 工时',
+        detailEn: 'Comparing system and IAMS hours'
+      };
+    }
+    return null;
+  }, [loading, markFixedLoading, openCalibrationLoading, punchFlowLoading, uploading]);
 
   return (
-    <section className="px-6 py-8">
+    <>
+      <BusyOverlay
+        visible={Boolean(busyOverlay)}
+        themeMode={themeMode}
+        t={t}
+        titleZh={busyOverlay?.titleZh}
+        titleEn={busyOverlay?.titleEn}
+        detailZh={busyOverlay?.detailZh}
+        detailEn={busyOverlay?.detailEn}
+      />
+      <section className="px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-display text-2xl tracking-[0.08em]">{t('工时对比', 'Work Hour Comparison')}</h2>
@@ -1856,6 +1902,7 @@ export default function WorkHourComparisonPage({
           </div>,
           document.body
         )}
-    </section>
+      </section>
+    </>
   );
 }

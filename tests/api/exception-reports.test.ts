@@ -70,6 +70,35 @@ describe('api/exception-reports', () => {
     expect(String(res.body?.error ?? '')).toContain('Invalid Lead PIN');
   });
 
+  test('rejects present employee list without Lead PIN or admin authorization', async () => {
+    const select = vi.fn(() => ({
+      order: () => ({
+        limit: async () => ({
+          data: [{ staff_id: 'US010454', name: 'Test User', position: 'OB', agency: 'MCO' }],
+          error: null
+        })
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_employees');
+        return { select };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({ method: 'GET', headers: {}, query: { present: '1' } }, res);
+
+    expect(res.code).toBe(401);
+    expect(String(res.body?.error ?? '')).toContain('Lead PIN or admin authorization is required');
+    expect(select).not.toHaveBeenCalled();
+  });
+
   test('creates exception reports with product barcode', async () => {
     const select = vi.fn(() => ({
       gte: () => ({
@@ -550,6 +579,55 @@ describe('api/exception-reports', () => {
     expect(res.code).toBe(200);
     expect(insert.mock.calls[0][0][0].exception_type).toBe('other');
     expect(insert.mock.calls[0][0][0].resolution_note).toBe('Mixed SKU issue');
+  });
+
+  test('surfaces missing Other exception type database migration', async () => {
+    const select = vi.fn(() => ({
+      gte: () => ({
+        lt: () => ({
+          order: () => ({
+            limit: async () => ({ data: [], error: null })
+          })
+        })
+      })
+    }));
+    const insert = vi.fn(() => ({
+      select: () => ({
+        single: async () => ({
+          data: null,
+          error: {
+            code: '23514',
+            message:
+              'new row for relation "ob_exception_reports" violates check constraint "ob_exception_reports_exception_type_check"'
+          }
+        })
+      })
+    }));
+    const serviceSupabase = {
+      from: (table: string) => {
+        expect(table).toBe('ob_exception_reports');
+        return { insert, select };
+      }
+    };
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: () => serviceSupabase
+    }));
+
+    const { default: handler } = await import('../../api/exception-reports');
+    const res = createRes();
+    await handler({
+      method: 'POST',
+      headers: {},
+      body: {
+        ...baseBody,
+        exception_type: 'other',
+        resolution_note: 'Mixed SKU issue'
+      }
+    }, res);
+
+    expect(res.code).toBe(500);
+    expect(res.body.error).toContain('2026-06-19_add_other_exception_type.sql');
   });
 
   test('creates Short Picked reports as a separate status for Less Pick after no-stock confirmation', async () => {
@@ -1491,7 +1569,7 @@ describe('api/exception-reports', () => {
 
     const { default: handler } = await import('../../api/exception-reports');
     const res = createRes();
-    await handler({ method: 'GET', headers: {}, query: { present: '1' } }, res);
+    await handler({ method: 'GET', headers: {}, query: { present: '1', lead_pin: '1234' } }, res);
 
     expect(res.code).toBe(200);
     expect(res.body.rows).toEqual([

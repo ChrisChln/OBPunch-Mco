@@ -41,4 +41,27 @@ describe('employeePositionSort', () => {
       'US003'
     ]);
   });
+
+  test('keeps priority groups before position order', () => {
+    const rows = [
+      { staff_id: 'US003', position: 'Pick', agency: 'Prime' },
+      { staff_id: '', position: 'Pack', agency: 'JDL', name: 'JDL Pack' },
+      { staff_id: 'US001', position: 'Pack', agency: 'Prime' },
+      { staff_id: '', position: 'Rebin', agency: 'JDL', name: 'JDL Rebin' }
+    ];
+
+    const sorted = sortEmployeesByPositionOrder(
+      rows,
+      ['Pick', 'Pack', 'Rebin'],
+      normalizeStaffId,
+      (left, right) => {
+        const leftJdl = String(left.agency ?? '').toLowerCase() === 'jdl';
+        const rightJdl = String(right.agency ?? '').toLowerCase() === 'jdl';
+        if (leftJdl === rightJdl) return 0;
+        return leftJdl ? -1 : 1;
+      }
+    );
+
+    expect(sorted.map((row) => row.name ?? row.staff_id)).toEqual(['JDL Pack', 'JDL Rebin', 'US003', 'US001']);
+  });
 });

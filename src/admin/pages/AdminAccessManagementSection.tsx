@@ -278,13 +278,13 @@ export default function AdminAccessManagementSection({
       ? createPortal(
           <div
             className={[
-              'fixed inset-0 z-40 flex items-center justify-center overflow-y-auto px-4 py-10',
+              'fixed inset-0 z-40 flex items-center justify-center overflow-y-auto px-4 py-6',
               isLight ? 'bg-slate-900/35' : 'bg-black/60'
             ].join(' ')}
           >
             <div
               className={[
-                'w-full max-w-5xl rounded-3xl border p-6 shadow-2xl',
+                'max-h-[calc(100vh-3rem)] w-full max-w-4xl overflow-y-auto rounded-3xl border p-5 shadow-2xl',
                 isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950/90 backdrop-blur'
               ].join(' ')}
             >
@@ -312,7 +312,7 @@ export default function AdminAccessManagementSection({
                 </button>
               </div>
 
-              <div className="mt-6 grid gap-4 md:grid-cols-3">
+              <div className="mt-5 grid gap-3 md:grid-cols-3">
                 <div>
                   <label className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
                     {t('账号', 'User')}
@@ -322,7 +322,7 @@ export default function AdminAccessManagementSection({
                     onChange={(e) => setSelectedUserId(e.target.value)}
                     disabled={saving || editing.mode === 'edit'}
                     className={[
-                      'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                      'mt-2 h-10 w-full rounded-2xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
                       isLight
                         ? 'border border-slate-200 bg-white text-slate-900 focus:border-neon/60 focus:shadow-[0_0_0_2px_rgba(132,204,22,0.15)]'
                         : 'border border-white/10 bg-black/30 text-white focus:border-neon focus:shadow-glow'
@@ -346,7 +346,7 @@ export default function AdminAccessManagementSection({
                     onChange={(e) => setRole(e.target.value as AdminRole)}
                     disabled={saving}
                     className={[
-                      'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                      'mt-2 h-10 w-full rounded-2xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
                       isLight
                         ? 'border border-slate-200 bg-white text-slate-900 focus:border-neon/60 focus:shadow-[0_0_0_2px_rgba(132,204,22,0.15)]'
                         : 'border border-white/10 bg-black/30 text-white focus:border-neon focus:shadow-glow'
@@ -363,7 +363,7 @@ export default function AdminAccessManagementSection({
                 <div className="flex items-end">
                   <label
                     className={[
-                      'flex h-11 w-full items-center justify-between rounded-2xl border px-4 text-sm',
+                      'flex h-10 w-full items-center justify-between rounded-2xl border px-3 text-sm',
                       isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-black/30 text-white'
                     ].join(' ')}
                   >
@@ -379,7 +379,7 @@ export default function AdminAccessManagementSection({
                 </div>
               </div>
 
-              <div className="mt-6">
+              <div className="mt-5">
                 <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
                   {t('Agency 范围', 'Agency Scope')}
                 </div>
@@ -415,7 +415,7 @@ export default function AdminAccessManagementSection({
                 </div>
               </div>
 
-              <div className="mt-6">
+              <div className="mt-5">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
@@ -499,12 +499,12 @@ export default function AdminAccessManagementSection({
                     </button>
                   </div>
                 </div>
-                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                   {modules.map((module) => (
                     <div
                       key={module.module_key}
                       className={[
-                        'rounded-2xl border p-3',
+                        'rounded-2xl border p-2.5',
                         isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'
                       ].join(' ')}
                     >
@@ -526,7 +526,7 @@ export default function AdminAccessManagementSection({
                               onClick={() => setModuleAccess(module.module_key, option)}
                               disabled={saving}
                               className={[
-                                'rounded-lg px-2 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                                'min-h-8 rounded-lg px-2 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
                                 selected
                                   ? option === 'operate'
                                     ? 'bg-emerald-500 text-white'
@@ -552,11 +552,11 @@ export default function AdminAccessManagementSection({
                 </div>
               </div>
 
-              <div className="mt-6">
+              <div className="mt-5">
                 <div className={['text-xs uppercase tracking-[0.25em]', isLight ? 'text-slate-600' : 'text-slate-400'].join(' ')}>
                   Positions
                 </div>
-                <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                <div className="mt-3 grid gap-2 lg:grid-cols-3">
                   {POSITION_SCOPE_MODULES.map((moduleKey) => {
                     const scope = positionScopes[moduleKey];
                     const selectedMap = new Map(scope.positions.map((item) => [item.position.toLowerCase(), item.access_level] as const));
@@ -564,7 +564,7 @@ export default function AdminAccessManagementSection({
                       <div
                         key={moduleKey}
                         className={[
-                          'rounded-2xl border p-3',
+                          'rounded-2xl border p-2.5',
                           isLight ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.03]'
                         ].join(' ')}
                       >
@@ -584,7 +584,7 @@ export default function AdminAccessManagementSection({
                               disabled={saving}
                               onClick={() => setPositionScopeMode(moduleKey, mode)}
                               className={[
-                                'rounded-lg px-2 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                                'min-h-8 rounded-lg px-2 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
                                 scope.mode === mode
                                   ? 'bg-slate-900 text-white'
                                   : isLight
@@ -642,7 +642,7 @@ export default function AdminAccessManagementSection({
                 </div>
               </div>
 
-              <div className="mt-6 flex items-center justify-end gap-3">
+              <div className="mt-5 flex items-center justify-end gap-3">
                 <button
                   type="button"
                   onClick={closeModal}

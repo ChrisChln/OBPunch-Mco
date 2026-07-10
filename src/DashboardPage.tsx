@@ -88,6 +88,22 @@ type MistakeDetailRow = {
   created_at: string;
 };
 
+type DashboardSnapshotRow = {
+  work_date: string;
+  shift: 'early' | 'late';
+  position: string;
+  department: string;
+  expected: number;
+  present: number;
+  on_clock: number;
+  off_worked: number;
+  work_hours: number;
+  snapshot_status: string;
+  expected_captured_at: string | null;
+  actual_captured_at: string | null;
+  updated_at: string | null;
+};
+
 type IconProps = {
   className?: string;
 };
@@ -180,6 +196,8 @@ const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefine
 const POSITIONS_TABLE = (import.meta.env.VITE_POSITIONS_TABLE as string | undefined) ?? 'ob_positions';
 const PUNCHES_TABLE = 'ob_punches';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
+const DASHBOARD_ATTENDANCE_SNAPSHOT_TABLE =
+  (import.meta.env.VITE_DASHBOARD_ATTENDANCE_SNAPSHOT_TABLE as string | undefined) ?? 'ob_dashboard_attendance_snapshots';
 
 const isEmployeeActive = (employee: { active?: unknown; terminated_at?: unknown } | null | undefined) => {
   if (!employee) return false;
@@ -597,6 +615,8 @@ export default function DashboardPage() {
   const [offWorkOnly, setOffWorkOnly] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState('');
   const [operationalDate, setOperationalDate] = useState('');
+  const [selectedOperationalDate, setSelectedOperationalDate] = useState(() => getOperationalRange().operationalDate);
+  const [snapshotStatus, setSnapshotStatus] = useState('');
   const [renderCount, setRenderCount] = useState(120);
   const [badgePrintingStaffId, setBadgePrintingStaffId] = useState<string | null>(null);
   const [accountPrintingStaffId, setAccountPrintingStaffId] = useState<string | null>(null);
@@ -637,6 +657,95 @@ export default function DashboardPage() {
   const employeeCacheRef = useRef<Map<string, EmployeeRow>>(new Map());
   const qrDataUrlCacheRef = useRef<Map<string, string>>(new Map());
   const rowsDigestRef = useRef('');
+
+  const isLiveDate = selectedOperationalDate === getOperationalRange().operationalDate;
+
+  const fetchSnapshotData = async (targetDate: string) => {
+    if (!supabase) {
+      setError('Missing Supabase configuration.');
+      setRows([]);
+      return;
+    }
+    const normalizedDate = normalizeDateOnly(targetDate);
+    if (!normalizedDate) {
+      setError('Invalid date.');
+      setRows([]);
+      return;
+    }
+
+    const currentSeq = fetchSeqRef.current + 1;
+    fetchSeqRef.current = currentSeq;
+    setLoading(true);
+    setError(null);
+
+    try {
+      const snapshotRes = await supabase
+        .from(DASHBOARD_ATTENDANCE_SNAPSHOT_TABLE)
+        .select('work_date, shift, position, department, expected, present, on_clock, off_worked, work_hours, snapshot_status, expected_captured_at, actual_captured_at, updated_at')
+        .eq('work_date', normalizedDate)
+        .order('shift', { ascending: true })
+        .order('position', { ascending: true })
+        .limit(1000);
+
+      if (snapshotRes.error) {
+        if (fetchSeqRef.current === currentSeq) {
+          if (isMissingTableError(snapshotRes.error.message, DASHBOARD_ATTENDANCE_SNAPSHOT_TABLE)) {
+            setRows([]);
+            setCardStatsByKey({});
+            setOperationalDate(normalizedDate);
+            setLastUpdatedAt('');
+            setSnapshotStatus('');
+            rowsDigestRef.current = '';
+            return;
+          }
+          setError(snapshotRes.error.message);
+          setRows([]);
+        }
+        return;
+      }
+
+      const snapshotRows = ((snapshotRes.data as DashboardSnapshotRow[] | null) ?? []).filter(
+        (row) => normalizeDateOnly(row.work_date) === normalizedDate
+      );
+
+      const nextStats: Record<string, { expected: number; present: number; onClock: number; offWorked: number; workHours: number }> = {};
+      const observedPositions: string[] = [];
+      const nextDepartments = { ...dashboardPositionDepartments };
+      let latestUpdated = '';
+      let hasActual = false;
+      for (const row of snapshotRows) {
+        const shift = row.shift === 'late' ? 'late' : 'early';
+        const position = normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || normalizePositionName(row.position);
+        if (!position) continue;
+        observedPositions.push(position);
+        nextDepartments[position] = normalizePositionDepartment(row.department);
+        const key = `${shift}:${position}`;
+        nextStats[key] = {
+          expected: Math.max(0, Number(row.expected ?? 0) || 0),
+          present: Math.max(0, Number(row.present ?? 0) || 0),
+          onClock: Math.max(0, Number(row.on_clock ?? 0) || 0),
+          offWorked: Math.max(0, Number(row.off_worked ?? 0) || 0),
+          workHours: Math.max(0, Number(row.work_hours ?? 0) || 0)
+        };
+        const updatedAt = String(row.actual_captured_at ?? row.expected_captured_at ?? row.updated_at ?? '').trim();
+        if (updatedAt && (!latestUpdated || updatedAt > latestUpdated)) latestUpdated = updatedAt;
+        if (String(row.snapshot_status ?? '').trim() === 'actual' || row.actual_captured_at) hasActual = true;
+      }
+
+      if (fetchSeqRef.current !== currentSeq) return;
+      rowsDigestRef.current = '';
+      setRows([]);
+      setAccountUsageRows([]);
+      setCardStatsByKey(nextStats);
+      setCardPositions(buildDashboardCardPositions(dashboardPositionNames, observedPositions));
+      setDashboardPositionDepartments(nextDepartments);
+      setOperationalDate(normalizedDate);
+      setLastUpdatedAt(latestUpdated ? formatDateTime(latestUpdated) : '');
+      setSnapshotStatus(snapshotRows.length === 0 ? '' : hasActual ? 'actual' : 'expected');
+    } finally {
+      if (fetchSeqRef.current === currentSeq) setLoading(false);
+    }
+  };
 
   const fetchData = async (force = false) => {
     if (!supabase) {
@@ -1326,6 +1435,7 @@ export default function DashboardPage() {
       setAccountUsageRows(nextUsageRows);
       setOperationalDate(currentOperationalDate);
       setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
+      setSnapshotStatus('');
     } finally {
       if (fetchSeqRef.current === currentSeq) setLoading(false);
       inFlightRef.current = false;
@@ -1333,11 +1443,16 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
-    void fetchData(true);
-  }, []);
+    if (selectedOperationalDate === getOperationalRange().operationalDate) {
+      void fetchData(true);
+      return;
+    }
+    void fetchSnapshotData(selectedOperationalDate);
+  }, [selectedOperationalDate]);
 
   useEffect(() => {
     if (!supabase) return;
+    if (selectedOperationalDate !== getOperationalRange().operationalDate) return;
     const tick = () => {
       void fetchData(true);
     };
@@ -1361,7 +1476,7 @@ export default function DashboardPage() {
       document.removeEventListener('visibilitychange', onVisibility);
       void supabase.removeChannel(channel);
     };
-  }, []);
+  }, [selectedOperationalDate]);
 
   const positionOptions = useMemo(
     () =>
@@ -2022,14 +2137,39 @@ export default function DashboardPage() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-1">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">Schedule Date</div>
-              <div className="text-xl font-semibold tracking-[-0.02em] text-stone-50">{operationalDate || '-'}</div>
-              <div className="text-sm text-stone-400">Updated {lastUpdatedAt || '-'}</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="date"
+                  value={selectedOperationalDate}
+                  onChange={(event) => setSelectedOperationalDate(normalizeDateOnly(event.target.value) || getOperationalRange().operationalDate)}
+                  className="h-11 rounded-full border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-stone-50 outline-none transition [color-scheme:dark] hover:bg-white/[0.08] focus:border-[#d9cfbf]/50"
+                />
+                <button
+                  type="button"
+                  onClick={() => setSelectedOperationalDate(getOperationalRange().operationalDate)}
+                  className={[
+                    'h-11 rounded-full border px-4 text-sm font-semibold transition',
+                    isLiveDate
+                      ? 'border-[#d9cfbf]/40 bg-[#e8dfcf] text-[#181614]'
+                      : 'border-white/10 bg-white/[0.05] text-stone-100 hover:bg-white/[0.08]'
+                  ].join(' ')}
+                >
+                  Today
+                </button>
+                {!isLiveDate && snapshotStatus && (
+                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-stone-300">
+                    {snapshotStatus}
+                  </span>
+                )}
+              </div>
+              <div className="text-sm text-stone-400">{loading ? 'Loading...' : `Updated ${lastUpdatedAt || '-'}`}</div>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => setMistakeReportOpen(true)}
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-medium text-stone-100 transition hover:bg-white/[0.08]"
+                disabled={!isLiveDate}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-medium text-stone-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <DocumentIcon />
                 Mistake Report
@@ -2037,7 +2177,8 @@ export default function DashboardPage() {
               <button
                 type="button"
                 onClick={() => setAccountUsageOpen(true)}
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-medium text-stone-100 transition hover:bg-white/[0.08]"
+                disabled={!isLiveDate}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-medium text-stone-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <GridIcon />
                 Account Usage
@@ -2054,7 +2195,10 @@ export default function DashboardPage() {
               </button>
               <button
                 type="button"
-                onClick={() => void fetchData()}
+                onClick={() => {
+                  if (isLiveDate) void fetchData(true);
+                  else void fetchSnapshotData(selectedOperationalDate);
+                }}
                 className="inline-flex items-center gap-2 rounded-full border border-[#d9cfbf]/40 bg-[#e8dfcf] px-4 py-2.5 text-sm font-semibold text-[#181614] transition hover:bg-[#f0e9dc]"
               >
                 <RefreshIcon />
@@ -2178,6 +2322,7 @@ export default function DashboardPage() {
             ))}
           </div>
 
+          {isLiveDate && (
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1.5fr)_160px_220px_200px_repeat(3,minmax(0,150px))]">
             <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4">
               <SearchIcon className="h-4 w-4 text-stone-400" />
@@ -2238,11 +2383,20 @@ export default function DashboardPage() {
               Off Work
             </label>
           </div>
+          )}
         </div>
 
         {error && <p className="mt-4 text-sm text-rose-300">Load failed: {error}</p>}
 
-        {!error && (
+        {!error && !isLiveDate && (
+          <div className="mt-6 rounded-[28px] border border-white/10 bg-black/20 px-5 py-8 text-center">
+            <div className="text-sm font-semibold text-stone-200">
+              {Object.keys(cardStatsByKey).length > 0 ? 'Snapshot summary only.' : 'No snapshot for this date.'}
+            </div>
+          </div>
+        )}
+
+        {!error && isLiveDate && (
           <div className="mt-6 overflow-hidden rounded-[28px] border border-white/10 bg-black/20">
             <div className="overflow-auto">
               <table className="min-w-[1100px] w-full border-collapse text-sm">
@@ -2456,7 +2610,7 @@ export default function DashboardPage() {
           </div>
           </div>
         )}
-        {!error && !loading && renderedRows.length < filteredRows.length && (
+        {!error && isLiveDate && !loading && renderedRows.length < filteredRows.length && (
           <div className="mt-4 flex justify-center">
             <button
               type="button"

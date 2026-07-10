@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
@@ -34,6 +34,8 @@ import BusyOverlay from './components/BusyOverlay';
 import AdminLoginPanel from './components/AdminLoginPanel';
 import ScheduleToolbar from './components/ScheduleToolbar';
 import { matchesScheduleDriverFilter, normalizeScheduleDriverFilterValue } from './scheduleDriverFilter';
+import { getScheduleEmployeeProfileEmail, resolveScheduleEmployeeDisplayName } from './scheduleDisplayName';
+import { buildHiddenJdlStaffIdsForAccounts } from './jdlAdminScheduleStaff';
 import DailyListNewHireModal from './components/DailyListNewHireModal';
 import AdminUserAvatar from './components/AdminUserAvatar';
 import DevicesPage from './pages/DevicesPage';
@@ -58,6 +60,7 @@ import PredictionModelPage from './pages/PredictionModelPage';
 import EfficiencyPage from './pages/EfficiencyPage';
 import WorkHourComparisonPage from './pages/WorkHourComparisonPage';
 import LeaveApprovalPage from './pages/LeaveApprovalPage';
+import { summarizeAttendancePunchRows } from './homeAttendance';
 import TodoPage from './pages/TodoPage';
 import ExceptionsPage from './pages/ExceptionsPage';
 import AppDialog from '../components/AppDialog';
@@ -65,6 +68,7 @@ import ElectricBorder from '../components/ElectricBorder';
 import {
   canManageAdminAccess,
   canReviewTerminationRequests,
+  filterRowsByManagedAgencyAccess,
   filterRowsByPositionAccess,
   getModuleMapFromContext,
   hasPositionAccess,
@@ -82,8 +86,10 @@ import {
   type DailyListLightPosition
 } from '../shared/dailyListLights';
 import { isScheduleOnlyAgency } from '../shared/agencyRules';
+import { getScheduleMistakeDateRange } from '../shared/scheduleMistakes';
 import {
   createAdminAccessRequest,
+  cancelPendingEmployeeTerminationRequests,
   fetchAdminAccessContext,
   listPositions,
   listAdminAccessAccounts,
@@ -114,6 +120,7 @@ import {
 import { useScheduleRealtime } from './useScheduleRealtime';
 import { shouldEnableEmployeeRealtime, useEmployeeRealtime } from './useEmployeeRealtime';
 import { sortEmployeesByPositionOrder } from './employeePositionSort';
+import { sortScheduleEmployees } from './scheduleEmployeeSort';
 import {
   activatePlannedScheduleNote,
   buildDailyPlannedActivationUpserts,
@@ -472,13 +479,6 @@ const normalizeWorkAccountKey = (value: string) => {
   const allDigits = raw.match(/\d{5,}/g);
   if (allDigits && allDigits.length > 0) return allDigits[allDigits.length - 1];
   return raw.replace(/\s+/g, '');
-};
-
-const buildJdlStaffIdCandidatesForAccount = (email: string, userId: string) => {
-  const userToken = String(userId ?? '').replace(/-/g, '').slice(0, 8).toUpperCase();
-  const emailPrefix = String(email ?? '').split('@')[0] ?? '';
-  const base = emailPrefix.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || `USER${userToken}`;
-  return [base, `${base}${userToken}`].filter(Boolean);
 };
 
 const parseUph = (value: unknown) => {
@@ -1418,6 +1418,10 @@ export default function AdminAppPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const isLocked = Boolean(busy);
   const [busyVisible, setBusyVisible] = useState(false);
+  const [homePanelLoading, setHomePanelLoading] = useState(false);
+  const [homePanelLoadingStage, setHomePanelLoadingStage] = useState<'syncing' | 'finalizing'>('syncing');
+  const [homePanelLoadingProgress, setHomePanelLoadingProgress] = useState(0);
+  const homePanelLoadingTokenRef = useRef(0);
   const timecardFetchSeqRef = useRef(0);
   const punchesFetchSeqRef = useRef(0);
   const attendanceFetchSeqRef = useRef(0);
@@ -1464,6 +1468,7 @@ export default function AdminAppPage() {
   const scheduleRenderFilterKeyRef = useRef('');
   const scheduleTableScrollRef = useRef<HTMLDivElement | null>(null);
   type EmployeeColumnMode = 'lower' | 'cased';
+  type EmployeeFetchProfile = 'full' | 'home';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
   const dailyCapacityRequestRef = useRef(0);
@@ -1636,24 +1641,17 @@ export default function AdminAppPage() {
     () => canManageAdminAccess(adminAccessContext),
     [adminAccessContext]
   );
-  const inactiveJdlStaffIds = useMemo(() => {
-    const next = new Set<string>();
-    for (const account of adminAccessAccounts) {
-      if (account.is_active) continue;
-      for (const staff of buildJdlStaffIdCandidatesForAccount(account.user_email, account.user_id)) {
-        const normalized = normalizeStaffId(staff);
-        if (normalized) next.add(normalized);
-      }
-    }
-    return next;
-  }, [adminAccessAccounts]);
+  const hiddenJdlStaffIds = useMemo(
+    () => buildHiddenJdlStaffIdsForAccounts(adminAccessAccounts, normalizeStaffId),
+    [adminAccessAccounts]
+  );
   const isInactiveJdlEmployee = useCallback(
     (employee: EmployeeRow | null | undefined) => {
       const staff = normalizeStaffId(String(employee?.staff_id ?? '').trim());
       const agency = String(employee?.agency ?? employee?.Agency ?? '').trim();
-      return Boolean(staff && isScheduleOnlyAgency(agency) && inactiveJdlStaffIds.has(staff));
+      return Boolean(staff && isScheduleOnlyAgency(agency) && hiddenJdlStaffIds.has(staff));
     },
-    [inactiveJdlStaffIds]
+    [hiddenJdlStaffIds]
   );
   const pendingTerminationRequestsByStaffId = useMemo(() => {
     const map = new Map<string, TerminationRequestRecord>();
@@ -2242,6 +2240,7 @@ export default function AdminAppPage() {
   const [timecardRows, setTimecardRows] = useState<TimecardRow[]>([]);
   const [timecardError, setTimecardError] = useState<string | null>(null);
   const [timecardLoading, setTimecardLoading] = useState(false);
+  const [timecardLoadingProgress, setTimecardLoadingProgress] = useState(0);
   const [timecardSearch, setTimecardSearch] = useState('');
   const [timecardAgency, setTimecardAgency] = useState<string[]>([]);
   const [timecardKnownAgencyOptions, setTimecardKnownAgencyOptions] = useState<string[]>([]);
@@ -2270,11 +2269,15 @@ export default function AdminAppPage() {
   const [timecardPunchPendingAddRows, setTimecardPunchPendingAddRows] = useState<PunchRow[]>([]);
   const [timecardPunchPendingDeleteIds, setTimecardPunchPendingDeleteIds] = useState<string[]>([]);
   const [timecardPunchAddOpen, setTimecardPunchAddOpen] = useState(false);
+  const [timecardPunchAddMenuOpen, setTimecardPunchAddMenuOpen] = useState(false);
   const [timecardPunchEdits, setTimecardPunchEdits] = useState<Record<string, { action: 'IN' | 'OUT'; atLocal: string }>>({});
   const [timecardPunchDraggingId, setTimecardPunchDraggingId] = useState<string | null>(null);
   const [timecardPunchDragOverId, setTimecardPunchDragOverId] = useState<string | null>(null);
   const [timecardPunchOrderIds, setTimecardPunchOrderIds] = useState<string[]>([]);
-  const [timecardPunchNew, setTimecardPunchNew] = useState<{ inAtLocal: string; outAtLocal: string }>({
+  const [timecardPunchAddMode, setTimecardPunchAddMode] = useState<'single' | 'pair'>('single');
+  const [timecardPunchNew, setTimecardPunchNew] = useState<{ action: 'IN' | 'OUT'; atLocal: string; inAtLocal: string; outAtLocal: string }>({
+    action: 'IN',
+    atLocal: '',
     inAtLocal: '',
     outAtLocal: ''
   });
@@ -2314,6 +2317,7 @@ export default function AdminAppPage() {
   const [scheduleLateByStaffDayKey, setScheduleLateByStaffDayKey] = useState<Record<string, LateMarkView>>({});
   const [scheduleDriverGroupByStaffId, setScheduleDriverGroupByStaffId] = useState<Record<string, ScheduleDriverGroupInfo>>({});
   const [scheduleAgencyNoteByStaffId, setScheduleAgencyNoteByStaffId] = useState<Record<string, string>>({});
+  const [scheduleRegisteredNameByEmail, setScheduleRegisteredNameByEmail] = useState<Record<string, string>>({});
   const [scheduleMistakeDraft, setScheduleMistakeDraft] = useState<ScheduleMistakeDraft>({
     open: false,
     staff_id: '',
@@ -2323,7 +2327,6 @@ export default function AdminAppPage() {
     saving: false
   });
   const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
-  const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
   const [schedulePrintDate, setSchedulePrintDate] = useState(() => toDateOnly(new Date()));
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [scheduleSearchInput, setScheduleSearchInput] = useState('');
@@ -2970,6 +2973,14 @@ export default function AdminAppPage() {
     employeeColumnModeRef.current = 'cased';
     return 'cased';
   };
+  const buildEmployeeSelectColumns = (mode: EmployeeColumnMode, profile: EmployeeFetchProfile) => {
+    if (profile === 'home') {
+      return mode === 'cased'
+        ? 'id, staff_id, name, "Agency", "Position", shift, "Label", "WorkAccount", "ShiftTime", active, terminated_at, created_at'
+        : 'id, staff_id, name, agency, position, shift, label, work_account, shift_time, active, terminated_at, created_at';
+    }
+    return '*';
+  };
 
   const normalizePositionKey = (value: string) => {
     const resolved = resolvePositionName(value, allPositionNames);
@@ -3100,8 +3111,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const pageSize = 1000;
-      const latestByStaff = new Map<string, { action: 'IN' | 'OUT'; at: string }>();
-      const firstInByStaff = new Map<string, { at: string }>();
       const runAttendanceQuery = async <T,>(queryFactory: () => PromiseLike<{ data: T | null; error: any }>) => {
         let lastRes = await queryFactory();
         if (!lastRes.error) return lastRes;
@@ -3133,40 +3142,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         setAttendanceError(normalizeAttendanceFetchError(latestPunchRowsRes.error));
         return;
       }
-      for (const r of latestPunchRowsRes.rows) {
-        const staff = String(r.staff_id ?? '').trim();
-        if (!staff || latestByStaff.has(staff)) continue;
-        const action = String(r.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-        const at = String(r.created_at ?? '').trim();
-        if (!at) continue;
-        latestByStaff.set(staff, { action, at });
-      }
-
-      const firstPunchRowsRes = await fetchAllPagedRows<any>({
-        pageSize,
-        shouldStop: () => seq !== attendanceFetchSeqRef.current,
-        stopError: STALE_TIMECARD_REQUEST,
-        fetchPage: async (from, to) =>
-          await runAttendanceQuery(() =>
-            supabase
-              .from('ob_punches')
-              .select('staff_id, created_at, id')
-              .order('created_at', { ascending: true })
-              .range(from, to)
-          )
-      });
-      if (firstPunchRowsRes.error) {
-        if (firstPunchRowsRes.error === STALE_TIMECARD_REQUEST) return;
-        setAttendanceError(normalizeAttendanceFetchError(firstPunchRowsRes.error));
-        return;
-      }
-      for (const r of firstPunchRowsRes.rows) {
-        const staff = normalizeStaffId(String(r.staff_id ?? '').trim());
-        if (!staff || firstInByStaff.has(staff)) continue;
-        const at = String(r.created_at ?? '').trim();
-        if (!at) continue;
-        firstInByStaff.set(staff, { at });
-      }
+      const { latestByStaff, firstInByStaff } = summarizeAttendancePunchRows(latestPunchRowsRes.rows, normalizeStaffId);
 
       const activeStaff = Array.from(latestByStaff.entries())
         .filter(([, v]) => v.action === 'IN')
@@ -3291,6 +3267,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }, 180);
     return () => window.clearTimeout(timer);
   }, [busy]);
+  const beginHomePanelLoading = () => {
+    const nextToken = homePanelLoadingTokenRef.current + 1;
+    homePanelLoadingTokenRef.current = nextToken;
+    setHomePanelLoadingStage('syncing');
+    setHomePanelLoadingProgress(0);
+    setHomePanelLoading(true);
+    return nextToken;
+  };
+  const advanceHomePanelLoading = (token: number, stage: 'syncing' | 'finalizing', progress: number) => {
+    if (homePanelLoadingTokenRef.current !== token) return;
+    setHomePanelLoadingStage(stage);
+    setHomePanelLoadingProgress((current) => Math.max(current, Math.max(0, Math.min(100, progress))));
+  };
+  const finishHomePanelLoading = (token: number) => {
+    if (homePanelLoadingTokenRef.current !== token) return;
+    setHomePanelLoading(false);
+  };
 
   const resolveDailyListLightsTargetDate = (targetDateOverride?: string) => {
     const fallbackDate = toDateOnly(addDays(new Date(serverTime), 1));
@@ -4257,25 +4250,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     };
   };
 
-  const changeScheduleWeek = (nextOffset: number, source: string) => {
-    const previousWeek = getWeekAuditPayload(scheduleWeekOffset);
+  const changeScheduleWeek = (nextOffset: number, _source: string) => {
     const nextWeek = getWeekAuditPayload(nextOffset);
     setScheduleWorkDayFilter(null);
     setScheduleWeekOffset(nextOffset);
-    setScheduleWeekInput(nextWeek.week_start);
-    void writeAudit({
-      action: 'schedule_week_switch',
-      target: SCHEDULE_TABLE,
-      payload: {
-        source,
-        previous_week_offset: previousWeek.week_offset,
-        previous_week_start: previousWeek.week_start,
-        previous_week_end: previousWeek.week_end,
-        next_week_offset: nextWeek.week_offset,
-        next_week_start: nextWeek.week_start,
-        next_week_end: nextWeek.week_end
-      }
-    });
+    setSchedulePrintDate(nextWeek.week_start);
+  };
+
+  const selectScheduleDate = (dateOnly: string) => {
+    setSchedulePrintDate(dateOnly);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) return;
+    const parsed = new Date(`${dateOnly}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return;
+    const weekStart = startOfWeekMonday(parsed);
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const offset = Math.round((weekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
+    setScheduleWorkDayFilter(null);
+    setScheduleWeekOffset(offset);
   };
 
   const openScheduleDailyList = (_source: string) => {
@@ -4302,24 +4293,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     await refreshSchedulePanel();
   };
 
-  const changeTimecardWeek = async (nextOffset: number, source: string) => {
-    const previousWeek = getWeekAuditPayload(timecardWeekOffset);
+  const changeTimecardWeek = async (nextOffset: number, _source: string) => {
     const nextWeek = getWeekAuditPayload(nextOffset);
     setTimecardWeekOffset(nextOffset);
     setTimecardWeekInput(nextWeek.week_start);
-    void writeAudit({
-      action: 'timecard_week_switch',
-      target: 'timecard',
-      payload: {
-        source,
-        previous_week_offset: previousWeek.week_offset,
-        previous_week_start: previousWeek.week_start,
-        previous_week_end: previousWeek.week_end,
-        next_week_offset: nextWeek.week_offset,
-        next_week_start: nextWeek.week_start,
-        next_week_end: nextWeek.week_end
-      }
-    });
     await fetchTimecard({ reset: true, weekOffset: nextOffset, lockUi: false });
   };
 
@@ -4980,6 +4957,127 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       });
       setStatus({ tone: 'success', message: t(`设备已更新：${nextSn}`, `Device updated: ${nextSn}`) });
       await refreshDevicePanel({ lockUi: false });
+    });
+  };
+
+  const exportDevices = async () => {
+    await runLocked('devices_export', async () => {
+      const rows = deviceRowsFiltered;
+      if (rows.length === 0) {
+        setStatus({ tone: 'error', message: t('暂无可导出的设备数据。', 'No device data to export.') });
+        return;
+      }
+
+      const headers = [
+        t('设备名', 'Device name'),
+        'SN',
+        t('类型', 'Type'),
+        t('岗位', 'Position'),
+        t('状态', 'Status'),
+        t('当前借用人ID', 'Current borrower ID'),
+        t('当前借用人', 'Current borrower'),
+        t('借出时间', 'Borrowed at'),
+        t('最后使用者', 'Last user'),
+        t('最后借还时间', 'Last loan at'),
+        t('盘点时间', 'Counted at'),
+        t('启用', 'Active'),
+        t('备注', 'Note'),
+        t('创建时间', 'Created at'),
+        t('更新时间', 'Updated at')
+      ];
+
+      const body = rows.map((row) => {
+        const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
+        const borrowed = deviceCurrentBorrowBySn.get(sn);
+        const active = row.active !== false;
+        const countedAtMs = Date.parse(parseDeviceCountedAtFromNote(row.note)) || 0;
+        const lastLoanAt = String(deviceLastLoanAtBySn.get(sn) ?? '').trim();
+        const status = !active
+          ? t('停用', 'Disabled')
+          : borrowed
+            ? t('借用中', 'Borrowed')
+            : t('空闲', 'Available');
+        return [
+          String(row.device_name ?? row.name ?? '').trim() || '-',
+          sn || '-',
+          normalizeDeviceType(String(row.device_type ?? row.type ?? '')),
+          String(row.position ?? '').trim() || '-',
+          status,
+          String(borrowed?.staff_id ?? '').trim() || '-',
+          String(borrowed?.staff_name ?? '').trim() || '-',
+          String(borrowed?.created_at ?? '').trim() || '-',
+          deviceLastUserBySn.get(sn) ?? '-',
+          lastLoanAt || '-',
+          countedAtMs > 0 ? new Date(countedAtMs).toISOString() : '-',
+          active ? 'TRUE' : 'FALSE',
+          String(row.note ?? '').trim() || '-',
+          String(row.created_at ?? '').trim() || '-',
+          String(row.updated_at ?? '').trim() || '-'
+        ];
+      });
+
+      const filename = `ob_devices_${toDateOnly(serverTime)}.xlsx`;
+      try {
+        const XLSX = await import('xlsx');
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...body]);
+        ws['!cols'] = [
+          { wch: 18 },
+          { wch: 18 },
+          { wch: 16 },
+          { wch: 16 },
+          { wch: 14 },
+          { wch: 18 },
+          { wch: 18 },
+          { wch: 24 },
+          { wch: 18 },
+          { wch: 24 },
+          { wch: 24 },
+          { wch: 10 },
+          { wch: 28 },
+          { wch: 24 },
+          { wch: 24 }
+        ];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'devices');
+        XLSX.writeFile(wb, filename);
+        setStatus({ tone: 'success', message: t(`已导出：${filename}`, `Exported: ${filename}`) });
+      } catch {
+        const csvName = filename.replace(/\.xlsx$/i, '.csv');
+        const csv = [headers, ...body]
+          .map((line) =>
+            line
+              .map((cell) => {
+                const value = String(cell ?? '');
+                if (value.includes('"') || value.includes(',') || value.includes('\n')) return `"${value.replace(/"/g, '""')}"`;
+                return value;
+              })
+              .join(',')
+          )
+          .join('\n');
+        const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = csvName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setStatus({ tone: 'success', message: t(`已导出：${csvName}`, `Exported: ${csvName}`) });
+      }
+
+      await writeAudit({
+        action: 'device_export',
+        target: DEVICE_TABLE,
+        payload: {
+          exported_rows: rows.length,
+          search: deviceSearch.trim() || null,
+          type: deviceFilterType || null,
+          department: deviceFilterDepartment,
+          position: deviceFilterPosition || null,
+          borrowed_only: deviceBorrowedOnly
+        }
+      });
     });
   };
 
@@ -5756,8 +5854,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
   const refreshHomePanel = async (options?: { lockUi?: boolean }) => {
     const lockUi = options?.lockUi ?? true;
-    await fetchSchedule({ weekOffsetOverride: 0, lockUi: false });
-    const latestEmployees = await fetchEmployees({
+    const loadingToken = beginHomePanelLoading();
+    const settleCompleteProgress = (completed: number) => Math.round((completed / 3) * 72);
+    let completedInitialLoads = 0;
+    const markInitialLoadComplete = () => {
+      completedInitialLoads += 1;
+      advanceHomePanelLoading(loadingToken, 'syncing', settleCompleteProgress(completedInitialLoads));
+    };
+    const scheduleTask = fetchSchedule({ weekOffsetOverride: 0, lockUi: false }).finally(markInitialLoadComplete);
+    const employeeTask = fetchEmployees({
       reset: true,
       search: '',
       agency: '',
@@ -5765,16 +5870,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       labels: [],
       lockUi,
       includePunchMeta: false,
-      streamPartialState: false
-    });
-    await fetchRealtimeAttendance();
-    // Home dashboard should use current week punch presence, independent of Schedule page week navigation.
-    await fetchSchedulePunchPresence({
-      employeesOverride: latestEmployees,
-      weekOffsetOverride: 0,
-      mode: 'operational_day',
-      keepPreviousWhileLoading: true
-    });
+      streamPartialState: false,
+      profile: 'home'
+    }).finally(markInitialLoadComplete);
+    const attendanceTask = fetchRealtimeAttendance().finally(markInitialLoadComplete);
+    try {
+      const [, latestEmployees] = await Promise.all([scheduleTask, employeeTask, attendanceTask]);
+      advanceHomePanelLoading(loadingToken, 'finalizing', 80);
+      // Home dashboard should use current week punch presence, independent of Schedule page week navigation.
+      await fetchSchedulePunchPresence({
+        employeesOverride: latestEmployees,
+        weekOffsetOverride: 0,
+        mode: 'operational_day',
+        keepPreviousWhileLoading: true
+      });
+      advanceHomePanelLoading(loadingToken, 'finalizing', 100);
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 180));
+    } finally {
+      finishHomePanelLoading(loadingToken);
+    }
   };
 
   const scheduleWeekRolloverInFlightRef = useRef(false);
@@ -6046,6 +6160,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const operationalPunchesByStaffId: Record<string, Array<{ action: 'IN' | 'OUT'; created_at: string }>> = {};
 
     if (mode === 'operational_day') {
+      const staffBatches = chunk(Array.from(staffSet), 120);
+      if (staffBatches.length === 0) {
+        if (!isStale()) {
+          setSchedulePunchPresenceKeys(new Set());
+          setScheduleFirstInByStaffDayKey({});
+          setHomePunchesByStaffId({});
+          setSchedulePunchPresenceReady(true);
+          setSchedulePunchPresenceWeekOffset(options?.weekOffsetOverride ?? scheduleWeekOffset);
+        }
+        return;
+      }
       const now = new Date(serverTime);
       const operationalStart = new Date(now);
       operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
@@ -6438,8 +6563,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
 
-    const endDate = toDateOnly(serverTime);
-    const startDate = toDateOnly(addDays(serverTime, -6));
+    const mistakeDateRange = getScheduleMistakeDateRange(currentOperationalDate);
+    if (!mistakeDateRange) {
+      if (requestId === scheduleMistakeRequestRef.current) {
+        setScheduleMistakeByStaffId({});
+        setScheduleMistakeDetailsByStaffId({});
+      }
+      return;
+    }
+
+    const { endDate, startDate } = mistakeDateRange;
     const countByStaff = new Map<string, number>();
     const detailByStaff = new Map<string, ScheduleMistakeDetail[]>();
     for (const batch of chunk(staffIds, 200)) {
@@ -6950,7 +7083,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     reset: _reset,
     lockUi: lockUiOption,
     includePunchMeta = false,
-    streamPartialState = true
+    streamPartialState = true,
+    profile = 'full'
   }: {
     reset: boolean;
     search?: string;
@@ -6960,6 +7094,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     lockUi?: boolean;
     includePunchMeta?: boolean;
     streamPartialState?: boolean;
+    profile?: EmployeeFetchProfile;
   }): Promise<EmployeeRow[] | null> => {
     if (!supabase) {
       setEmployeesError('缺少 Supabase 配置。');
@@ -6976,10 +7111,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const firstPageSize = 60;
       const nextPageSize = 200;
 
-      const build = (_mode: EmployeeColumnMode, from: number, to: number) => {
-        // Use wildcard select to tolerate mixed legacy schemas:
-        // some deployments use "Agency"/"Position"/"Label", others use lower-case.
-        return supabase.from(EMPLOYEE_TABLE).select('*').order('staff_id', { ascending: true }).range(from, to);
+      const build = (mode: EmployeeColumnMode, from: number, to: number) => {
+        const selectColumns = buildEmployeeSelectColumns(mode, profile);
+        return supabase.from(EMPLOYEE_TABLE).select(selectColumns).order('staff_id', { ascending: true }).range(from, to);
       };
 
       const mode = await resolveEmployeeColumnMode();
@@ -7107,13 +7241,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               : 'staff_id, name, agency, position, active, terminated_at';
           return includeTerminationType ? `${base}, termination_type` : base;
         };
-        const run = async (mode: EmployeeColumnMode, includeTerminationType: boolean) =>
-          await supabase
-            .from(EMPLOYEE_TABLE)
-            .select(buildSelect(mode, includeTerminationType))
-            .not('terminated_at', 'is', null)
-            .order('terminated_at', { ascending: false })
-            .limit(1000);
+        const run = async (mode: EmployeeColumnMode, includeTerminationType: boolean) => {
+          const rows: EmployeeRow[] = [];
+          const pageSize = 1000;
+          for (let from = 0; ; from += pageSize) {
+            const to = from + pageSize - 1;
+            const result = await supabase
+              .from(EMPLOYEE_TABLE)
+              .select(buildSelect(mode, includeTerminationType))
+              .not('terminated_at', 'is', null)
+              .order('terminated_at', { ascending: false })
+              .range(from, to);
+            if (result.error) return { data: rows, error: result.error };
+            const pageRows = ((result.data as EmployeeRow[] | null) ?? []).filter((row) =>
+              String(row.terminated_at ?? '').trim()
+            );
+            rows.push(...pageRows);
+            if (pageRows.length < pageSize) return { data: rows, error: null };
+          }
+        };
         let mode = await resolveEmployeeColumnMode();
         let res = await run(mode, true);
         if (res.error) {
@@ -7130,7 +7276,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           setDepartedEmployeesError(res.error.message);
           return;
         }
-        setDepartedEmployees(((res.data as EmployeeRow[] | null) ?? []).filter((row) => String(row.terminated_at ?? '').trim()));
+        const positionScopedRows = filterRowsByPositionAccess(
+          adminAccessContext,
+          'employees',
+          res.data ?? [],
+          (row) => String(row.position ?? row.Position ?? '').trim()
+        );
+        const agencyScopedRows = filterRowsByManagedAgencyAccess(
+          adminAccessContext,
+          positionScopedRows,
+          (row) => String(row.agency ?? row.Agency ?? '').trim()
+        );
+        setDepartedEmployees(agencyScopedRows);
       } finally {
         setDepartedEmployeesLoading(false);
       }
@@ -7649,7 +7806,42 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         );
         return;
       }
-      setStatus({ tone: 'success', message: `Employee departed: ${displayName}` });
+      let cancelledTerminationRequestCount = 0;
+      let terminationCleanupError = '';
+      try {
+        const cancelResult = await cancelPendingEmployeeTerminationRequests(
+          supabase,
+          staff,
+          'Cancelled automatically because employee was departed directly.'
+        );
+        cancelledTerminationRequestCount = Number(cancelResult.cancelled_count ?? 0);
+      } catch (error) {
+        terminationCleanupError = error instanceof Error ? error.message : String(error);
+      }
+      if (cancelledTerminationRequestCount > 0) {
+        setTerminationRequests((prev) =>
+          prev.filter(
+            (request) =>
+              !(
+                request.status === 'pending' &&
+                normalizeStaffId(String(request.staff_id ?? '').trim()) === normalizedStaff
+              )
+          )
+        );
+      }
+      if (terminationCleanupError) {
+        setStatus({
+          tone: 'error',
+          message: `Employee departed: ${displayName}. Pending departure cleanup failed: ${terminationCleanupError}`
+        });
+      } else if (cancelledTerminationRequestCount === 0) {
+        setStatus({ tone: 'success', message: `Employee departed: ${displayName}` });
+      } else {
+        setStatus({
+          tone: 'success',
+          message: `Employee departed: ${displayName}. Cancelled ${cancelledTerminationRequestCount} pending request${cancelledTerminationRequestCount === 1 ? '' : 's'}.`
+        });
+      }
       await writeAudit({
         action: 'employee_delete',
         staffId: staff,
@@ -7691,6 +7883,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         ...prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== normalizedStaff)
       ]);
       setDepartureConfirm(null);
+      void fetchTerminationRequests({ lockUi: false });
     });
   };
 
@@ -8852,7 +9045,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const normalized = normalizePositionKey(payload.position);
     setEmployeeEditPosition((normalized ?? '') as string);
     setEmployeeEditEmploymentType(normalizeEmploymentTypeValue(payload.employmentType));
-    setEmployeeEditShift(payload.shift);
+    setEmployeeEditShift(normalizeShiftValue(String(payload.shift ?? '').trim()));
     setEmployeeEditShiftTime(normalizeShiftTimeValue(payload.shiftTime));
     setEmployeeEditLabel(payload.label);
     setEmployeeEditWorkAccount(payload.workAccount);
@@ -10485,10 +10678,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const positionValues = normalizeTimecardFilterValues(position, timecardPosition);
     const missingOnly = missingEmployeeOnly ?? timecardMissingEmployeeOnly;
     const shouldDeferLateSync = deferLateSync ?? true;
+    const advanceTimecardLoadingProgress = (progress: number) => {
+      if (requestId !== timecardFetchSeqRef.current) return;
+      const nextProgress = Math.max(0, Math.min(100, progress));
+      setTimecardLoadingProgress((current) => Math.max(current, nextProgress));
+    };
+    setTimecardLoadingProgress(0);
     setTimecardLoading(true);
     const finishLoading = () => {
       if (requestId === timecardFetchSeqRef.current) {
-        setTimecardLoading(false);
+        setTimecardLoadingProgress(100);
+        window.setTimeout(() => {
+          if (requestId !== timecardFetchSeqRef.current) return;
+          setTimecardLoading(false);
+        }, 180);
       }
     };
 
@@ -11140,6 +11343,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       if (missingOnly) {
         const punchesRes = await fetchPunchesInRange();
+        advanceTimecardLoadingProgress(28);
         if (punchesRes.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: punchesRes.error };
         }
@@ -11169,6 +11373,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
 
         const profilesRes = await fetchProfilesByStaffId(allStaffIds);
+        advanceTimecardLoadingProgress(48);
         if (profilesRes.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: profilesRes.error };
         }
@@ -11198,6 +11403,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           fetchScheduledByStaff(staffIds),
           fetchAttendanceMarksByStaff(staffIds)
         ]);
+        advanceTimecardLoadingProgress(74);
         if (scheduledRes.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: scheduledRes.error };
         }
@@ -11225,11 +11431,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           });
         });
 
+        advanceTimecardLoadingProgress(92);
         return { rows, hasMore: false, error: null as string | null };
       }
 
       const cachedWeek = timecardWeekCacheRef.current;
       if (cachedWeek && cachedWeek.weekKey === weekStartDate) {
+        advanceTimecardLoadingProgress(70);
         const viewEmployees = filterEmployeesForView(cachedWeek.allEmployees);
         const now = new Date(serverTime);
         const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
@@ -11251,6 +11459,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             capEnd
           })
         );
+        advanceTimecardLoadingProgress(92);
         return { rows, hasMore: false, error: null as string | null };
       }
 
@@ -11258,6 +11467,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         fetchPunchesInRange(),
         fetchActiveStaffIdsForWeek()
       ]);
+      advanceTimecardLoadingProgress(38);
       if (isStale()) {
         return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
       }
@@ -11288,6 +11498,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const profilesRes = await fetchProfilesByStaffId(activeStaffIds);
+      advanceTimecardLoadingProgress(55);
       if (profilesRes.error) {
         return { rows: [] as TimecardRow[], hasMore: false, error: profilesRes.error };
       }
@@ -11317,6 +11528,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         fetchScheduledByStaff(activeStaffIds),
         fetchAttendanceMarksByStaff(activeStaffIds)
       ]);
+      advanceTimecardLoadingProgress(74);
       if (isStale()) {
         return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
       }
@@ -11338,6 +11550,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       let lateMarksSynced = false;
       if (!shouldDeferLateSync) {
         try {
+          advanceTimecardLoadingProgress(82);
           lateByStaffDayKey = (
             await syncLateMarksForWeek({
               weekStart,
@@ -11356,6 +11569,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           console.warn('[timecard] sync late marks failed:', error);
         }
       }
+      advanceTimecardLoadingProgress(88);
 
       timecardWeekCacheRef.current = {
         weekKey: weekStartDate,
@@ -11393,6 +11607,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         });
       });
 
+      advanceTimecardLoadingProgress(94);
       return { rows, hasMore: false, error: null as string | null };
     };
 
@@ -11986,13 +12201,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   };
 
-  const fetchPunchRowsForTimecard = async (staffId: string, dayIndex: number | null) => {
+  const fetchPunchRowsForTimecard = async (staffId: string, dayIndex: number | null, weekOffsetOverride = timecardWeekOffset) => {
     if (!supabase) {
       return { rows: [] as PunchRow[], error: '缺少 Supabase 配置。' };
     }
 
     const baseWeekStart = startOfWeekMonday(serverTime);
-    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+    const weekStart = addDays(baseWeekStart, weekOffsetOverride * 7);
 
     const dayRange =
       dayIndex === null ? getDayRange(weekStart, 0, 7) : getDayRange(weekStart, dayIndex);
@@ -12028,7 +12243,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return { rows, error: null as string | null };
   };
 
-  const openTimecardPunchModal = async (staffId: string, dayIndex: number | null) => {
+  const openTimecardPunchModal = async (staffId: string, dayIndex: number | null, weekOffsetOverride = timecardWeekOffset) => {
     const staff = staffId.trim();
     if (!staff) return;
     const staffKey = normalizeStaffId(staff);
@@ -12052,15 +12267,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setTimecardPunchPendingAddRows([]);
     setTimecardPunchPendingDeleteIds([]);
     setTimecardPunchAddOpen(false);
+    setTimecardPunchAddMenuOpen(false);
     setTimecardPunchEdits({});
     setTimecardPunchDraggingId(null);
     setTimecardPunchDragOverId(null);
     setTimecardPunchOrderIds([]);
+    setTimecardPunchAddMode('single');
     const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
-    setTimecardPunchNew({ inAtLocal: nowLocal, outAtLocal: nowLocal });
+    setTimecardPunchNew({ action: 'IN', atLocal: nowLocal, inAtLocal: nowLocal, outAtLocal: nowLocal });
 
     const requestId = ++timecardPunchFetchSeqRef.current;
-    const res = await fetchPunchRowsForTimecard(staff, dayIndex);
+    const res = await fetchPunchRowsForTimecard(staff, dayIndex, weekOffsetOverride);
     if (requestId !== timecardPunchFetchSeqRef.current) return;
     if (res.error) {
       setTimecardPunchError(res.error);
@@ -12107,7 +12324,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     setTimecardWeekOffset(weekOffset);
     setTimecardWeekInput(dateOnly);
-    await fetchTimecard({
+    void fetchTimecard({
       reset: true,
       weekOffset,
       search: staff,
@@ -12117,7 +12334,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       lockUi: false,
       deferLateSync: false
     });
-    await openTimecardPunchModal(staff, dayIndex);
+    await openTimecardPunchModal(staff, dayIndex, weekOffset);
   };
 
   const closeTimecardPunchModal = () => {
@@ -12130,11 +12347,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setTimecardPunchPendingAddRows([]);
     setTimecardPunchPendingDeleteIds([]);
     setTimecardPunchAddOpen(false);
+    setTimecardPunchAddMenuOpen(false);
     setTimecardPunchEdits({});
     setTimecardPunchDraggingId(null);
     setTimecardPunchDragOverId(null);
     setTimecardPunchOrderIds([]);
-    setTimecardPunchNew({ inAtLocal: '', outAtLocal: '' });
+    setTimecardPunchAddMode('single');
+    setTimecardPunchNew({ action: 'IN', atLocal: '', inAtLocal: '', outAtLocal: '' });
   };
 
   const notifyTimecardPunchSaved = (staffId: string, workDate: string) => {
@@ -12150,6 +12369,129 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         }
       })
     );
+  };
+
+  const timecardPunchInputClass = [
+    'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+    themeMode === 'light'
+      ? 'border border-slate-300 bg-white text-slate-900'
+      : 'border border-white/10 bg-black/30 text-white'
+  ].join(' ');
+
+  const timecardPunchActionSelectClass = (action: 'IN' | 'OUT') =>
+    [
+      'mt-2 h-11 w-full rounded-2xl border px-4 font-display text-base tracking-[0.08em] outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+      themeMode === 'light'
+        ? action === 'IN'
+          ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+          : 'border-rose-300 bg-rose-50 text-rose-700'
+        : action === 'IN'
+          ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200'
+          : 'border-rose-400/40 bg-rose-500/10 text-rose-200'
+    ].join(' ');
+
+  const getTimecardPunchActionSelectStyle = (action: 'IN' | 'OUT'): CSSProperties & { WebkitTextFillColor?: string } => {
+    const tone = action === 'IN'
+      ? { text: '#34d399', border: 'rgba(52, 211, 153, 0.45)', bg: 'rgba(16, 185, 129, 0.10)' }
+      : { text: '#fb7185', border: 'rgba(251, 113, 133, 0.45)', bg: 'rgba(244, 63, 94, 0.10)' };
+
+    return {
+      color: tone.text,
+      WebkitTextFillColor: tone.text,
+      borderColor: tone.border,
+      backgroundColor: tone.bg
+    };
+  };
+
+  const renderTimecardPunchAddPanel = () => (
+    <div
+      className={[
+        'rounded-2xl px-4 py-4',
+        themeMode === 'light' ? 'border border-neon/50 bg-emerald-50' : 'border border-neon/40 bg-black/30 shadow-glow'
+      ].join(' ')}
+    >
+      {timecardPunchAddMode === 'single' ? (
+        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_7rem] lg:items-end">
+          <div>
+            <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Action</div>
+            <select
+            value={timecardPunchNew.action}
+            disabled={isLocked}
+            onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, action: e.target.value === 'OUT' ? 'OUT' : 'IN' }))}
+            className={timecardPunchActionSelectClass(timecardPunchNew.action)}
+            style={getTimecardPunchActionSelectStyle(timecardPunchNew.action)}
+          >
+              <option value="IN" className="bg-slate-950 text-emerald-300">IN</option>
+              <option value="OUT" className="bg-slate-950 text-rose-300">OUT</option>
+            </select>
+          </div>
+          <div>
+            <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Time</div>
+            <input
+              value={timecardPunchNew.atLocal}
+              disabled={isLocked}
+              onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, atLocal: e.target.value }))}
+              type="datetime-local"
+              className={timecardPunchInputClass}
+            />
+          </div>
+          <button
+            type="button"
+            disabled={isLocked}
+            onClick={() => void addSingleTimecardPunchRow()}
+            className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t('添加', 'Add')}
+          </button>
+        </div>
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_7rem] lg:items-end">
+          <div>
+            <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>IN Time</div>
+            <input
+              value={timecardPunchNew.inAtLocal}
+              disabled={isLocked}
+              onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, inAtLocal: e.target.value }))}
+              type="datetime-local"
+              className={timecardPunchInputClass}
+            />
+          </div>
+          <div>
+            <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>OUT Time</div>
+            <input
+              value={timecardPunchNew.outAtLocal}
+              disabled={isLocked}
+              onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, outAtLocal: e.target.value }))}
+              type="datetime-local"
+              className={timecardPunchInputClass}
+            />
+          </div>
+          <button
+            type="button"
+            disabled={isLocked}
+            onClick={() => void addTimecardPunchRow()}
+            className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t('添加', 'Add')}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  const openTimecardPunchAddForm = (mode: 'single' | 'pair') => {
+    setTimecardPunchAddMode(mode);
+    setTimecardPunchAddMenuOpen(false);
+    setTimecardPunchAddOpen(true);
+  };
+
+  const toggleTimecardPunchAddMenu = () => {
+    if (timecardPunchAddOpen) {
+      setTimecardPunchAddOpen(false);
+      setTimecardPunchAddMenuOpen(false);
+      return;
+    }
+    setTimecardPunchAddMenuOpen((prev) => !prev);
   };
 
   const renderTimecardPunchModal = () => {
@@ -12196,19 +12538,31 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             </div>
             <div className="flex items-center gap-2">
               {!timecardPunchReadOnly && (
-                <button
-                  type="button"
-                  disabled={isLocked}
-                  onClick={() => setTimecardPunchAddOpen((prev) => !prev)}
-                  className={[
-                    'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-                    themeMode === 'light'
-                      ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                  ].join(' ')}
-                >
-                  {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
-                </button>
+                <div className="relative">
+                  <button
+                    type="button"
+                    disabled={isLocked}
+                    onClick={toggleTimecardPunchAddMenu}
+                    className={[
+                      'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                      themeMode === 'light'
+                        ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                    ].join(' ')}
+                  >
+                    {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
+                  </button>
+                  {timecardPunchAddMenuOpen ? (
+                    <div className={['absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-2xl border p-1 shadow-2xl', themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950'].join(' ')}>
+                      <button type="button" onClick={() => openTimecardPunchAddForm('single')} className={['block h-10 w-full rounded-xl px-3 text-left text-sm font-semibold', themeMode === 'light' ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-200 hover:bg-white/10'].join(' ')}>
+                        {t('单条', 'Single')}
+                      </button>
+                      <button type="button" onClick={() => openTimecardPunchAddForm('pair')} className={['block h-10 w-full rounded-xl px-3 text-left text-sm font-semibold', themeMode === 'light' ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-200 hover:bg-white/10'].join(' ')}>
+                        {t('一组', 'Pair')}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               )}
               {!timecardPunchReadOnly && (
                 <button
@@ -12237,56 +12591,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           </div>
 
           <div className="flex-1 overflow-y-auto px-6 py-5">
-            {!timecardPunchReadOnly && timecardPunchAddOpen && (
-              <div
-                className={[
-                  'rounded-2xl px-4 py-4',
-                  themeMode === 'light' ? 'border border-neon/50 bg-emerald-50' : 'border border-neon/40 bg-black/30 shadow-glow'
-                ].join(' ')}
-              >
-                <div className="grid gap-3 md:grid-cols-[1fr_1fr_7rem] md:items-end">
-                  <div>
-                    <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>IN Time</div>
-                    <input
-                      value={timecardPunchNew.inAtLocal}
-                      disabled={isLocked}
-                      onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, inAtLocal: e.target.value }))}
-                      type="datetime-local"
-                      className={[
-                        'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                        themeMode === 'light'
-                          ? 'border border-slate-300 bg-white text-slate-900'
-                          : 'border border-white/10 bg-black/30 text-white'
-                      ].join(' ')}
-                    />
-                  </div>
-                  <div>
-                    <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>OUT Time</div>
-                    <input
-                      value={timecardPunchNew.outAtLocal}
-                      disabled={isLocked}
-                      onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, outAtLocal: e.target.value }))}
-                      type="datetime-local"
-                      className={[
-                        'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                        themeMode === 'light'
-                          ? 'border border-slate-300 bg-white text-slate-900'
-                          : 'border border-white/10 bg-black/30 text-white'
-                      ].join(' ')}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isLocked}
-                    onClick={() => void addTimecardPunchRow()}
-                    className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {t('添加', 'Add')}
-                  </button>
-                </div>
-                <p className={['mt-3 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{t('手动一次添加一组 IN / OUT 打卡记录。', 'Add one IN/OUT pair manually.')}</p>
-              </div>
-            )}
+            {!timecardPunchReadOnly && timecardPunchAddOpen && renderTimecardPunchAddPanel()}
 
             {timecardPunchError && <p className="text-sm text-ember">{t('操作失败：', 'Failed: ')}{timecardPunchError}</p>}
             {!timecardPunchError && timecardPunchRowsVisible.length === 0 && (
@@ -12403,11 +12708,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
                                 : themeMode === 'light'
                                   ? 'border border-slate-300 bg-white'
                                   : 'border border-white/10 bg-black/30',
-                              edit.action === 'IN' ? 'text-mint' : 'text-ember'
+                              edit.action === 'IN'
+                                ? themeMode === 'light'
+                                  ? 'text-emerald-700'
+                                  : 'text-emerald-300'
+                                : themeMode === 'light'
+                                  ? 'text-rose-700'
+                                  : 'text-rose-300'
                             ].join(' ')}
+                            style={getTimecardPunchActionSelectStyle(edit.action)}
                           >
-                            <option value="IN">IN</option>
-                            <option value="OUT">OUT</option>
+                            <option value="IN" className="bg-slate-950 text-emerald-300">IN</option>
+                            <option value="OUT" className="bg-slate-950 text-rose-300">OUT</option>
                           </select>
                         </div>
                         <div>
@@ -12460,6 +12772,59 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     );
   };
 
+  const getTimecardPunchAddDayRange = () => {
+    if (timecardPunchDayIndex === null || timecardPunchDayIndex < 0 || timecardPunchDayIndex > 6) return null;
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+    return getDayRange(weekStart, timecardPunchDayIndex);
+  };
+
+  const ensureTimecardPunchAddTimeInRange = (createdAt: string) => {
+    const dayRange = getTimecardPunchAddDayRange();
+    if (!dayRange) return { ok: false as const, error: '仅支持在单天视图新增打卡。' };
+    const ms = new Date(createdAt).getTime();
+    const startMs = dayRange.start.getTime();
+    const endMs = dayRange.end.getTime();
+    if (ms < startMs || ms >= endMs) {
+      const startText = formatTime(dayRange.start);
+      const endText = formatTime(dayRange.end);
+      return { ok: false as const, error: `时间必须在单天范围内（${startText} ~ ${endText}，允许跨夜）。` };
+    }
+    return { ok: true as const };
+  };
+
+  const addSingleTimecardPunchRow = async () => {
+    if (!timecardCanOperate) {
+      setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
+      return;
+    }
+    const staff = timecardPunchStaffId;
+    if (!staff) return;
+
+    const createdAt = parseLocalDateTimeInputValue(timecardPunchNew.atLocal);
+    if (!createdAt) {
+      setTimecardPunchError('时间格式不正确。');
+      return;
+    }
+    const rangeCheck = ensureTimecardPunchAddTimeInRange(createdAt);
+    if (!rangeCheck.ok) {
+      setTimecardPunchError(rangeCheck.error);
+      return;
+    }
+
+    const tempId = `tmp_add_${Date.now()}_${timecardPunchNew.action.toLowerCase()}_${Math.random().toString(36).slice(2, 8)}`;
+    const stagedRow: PunchRow = { id: tempId, staff_id: staff, action: timecardPunchNew.action, created_at: createdAt };
+    setTimecardPunchError(null);
+    setTimecardPunchPendingAddRows((prev) => [...prev, stagedRow]);
+    setTimecardPunchEdits((prev) => ({
+      ...prev,
+      [tempId]: { action: timecardPunchNew.action, atLocal: timecardPunchNew.atLocal }
+    }));
+    const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
+    setTimecardPunchNew((prev) => ({ ...prev, atLocal: nowLocal }));
+    setStatus({ tone: 'idle', message: t('已暂存新增，请点击保存全部提交。', 'Add staged. Click Save all to apply.') });
+  };
+
   const addTimecardPunchRow = async () => {
     if (!timecardCanOperate) {
       setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
@@ -12480,21 +12845,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setTimecardPunchError('OUT 时间必须晚于 IN 时间。');
       return;
     }
-    if (timecardPunchDayIndex === null || timecardPunchDayIndex < 0 || timecardPunchDayIndex > 6) {
-      setTimecardPunchError('仅支持在单天视图新增打卡。');
+    const inRangeCheck = ensureTimecardPunchAddTimeInRange(inCreatedAt);
+    if (!inRangeCheck.ok) {
+      setTimecardPunchError(inRangeCheck.error);
       return;
     }
-    const baseWeekStart = startOfWeekMonday(serverTime);
-    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
-    const dayRange = getDayRange(weekStart, timecardPunchDayIndex);
-    const inMs = new Date(inCreatedAt).getTime();
-    const outMs = new Date(outCreatedAt).getTime();
-    const startMs = dayRange.start.getTime();
-    const endMs = dayRange.end.getTime();
-    if (inMs < startMs || inMs >= endMs || outMs < startMs || outMs >= endMs) {
-      const startText = formatTime(dayRange.start);
-      const endText = formatTime(dayRange.end);
-      setTimecardPunchError(`时间必须在单天范围内（${startText} ~ ${endText}，允许跨夜）。`);
+    const outRangeCheck = ensureTimecardPunchAddTimeInRange(outCreatedAt);
+    if (!outRangeCheck.ok) {
+      setTimecardPunchError(outRangeCheck.error);
       return;
     }
     const inTempId = `tmp_add_${Date.now()}_in_${Math.random().toString(36).slice(2, 8)}`;
@@ -12511,7 +12869,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       [outTempId]: { action: 'OUT', atLocal: timecardPunchNew.outAtLocal }
     }));
     const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
-    setTimecardPunchNew({ inAtLocal: nowLocal, outAtLocal: nowLocal });
+    setTimecardPunchNew({ action: 'IN', atLocal: nowLocal, inAtLocal: nowLocal, outAtLocal: nowLocal });
     setStatus({ tone: 'idle', message: t('已暂存新增，请点击保存全部提交。', 'Add staged. Click Save all to apply.') });
   };
 
@@ -13033,7 +13391,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (page !== 'schedule') return;
     void fetchScheduleUph();
     void fetchScheduleMistakeCounts();
-  }, [page, employees]);
+  }, [page, employees, toDateOnly(serverTime), serverTime.getHours()]);
 
   useEffect(() => {
     if (page !== 'schedule') return;
@@ -13874,16 +14232,35 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   }, [page, employeesAllowedByPositionScope, employeeFilterNeedles, employeeShiftByStaffId, getDepartmentForPosition, isInactiveJdlEmployee]);
 
+  const compareEmployeeJdlPriority = useCallback((a: EmployeeRow, b: EmployeeRow) => {
+    const agencyA = String(a.agency ?? a.Agency ?? '').trim().toLowerCase();
+    const agencyB = String(b.agency ?? b.Agency ?? '').trim().toLowerCase();
+    const isJdlA = agencyA === 'jdl';
+    const isJdlB = agencyB === 'jdl';
+    if (isJdlA === isJdlB) return 0;
+    return isJdlA ? -1 : 1;
+  }, []);
+
+  const employeesAfterJdlPrioritySort = useMemo(() => {
+    return employeesAfterFilter
+      .map((employee, index) => ({ employee, index }))
+      .sort((a, b) => compareEmployeeJdlPriority(a.employee, b.employee) || a.index - b.index)
+      .map((entry) => entry.employee);
+  }, [employeesAfterFilter, compareEmployeeJdlPriority]);
+
   // Step 3: Apply position sorting (optional, depends on filtered rows + sort flag)
   const employeesAfterPositionSort = useMemo(() => {
-    if (!employeeSortByPosition) return employeesAfterFilter;
-    return sortEmployeesByPositionOrder(employeesAfterFilter, activePositionNames, normalizeStaffId);
-  }, [employeesAfterFilter, employeeSortByPosition, activePositionNames, normalizeStaffId]);
+    if (!employeeSortByPosition) return employeesAfterJdlPrioritySort;
+    return sortEmployeesByPositionOrder(employeesAfterJdlPrioritySort, activePositionNames, normalizeStaffId, compareEmployeeJdlPriority);
+  }, [employeesAfterJdlPrioritySort, employeeSortByPosition, activePositionNames, normalizeStaffId, compareEmployeeJdlPriority]);
 
   // Step 4: Apply hire date sorting (optional, depends on position-sorted rows + sort flag)
   const employeesAfterHireDateSort = useMemo(() => {
     if (!employeeSortByHireDateDesc) return employeesAfterPositionSort;
     return [...employeesAfterPositionSort].sort((a, b) => {
+      const priorityCompare = compareEmployeeJdlPriority(a, b);
+      if (priorityCompare !== 0) return priorityCompare;
+
       const atA = Date.parse(String(a.created_at ?? ''));
       const atB = Date.parse(String(b.created_at ?? ''));
       const valA = Number.isFinite(atA) ? atA : -1;
@@ -13893,7 +14270,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
       return staffA.localeCompare(staffB, 'en-US');
     });
-  }, [employeesAfterPositionSort, employeeSortByHireDateDesc, normalizeStaffId]);
+  }, [employeesAfterPositionSort, employeeSortByHireDateDesc, normalizeStaffId, compareEmployeeJdlPriority]);
 
   // Step 5: Apply punch time sorting (optional, depends on hire-date sorted rows + sort flag)
   const employeesFiltered = useMemo(() => {
@@ -13908,6 +14285,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return Math.max(0, Math.floor((nowMs - dt.getTime()) / dayMs));
     };
     return [...employeesAfterHireDateSort].sort((a, b) => {
+      const priorityCompare = compareEmployeeJdlPriority(a, b);
+      if (priorityCompare !== 0) return priorityCompare;
+
       const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
       const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
       const daysA = daysAgoForStaff(staffA);
@@ -13917,7 +14297,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (valA !== valB) return valB - valA;
       return staffA.localeCompare(staffB, 'en-US');
     });
-  }, [employeesAfterHireDateSort, employeeSortByLastPunchDesc, employeeLastPunchAtByStaffId, employeeLastPunchSortNowMs]);
+  }, [employeesAfterHireDateSort, employeeSortByLastPunchDesc, employeeLastPunchAtByStaffId, employeeLastPunchSortNowMs, compareEmployeeJdlPriority]);
 
   const toggleEmployeeLastPunchSort = async () => {
     if (employeeSortByLastPunchDesc) {
@@ -14817,20 +15197,24 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     return next;
   }, [scheduleRecommendedAdjustedByDate, selectedSchedulePositionSet, deferredScheduleShift]);
+  const getScheduleEmployeeDisplayName = useCallback(
+    (employee: EmployeeRow) => resolveScheduleEmployeeDisplayName(employee, scheduleRegisteredNameByEmail),
+    [scheduleRegisteredNameByEmail]
+  );
   const employeeProfileByStaffId = useMemo(() => {
     const map = new Map<string, { name: string; agency: string; position: string; shiftTime: string }>();
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff) continue;
       map.set(staff, {
-        name: String(employee.name ?? '').trim(),
+        name: getScheduleEmployeeDisplayName(employee),
         agency: String(employee.agency ?? employee.Agency ?? '').trim(),
         position: String(employee.position ?? employee.Position ?? '').trim(),
         shiftTime: normalizeShiftTimeValue((employee as any).shift_time ?? (employee as any).ShiftTime ?? '')
       });
     }
     return map;
-  }, [employees]);
+  }, [employees, getScheduleEmployeeDisplayName]);
   const scheduleOnlyStaffIds = useMemo(() => {
     const next = new Set<string>();
     for (const employee of employees) {
@@ -14841,6 +15225,44 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     return next;
   }, [employees]);
+  useEffect(() => {
+    if (!supabase || (page !== 'schedule' && page !== 'employees')) return;
+    const emails = Array.from(
+      new Set(
+        employees
+          .filter((employee) => isScheduleOnlyAgency(String(employee.agency ?? employee.Agency ?? '').trim()))
+          .map(getScheduleEmployeeProfileEmail)
+          .filter(Boolean)
+      )
+    );
+    if (emails.length === 0) return;
+    const missingEmails = emails.filter((email) => !scheduleRegisteredNameByEmail[email]);
+    if (missingEmails.length === 0) return;
+
+    let cancelled = false;
+    const loadRegisteredNames = async () => {
+      const res = await supabase
+        .from(USER_PROFILE_TABLE)
+        .select('user_email, display_name')
+        .in('user_email', missingEmails as any);
+      if (cancelled || res.error) return;
+
+      const next: Record<string, string> = {};
+      for (const row of ((res.data as any[]) ?? [])) {
+        const email = String(row?.user_email ?? '').trim().toLowerCase();
+        const displayName = String(row?.display_name ?? '').trim();
+        if (!email || !displayName) continue;
+        next[email] = displayName;
+      }
+      if (Object.keys(next).length === 0) return;
+      setScheduleRegisteredNameByEmail((current) => ({ ...current, ...next }));
+    };
+    void loadRegisteredNames();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [employees, page, scheduleRegisteredNameByEmail, supabase]);
   const tomorrowDailyList = useMemo(() => {
     const parsedTarget =
       /^\d{4}-\d{2}-\d{2}$/.test(dailyListDateInput)
@@ -15361,6 +15783,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     getPositionBadgeClass(position, schedulePositionToneByPosition);
   const getSchedulePositionBadgeClassLight = (position: string) =>
     getPositionBadgeClassLight(position, schedulePositionToneByPosition);
+  const getSchedulePositionTone = (position: string): LabelToneKey =>
+    getPositionToneFromMap(position, schedulePositionToneByPosition);
   const scheduleLabelDefaultToneByName = useMemo(() => {
     const positionCountByLabel: Record<string, Record<string, number>> = {};
     for (const employee of employees) {
@@ -15470,27 +15894,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       ? scheduleEmployeesBase
       : scheduleEmployeesBase.filter((employee) => {
           const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-          const name = String(employee.name ?? '').trim();
+          const name = getScheduleEmployeeDisplayName(employee);
           const position = String(employee.position ?? employee.Position ?? '').trim();
           return [staff, name, position].join(' ').toLowerCase().includes(search);
         });
-    return [...filtered].sort((a, b) => {
-      const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
-      const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
-      const pendingA = pendingTerminationRequestsByStaffId.has(staffA);
-      const pendingB = pendingTerminationRequestsByStaffId.has(staffB);
-      if (pendingA !== pendingB) return pendingA ? -1 : 1;
-      if (!scheduleSortByUphDesc) return staffA.localeCompare(staffB, 'en-US');
-      const rawA = Number(scheduleUphByStaffId[staffA]);
-      const rawB = Number(scheduleUphByStaffId[staffB]);
-      const hasA = Number.isFinite(rawA);
-      const hasB = Number.isFinite(rawB);
-      if (hasA && hasB && rawA !== rawB) return rawB - rawA;
-      if (hasA && !hasB) return -1;
-      if (!hasA && hasB) return 1;
-      return staffA.localeCompare(staffB, 'en-US');
+    return sortScheduleEmployees(filtered, {
+      normalizeStaffId,
+      pendingStaffIds: pendingTerminationRequestsByStaffId,
+      sortByUphDesc: scheduleSortByUphDesc,
+      uphByStaffId: scheduleUphByStaffId
     });
-  }, [page, scheduleEmployeesBase, deferredScheduleSearch, pendingTerminationRequestsByStaffId, scheduleSortByUphDesc, scheduleUphByStaffId]);
+  }, [page, scheduleEmployeesBase, deferredScheduleSearch, pendingTerminationRequestsByStaffId, scheduleSortByUphDesc, scheduleUphByStaffId, getScheduleEmployeeDisplayName]);
   const scheduleEmployeesRendered = useMemo(
     () => scheduleEmployeesFiltered.slice(0, Math.max(0, scheduleRenderCount)),
     [scheduleEmployeesFiltered, scheduleRenderCount]
@@ -16378,6 +16792,12 @@ ${rowsToHtml(late)}
       });
     });
   };
+  const handleDisabledNewHireRequestClick = () => {
+    setStatus({
+      tone: 'idle',
+      message: t('如需新人需求请联系HR', 'If you need new hire requests, please contact HR')
+    });
+  };
 
   const exportScheduleTemplate = async () => {
     await runLocked('schedule_export', async () => {
@@ -16410,7 +16830,7 @@ ${rowsToHtml(late)}
           .sort((a, b) => String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US'))
           .map((employee) => {
             const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-            const name = String(employee.name ?? '').trim();
+            const name = getScheduleEmployeeDisplayName(employee);
             const dayCells = Array.from({ length: 7 }, (_, dayIndex) => {
               const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
               if (!row) return '休息';
@@ -16527,7 +16947,7 @@ ${rowsToHtml(late)}
         if (shift !== 'early' && shift !== 'late') return null;
         return {
           staff_id: staff,
-          name: String(employee.name ?? '').trim(),
+          name: getScheduleEmployeeDisplayName(employee),
           agency: String(employee.agency ?? employee.Agency ?? '').trim(),
           label: String(employee.label ?? employee.Label ?? '').trim(),
           shift
@@ -17059,6 +17479,7 @@ ${rowsToHtml(late)}
                 getHomeChipToneClass={getHomeChipToneClass}
                 getScheduleLabelTone={getScheduleLabelTone}
                 getScheduleTableLabelBadgeClass={getScheduleTableLabelBadgeClass}
+                getSchedulePositionTone={getSchedulePositionTone}
                 getHomePanelToneClass={getHomePanelToneClass}
                 getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                 getScheduleTablePositionBadgeClass={getScheduleTablePositionBadgeClass}
@@ -17117,6 +17538,7 @@ ${rowsToHtml(late)}
                 onDeviceFileSelected={onDeviceFileSelected}
                 uploadDevices={uploadDevices}
                 onDownloadDeviceTemplate={downloadDeviceTemplate}
+                onExportDevices={exportDevices}
                 deviceUploadError={deviceUploadError}
                 deviceSearch={deviceSearch}
                 setDeviceSearch={setDeviceSearch}
@@ -17253,7 +17675,7 @@ ${rowsToHtml(late)}
                   changeScheduleWeek={changeScheduleWeek}
                   openScheduleDailyList={openScheduleDailyList}
                   schedulePrintDate={schedulePrintDate}
-                  setSchedulePrintDate={setSchedulePrintDate}
+                  setSchedulePrintDate={selectScheduleDate}
                   scheduleEmployeesFilteredLength={scheduleEmployeesFiltered.length}
                   printScheduleSignInSheet={printScheduleSignInSheet}
                   exportScheduleTemplate={exportScheduleTemplate}
@@ -17261,25 +17683,6 @@ ${rowsToHtml(late)}
                 />
 
                 <div className="mt-5 grid gap-4 md:grid-cols-12 xl:grid-cols-[repeat(16,minmax(0,1fr))]">
-                  <div className="md:col-span-2">
-                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('周', 'Week')}</label>
-                    <input
-                      type="date"
-                      value={scheduleWeekInput}
-                      disabled={isLocked}
-                      onChange={(e) => setScheduleWeekInput(e.target.value)}
-                      onBlur={() => {
-                        if (!/^\d{4}-\d{2}-\d{2}$/.test(scheduleWeekInput)) return;
-                        const parsed = new Date(`${scheduleWeekInput}T00:00:00`);
-                        if (Number.isNaN(parsed.getTime())) return;
-                        const weekStart = startOfWeekMonday(parsed);
-                        const baseWeekStart = startOfWeekMonday(serverTime);
-                        const offset = Math.round((weekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
-                        changeScheduleWeek(offset, 'date_input');
-                      }}
-                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                  </div>
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('搜索', 'Search')}</label>
                     <input
@@ -17642,16 +18045,35 @@ ${rowsToHtml(late)}
                     className="mx-auto mt-4 min-h-[320px] max-h-[68vh] overflow-x-hidden overflow-y-auto rounded-2xl border border-white/10 bg-black/30 pr-3 pb-2"
                   >
                     <table className="mx-auto w-full table-fixed text-center text-xs leading-tight">
+                      <colgroup>
+                        <col className="w-[44px]" />
+                        <col className="w-[88px]" />
+                        <col className="w-[124px]" />
+                        <col className="w-[74px]" />
+                        <col className="w-[82px]" />
+                        <col className="w-[74px]" />
+                        <col className="w-[74px]" />
+                        <col className="w-[88px]" />
+                        <col className="w-[64px]" />
+                        <col className="w-[56px]" />
+                        <col className="w-[64px]" />
+                        <col className="w-[58px]" />
+                        <col className="w-[58px]" />
+                        {scheduleDays.map((day) => (
+                          <col key={`schedule-col-${toDateOnly(day)}`} className="w-[72px]" />
+                        ))}
+                        <col className="w-[52px]" />
+                      </colgroup>
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
-                          <th className="sticky top-0 z-20 w-[44px] bg-slate-950/95 pl-4 pr-1 py-2 text-left backdrop-blur">NO.</th>
+                          <th className="sticky top-0 z-20 bg-slate-950/95 px-1 py-2 text-center backdrop-blur">NO.</th>
                           <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('工号', 'ID')}</th>
                           <th className="sticky top-0 z-20 w-[124px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('姓名', 'Name')}</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">{t('工作天数', 'Work Days')}</th>
                           <th className="sticky top-0 z-20 w-[82px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('中介', 'Agency')}</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">Driver</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('岗位', 'Position')}</th>
-                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('标签', 'Label')}</th>
+                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('标签', 'Label')}</th>
                           <th className="sticky top-0 z-20 w-[64px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('班次', 'Shift')}</th>
                           <th className="sticky top-0 z-20 w-[56px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
                             <button
@@ -17720,7 +18142,7 @@ ${rowsToHtml(late)}
                       <tbody>
                         {scheduleEmployeesRendered.map((employee, renderedIndex) => {
                           const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-                          const name = String(employee.name ?? '').trim();
+                          const name = getScheduleEmployeeDisplayName(employee);
                           const agency = String(employee.agency ?? employee.Agency ?? '').trim();
                           const attendanceTrackingDisabled = scheduleOnlyStaffIds.has(staff);
                           const position = String(employee.position ?? employee.Position ?? '').trim();
@@ -17802,8 +18224,8 @@ ${rowsToHtml(late)}
                           const effectiveWorkDays = workDays + restWorkedBonusDays - absentPenaltyDays;
                           const scheduleRowClass = hasPendingTermination
                             ? themeMode === 'light'
-                              ? 'border-b border-slate-300 bg-slate-200/85 text-slate-700 transition-colors hover:bg-slate-200 last:border-0'
-                              : 'border-b border-white/5 bg-slate-800/70 text-slate-200 transition-colors hover:bg-slate-800 last:border-0'
+                              ? 'border-b border-slate-300 bg-slate-200/85 text-slate-700 transition-colors hover:bg-slate-100 last:border-0'
+                              : 'border-b border-white/5 bg-slate-800/70 text-slate-200 transition-colors hover:bg-slate-700/80 last:border-0'
                             : 'border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-0';
                           const scheduleBodyTextClass = hasPendingTermination
                             ? themeMode === 'light'
@@ -17817,9 +18239,9 @@ ${rowsToHtml(late)}
 
                           return (
                             <tr className={scheduleRowClass} key={staff}>
-                              <td className="pl-4 pr-1 py-2 font-mono text-[10px] tabular-nums text-slate-400">{renderedIndex + 1}</td>
-                              <td className={['px-1 py-2 font-mono', scheduleBodyTextClass].join(' ')}>{staff}</td>
-                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
+                              <td className="px-1 py-2 text-center font-mono text-[10px] tabular-nums text-slate-400">{renderedIndex + 1}</td>
+                              <td className={['px-1 py-2 text-left font-mono', scheduleBodyTextClass].join(' ')}>{staff}</td>
+                              <td className={['px-1 py-2 text-left', scheduleBodyTextClass].join(' ')}>
                                 <div className="relative inline-flex max-w-full items-start">
                                   <span
                                     className="group relative inline-flex max-w-full items-start pr-2"
@@ -17855,7 +18277,7 @@ ${rowsToHtml(late)}
                                   'min-w-[38px] px-1.5 py-0.5 tabular-nums'
                                 )}
                               </td>
-                              <td className={['px-1 py-2 truncate', scheduleBodyTextClass].join(' ')}>{agency || '-'}</td>
+                              <td className={['px-1 py-2 truncate text-left', scheduleBodyTextClass].join(' ')}>{agency || '-'}</td>
                               <td className="px-1 py-2 text-center">
                                 {scheduleDriverInfo ? (
                                   <span
@@ -17873,7 +18295,7 @@ ${rowsToHtml(late)}
                                   <span className={scheduleBodyTextClass} />
                                 )}
                               </td>
-                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
+                              <td className={['px-1 py-2 text-center', scheduleBodyTextClass].join(' ')}>
                                 {position ? (
                                   <BorderGlow
                                     className="admin-position-badge-glow admin-schedule-badge-glow"
@@ -17902,7 +18324,7 @@ ${rowsToHtml(late)}
                                   renderScheduleEmptyPill()
                                 )}
                               </td>
-                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
+                              <td className={['px-1 py-2 text-center', scheduleBodyTextClass].join(' ')}>
                                 {canEditScheduleLabel && !label ? (
                                   <span
                                     className="relative inline-flex align-middle"
@@ -18110,7 +18532,7 @@ ${rowsToHtml(late)}
                                   row &&
                                   !String(row.note ?? '').trim() &&
                                   isNewHirePlaceholderStaffId(staff) &&
-                                  isNewHirePlaceholderName(String(employee.name ?? '').trim()) &&
+                                  isNewHirePlaceholderName(name) &&
                                   isNewHireFirstWorkDate(staff, scheduleDays[dayIndex] as Date);
                                 const displayState: ScheduleDisplayState = isImplicitNew ? 'new' : state;
                                 const scheduleAuditKey = `${staff}__${getTemplateDateByDayIndex(dayIndex, scheduleWeekOffset)}`;
@@ -18752,13 +19174,14 @@ ${rowsToHtml(late)}
                                 </button>
                                 <button
                                   type="button"
-                                  disabled={isLocked}
-                                  onClick={() => setDailyListNewHireOpen(true)}
+                                  aria-disabled="true"
+                                  onClick={handleDisabledNewHireRequestClick}
+                                  title={t('如需新人需求请联系HR', 'If you need new hire requests, please contact HR')}
                                   className={[
-                                    'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50',
+                                    'rounded-xl px-3 py-1.5 text-xs font-semibold opacity-50 transition',
                                     themeMode === 'light'
-                                      ? 'border border-slate-300 bg-white text-slate-900 hover:bg-slate-100'
-                                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                      ? 'cursor-not-allowed border border-slate-300 bg-white text-slate-900'
+                                      : 'cursor-not-allowed bg-white/10 text-slate-200'
                                   ].join(' ')}
                                 >
                                   {t('新人需求', 'New Request')}
@@ -19203,6 +19626,8 @@ ${rowsToHtml(late)}
                   onToggleSort={toggleEmployeeLastPunchSort}
                   onToggleHireDateSort={toggleEmployeeHireDateSort}
                   displayStaffId={displayStaffId}
+                  getEmployeeDisplayName={getScheduleEmployeeDisplayName}
+                  getSchedulePositionTone={getSchedulePositionTone}
                   getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                   getScheduleLabelTone={getScheduleLabelTone}
                   getScheduleLabelToneClass={getScheduleLabelToneClass}
@@ -19399,6 +19824,7 @@ ${rowsToHtml(late)}
                   themeMode={themeMode}
                   isLocked={timecardReadOnly}
                   timecardLoading={timecardLoading}
+                  timecardLoadingProgress={timecardLoadingProgress}
                   serverTime={serverTime}
                   timecardWeekOffset={timecardWeekOffset}
                   timecardWeekStart={timecardWeekStart}
@@ -19406,6 +19832,7 @@ ${rowsToHtml(late)}
                   addDays={addDays}
                   toDateOnly={toDateOnly}
                   formatHours={formatHours}
+                  getSchedulePositionTone={getSchedulePositionTone}
                   getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                   timecardDayTotalHours={timecardDayTotalHours}
                   timecardDayAttendanceCount={timecardDayAttendanceCount}
@@ -19479,19 +19906,31 @@ ${rowsToHtml(late)}
                           </div>
                           <div className="flex items-center gap-2">
                             {!timecardPunchReadOnly && (
-                              <button
-                                type="button"
-                                disabled={isLocked}
-                                onClick={() => setTimecardPunchAddOpen((prev) => !prev)}
-                                className={[
-                                  'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-                                  themeMode === 'light'
-                                    ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
-                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                                ].join(' ')}
-                              >
-                                {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
-                              </button>
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  disabled={isLocked}
+                                  onClick={toggleTimecardPunchAddMenu}
+                                  className={[
+                                    'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                                    themeMode === 'light'
+                                      ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                  ].join(' ')}
+                                >
+                                  {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
+                                </button>
+                                {timecardPunchAddMenuOpen ? (
+                                  <div className={['absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-2xl border p-1 shadow-2xl', themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950'].join(' ')}>
+                                    <button type="button" onClick={() => openTimecardPunchAddForm('single')} className={['block h-10 w-full rounded-xl px-3 text-left text-sm font-semibold', themeMode === 'light' ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-200 hover:bg-white/10'].join(' ')}>
+                                      {t('单条', 'Single')}
+                                    </button>
+                                    <button type="button" onClick={() => openTimecardPunchAddForm('pair')} className={['block h-10 w-full rounded-xl px-3 text-left text-sm font-semibold', themeMode === 'light' ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-200 hover:bg-white/10'].join(' ')}>
+                                      {t('一组', 'Pair')}
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
                             )}
                             {!timecardPunchReadOnly && (
                               <button
@@ -19520,56 +19959,7 @@ ${rowsToHtml(late)}
                         </div>
 
                         <div className="flex-1 overflow-y-auto px-6 py-5">
-                          {!timecardPunchReadOnly && timecardPunchAddOpen && (
-                            <div
-                              className={[
-                                'rounded-2xl px-4 py-4',
-                                themeMode === 'light' ? 'border border-neon/50 bg-emerald-50' : 'border border-neon/40 bg-black/30 shadow-glow'
-                              ].join(' ')}
-                            >
-                              <div className="grid gap-3 md:grid-cols-[1fr_1fr_7rem] md:items-end">
-                                <div>
-                                  <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>IN Time</div>
-                                  <input
-                                    value={timecardPunchNew.inAtLocal}
-                                    disabled={isLocked}
-                                    onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, inAtLocal: e.target.value }))}
-                                    type="datetime-local"
-                                    className={[
-                                      'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                                      themeMode === 'light'
-                                        ? 'border border-slate-300 bg-white text-slate-900'
-                                        : 'border border-white/10 bg-black/30 text-white'
-                                    ].join(' ')}
-                                  />
-                                </div>
-                                <div>
-                                  <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>OUT Time</div>
-                                  <input
-                                    value={timecardPunchNew.outAtLocal}
-                                    disabled={isLocked}
-                                    onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, outAtLocal: e.target.value }))}
-                                    type="datetime-local"
-                                    className={[
-                                      'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                                      themeMode === 'light'
-                                        ? 'border border-slate-300 bg-white text-slate-900'
-                                        : 'border border-white/10 bg-black/30 text-white'
-                                    ].join(' ')}
-                                  />
-                                </div>
-                                <button
-                                  type="button"
-                                  disabled={isLocked}
-                                  onClick={() => void addTimecardPunchRow()}
-                                  className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                  {t('添加', 'Add')}
-                                </button>
-                              </div>
-                              <p className={['mt-3 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{t('手动一次添加一组 IN / OUT 打卡记录。', 'Add one IN/OUT pair manually.')}</p>
-                            </div>
-                          )}
+                          {!timecardPunchReadOnly && timecardPunchAddOpen && renderTimecardPunchAddPanel()}
 
                         {timecardPunchError && <p className="text-sm text-ember">{t('操作失败：', 'Failed: ')}{timecardPunchError}</p>}
                         {!timecardPunchError && timecardPunchRowsVisible.length === 0 && (
@@ -19686,11 +20076,18 @@ ${rowsToHtml(late)}
                                             : themeMode === 'light'
                                               ? 'border border-slate-300 bg-white'
                                               : 'border border-white/10 bg-black/30',
-                                          edit.action === 'IN' ? 'text-mint' : 'text-ember'
+                                          edit.action === 'IN'
+                                            ? themeMode === 'light'
+                                              ? 'text-emerald-700'
+                                              : 'text-emerald-300'
+                                            : themeMode === 'light'
+                                              ? 'text-rose-700'
+                                              : 'text-rose-300'
                                         ].join(' ')}
+                                        style={getTimecardPunchActionSelectStyle(edit.action)}
                                       >
-                                        <option value="IN">IN</option>
-                                        <option value="OUT">OUT</option>
+                                        <option value="IN" className="bg-slate-950 text-emerald-300">IN</option>
+                                        <option value="OUT" className="bg-slate-950 text-rose-300">OUT</option>
                                       </select>
                                     </div>
                                     <div>
@@ -19902,7 +20299,28 @@ ${rowsToHtml(late)}
             document.body
           )}
 
-        <BusyOverlay visible={busyVisible} themeMode={themeMode} t={t} />
+        <BusyOverlay
+          visible={busyVisible || (page === 'home' && homePanelLoading)}
+          themeMode={themeMode}
+          t={t}
+          titleZh={page === 'home' && homePanelLoading ? '看板同步中' : '处理中...'}
+          titleEn={page === 'home' && homePanelLoading ? 'Syncing Dashboard' : 'Processing...'}
+          detailZh={
+            page === 'home' && homePanelLoading
+              ? homePanelLoadingStage === 'finalizing'
+                ? '正在校准出勤与覆盖率'
+                : '正在加载排班、员工和打卡'
+              : undefined
+          }
+          detailEn={
+            page === 'home' && homePanelLoading
+              ? homePanelLoadingStage === 'finalizing'
+                ? 'Finalizing attendance and coverage'
+                : 'Loading schedules, roster, and punches'
+              : undefined
+          }
+          progress={page === 'home' && homePanelLoading ? homePanelLoadingProgress : null}
+        />
 
         {user && userDisplayNamePromptOpen && (
           <div className={['fixed inset-0 z-[80] flex items-center justify-center px-4', themeMode === 'light' ? 'bg-slate-900/30' : 'bg-black/70'].join(' ')}>

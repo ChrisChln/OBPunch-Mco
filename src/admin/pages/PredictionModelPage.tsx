@@ -3,6 +3,7 @@ import StyledDateInput from '../components/StyledDateInput';
 import { createSupabaseClientWithCredentials } from '../../lib/supabase';
 import { useDeferredValue } from 'react';
 import { getIsoWeekday } from '../forecast';
+import { useDeterminateLoadingProgress } from '../../components/useDeterminateLoadingProgress';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -3637,12 +3638,17 @@ function MetricCard({
 
 function PredictionWorkbenchFullscreenLoading({
   t,
-  themeMode
+  themeMode,
+  visible
 }: {
   t: TranslateFn;
   themeMode: 'light' | 'dark';
+  visible: boolean;
 }) {
   const isLight = themeMode === 'light';
+  const { renderVisible, progressValue } = useDeterminateLoadingProgress(visible);
+
+  if (!renderVisible) return null;
 
   return (
     <div
@@ -3697,6 +3703,29 @@ function PredictionWorkbenchFullscreenLoading({
             </div>
             <div className={['mt-3 text-sm', isLight ? 'text-slate-500' : 'text-white/65'].join(' ')}>
               {t('正在同步历史数据、构建特征并完成版本评分', 'Syncing history, building features, and scoring versions')}
+            </div>
+            <div className="mx-auto mt-5 w-full max-w-md">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span className={['text-xs font-semibold tracking-[0.18em]', isLight ? 'text-slate-500' : 'text-white/55'].join(' ')}>
+                  {t('进度', 'Progress')}
+                </span>
+                <span className={['text-xs font-semibold tabular-nums', isLight ? 'text-slate-600' : 'text-white/70'].join(' ')}>
+                  {progressValue}%
+                </span>
+              </div>
+              <div
+                className={['h-2 overflow-hidden rounded-full', isLight ? 'bg-slate-200' : 'bg-white/12'].join(' ')}
+                role="progressbar"
+                aria-label={t('预测工作台加载进度', 'Prediction workbench loading progress')}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progressValue}
+              >
+                <span
+                  className={['block h-full rounded-full transition-[width] duration-300 ease-out', isLight ? 'bg-sky-500 shadow-[0_0_18px_rgba(14,165,233,0.34)]' : 'bg-sky-300 shadow-[0_0_18px_rgba(125,211,252,0.34)]'].join(' ')}
+                  style={{ width: `${progressValue}%` }}
+                />
+              </div>
             </div>
           </div>
           <div className="mt-6 grid gap-3 md:grid-cols-[repeat(5,minmax(0,1fr))]">
@@ -4350,7 +4379,7 @@ export default function PredictionModelPage({ t, isLocked, serverTime, supabase,
 
   return (
     <>
-      {showFullscreenLoading ? <PredictionWorkbenchFullscreenLoading t={t} themeMode={themeMode} /> : null}
+      <PredictionWorkbenchFullscreenLoading t={t} themeMode={themeMode} visible={showFullscreenLoading} />
       <section className="px-6 py-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>

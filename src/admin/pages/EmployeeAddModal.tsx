@@ -1,5 +1,7 @@
 ﻿import { createPortal } from 'react-dom';
 
+import { Check } from 'lucide-react';
+
 import { isScheduleOnlyAgency } from '../../shared/agencyRules';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -116,7 +118,7 @@ export default function EmployeeAddModal({
   const addBtnClass = isLight
     ? 'rounded-2xl bg-neon px-6 py-2 text-sm font-semibold text-slate-900 shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50'
     : 'rounded-2xl bg-neon px-6 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50';
-  const selectedShiftLabel = employeeNewShift === 'early' ? t('早班', 'Morning') : employeeNewShift === 'late' ? t('晚班', 'Night') : t('未选择', 'Not set');
+  const selectedShiftLabel = employeeNewShift === 'early' ? t('白班', 'Day') : employeeNewShift === 'late' ? t('夜班', 'Night') : t('未选择', 'Not set');
 
   return createPortal(
     <div className={['fixed inset-0 z-40 flex items-center justify-center overflow-y-auto px-4 py-10', overlayClass].join(' ')}>
@@ -223,8 +225,8 @@ export default function EmployeeAddModal({
                 </div>
                 <div className={shiftGroupClass}>
                   {([
-                    ['early', t('早班', 'Morning')],
-                    ['late', t('晚班', 'Night')]
+                    ['early', t('白班', 'Day')],
+                    ['late', t('夜班', 'Night')]
                   ] as const).map(([val, label]) => (
                     <button
                       key={val}
@@ -233,18 +235,19 @@ export default function EmployeeAddModal({
                       aria-pressed={employeeNewShift === val}
                       onClick={() => setEmployeeNewShift(val as '' | 'early' | 'late')}
                       className={[
-                        'flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition',
+                        'flex-1 inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition',
                         employeeNewShift === val
                           ? val === 'early'
                             ? isLight
-                              ? 'border-amber-300 bg-amber-400 text-slate-950 shadow-[0_8px_22px_rgba(251,191,36,0.32)]'
-                              : 'border-amber-300/60 bg-amber-400 text-slate-950 shadow-[0_10px_28px_rgba(251,191,36,0.3)]'
+                              ? 'border-amber-400 bg-amber-400 text-slate-950 shadow-[0_8px_22px_rgba(251,191,36,0.32)] ring-2 ring-amber-200'
+                              : 'border-amber-300 bg-amber-400 text-slate-950 shadow-[0_10px_28px_rgba(251,191,36,0.3)] ring-2 ring-amber-200/30'
                             : isLight
-                              ? 'border-violet-300 bg-violet-500 text-white shadow-[0_8px_22px_rgba(139,92,246,0.28)]'
-                              : 'border-indigo-300/60 bg-indigo-500 text-white shadow-[0_10px_28px_rgba(99,102,241,0.3)]'
+                              ? 'border-indigo-500 bg-indigo-600 text-white shadow-[0_8px_22px_rgba(79,70,229,0.28)] ring-2 ring-indigo-200'
+                              : 'border-indigo-300 bg-indigo-500 text-white shadow-[0_10px_28px_rgba(99,102,241,0.3)] ring-2 ring-indigo-200/30'
                           : shiftInactiveClass
                       ].join(' ')}
                     >
+                      {employeeNewShift === val && <Check className="h-4 w-4" aria-hidden="true" />}
                       {label}
                     </button>
                   ))}

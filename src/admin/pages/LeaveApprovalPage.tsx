@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import BusyOverlay from '../components/BusyOverlay';
 import StyledDateInput from '../components/StyledDateInput';
 import { isValidStaffId, normalizeStaffId } from '../../lib/staffId';
 import {
@@ -653,9 +654,38 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
   const buttonSecondaryClass = isLight ? 'admin-btn h-10 rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:border-slate-400 disabled:opacity-60' : 'admin-btn admin-btn-secondary h-10 px-4 text-sm font-semibold text-white disabled:opacity-60';
   const buttonPrimaryClass = isLight ? 'admin-btn h-10 rounded-2xl bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60' : 'admin-btn admin-btn-primary h-10 px-4 text-sm font-semibold text-slate-950 disabled:opacity-60';
   const labelClass = isLight ? 'text-xs uppercase tracking-[0.16em] text-slate-500' : 'text-xs uppercase tracking-[0.16em] text-white/60';
+  const busyOverlay = useMemo(() => {
+    if (savingRowId) {
+      return {
+        titleZh: '审批保存中',
+        titleEn: 'Saving Review',
+        detailZh: '正在写入请假状态',
+        detailEn: 'Updating leave status'
+      };
+    }
+    if (loading) {
+      return {
+        titleZh: '请假加载中',
+        titleEn: 'Loading Leave',
+        detailZh: '正在加载申请和员工资料',
+        detailEn: 'Loading requests and employees'
+      };
+    }
+    return null;
+  }, [loading, savingRowId]);
 
   return (
-    <section className="px-6 py-8">
+    <>
+      <BusyOverlay
+        visible={Boolean(busyOverlay)}
+        themeMode={themeMode}
+        t={t}
+        titleZh={busyOverlay?.titleZh}
+        titleEn={busyOverlay?.titleEn}
+        detailZh={busyOverlay?.detailZh}
+        detailEn={busyOverlay?.detailEn}
+      />
+      <section className="px-6 py-8">
       <div>
         <h2 className="font-display text-2xl tracking-[0.08em]">{t('请假审批', 'Leave Approval')}</h2>
       </div>
@@ -753,6 +783,7 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
           </div>
         </div>
       ) : null}
-    </section>
+      </section>
+    </>
   );
 }

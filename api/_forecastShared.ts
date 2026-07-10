@@ -36,14 +36,9 @@ export const ensureCron = (req: any, res: any) => {
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
   if (adminToken && token === adminToken) return true;
   if (cronSecret && token === cronSecret) return true;
-  const userAgent = String(req.headers?.['user-agent'] ?? '').toLowerCase();
-  const isCronRequest = req.headers?.['x-vercel-cron'] === '1' || userAgent.includes('vercel-cron');
 
-  if (!isCronRequest) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return false;
-  }
-  return true;
+  res.status(401).json({ error: 'Unauthorized' });
+  return false;
 };
 
 export const parseJsonBody = <T>(req: any, res: any): T | null => {

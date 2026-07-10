@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Children, isValidElement, type ReactNode } from 'react';
 
 import type { LabelToneKey } from '../lib/labelTone';
 import BorderGlow from '../admin/components/BorderGlow';
@@ -57,6 +57,13 @@ const TEXT_CLASS: Record<LabelToneKey, string> = {
   slate: 'text-slate-100'
 };
 
+const getTextSeed = (node: ReactNode): string => {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(getTextSeed).join('|');
+  if (isValidElement<{ children?: ReactNode }>(node)) return getTextSeed(node.props.children);
+  return Children.count(node) ? 'chip' : 'empty';
+};
+
 export const getGlowToneForPosition = (value: string): LabelToneKey => {
   const key = String(value ?? '').trim().toLowerCase();
   if (key === 'pick') return 'sky';
@@ -84,6 +91,7 @@ export const getGlowToneForPunch = (value: string): LabelToneKey => {
 
 export default function GlowLabelChip({ children, tone = 'slate', className = '', title, static: useStatic = false, glowSeed }: GlowLabelChipProps) {
   const glowTheme = GLOW_THEME[tone] ?? GLOW_THEME.slate;
+  const resolvedGlowSeed = glowSeed ?? `${tone}:${getTextSeed(children)}`;
   if (useStatic) {
     return (
       <span
@@ -118,7 +126,7 @@ export default function GlowLabelChip({ children, tone = 'slate', className = ''
       rotateDuration={4200}
       colors={glowTheme.colors}
       fillOpacity={0.5}
-      glowSeed={glowSeed}
+      glowSeed={resolvedGlowSeed}
     >
       <span
         className={[

@@ -17,10 +17,14 @@ export const buildEmployeePositionRankMap = (positionNames: readonly string[]) =
 export const sortEmployeesByPositionOrder = <T extends EmployeePositionLike>(
   employees: readonly T[],
   positionNames: readonly string[],
-  normalizeStaffId: (value: string) => string
+  normalizeStaffId: (value: string) => string,
+  comparePriority?: (a: T, b: T) => number
 ) => {
   const rankMap = buildEmployeePositionRankMap(positionNames);
   return [...employees].sort((a, b) => {
+    const priorityCompare = comparePriority?.(a, b) ?? 0;
+    if (priorityCompare !== 0) return priorityCompare;
+
     const positionA = String(a.position ?? a.Position ?? '').trim();
     const positionB = String(b.position ?? b.Position ?? '').trim();
     const keyA = positionA.toLowerCase();

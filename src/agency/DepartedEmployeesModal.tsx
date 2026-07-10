@@ -1,6 +1,7 @@
 import { createPortal } from 'react-dom';
 import { useMemo, useState } from 'react';
 import type { AgencyDepartedEmployeeRow } from './types';
+import { agencyButtonClass, agencyInputClass } from './uiClasses';
 
 type DepartedEmployeesModalProps = {
   open: boolean;
@@ -80,10 +81,10 @@ export default function DepartedEmployeesModal({
             <div className="mt-1 text-xs uppercase tracking-[0.2em] text-slate-500">Read Only</div>
           </div>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => void onRefresh()} className="inline-flex h-10 items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-medium text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50" disabled={loading}>
+            <button type="button" onClick={() => void onRefresh()} className={agencyButtonClass} disabled={loading}>
               Refresh
             </button>
-            <button type="button" onClick={onClose} className="inline-flex h-10 items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-medium text-white transition hover:bg-white/10">
+            <button type="button" onClick={onClose} className={agencyButtonClass}>
               Close
             </button>
           </div>
@@ -94,12 +95,12 @@ export default function DepartedEmployeesModal({
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search name / USID"
-            className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-[#9eff00]"
+            className={agencyInputClass}
           />
           <select
             value={agency}
             onChange={(event) => setAgency(event.target.value)}
-            className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-[#9eff00]"
+            className={agencyInputClass}
           >
             <option value="">All Agency</option>
             {agencyOptions.map((option) => (
@@ -111,7 +112,7 @@ export default function DepartedEmployeesModal({
           <select
             value={position}
             onChange={(event) => setPosition(event.target.value)}
-            className="h-11 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm text-white outline-none transition focus:border-[#9eff00]"
+            className={agencyInputClass}
           >
             <option value="">All Position</option>
             {positionOptions.map((option) => (

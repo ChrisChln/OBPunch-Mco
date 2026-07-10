@@ -126,6 +126,28 @@ export const buildDashboardAttendanceStats = (rows: readonly DashboardAttendance
   return stats;
 };
 
+export const mergeDashboardAttendanceActualsIntoExpected = (
+  expectedStats: DashboardAttendanceSummary,
+  actualStats: DashboardAttendanceSummary
+): DashboardAttendanceSummary => {
+  const keys = new Set([...Object.keys(expectedStats), ...Object.keys(actualStats)]);
+  const merged: DashboardAttendanceSummary = {};
+
+  for (const key of keys) {
+    const expected = expectedStats[key] ?? createDashboardAttendanceStat();
+    const actual = actualStats[key] ?? createDashboardAttendanceStat();
+    merged[key] = {
+      expected: Math.max(0, Number(expected.expected ?? 0) || 0),
+      present: Math.max(0, Number(actual.present ?? 0) || 0),
+      onClock: Math.max(0, Number(actual.onClock ?? 0) || 0),
+      offWorked: Math.max(0, Number(actual.offWorked ?? 0) || 0),
+      workHours: Math.max(0, Number(actual.workHours ?? 0) || 0)
+    };
+  }
+
+  return merged;
+};
+
 const isDashboardCoverageDepartment = (value: PositionDepartment): value is DashboardCoverageDepartment =>
   DASHBOARD_COVERAGE_DEPARTMENTS.includes(value as DashboardCoverageDepartment);
 

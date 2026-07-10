@@ -34,11 +34,23 @@ describe('forecast shared cron auth', () => {
     vi.resetModules();
   });
 
-  test('allows Vercel cron requests even when no cron secret is configured', async () => {
+  test('rejects Vercel cron headers without a valid token', async () => {
     const { ensureCron } = await loadForecastShared();
     const res = createRes();
 
     const ok = ensureCron({ headers: { 'x-vercel-cron': '1' } }, res);
+
+    expect(ok).toBe(false);
+    expect(res.code).toBe(401);
+    expect(res.body).toEqual({ error: 'Unauthorized' });
+  });
+
+  test('allows cron calls with cron secret', async () => {
+    process.env.CRON_SECRET = 'cron-secret';
+    const { ensureCron } = await loadForecastShared();
+    const res = createRes();
+
+    const ok = ensureCron({ headers: { authorization: 'Bearer cron-secret' } }, res);
 
     expect(ok).toBe(true);
     expect(res.code).toBe(0);
