@@ -2958,16 +2958,16 @@ export default function AdminAppPage() {
       return 'lower';
     }
 
-    const cased = await supabase.from(EMPLOYEE_TABLE).select('staff_id, "Agency", "Position"').limit(1);
-    if (!cased.error) {
-      employeeColumnModeRef.current = 'cased';
-      return 'cased';
-    }
-
     const lower = await supabase.from(EMPLOYEE_TABLE).select('staff_id, agency, position').limit(1);
     if (!lower.error) {
       employeeColumnModeRef.current = 'lower';
       return 'lower';
+    }
+
+    const cased = await supabase.from(EMPLOYEE_TABLE).select('staff_id, "Agency", "Position"').limit(1);
+    if (!cased.error) {
+      employeeColumnModeRef.current = 'cased';
+      return 'cased';
     }
 
     employeeColumnModeRef.current = 'cased';
