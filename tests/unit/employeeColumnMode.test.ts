@@ -18,4 +18,17 @@ describe('employee column mode detection', () => {
     expect(legacyProbe).toBeGreaterThanOrEqual(0);
     expect(lowerProbe).toBeLessThan(legacyProbe);
   });
+
+  test('retries employee creation with the alternate mode when a selected column is generated', () => {
+    const source = readFileSync(join(process.cwd(), 'src', 'admin', 'AdminAppPage.tsx'), 'utf8');
+    const addStart = source.indexOf('const addEmployeeRow = async');
+    const addEnd = source.indexOf('const deleteEmployeeRow = async', addStart);
+    const addSource = source.slice(addStart, addEnd);
+
+    expect(addStart).toBeGreaterThanOrEqual(0);
+    expect(addEnd).toBeGreaterThan(addStart);
+    expect(addSource).toContain('isGeneratedEmployeeColumnWriteError');
+    expect(addSource).toContain('employeeColumnModeRef.current = fallbackMode');
+    expect(addSource).toContain('await upsertEmployeePayload(buildPayload(fallbackMode))');
+  });
 });

@@ -7572,9 +7572,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       await runLocked('employee_add', async () => {
       setEmployeesError(null);
 
-      const mode = await resolveEmployeeColumnMode();
-      let payload =
-        mode === 'cased'
+      const isGeneratedEmployeeColumnWriteError = (message: string) =>
+        /cannot insert a non-default value into column "(?:agency|position)"/i.test(message);
+      const buildPayload = (targetMode: EmployeeColumnMode): Record<string, unknown> =>
+        targetMode === 'cased'
           ? {
               staff_id: staff,
               name,
@@ -7604,18 +7605,32 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               terminated_at: null
             };
 
-      let attemptUpsert = await supabase
-        .from(EMPLOYEE_TABLE)
-        .upsert([payload as any], { onConflict: 'staff_id', ignoreDuplicates: false });
-      if (attemptUpsert.error && /active|terminated_at/i.test(String(attemptUpsert.error.message ?? ''))) {
-        const fallbackPayload = { ...payload } as Record<string, unknown>;
-        delete fallbackPayload.active;
-        delete fallbackPayload.terminated_at;
-        attemptUpsert = await supabase
+      const upsertEmployeePayload = async (candidate: Record<string, unknown>) => {
+        const effectivePayload = { ...candidate };
+        let result = await supabase
           .from(EMPLOYEE_TABLE)
-          .upsert([fallbackPayload as any], { onConflict: 'staff_id', ignoreDuplicates: false });
-        payload = fallbackPayload as typeof payload;
+          .upsert([effectivePayload as any], { onConflict: 'staff_id', ignoreDuplicates: false });
+        if (result.error && /active|terminated_at/i.test(String(result.error.message ?? ''))) {
+          delete effectivePayload.active;
+          delete effectivePayload.terminated_at;
+          result = await supabase
+            .from(EMPLOYEE_TABLE)
+            .upsert([effectivePayload as any], { onConflict: 'staff_id', ignoreDuplicates: false });
+        }
+        return { result, payload: effectivePayload };
+      };
+
+      const mode = await resolveEmployeeColumnMode();
+      let writeAttempt = await upsertEmployeePayload(buildPayload(mode));
+      if (writeAttempt.result.error && isGeneratedEmployeeColumnWriteError(String(writeAttempt.result.error.message ?? ''))) {
+        const fallbackMode: EmployeeColumnMode = mode === 'lower' ? 'cased' : 'lower';
+        writeAttempt = await upsertEmployeePayload(buildPayload(fallbackMode));
+        if (!writeAttempt.result.error) {
+          employeeColumnModeRef.current = fallbackMode;
+        }
       }
+      const attemptUpsert = writeAttempt.result;
+      const payload = writeAttempt.payload;
 
       if (attemptUpsert.error) {
         const attemptInsert = await supabase.from(EMPLOYEE_TABLE).insert([payload as any]);
