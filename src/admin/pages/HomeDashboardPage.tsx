@@ -109,6 +109,17 @@ type HistoricalEmployeeRow = {
 };
 
 export const HOME_DASHBOARD_CARD_POSITIONS = DEFAULT_DASHBOARD_CARD_POSITIONS;
+const TIMECARD_PUNCH_SAVED_EVENT = 'ob-timecard-punch-saved';
+
+export const shouldRefreshHistoricalTimecard = (
+  savedWorkDate: string,
+  selectedOperationalDate: string,
+  currentOperationalDate: string
+) =>
+  Boolean(savedWorkDate) &&
+  savedWorkDate === selectedOperationalDate &&
+  selectedOperationalDate !== currentOperationalDate;
+
 const iconStrokeClass = 'h-4 w-4 shrink-0';
 const DASHBOARD_ATTENDANCE_SNAPSHOT_TABLE =
   (import.meta.env.VITE_DASHBOARD_ATTENDANCE_SNAPSHOT_TABLE as string | undefined) ?? 'ob_dashboard_attendance_snapshots';
@@ -562,6 +573,27 @@ function HomeDashboardPage({
     }
     void loadSnapshot(selectedOperationalDate);
     void loadHistoricalRoster(selectedOperationalDate);
+  }, [selectedOperationalDate, homeDashboardPositionNames]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const handleTimecardPunchSaved = (event: Event) => {
+      const detail = (event as CustomEvent<{ workDate?: string }>).detail;
+      const workDate = String(detail?.workDate ?? '').trim();
+      const currentDate = getCurrentOperationalDate();
+      if (!shouldRefreshHistoricalTimecard(workDate, selectedOperationalDate, currentDate)) return;
+
+      void Promise.all([
+        loadSnapshot(selectedOperationalDate),
+        loadHistoricalRoster(selectedOperationalDate)
+      ]);
+    };
+
+    window.addEventListener(TIMECARD_PUNCH_SAVED_EVENT, handleTimecardPunchSaved as EventListener);
+    return () => {
+      window.removeEventListener(TIMECARD_PUNCH_SAVED_EVENT, handleTimecardPunchSaved as EventListener);
+    };
   }, [selectedOperationalDate, homeDashboardPositionNames]);
 
   const summaryByPosition = useMemo(() => {
