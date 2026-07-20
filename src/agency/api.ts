@@ -2,14 +2,21 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizeAdminAccessContext, type AdminAccessContext } from '../shared/adminAccess';
 import type {
   AgencyBoard,
+  AgencyDepartedEmployeeRow,
   AgencyUpsertNewHireInput,
   AgencyWeekSchedule,
   AgencyScheduleState
 } from './types';
+import { filterAgencyDepartedEmployees } from './departedEmployees';
+import type { AgencyExistingEmployeeNameRecord } from './newHireValidation';
+import { normalizeAgencyPayrateInput } from './payrate';
 
 const PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
 const PUNCHES_TABLE = (import.meta.env.VITE_PUNCHES_TABLE as string | undefined) ?? 'ob_punches';
+const AGENCY_PAYRATES_TABLE = (import.meta.env.VITE_AGENCY_PAYRATES_TABLE as string | undefined) ?? 'ob_agency_payrates';
+const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefined) ?? 'ob_employees';
+const DEPARTED_EMPLOYEE_PAGE_SIZE = 1000;
 
 const expectRpcSuccess = async <T>(promise: PromiseLike<{ data: T | null; error: { message: string } | null }>) => {
   const result = await promise;
@@ -17,6 +24,52 @@ const expectRpcSuccess = async <T>(promise: PromiseLike<{ data: T | null; error:
     throw new Error(result.error.message);
   }
   return result.data as T;
+};
+
+type AgencyPayrateRow = {
+  staff_id?: string | null;
+  work_date?: string | null;
+  payrate?: string | number | null;
+};
+
+const payrateKey = (staffId: string, workDate: string) => `${staffId}__${workDate}`;
+
+const readFirstText = (row: Record<string, unknown>, keys: string[]) => {
+  for (const key of keys) {
+    const value = String(row[key] ?? '').trim();
+    if (value) return value;
+  }
+  return '';
+};
+
+const normalizeEmployeeNameLookupInput = (value: unknown) => String(value ?? '').trim().replace(/\s+/g, ' ');
+
+const escapeLikeValue = (value: string) => value.replace(/[%_]/g, (token) => `\\${token}`);
+
+const fetchAgencyPayrates = async (supabase: SupabaseClient, staffIds: readonly string[], workDates: readonly string[]) => {
+  const scopedStaffIds = Array.from(new Set(staffIds.map((item) => String(item ?? '').trim()).filter(Boolean)));
+  const scopedWorkDates = Array.from(new Set(workDates.map((item) => String(item ?? '').trim()).filter(Boolean)));
+  if (scopedStaffIds.length === 0 || scopedWorkDates.length === 0) return new Map<string, string>();
+
+  const result = await supabase
+    .from(AGENCY_PAYRATES_TABLE)
+    .select('staff_id, work_date, payrate')
+    .in('staff_id', scopedStaffIds)
+    .in('work_date', scopedWorkDates);
+
+  if (result.error) {
+    throw new Error(String(result.error.message ?? 'Failed to load agency payrates.'));
+  }
+
+  const next = new Map<string, string>();
+  for (const row of (Array.isArray(result.data) ? (result.data as AgencyPayrateRow[]) : [])) {
+    const staffId = String(row.staff_id ?? '').trim();
+    const workDate = String(row.work_date ?? '').trim();
+    const payrate = normalizeAgencyPayrateInput(row.payrate);
+    if (!staffId || !workDate || !payrate) continue;
+    next.set(payrateKey(staffId, workDate), payrate);
+  }
+  return next;
 };
 
 export const fetchAdminAccessContext = async (
@@ -71,21 +124,21 @@ export const fetchAgencyScheduleWeek = async (supabase: SupabaseClient, workDate
       .map((row) => [String(row?.staff_id ?? '').trim(), String(row?.note ?? '').trim()] as const)
       .filter(([staffId]) => Boolean(staffId))
   );
-  return {
-    week_dates: Array.isArray(payload.week_dates) ? payload.week_dates.map((item) => String(item ?? '').trim()).filter(Boolean) : [],
-    employees: Array.isArray(payload.employees)
-      ? payload.employees.map((row) => ({
+  const weekDates = Array.isArray(payload.week_dates) ? payload.week_dates.map((item) => String(item ?? '').trim()).filter(Boolean) : [];
+  const employees = Array.isArray(payload.employees)
+    ? payload.employees.map((row) => ({
           staff_id: String(row?.staff_id ?? '').trim(),
           name: String(row?.name ?? '').trim(),
           agency: String(row?.agency ?? '').trim(),
           position: String(row?.position ?? '').trim(),
-          shift: String(row?.shift ?? '').trim() === 'late' ? 'late' : String(row?.shift ?? '').trim() === 'early' ? 'early' : '',
+          shift: (String(row?.shift ?? '').trim() === 'late' ? 'late' : String(row?.shift ?? '').trim() === 'early' ? 'early' : '') as 'early' | 'late' | '',
           start_time: String(row?.start_time ?? '').trim(),
           label: String(row?.label ?? '').trim(),
+          payrate: '',
           fixed_work_count: Number(row?.fixed_work_count ?? 0) || 0,
           termination_status: row?.termination_status == null ? null : String(row.termination_status).trim() || null,
           driver_group_code: driverAssignmentByStaffId.get(String(row?.staff_id ?? '').trim())?.code ?? '',
-          driver_group_role: driverAssignmentByStaffId.get(String(row?.staff_id ?? '').trim())?.role ?? '',
+          driver_group_role: (driverAssignmentByStaffId.get(String(row?.staff_id ?? '').trim())?.role ?? '') as 'driver' | 'member' | '',
           driver_group_label: driverAssignmentByStaffId.get(String(row?.staff_id ?? '').trim())?.label ?? '',
           agency_note: noteByStaffId.get(String(row?.staff_id ?? '').trim()) ?? '',
           days: Array.isArray(row?.days)
@@ -98,20 +151,37 @@ export const fetchAgencyScheduleWeek = async (supabase: SupabaseClient, workDate
               }))
             : []
         }))
-      : [],
-    new_hire_requests: Array.isArray(payload.new_hire_requests)
-      ? payload.new_hire_requests.map((row) => ({
+    : [];
+  const newHireRequests = Array.isArray(payload.new_hire_requests)
+    ? payload.new_hire_requests.map((row) => ({
           staff_id: String(row?.staff_id ?? '').trim(),
           name: String(row?.name ?? '').trim(),
           agency: String(row?.agency ?? '').trim(),
           position: String(row?.position ?? '').trim(),
-          shift: String(row?.shift ?? '').trim() === 'late' ? 'late' : String(row?.shift ?? '').trim() === 'early' ? 'early' : '',
+          shift: (String(row?.shift ?? '').trim() === 'late' ? 'late' : String(row?.shift ?? '').trim() === 'early' ? 'early' : '') as 'early' | 'late' | '',
           start_time: String(row?.start_time ?? '').trim(),
           label: String(row?.label ?? '').trim(),
+          payrate: '',
           work_date: String(row?.work_date ?? '').trim(),
           can_delete: Boolean(row?.can_delete)
         }))
-      : [],
+    : [];
+  const payrateByStaffDate = await fetchAgencyPayrates(
+    supabase,
+    [...employees.map((row) => row.staff_id), ...newHireRequests.map((row) => row.staff_id)],
+    weekDates
+  );
+
+  return {
+    week_dates: weekDates,
+    employees: employees.map((row) => ({
+      ...row,
+      payrate: payrateByStaffDate.get(payrateKey(row.staff_id, workDate)) ?? ''
+    })),
+    new_hire_requests: newHireRequests.map((row) => ({
+      ...row,
+      payrate: payrateByStaffDate.get(payrateKey(row.staff_id, row.work_date)) ?? ''
+    })),
     driver_groups: Array.isArray(driverPayload.groups)
       ? driverPayload.groups.map((row) => ({
           code: String(row?.code ?? '').trim(),
@@ -129,6 +199,86 @@ export const fetchAgencyUserDisplayName = async (supabase: SupabaseClient, userI
   const result = await supabase.from(PROFILE_TABLE).select('display_name').eq('user_id', userId).maybeSingle();
   if (result.error) return '';
   return String((result.data as { display_name?: string | null } | null)?.display_name ?? '').trim();
+};
+
+export const fetchAgencyExistingEmployeeNameRecords = async (
+  supabase: SupabaseClient,
+  employeeName: string
+): Promise<AgencyExistingEmployeeNameRecord[]> => {
+  const lookupName = normalizeEmployeeNameLookupInput(employeeName);
+  if (!lookupName) return [];
+
+  const result = await supabase
+    .from(EMPLOYEE_TABLE)
+    .select('staff_id, name, terminated_at')
+    .ilike('name', `%${escapeLikeValue(lookupName)}%`)
+    .limit(20);
+
+  if (result.error) {
+    throw new Error(String(result.error.message ?? 'Failed to validate employee name.'));
+  }
+
+  return Array.isArray(result.data)
+    ? result.data.map((row) => ({
+        staffId: String((row as { staff_id?: string | null }).staff_id ?? '').trim(),
+        name: String((row as { name?: string | null }).name ?? '').trim(),
+        terminatedAt: String((row as { terminated_at?: string | null }).terminated_at ?? '').trim() || null
+      }))
+    : [];
+};
+
+export const fetchAgencyDepartedEmployees = async (
+  supabase: SupabaseClient,
+  managedAgencies: string[]
+): Promise<AgencyDepartedEmployeeRow[]> => {
+  const fetchPages = async (selectColumns: string) => {
+    const rows: Record<string, unknown>[] = [];
+    for (let from = 0; ; from += DEPARTED_EMPLOYEE_PAGE_SIZE) {
+      const to = from + DEPARTED_EMPLOYEE_PAGE_SIZE - 1;
+      const result = await supabase
+        .from(EMPLOYEE_TABLE)
+        .select(selectColumns)
+        .not('terminated_at', 'is', null)
+        .order('terminated_at', { ascending: false })
+        .range(from, to) as { data: Record<string, unknown>[] | null; error: { message?: string | null } | null };
+      if (result.error) return { rows, error: result.error };
+
+      const pageRows = Array.isArray(result.data) ? result.data : [];
+      rows.push(...pageRows);
+      if (pageRows.length < DEPARTED_EMPLOYEE_PAGE_SIZE) return { rows, error: null };
+    }
+  };
+
+  let result = await fetchPages('staff_id, name, agency, "Agency", position, "Position", shift, shift_time, terminated_at');
+
+  if (result.error) {
+    result = await fetchPages('staff_id, name, agency, position, shift, shift_time, terminated_at');
+  }
+
+  if (result.error) {
+    result = await fetchPages('staff_id, name, "Agency", "Position", shift, shift_time, terminated_at');
+  }
+
+  if (result.error) {
+    throw new Error(String(result.error.message ?? 'Failed to load departed employees.'));
+  }
+
+  const rows = result.rows
+    .map((row) => ({
+        staff_id: readFirstText(row, ['staff_id']),
+        name: readFirstText(row, ['name']),
+        agency: readFirstText(row, ['agency', 'Agency']),
+        position: readFirstText(row, ['position', 'Position']),
+        shift: (readFirstText(row, ['shift']) === 'late'
+          ? 'late'
+          : readFirstText(row, ['shift']) === 'early'
+            ? 'early'
+            : '') as 'early' | 'late' | '',
+        start_time: readFirstText(row, ['shift_time']),
+        terminated_at: readFirstText(row, ['terminated_at'])
+      }));
+
+  return filterAgencyDepartedEmployees(rows, managedAgencies);
 };
 
 export const fetchAgencyAbsentMarkKeys = async (
@@ -205,8 +355,33 @@ export const submitAgencySubstitute = async (
     })
   );
 
-export const upsertAgencyNewHireDemand = async (supabase: SupabaseClient, input: AgencyUpsertNewHireInput) =>
-  expectRpcSuccess(
+const syncAgencyNewHirePayrate = async (
+  supabase: SupabaseClient,
+  staffIds: readonly string[],
+  workDate: string,
+  payrateInput: unknown
+) => {
+  const scopedStaffIds = Array.from(new Set(staffIds.map((item) => String(item ?? '').trim()).filter(Boolean)));
+  const scopedWorkDate = String(workDate ?? '').trim();
+  if (scopedStaffIds.length === 0 || !scopedWorkDate) return;
+
+  const payrate = normalizeAgencyPayrateInput(payrateInput);
+  const result = await supabase.rpc('save_agency_payrates', {
+    p_staff_ids: scopedStaffIds,
+    p_work_date: scopedWorkDate,
+    p_payrate: payrate || null
+  });
+  if (result.error) {
+    throw new Error(String(result.error.message ?? 'Failed to save agency payrate.'));
+  }
+};
+
+export const upsertAgencyPayrate = async (supabase: SupabaseClient, staffId: string, workDate: string, payrateInput: unknown) => {
+  await syncAgencyNewHirePayrate(supabase, [staffId], workDate, payrateInput);
+};
+
+export const upsertAgencyNewHireDemand = async (supabase: SupabaseClient, input: AgencyUpsertNewHireInput) => {
+  const payload = await expectRpcSuccess<Record<string, unknown>>(
     supabase.rpc('agency_upsert_new_hire_demand', {
       p_staff_id: input.staffId ?? null,
       p_work_date: input.workDate,
@@ -220,14 +395,25 @@ export const upsertAgencyNewHireDemand = async (supabase: SupabaseClient, input:
       p_employee_name: input.employeeName
     })
   );
+  const staffIds = Array.isArray(payload?.staff_ids)
+    ? payload.staff_ids.map((item) => String(item ?? '').trim()).filter(Boolean)
+    : input.staffId
+      ? [String(input.staffId).trim()]
+      : [];
+  await syncAgencyNewHirePayrate(supabase, staffIds, input.workDate, input.payrate);
+  return payload;
+};
 
-export const deleteAgencyNewHireDemand = async (supabase: SupabaseClient, staffId: string, workDate: string) =>
-  expectRpcSuccess(
+export const deleteAgencyNewHireDemand = async (supabase: SupabaseClient, staffId: string, workDate: string) => {
+  const payload = await expectRpcSuccess(
     supabase.rpc('agency_delete_new_hire_demand', {
       p_staff_id: staffId,
       p_work_date: workDate
     })
   );
+  await syncAgencyNewHirePayrate(supabase, [staffId], workDate, '');
+  return payload;
+};
 
 export const createAgencyTerminationRequest = async (
   supabase: SupabaseClient,

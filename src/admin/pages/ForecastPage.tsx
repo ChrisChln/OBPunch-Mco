@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import BusyOverlay from '../components/BusyOverlay';
 import StyledDateInput from '../components/StyledDateInput';
 import type { ForecastModelRow } from '../forecast';
 import { FORECAST_HOURS, calculateForecast, getIsoWeekday } from '../forecast';
@@ -1921,9 +1922,54 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
+  const busyOverlay = useMemo(() => {
+    if (uploading) {
+      return {
+        titleZh: 'Forecast 导入中',
+        titleEn: 'Importing Forecast',
+        detailZh: '正在解析并保存历史数据',
+        detailEn: 'Parsing and saving history'
+      };
+    }
+    if (historyPasteSaving || manualInputSaving) {
+      return {
+        titleZh: 'Forecast 保存中',
+        titleEn: 'Saving Forecast',
+        detailZh: '正在同步手动输入',
+        detailEn: 'Syncing manual inputs'
+      };
+    }
+    if (historyWindowLoading || manualInputsLoading) {
+      return {
+        titleZh: 'Forecast 加载中',
+        titleEn: 'Loading Forecast',
+        detailZh: '正在加载历史和手动输入',
+        detailEn: 'Loading history and inputs'
+      };
+    }
+    if (loading) {
+      return {
+        titleZh: '模型计算中',
+        titleEn: 'Calculating Model',
+        detailZh: '正在刷新预测模型',
+        detailEn: 'Refreshing forecast model'
+      };
+    }
+    return null;
+  }, [historyPasteSaving, historyWindowLoading, loading, manualInputSaving, manualInputsLoading, uploading]);
 
   return (
-    <section className="px-6 py-8">
+    <>
+      <BusyOverlay
+        visible={Boolean(busyOverlay)}
+        themeMode={themeMode}
+        t={t}
+        titleZh={busyOverlay?.titleZh}
+        titleEn={busyOverlay?.titleEn}
+        detailZh={busyOverlay?.detailZh}
+        detailEn={busyOverlay?.detailEn}
+      />
+      <section className="px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-display text-2xl tracking-[0.08em]">{t('Forecast', 'Forecast')}</h2>
@@ -2858,6 +2904,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           </div>,
           document.body
         )}
-    </section>
+      </section>
+    </>
   );
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ElectricBorder from '../../components/ElectricBorder';
-import GlowLabelChip, { getGlowToneForPosition, getGlowToneForShift } from '../../components/GlowLabelChip';
+import GlowLabelChip, { getGlowToneForShift } from '../../components/GlowLabelChip';
+import type { LabelToneKey } from '../../lib/labelTone';
 import AdminUserAvatar from '../components/AdminUserAvatar';
 import type { AdminUserIdentityView } from '../adminIdentity';
 import { getTimecardCellHoursText, getTimecardTotalHoursText } from '../timecardDisplay';
@@ -12,6 +13,7 @@ type TimecardTableSectionProps = {
   themeMode: 'light' | 'dark';
   isLocked: boolean;
   timecardLoading: boolean;
+  timecardLoadingProgress: number;
   serverTime: Date;
   timecardWeekOffset: number;
   timecardWeekStart: Date;
@@ -19,6 +21,7 @@ type TimecardTableSectionProps = {
   addDays: (date: Date, days: number) => Date;
   toDateOnly: (date: Date) => string;
   formatHours: (value: number) => string;
+  getSchedulePositionTone: (position: string) => LabelToneKey;
   getSchedulePositionBadgeClass: (position: string) => string;
   timecardDayTotalHours: number[];
   timecardDayAttendanceCount: number[];
@@ -51,6 +54,7 @@ export default function TimecardTableSection({
   themeMode,
   isLocked,
   timecardLoading,
+  timecardLoadingProgress,
   serverTime,
   timecardWeekOffset,
   timecardWeekStart,
@@ -58,6 +62,7 @@ export default function TimecardTableSection({
   addDays,
   toDateOnly,
   formatHours,
+  getSchedulePositionTone,
   getSchedulePositionBadgeClass,
   timecardDayTotalHours,
   timecardDayAttendanceCount,
@@ -77,6 +82,7 @@ export default function TimecardTableSection({
   renderAuditSummary
 }: TimecardTableSectionProps) {
   const isLight = themeMode === 'light';
+  const loadingProgressValue = Math.max(0, Math.min(100, Math.round(timecardLoadingProgress)));
   const containerRef = useRef<HTMLDivElement | null>(null);
   const scrollRafRef = useRef<number | null>(null);
   const [visibleStartIndex, setVisibleStartIndex] = useState(0);
@@ -210,7 +216,7 @@ export default function TimecardTableSection({
             {row.position || '-'}
           </span>
         ) : (
-          <GlowLabelChip tone={getGlowToneForPosition(row.position)} className="min-w-[54px] uppercase tracking-[0.12em]">
+          <GlowLabelChip tone={getSchedulePositionTone(row.position)} className="min-w-[54px] uppercase tracking-[0.12em]">
             {row.position || '-'}
           </GlowLabelChip>
         )}
@@ -386,7 +392,8 @@ export default function TimecardTableSection({
   return (
     <div
       ref={containerRef}
-      className="no-scrollbar relative mt-5 min-h-[320px] max-h-[68vh] overflow-auto rounded-2xl border border-white/10 bg-black/30"
+      className="relative mt-5 min-h-0 flex-1 overflow-auto overscroll-contain rounded-2xl border border-white/10 bg-black/30 [scrollbar-gutter:stable]"
+      style={{ contain: 'layout paint style' }}
       onScroll={handleBodyScroll}
     >
       <table className="min-w-[1500px] w-full table-fixed text-left text-xs leading-tight">
@@ -469,11 +476,43 @@ export default function TimecardTableSection({
       {timecardLoading ? (
         <div
           className={[
-            'pointer-events-none absolute inset-0 z-30 overflow-hidden rounded-2xl border backdrop-blur-sm',
-            isLight ? 'border-slate-200/90 bg-white/80' : 'border-white/10 bg-slate-950/70'
+            'pointer-events-none absolute inset-0 z-30 flex items-center justify-center rounded-2xl border px-6 backdrop-blur-sm',
+            isLight ? 'border-slate-200/90 bg-white/82' : 'border-white/10 bg-slate-950/78'
           ].join(' ')}
         >
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-transparent via-neon to-transparent opacity-80" />
+          <div
+            className={[
+              'w-full max-w-md rounded-2xl border px-5 py-4 shadow-2xl',
+              isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-slate-950/90 text-white'
+            ].join(' ')}
+          >
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className={['text-sm font-semibold tracking-[0.12em]', isLight ? 'text-slate-800' : 'text-slate-100'].join(' ')}>
+                  {t('时间卡同步中', 'Syncing Timecard')}
+                </div>
+                <div className={['mt-1 text-xs', isLight ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                  {t('正在加载打卡、排班和标记', 'Loading punches, schedules, and marks')}
+                </div>
+              </div>
+              <div className={['text-sm font-semibold tabular-nums', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
+                {loadingProgressValue}%
+              </div>
+            </div>
+            <div
+              className={['mt-4 h-2 overflow-hidden rounded-full', isLight ? 'bg-slate-200' : 'bg-white/12'].join(' ')}
+              role="progressbar"
+              aria-label={t('时间卡同步进度', 'Timecard sync progress')}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={loadingProgressValue}
+            >
+              <span
+                className="block h-full rounded-full bg-neon shadow-[0_0_18px_rgba(34,211,238,0.42)] transition-[width] duration-300 ease-out"
+                style={{ width: `${loadingProgressValue}%` }}
+              />
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

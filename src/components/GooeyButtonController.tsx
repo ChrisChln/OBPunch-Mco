@@ -5,9 +5,37 @@ import '../admin/components/GooeyNav.css';
 
 const INTERACTIVE_SELECTOR =
   'button:not([data-gooey-skip]), label.cursor-pointer.rounded-2xl:not([data-gooey-skip]), label.cursor-pointer.rounded-xl:not([data-gooey-skip])';
+const FIELD_SELECTOR =
+  [
+    'input:not([type])',
+    'input[type="text"]',
+    'input[type="search"]',
+    'input[type="date"]',
+    'input[type="datetime-local"]',
+    'input[type="email"]',
+    'input[type="number"]',
+    'input[type="password"]',
+    'input[type="tel"]',
+    'input[type="time"]',
+    'input[type="url"]',
+    'select',
+    'textarea',
+    '[role="combobox"]',
+    '[aria-haspopup="listbox"]',
+    '[data-magic-field]',
+  ].join(',');
 const SKIP_CONTAINER_SELECTOR = '.gooey-nav-container';
 const CHIP_CLASS_HINTS = ['text-[10px]', 'text-[11px]', 'px-1', 'px-1.5', 'py-0.5'];
 const MENU_CONTAINER_SELECTOR = '[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]';
+const FIELD_SKIP_CLASS_HINTS = [
+  'arrangement-input-plain',
+  'home-filter-checkbox',
+  'punch-scan-input',
+  'border-0',
+  'bg-transparent',
+  'appearance-auto',
+  'accent-',
+];
 const PARTICLE_COUNT = 12;
 const GLOW_COLOR = '255, 255, 255';
 const MAX_RIPPLE_DIAMETER = 72;
@@ -59,9 +87,21 @@ const shouldStyleTarget = (element: MagicTarget) => {
   if (isHeaderAvatarButton(element)) return false;
   const className = element.className;
   const classText = typeof className === 'string' ? className : '';
+  if (classText.includes('obp-primary-button') || classText.includes('agency-action-button')) return false;
   const isSmallChip = CHIP_CLASS_HINTS.some((hint) => classText.includes(hint));
   if (element.closest('table') && (isSmallChip || (classText.includes('w-full') && classText.includes('text-left')))) return false;
   if (element.closest('.absolute') && (classText.includes('w-full') || classText.includes('text-left'))) return false;
+  return true;
+};
+
+const shouldStyleField = (element: MagicTarget) => {
+  if (element.closest(SKIP_CONTAINER_SELECTOR)) return false;
+  if (element.closest('[data-gooey-skip="true"], [data-magic-field-skip="true"]')) return false;
+  if (element.dataset.magicFieldSkip === 'true') return false;
+  if (element instanceof HTMLInputElement && ['checkbox', 'radio', 'file', 'range', 'hidden', 'color'].includes(element.type)) return false;
+  const className = element.className;
+  const classText = typeof className === 'string' ? className : '';
+  if (FIELD_SKIP_CLASS_HINTS.some((hint) => classText.includes(hint))) return false;
   return true;
 };
 
@@ -83,6 +123,15 @@ const applyButtonClass = (root: ParentNode = document) => {
     } else {
       button.classList.remove('gooey-button-auto', 'gooey-button-animating', 'magic-button-compact');
       button.querySelectorAll(':scope > .gooey-button-particle, :scope > .gooey-button-ripple').forEach((effect) => effect.remove());
+    }
+  });
+
+  root.querySelectorAll<MagicTarget>(FIELD_SELECTOR).forEach((field) => {
+    if (shouldStyleField(field)) {
+      field.classList.add('magic-field-auto');
+      field.style.setProperty('--magic-glow-rgb', GLOW_COLOR);
+    } else {
+      field.classList.remove('magic-field-auto', 'magic-field-active');
     }
   });
 };
@@ -245,6 +294,9 @@ export default function GooeyButtonController() {
           if (node instanceof HTMLElement && node.matches(INTERACTIVE_SELECTOR) && shouldStyleTarget(node)) {
             node.classList.add('gooey-button-auto');
           }
+          if (node instanceof HTMLElement && node.matches(FIELD_SELECTOR) && shouldStyleField(node)) {
+            node.classList.add('magic-field-auto');
+          }
           applyButtonClass(node);
         });
       });
@@ -258,16 +310,25 @@ export default function GooeyButtonController() {
     const onPointerMove = (event: PointerEvent) => {
       const button = event.target instanceof Element ? event.target.closest<MagicTarget>(INTERACTIVE_SELECTOR) : null;
       if (button) handleButtonMove(button, event);
+      const field = event.target instanceof Element ? event.target.closest<MagicTarget>(FIELD_SELECTOR) : null;
+      if (field && shouldStyleField(field)) updatePointerGlow(field, event.clientX, event.clientY);
     };
 
     const onPointerEnter = (event: PointerEvent) => {
       const button = event.target instanceof HTMLElement ? event.target : null;
       if (button?.matches(INTERACTIVE_SELECTOR)) handleButtonEnter(button);
+      if (button?.matches(FIELD_SELECTOR) && shouldStyleField(button)) {
+        button.classList.add('magic-field-active');
+      }
     };
 
     const onPointerLeave = (event: PointerEvent) => {
       const button = event.target instanceof HTMLElement ? event.target : null;
       if (button?.matches(INTERACTIVE_SELECTOR)) handleButtonLeave(button);
+      if (button?.matches(FIELD_SELECTOR)) {
+        button.classList.remove('magic-field-active');
+        button.style.setProperty('--glow-intensity', '0');
+      }
     };
 
     observer.observe(document.body, { childList: true, subtree: true });

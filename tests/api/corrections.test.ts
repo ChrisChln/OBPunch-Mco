@@ -27,6 +27,7 @@ describe('api/corrections', () => {
     insertErrorMessage?: string;
     terminatedAt?: string | null;
     employeeLookupErrorMessage?: string;
+    employeeRows?: Array<{ staff_id?: string | null; terminated_at?: string | null }>;
     onInsert?: (rows: unknown[]) => void;
   }) => {
     vi.doMock('@supabase/supabase-js', () => ({
@@ -39,7 +40,12 @@ describe('api/corrections', () => {
                   limit: async () =>
                     options?.employeeLookupErrorMessage
                       ? { data: null, error: { message: options.employeeLookupErrorMessage } }
-                      : { data: [{ staff_id: 'US010454', terminated_at: options?.terminatedAt ?? null }], error: null }
+                      : {
+                          data: options?.employeeRows ?? [
+                            { staff_id: 'US010454', terminated_at: options?.terminatedAt ?? null }
+                          ],
+                          error: null
+                        }
                 })
               })
             };
@@ -264,6 +270,26 @@ describe('api/corrections', () => {
     await handler(req, res);
     expect(res.code).toBe(500);
     expect(String(res.body?.error ?? '')).toContain('lookup failed');
+  });
+
+  test('returns 404 and does not insert when employee is not registered', async () => {
+    process.env.ADMIN_TOKEN = 'secret';
+    process.env.SUPABASE_URL = 'https://example.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role';
+    const onInsert = vi.fn();
+    mockSupabaseModule({ employeeRows: [], onInsert });
+    const { default: handler } = await import('../../api/corrections');
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer secret' },
+      body: { staff_id: 'US999999', action: 'IN' }
+    };
+    const res = createRes();
+    await handler(req, res);
+
+    expect(res.code).toBe(404);
+    expect(String(res.body?.error ?? '')).toContain('Employee not registered');
+    expect(onInsert).not.toHaveBeenCalled();
   });
 
   test('accepts non-Bearer authorization token format', async () => {

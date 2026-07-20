@@ -21,6 +21,7 @@ import {
   shouldCountScheduledPackageMetricsStaff
 } from '../../shared/packageStaffing';
 import AdminNoticeToast from '../components/AdminNoticeToast';
+import BusyOverlay from '../components/BusyOverlay';
 import ConsumablesWorkspace from '../components/ConsumablesWorkspace';
 import StyledDateInput from '../components/StyledDateInput';
 
@@ -662,17 +663,6 @@ const parseJsonResponse = (text: string) => {
   }
 };
 
-const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.subarray(index, index + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return window.btoa(binary);
-};
-
 const resolvePackageMetricsImportUrls = () => {
   if (typeof window === 'undefined') return ['/api/package-metrics-import'];
   const urls = ['/api/package-metrics-import'];
@@ -1163,6 +1153,7 @@ export default function PackageMetricsPage({
   const [unfinishedReason, setUnfinishedReason] = useState('');
   const [dailyReportText, setDailyReportText] = useState('');
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
   const [transferDialogOpen, setTransferDialogOpen] = useState(false);
   const [transferSaving, setTransferSaving] = useState(false);
   const [transferForm, setTransferForm] = useState(() => createEmptyTransferForm());
@@ -1209,6 +1200,49 @@ export default function PackageMetricsPage({
     themeMode === 'light'
       ? 'border-r border-slate-200/80 bg-white'
       : 'border-r border-slate-800/70 bg-slate-950/80';
+  const metricsBusyOverlay = useMemo(() => {
+    if (loading) {
+      return {
+        titleZh: '日报导入中',
+        titleEn: 'Importing Daily',
+        detailZh: '正在上传并计算出库数据',
+        detailEn: 'Uploading and computing outbound metrics'
+      };
+    }
+    if (tableLoading) {
+      return {
+        titleZh: '日报加载中',
+        titleEn: 'Loading Daily',
+        detailZh: '正在读取日报范围和人力汇总',
+        detailEn: 'Loading metric range and labor summary'
+      };
+    }
+    if (reportLoading) {
+      return {
+        titleZh: '生成日报中',
+        titleEn: 'Generating Report',
+        detailZh: '正在整理日报文本',
+        detailEn: 'Preparing report text'
+      };
+    }
+    if (transferSaving) {
+      return {
+        titleZh: '保存调拨中',
+        titleEn: 'Saving Transfer',
+        detailZh: '正在写入调拨日报数据',
+        detailEn: 'Saving transfer daily metrics'
+      };
+    }
+    if (transferInventoryLoading) {
+      return {
+        titleZh: '库存加载中',
+        titleEn: 'Loading Inventory',
+        detailZh: '正在读取调拨库存量',
+        detailEn: 'Loading transfer inventory level'
+      };
+    }
+    return null;
+  }, [loading, reportLoading, tableLoading, transferInventoryLoading, transferSaving]);
 
   useEffect(() => {
     if (!status.message || status.tone === 'idle') return undefined;
@@ -1419,7 +1453,7 @@ export default function PackageMetricsPage({
       const requestBody = JSON.stringify({
         metric_date: metricDate,
         filename: selectedFile.name,
-        file_base64: arrayBufferToBase64(fileBuffer)
+        rows
       });
       const requestInit: RequestInit = {
         method: 'POST',
@@ -1686,6 +1720,7 @@ export default function PackageMetricsPage({
   const openDailyReport = async (reason: string) => {
     if (!selectedMetricsRow) return;
 
+    setReportLoading(true);
     try {
       const labor =
         laborSummaryByDate[selectedMetricsRow.metric_date] ??
@@ -1714,6 +1749,8 @@ export default function PackageMetricsPage({
         tone: 'error',
         message: String(error?.message ?? error ?? t('生成日报失败。', 'Failed to generate daily report.'))
       });
+    } finally {
+      setReportLoading(false);
     }
   };
 
@@ -1731,6 +1768,15 @@ export default function PackageMetricsPage({
 
   return (
     <>
+      <BusyOverlay
+        visible={Boolean(metricsBusyOverlay)}
+        themeMode={themeMode}
+        t={t}
+        titleZh={metricsBusyOverlay?.titleZh}
+        titleEn={metricsBusyOverlay?.titleEn}
+        detailZh={metricsBusyOverlay?.detailZh}
+        detailEn={metricsBusyOverlay?.detailEn}
+      />
       <div className={mode === 'consumables' ? shellClass : ['w-full px-4 py-4 md:px-5', shellClass].join(' ')}>
         <div className="flex flex-col gap-4">
           {showMetrics ? (

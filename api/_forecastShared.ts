@@ -10,6 +10,7 @@ const adminToken = process.env.ADMIN_TOKEN as string | undefined;
 const cronSecret = process.env.CRON_SECRET as string | undefined;
 
 export const DEFAULT_TIMEZONE = 'America/New_York';
+export const MAIN_LEADERBOARD_CUTOFF = 'preopen';
 export const DEFAULT_CODE_VERSION =
   (process.env.VERCEL_GIT_COMMIT_SHA as string | undefined) ??
   (process.env.COMMIT_SHA as string | undefined) ??
@@ -35,14 +36,9 @@ export const ensureCron = (req: any, res: any) => {
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
   if (adminToken && token === adminToken) return true;
   if (cronSecret && token === cronSecret) return true;
-  const userAgent = String(req.headers?.['user-agent'] ?? '').toLowerCase();
-  const isCronRequest = req.headers?.['x-vercel-cron'] === '1' || userAgent.includes('vercel-cron');
 
-  if (!isCronRequest) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return false;
-  }
-  return true;
+  res.status(401).json({ error: 'Unauthorized' });
+  return false;
 };
 
 export const parseJsonBody = <T>(req: any, res: any): T | null => {
@@ -87,7 +83,8 @@ export const safeJson = (value: unknown) => {
 };
 
 export const loadForecastSetting = async (supabase: any, key: string) => {
-  const res = await supabase.from('ob_app_settings').select('value').eq('key', key).limit(1).maybeSingle();
+  const settingsTable = process.env.APP_SETTINGS_TABLE ?? process.env.VITE_APP_SETTINGS_TABLE ?? 'ob_app_settings';
+  const res = await supabase.from(settingsTable).select('value').eq('key', key).limit(1).maybeSingle();
   if (res.error) return null;
   return res.data?.value ?? null;
 };
