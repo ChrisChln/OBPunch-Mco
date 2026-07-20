@@ -169,6 +169,7 @@ import {
   normalizeEmployeeUploadPosition
 } from './employeeUploadPositions';
 import { shouldAutofillShiftTime } from './shiftTimeAutofill';
+import { getScheduleExportCellValue } from './scheduleExport';
 import {
   loadDailyCapacityStaffStats,
   type DailyCapacityProcKey,
@@ -16848,20 +16849,16 @@ ${rowsToHtml(late)}
           .map((employee) => {
             const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
             const name = getScheduleEmployeeDisplayName(employee);
+            const position = String(employee.position ?? employee.Position ?? '').trim();
+            const resolvedShiftStartTime = resolveShiftStartTime(
+              shift,
+              position,
+              employee.shift_time ?? employee.ShiftTime
+            );
             const dayCells = Array.from({ length: 7 }, (_, dayIndex) => {
               const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
-              if (!row) return '休息';
-              const state = getScheduleBaseStateFromNote(row.note);
-              if (state === 'new') return '新人';
-              if (state === 'work') return shift === 'late' ? '晚1' : '早1';
-              if (state === 'fixed_work') return '固定排班';
-              if (state === 'temp_work') return '临时工作';
-              if (state === 'planned_temp_work') return '替补';
-              if (state === 'leave') return '请假';
-              if (state === 'planned_leave') return '计划请假';
-              if (state === 'temp_rest') return '临时排休';
-              if (state === 'planned_temp_rest') return '计划临时排休';
-              return '休息';
+              const state = row ? getScheduleBaseStateFromNote(row.note) : null;
+              return getScheduleExportCellValue(state, resolvedShiftStartTime);
             });
             return ['', staff, name, ...dayCells];
           });
