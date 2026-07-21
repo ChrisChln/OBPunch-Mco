@@ -12,6 +12,7 @@ import {
 } from '../workHourStats';
 import { buildWorkHourPositionList, getTrackedStaffIds } from '../workHourGlobalStats';
 import { buildComparisonRows } from '../workHourComparisonData';
+import { formatWorkHourPunchDateTime } from '../workHourComparisonDisplay';
 import { POSITION_DEPARTMENTS, normalizePositionDepartment, type PositionDepartment } from '../../shared/positions';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -493,20 +494,6 @@ const getStatusView = (row: ComparisonRow, resolveFixer: (value: string) => stri
   }
   return { labelZh: '异常', labelEn: 'Abnormal', tone: 'abnormal' as const };
 };
-const formatPunchDateTime = (value: string) => {
-  const at = new Date(value);
-  if (Number.isNaN(at.getTime())) return '-';
-  return at.toLocaleString('zh-CN', {
-    hour12: false,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  });
-};
-
 export default function WorkHourComparisonPage({
   t,
   isLocked,
@@ -1891,7 +1878,7 @@ export default function WorkHourComparisonPage({
                           <td className={['px-3 py-2 font-semibold', item.action === 'IN' ? (isLight ? 'text-emerald-700' : 'text-emerald-300') : isLight ? 'text-amber-700' : 'text-amber-300'].join(' ')}>
                             {item.action}
                           </td>
-                          <td className="px-3 py-2">{formatPunchDateTime(item.createdAt)}</td>
+                          <td className="px-3 py-2">{formatWorkHourPunchDateTime(item.createdAt)}</td>
                         </tr>
                       ))}
                     </tbody>

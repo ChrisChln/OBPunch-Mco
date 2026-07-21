@@ -1,4 +1,5 @@
 ﻿import { createPortal } from 'react-dom';
+import { useEffect, useState } from 'react';
 
 import { Check } from 'lucide-react';
 
@@ -71,6 +72,12 @@ export default function EmployeeAddModal({
   closeEmployeeAdd,
   addEmployeeRow
 }: EmployeeAddModalProps) {
+  const [isAddingNewAgency, setIsAddingNewAgency] = useState(false);
+
+  useEffect(() => {
+    if (!open) setIsAddingNewAgency(false);
+  }, [open]);
+
   if (!open || typeof document === 'undefined') return null;
 
   const isLight = themeMode === 'light';
@@ -79,7 +86,7 @@ export default function EmployeeAddModal({
   const selectableAgencyOptions = employeeAgencyOptions.filter((agency) => !isScheduleOnlyAgency(agency));
   const isProtectedAgencyInput = isScheduleOnlyAgency(normalizedAgency);
   const hasAgencyInOptions = normalizedAgency ? selectableAgencyOptions.includes(normalizedAgency) : false;
-  const agencySelectValue = !normalizedAgency ? '' : hasAgencyInOptions ? normalizedAgency : NEW_AGENCY_OPTION;
+  const agencySelectValue = isAddingNewAgency ? NEW_AGENCY_OPTION : !normalizedAgency ? '' : hasAgencyInOptions ? normalizedAgency : '';
   const isAddDisabled =
     isLocked ||
     !employeeNewName.trim() ||
@@ -163,9 +170,11 @@ export default function EmployeeAddModal({
                   onChange={(e) => {
                     const selected = String(e.target.value ?? '').trim();
                     if (selected === NEW_AGENCY_OPTION) {
-                      if (hasAgencyInOptions) setEmployeeNewAgency('');
+                      setEmployeeNewAgency('');
+                      setIsAddingNewAgency(true);
                       return;
                     }
+                    setIsAddingNewAgency(false);
                     setEmployeeNewAgency(selected);
                   }}
                   disabled={isLocked}
@@ -179,7 +188,7 @@ export default function EmployeeAddModal({
                   ))}
                   <option value={NEW_AGENCY_OPTION}>{t('新中介', 'New agency')}</option>
                 </select>
-                {agencySelectValue === NEW_AGENCY_OPTION && (
+                {isAddingNewAgency && (
                   <input
                     value={employeeNewAgency}
                     onChange={(e) => setEmployeeNewAgency(e.target.value)}

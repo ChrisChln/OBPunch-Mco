@@ -130,7 +130,13 @@ import {
   shouldRunWeeklyScheduleReset,
   shouldRunWeeklyScheduleRollover
 } from './scheduleWeek';
-import { buildTimecardExportDailyPeopleRow, formatRoundedHours, getTimecardExportDayCellText, getTimecardTerminatedByDay } from './timecardDisplay';
+import {
+  buildTimecardExportDailyPeopleRow,
+  formatRoundedHours,
+  formatTimecardPunchExportDateTime,
+  getTimecardExportDayCellText,
+  getTimecardTerminatedByDay
+} from './timecardDisplay';
 import {
   getDefaultPositionToneKey,
   getPositionToneFromMap,
@@ -163,6 +169,7 @@ import {
   normalizeEmployeeUploadPosition
 } from './employeeUploadPositions';
 import { shouldAutofillShiftTime } from './shiftTimeAutofill';
+import { getScheduleExportCellValue } from './scheduleExport';
 import {
   loadDailyCapacityStaffStats,
   type DailyCapacityProcKey,
@@ -12159,7 +12166,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const profile = staffToProfile.get(staff) ?? { name: '', agency: '', position: '' };
         const times: string[] = [];
         for (const item of list) {
-          const timeText = formatTime(new Date(item.at));
+          const timeText = formatTimecardPunchExportDateTime(new Date(item.at));
           times.push(timeText);
         }
         maxPairs = Math.max(maxPairs, Math.ceil(times.length / 2));
@@ -12182,6 +12189,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       try {
         const XLSX = await import('xlsx');
         const ws = XLSX.utils.aoa_to_sheet([headers, ...paddedBody]);
+        const timeColumnStart = 4;
+        for (let rowIndex = 1; rowIndex <= paddedBody.length; rowIndex += 1) {
+          for (let columnIndex = timeColumnStart; columnIndex < headers.length; columnIndex += 1) {
+            const cellAddress = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+            const cell = ws[cellAddress];
+            if (!cell) continue;
+            cell.t = 's';
+            cell.z = '@';
+          }
+        }
+        ws['!cols'] = headers.map((_, index) => ({ wch: index >= timeColumnStart ? 20 : 14 }));
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'daily_punches');
         const filename = `ob_punches_${timecardWeekInput}.xlsx`;
@@ -16846,20 +16864,16 @@ ${rowsToHtml(late)}
           .map((employee) => {
             const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
             const name = getScheduleEmployeeDisplayName(employee);
+            const position = String(employee.position ?? employee.Position ?? '').trim();
+            const resolvedShiftStartTime = resolveShiftStartTime(
+              shift,
+              position,
+              employee.shift_time ?? employee.ShiftTime
+            );
             const dayCells = Array.from({ length: 7 }, (_, dayIndex) => {
               const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
-              if (!row) return '休息';
-              const state = getScheduleBaseStateFromNote(row.note);
-              if (state === 'new') return '新人';
-              if (state === 'work') return shift === 'late' ? '晚1' : '早1';
-              if (state === 'fixed_work') return '固定排班';
-              if (state === 'temp_work') return '临时工作';
-              if (state === 'planned_temp_work') return '替补';
-              if (state === 'leave') return '请假';
-              if (state === 'planned_leave') return '计划请假';
-              if (state === 'temp_rest') return '临时排休';
-              if (state === 'planned_temp_rest') return '计划临时排休';
-              return '休息';
+              const state = row ? getScheduleBaseStateFromNote(row.note) : null;
+              return getScheduleExportCellValue(state, resolvedShiftStartTime);
             });
             return ['', staff, name, ...dayCells];
           });
