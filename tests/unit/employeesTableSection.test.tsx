@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
@@ -40,6 +40,7 @@ const baseProps = {
   onToggleHireDateSort: vi.fn(),
   displayStaffId: (value: string) => value,
   getEmployeeDisplayName: (employee: Record<string, unknown>) => String(employee.name ?? ''),
+  getSchedulePositionTone: () => 'slate' as LabelToneKey,
   getSchedulePositionBadgeClass: () => 'position-class',
   getScheduleLabelTone: () => 'slate' as LabelToneKey,
   getScheduleLabelToneClass: () => 'label-class',
@@ -55,7 +56,9 @@ const baseProps = {
   toDateOnly: (date: Date) => date.toISOString().slice(0, 10),
   employeeBadgePrintingStaffId: null,
   employeeBadgeBatchSelectedStaffIds: [],
+  employeeNotesByStaffId: {},
   toggleEmployeeBadgeBatchSelectedStaffId: vi.fn(),
+  openEmployeeNotes: vi.fn(),
   openEmployeeAuditLog: vi.fn(),
   printEmployeeTempBadge: vi.fn(),
   canOperateEmployeePosition: () => true,
@@ -79,5 +82,46 @@ describe('EmployeesTableSection', () => {
     const positionChip = screen.getByText('JDL').closest('[data-testid="glow-chip"]');
 
     expect(positionChip).toHaveAttribute('data-tone', 'rose');
+  });
+
+  test('opens employee notes from the name without selecting the badge row', () => {
+    const openEmployeeNotes = vi.fn();
+    const toggleEmployeeBadgeBatchSelectedStaffId = vi.fn();
+
+    render(
+      <EmployeesTableSection
+        {...baseProps}
+        employeeNotesByStaffId={{
+          US001: {
+            agencyNote: 'Cannot work Sunday',
+            adminNote: 'Confirm availability',
+            agencyNoteUpdatedBy: 'Prime Agency',
+            adminNoteUpdatedBy: 'Linda Chen'
+          }
+        }}
+        openEmployeeNotes={openEmployeeNotes}
+        toggleEmployeeBadgeBatchSelectedStaffId={toggleEmployeeBadgeBatchSelectedStaffId}
+      />
+    );
+
+    const noteDot = screen.getByTestId('employee-note-dot-US001');
+    const noteButton = screen.getByRole('button', { name: 'Open notes for Alex' });
+    expect(noteDot).toHaveClass('h-1.5', 'w-1.5', 'rounded-full', 'bg-rose-500');
+    expect(noteDot).not.toHaveClass('border');
+    expect(noteDot.className).not.toContain('/');
+    expect(noteButton).not.toContainElement(noteDot);
+    expect(screen.getByText('Agency note')).toBeInTheDocument();
+    expect(screen.getByText('Cannot work Sunday')).toBeInTheDocument();
+    expect(screen.getByText('Admin note')).toBeInTheDocument();
+    expect(screen.getByText('Confirm availability')).toBeInTheDocument();
+
+    fireEvent.click(noteButton);
+
+    expect(openEmployeeNotes).toHaveBeenCalledWith({
+      staff: 'US001',
+      name: 'Alex',
+      position: 'JDL'
+    });
+    expect(toggleEmployeeBadgeBatchSelectedStaffId).not.toHaveBeenCalled();
   });
 });

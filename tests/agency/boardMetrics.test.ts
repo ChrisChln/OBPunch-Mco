@@ -20,6 +20,9 @@ const makeEmployee = (overrides: Partial<AgencyEmployeeRow>): AgencyEmployeeRow 
   driver_group_role: '',
   driver_group_label: '',
   agency_note: '',
+  admin_note: '',
+  agency_note_updated_by: '',
+  admin_note_updated_by: '',
   ...overrides
 });
 

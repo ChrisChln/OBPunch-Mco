@@ -2,6 +2,12 @@
 import type { User } from '@supabase/supabase-js';
 import { Check, Hourglass, Plus, Save, Trash2, Users } from 'lucide-react';
 import { createPortal } from 'react-dom';
+import EmployeeNotesDialogContent from '../components/EmployeeNotesDialogContent';
+import AgencyEmployeeName from './components/AgencyEmployeeName';
+import {
+  AgencyTablePillButton,
+  AgencyTablePillSelect
+} from './components/AgencyTablePillControl';
 import GlowLabelChip, { getGlowToneForPosition, getGlowToneForShift } from '../components/GlowLabelChip';
 import { useDeterminateLoadingProgress } from '../components/useDeterminateLoadingProgress';
 import { createSupabaseClient } from '../lib/supabase';
@@ -293,13 +299,8 @@ const shiftLabel = (shift: AgencyEmployeeRow['shift']) => {
 
 const normalizeAgencyShift = (shift: string): AgencyShift => (shift === 'late' ? 'late' : 'early');
 
-const agencyStatusLabel = (status: AgencyEmployeeRow['agencyStatus']) =>
-  status === 'ready' ? 'Ready' : 'Wait for Confirm';
-
-const agencyStatusChipClass = (status: AgencyEmployeeRow['agencyStatus']) =>
-  status === 'ready'
-    ? 'border-emerald-400/35 bg-emerald-500/12 text-emerald-100'
-    : 'border-amber-400/35 bg-amber-500/12 text-amber-100';
+export const getAgencyStatusLabel = (status: AgencyEmployeeRow['agencyStatus']) =>
+  status === 'ready' ? 'Ready' : 'Waiting';
 
 const getAgencyNewHireNameConflictMessage = (conflict: AgencyNewHireNameConflict) => {
   const displayName = conflict.name || conflict.staffId || 'Employee';
@@ -1350,15 +1351,22 @@ export default function AgencyAppPage() {
     });
     try {
       await upsertAgencyEmployeeNote(supabase, employee.staff_id, nextNote);
+      const nextUpdatedBy = nextNote ? String(displayName || user?.email || '').trim() : '';
       setWeekSchedule((previous) => {
         if (!previous) return previous;
         return {
           ...previous,
-          employees: previous.employees.map((row) => (row.staff_id === employee.staff_id ? { ...row, agency_note: nextNote } : row))
+          employees: previous.employees.map((row) => (
+            row.staff_id === employee.staff_id
+              ? { ...row, agency_note: nextNote, agency_note_updated_by: nextUpdatedBy }
+              : row
+          ))
         };
       });
       setSelectedNoteEmployee((previous) =>
-        previous?.staff_id === employee.staff_id ? { ...previous, agency_note: nextNote } : previous
+        previous?.staff_id === employee.staff_id
+          ? { ...previous, agency_note: nextNote, agency_note_updated_by: nextUpdatedBy }
+          : previous
       );
       setNoteDrafts((previous) => ({ ...previous, [employee.staff_id]: nextNote }));
     } catch (nextError) {
@@ -1647,7 +1655,10 @@ export default function AgencyAppPage() {
         driver_group_code: row.driver_group_code,
         driver_group_role: row.driver_group_role,
         driver_group_label: row.driver_group_label,
-        agency_note: row.agency_note
+        agency_note: row.agency_note,
+        admin_note: row.admin_note,
+        agency_note_updated_by: row.agency_note_updated_by,
+        admin_note_updated_by: row.admin_note_updated_by
       })),
     [absentMarkKeys, dailyListLightFlags, selectedDate, weekSchedule, weeklyWorkCountByStaffId]
   );
@@ -2525,13 +2536,18 @@ export default function AgencyAppPage() {
                         ? 'border-b border-white/5 bg-slate-800/60 transition-colors hover:bg-slate-800/70 last:border-b-0'
                         : 'border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-b-0';
                       const employeeDriverGroupSummaries = driverGroupSummariesByAgency.get(normalizeAgencyValue(employee.agency)) ?? [];
+                      const driverGroupDisplayLabel =
+                        employee.driver_group_label || employee.driver_group_code || 'Individual';
                       return (
                       <tr key={employee.staff_id} className={rowClass}>
                         {showIdColumn ? <td className="py-2 pl-4 pr-1 font-mono text-slate-200">{employee.staff_id}</td> : null}
                         <td className="px-1 py-2 text-slate-200">
-                          <div className="truncate font-medium" title={employee.agency_note ? `${employee.name || '-'}\n${employee.agency_note}` : employee.name || '-'}>
-                            {employee.name || '-'}
-                          </div>
+                          <AgencyEmployeeName
+                            staffId={employee.staff_id}
+                            name={employee.name}
+                            agencyNote={employee.agency_note}
+                            adminNote={employee.admin_note}
+                          />
                           <div className="mt-1 flex min-h-[38px] flex-col items-start justify-center gap-1">
                             {isPendingTermination ? (
                               <>
@@ -2560,16 +2576,17 @@ export default function AgencyAppPage() {
                         {showAgencyColumn ? <td className="truncate px-1 py-2 text-slate-300">{employee.agency || '-'}</td> : null}
                         {showDriverGroupColumn ? (
                           <td className="px-1 py-2 text-center">
-                            <select
+                            <AgencyTablePillSelect
+                              ariaLabel={`Driver group for ${employee.name || employee.staff_id}`}
+                              displayLabel={driverGroupDisplayLabel}
                               value={employee.driver_group_code ? `group:${employee.driver_group_code}` : 'individual'}
-                              className={[
-                                'h-7 w-[68px] rounded-full border px-1.5 text-[9px] font-semibold outline-none transition disabled:cursor-not-allowed disabled:opacity-50',
+                              tone={
                                 employee.driver_group_role === 'driver'
-                                  ? 'border-cyan-300/40 bg-cyan-500/15 text-cyan-100'
+                                  ? 'cyan'
                                   : employee.driver_group_label
-                                    ? 'border-white/12 bg-white/[0.05] text-slate-200'
-                                    : 'border-emerald-300/25 bg-emerald-500/10 text-emerald-100'
-                              ].join(' ')}
+                                    ? 'slate'
+                                    : 'emerald'
+                              }
                               disabled={!canOperateAgency || busy}
                               onChange={(event) => void selectEmployeeDriverGroup(employee, event.target.value)}
                               title={employee.driver_group_label ? `Group ${employee.driver_group_label}` : 'Individual'}
@@ -2589,25 +2606,19 @@ export default function AgencyAppPage() {
                                 </option>
                               ))}
                               <option value="new">New group {nextDriverGroupCode}</option>
-                            </select>
+                            </AgencyTablePillSelect>
                           </td>
                         ) : null}
                         {showNoteColumn ? (
                           <td className="px-1 py-2">
-                              <button
-                                type="button"
-                                className={[
-                                  'inline-flex h-8 max-w-full items-center justify-center rounded-lg border px-2 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
-                                  employee.agency_note
-                                    ? 'border-cyan-300/30 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/15'
-                                    : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
-                                ].join(' ')}
+                              <AgencyTablePillButton
+                                tone={employee.agency_note || employee.admin_note ? 'cyan' : 'slate'}
                                 disabled={isSavingNote}
                                 onClick={() => openNoteModal(employee)}
-                                title={employee.agency_note || 'Note'}
+                                title={employee.agency_note || employee.admin_note || 'Note'}
                               >
-                                <span className="truncate">{employee.agency_note ? 'View' : 'Add'}</span>
-                              </button>
+                                <span className="truncate">{employee.agency_note || employee.admin_note ? 'View' : 'Add'}</span>
+                              </AgencyTablePillButton>
                           </td>
                         ) : null}
                         <td className="px-1 py-2">
@@ -2621,15 +2632,13 @@ export default function AgencyAppPage() {
                           </GlowLabelChip>
                         </td>
                         <td className="px-1 py-2 text-center">
-                          <span
-                            className={[
-                              'inline-flex items-center justify-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.04em]',
-                              agencyStatusChipClass(employee.agencyStatus)
-                            ].join(' ')}
+                          <GlowLabelChip
+                            tone={employee.agencyStatus === 'ready' ? 'emerald' : 'amber'}
+                            className="gap-1 tracking-[0.04em]"
                           >
-                            {employee.agencyStatus === 'ready' ? <Check className="h-3.5 w-3.5" /> : <Hourglass className="h-3.5 w-3.5" />}
-                            <span>{agencyStatusLabel(employee.agencyStatus)}</span>
-                          </span>
+                            {employee.agencyStatus === 'ready' ? <Check className="h-2.5 w-2.5" /> : <Hourglass className="h-2.5 w-2.5" />}
+                            <span>{getAgencyStatusLabel(employee.agencyStatus)}</span>
+                          </GlowLabelChip>
                         </td>
                         <td className="px-1 py-2 text-right">
                           <button
@@ -2908,34 +2917,28 @@ export default function AgencyAppPage() {
           <div className="text-sm font-semibold text-white">
             {selectedNoteEmployee ? `${selectedNoteEmployee.name || selectedNoteEmployee.staff_id} (${selectedNoteEmployee.staff_id})` : '-'}
           </div>
-          <textarea
-            value={selectedNoteDraft}
-            maxLength={500}
-            rows={7}
-            disabled={!canOperateAgency || selectedNoteSaving}
-            onChange={(event) => {
-              const value = event.target.value;
+          <EmployeeNotesDialogContent
+            t={(_zh, en) => en}
+            themeMode="dark"
+            editor="agency"
+            agencyNote={selectedNoteEmployee?.agency_note ?? ''}
+            adminNote={selectedNoteEmployee?.admin_note ?? ''}
+            agencyNoteUpdatedBy={selectedNoteEmployee?.agency_note_updated_by ?? ''}
+            adminNoteUpdatedBy={selectedNoteEmployee?.admin_note_updated_by ?? ''}
+            draft={selectedNoteDraft}
+            canEdit={canOperateAgency}
+            dirty={selectedNoteDirty}
+            saving={selectedNoteSaving}
+            error={null}
+            onDraftChange={(value) => {
               if (!selectedNoteStaffId) return;
               setNoteDrafts((previous) => ({ ...previous, [selectedNoteStaffId]: value }));
             }}
-            className={[inputClass, 'h-auto resize-none py-3 leading-6'].join(' ')}
+            onClose={closeModal}
+            onSave={() => {
+              if (selectedNoteEmployee) void submitEmployeeNote(selectedNoteEmployee);
+            }}
           />
-          <div className="flex justify-end gap-2">
-            <button type="button" onClick={closeModal} className={buttonClass} disabled={selectedNoteSaving}>
-              Close
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (selectedNoteEmployee) void submitEmployeeNote(selectedNoteEmployee);
-              }}
-              className={neonButtonClass}
-              disabled={!canOperateAgency || selectedNoteSaving || !selectedNoteDirty}
-            >
-              <Save className="mr-2 h-4 w-4" />
-              Save
-            </button>
-          </div>
         </div>
       </Modal>
 

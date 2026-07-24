@@ -282,7 +282,12 @@ export default function EmployeeEditModal({
           <button type="button" disabled={isLocked} onClick={closeEmployeeEdit} className={cancelBtnClass}>
             {t('取消', 'Cancel')}
           </button>
-          <button type="button" disabled={isLocked} onClick={() => void saveEmployeeEdit()} className={saveBtnClass}>
+          <button
+            type="button"
+            disabled={isLocked || !employeeEditPosition.trim()}
+            onClick={() => void saveEmployeeEdit()}
+            className={saveBtnClass}
+          >
             {t('保存', 'Save')}
           </button>
         </div>

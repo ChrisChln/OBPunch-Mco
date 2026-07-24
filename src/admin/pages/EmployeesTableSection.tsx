@@ -4,6 +4,7 @@ import { useCallback, type UIEvent } from 'react';
 import GlowLabelChip, { getGlowToneForShift } from '../../components/GlowLabelChip';
 import type { LabelToneKey } from '../../lib/labelTone';
 import { isScheduleOnlyAgency } from '../../shared/agencyRules';
+import EmployeeNoteNameButton, { type EmployeeNotePair } from '../components/EmployeeNoteNameButton';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -44,6 +45,7 @@ type EmployeesTableSectionProps = {
   toDateOnly: (date: Date) => string;
   employeeBadgePrintingStaffId: string | null;
   employeeBadgeBatchSelectedStaffIds: string[];
+  employeeNotesByStaffId: Record<string, EmployeeNotePair>;
   toggleEmployeeBadgeBatchSelectedStaffId: (payload: {
     staff: string;
     name: string;
@@ -52,6 +54,7 @@ type EmployeesTableSectionProps = {
     workAccount?: string;
     workPassword?: string;
   }) => void;
+  openEmployeeNotes: (employee: { staff: string; name: string; position: string }) => void;
   openEmployeeAuditLog: (staff: string, name?: string) => void | Promise<void>;
   printEmployeeTempBadge: (payload: {
     staff: string;
@@ -108,7 +111,9 @@ export default function EmployeesTableSection({
   toDateOnly,
   employeeBadgePrintingStaffId,
   employeeBadgeBatchSelectedStaffIds,
+  employeeNotesByStaffId,
   toggleEmployeeBadgeBatchSelectedStaffId,
+  openEmployeeNotes,
   openEmployeeAuditLog,
   printEmployeeTempBadge,
   canOperateEmployeePosition,
@@ -373,7 +378,14 @@ export default function EmployeesTableSection({
                     <span className="block truncate" title={displayEmployeeId}>{displayEmployeeId}</span>
                   </td>
                   <td className={['w-[16%] px-2 py-3 xl:px-3', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>
-                    <span className="block truncate" title={name || '-'}>{name || '-'}</span>
+                    <EmployeeNoteNameButton
+                      staff={staff}
+                      name={name}
+                      position={position}
+                      notes={employeeNotesByStaffId[normalizeStaffId(staff)]}
+                      isLight={isLight}
+                      onOpen={openEmployeeNotes}
+                    />
                   </td>
                   <td className={['hidden w-[8%] px-2 py-3 whitespace-nowrap lg:table-cell xl:px-3', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{agency || '-'}</td>
                   <td className={['w-[10%] px-2 py-3 whitespace-nowrap xl:px-3', isLight ? 'text-slate-700' : 'text-slate-200'].join(' ')}>

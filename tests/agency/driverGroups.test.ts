@@ -25,6 +25,9 @@ const makeWeekRow = (
   driver_group_role: driverGroupRole,
   driver_group_label: driverGroupRole === 'driver' ? `Driver${groupCode}` : groupCode,
   agency_note: '',
+  admin_note: '',
+  agency_note_updated_by: '',
+  admin_note_updated_by: '',
   days: states.map((state, index) => ({
     work_date: `2026-04-${String(13 + index).padStart(2, '0')}`,
     template_date: `2026-04-${String(13 + index).padStart(2, '0')}`,

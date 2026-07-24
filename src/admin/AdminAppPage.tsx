@@ -47,8 +47,12 @@ import EmployeeAddModal from './pages/EmployeeAddModal';
 import EmployeesTableSection from './pages/EmployeesTableSection';
 import EmployeeAuditModal from './pages/EmployeeAuditModal';
 import EmployeeEditModal from './pages/EmployeeEditModal';
+import EmployeeNotesModal from './pages/EmployeeNotesModal';
+import EmployeeNoteNameButton, { type EmployeeNotePair } from './components/EmployeeNoteNameButton';
 import EmployeeBadgePreviewModal from './pages/EmployeeBadgePreviewModal';
 import DepartedEmployeesModal from './pages/DepartedEmployeesModal';
+import DepartureConfirmDialog from './pages/DepartureConfirmDialog';
+import { buildDepartedEmployeesCsv, normalizeTerminationReason } from './departedEmployees';
 import TimecardControls from './pages/TimecardControls';
 import TimecardTableSection from './pages/TimecardTableSection';
 import HomeDashboardPage from './pages/HomeDashboardPage';
@@ -2186,6 +2190,12 @@ export default function AdminAppPage() {
   const [employeeAddOpen, setEmployeeAddOpen] = useState(false);
   const [employeeAddFeedback, setEmployeeAddFeedback] = useState<{ tone: 'pending' | 'success' | 'error'; message: string } | null>(null);
   const [employeeEditOpen, setEmployeeEditOpen] = useState(false);
+  const [employeeNotesOpen, setEmployeeNotesOpen] = useState(false);
+  const [employeeNotesTarget, setEmployeeNotesTarget] = useState<{ staff: string; name: string; position: string } | null>(null);
+  const [employeeAdminNoteDraft, setEmployeeAdminNoteDraft] = useState('');
+  const [employeeNoteSaving, setEmployeeNoteSaving] = useState(false);
+  const [employeeNoteError, setEmployeeNoteError] = useState<string | null>(null);
+  const [employeeNotesByStaffId, setEmployeeNotesByStaffId] = useState<Record<string, EmployeeNotePair>>({});
   const [employeeEditOriginalStaffId, setEmployeeEditOriginalStaffId] = useState<string | null>(null);
   const [employeeEditStaffId, setEmployeeEditStaffId] = useState<string | null>(null);
   const [employeeEditName, setEmployeeEditName] = useState('');
@@ -2226,6 +2236,7 @@ export default function AdminAppPage() {
     displayName: string;
     employeeSnapshot: EmployeeRow | null;
     type: TerminationType;
+    reason: string;
   } | null>(null);
 
   useEffect(() => {
@@ -2323,7 +2334,6 @@ export default function AdminAppPage() {
   const [scheduleMonthlyAbsentDatesByStaffId, setScheduleMonthlyAbsentDatesByStaffId] = useState<Record<string, string[]>>({});
   const [scheduleLateByStaffDayKey, setScheduleLateByStaffDayKey] = useState<Record<string, LateMarkView>>({});
   const [scheduleDriverGroupByStaffId, setScheduleDriverGroupByStaffId] = useState<Record<string, ScheduleDriverGroupInfo>>({});
-  const [scheduleAgencyNoteByStaffId, setScheduleAgencyNoteByStaffId] = useState<Record<string, string>>({});
   const [scheduleRegisteredNameByEmail, setScheduleRegisteredNameByEmail] = useState<Record<string, string>>({});
   const [scheduleMistakeDraft, setScheduleMistakeDraft] = useState<ScheduleMistakeDraft>({
     open: false,
@@ -5156,17 +5166,50 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   // Save fetchSchedule reference for use in realtime callbacks
   fetchScheduleRef.current = fetchSchedule;
 
+  const fetchEmployeeNotes = async () => {
+    if (!supabase) {
+      setEmployeeNotesByStaffId({});
+      return;
+    }
+    const result = await supabase.rpc('get_employee_notes');
+    if (result.error) {
+      console.warn('[Employees] Failed to load employee notes:', result.error.message);
+      setEmployeeNotesByStaffId({});
+      return;
+    }
+    const rows = Array.isArray(result.data) ? result.data : [];
+    const nextNoteMap: Record<string, EmployeeNotePair> = {};
+    for (const raw of rows) {
+      const row = raw as {
+        staff_id?: unknown;
+        agency_note?: unknown;
+        admin_note?: unknown;
+        agency_note_updated_by?: unknown;
+        admin_note_updated_by?: unknown;
+      };
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) continue;
+      nextNoteMap[staff] = {
+        agencyNote: String(row.agency_note ?? '').trim(),
+        adminNote: String(row.admin_note ?? '').trim(),
+        agencyNoteUpdatedBy: String(row.agency_note_updated_by ?? '').trim(),
+        adminNoteUpdatedBy: String(row.admin_note_updated_by ?? '').trim()
+      };
+    }
+    setEmployeeNotesByStaffId(nextNoteMap);
+  };
+
   const fetchScheduleAgencyInfo = async () => {
     if (!supabase) {
       setScheduleDriverGroupByStaffId({});
-      setScheduleAgencyNoteByStaffId({});
+      setEmployeeNotesByStaffId({});
       return;
     }
 
     try {
       const [driverRes, noteRes] = await Promise.all([
         supabase.rpc('agency_get_driver_groups'),
-        supabase.rpc('agency_get_employee_notes')
+        supabase.rpc('get_employee_notes')
       ]);
 
       if (driverRes.error) {
@@ -5193,24 +5236,34 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       if (noteRes.error) {
-        console.warn('[Schedule] Failed to load agency notes:', noteRes.error.message);
-        setScheduleAgencyNoteByStaffId({});
+        console.warn('[Schedule] Failed to load employee notes:', noteRes.error.message);
+        setEmployeeNotesByStaffId({});
       } else {
         const rows = Array.isArray(noteRes.data) ? noteRes.data : [];
-        const nextNoteMap: Record<string, string> = {};
+        const nextNoteMap: Record<string, EmployeeNotePair> = {};
         for (const raw of rows) {
-          const row = raw as { staff_id?: unknown; note?: unknown };
+          const row = raw as {
+            staff_id?: unknown;
+            agency_note?: unknown;
+            admin_note?: unknown;
+            agency_note_updated_by?: unknown;
+            admin_note_updated_by?: unknown;
+          };
           const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-          const note = String(row.note ?? '').trim();
-          if (!staff || !note) continue;
-          nextNoteMap[staff] = note;
+          if (!staff) continue;
+          nextNoteMap[staff] = {
+            agencyNote: String(row.agency_note ?? '').trim(),
+            adminNote: String(row.admin_note ?? '').trim(),
+            agencyNoteUpdatedBy: String(row.agency_note_updated_by ?? '').trim(),
+            adminNoteUpdatedBy: String(row.admin_note_updated_by ?? '').trim()
+          };
         }
-        setScheduleAgencyNoteByStaffId(nextNoteMap);
+        setEmployeeNotesByStaffId(nextNoteMap);
       }
     } catch (error) {
       console.warn('[Schedule] Failed to load agency info:', error);
       setScheduleDriverGroupByStaffId({});
-      setScheduleAgencyNoteByStaffId({});
+      setEmployeeNotesByStaffId({});
     }
   };
 
@@ -7241,21 +7294,35 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setDepartedEmployeesLoading(true);
       setDepartedEmployeesError(null);
       try {
-        const buildSelect = (mode: EmployeeColumnMode, includeTerminationType: boolean) => {
+        const buildSelect = (
+          mode: EmployeeColumnMode,
+          includeTerminationType: boolean,
+          includeTerminationReason: boolean
+        ) => {
           const base =
             mode === 'cased'
               ? 'staff_id, name, "Agency", "Position", active, terminated_at'
               : 'staff_id, name, agency, position, active, terminated_at';
-          return includeTerminationType ? `${base}, termination_type` : base;
+          return [
+            base,
+            includeTerminationType ? 'termination_type' : '',
+            includeTerminationReason ? 'termination_reason' : ''
+          ]
+            .filter(Boolean)
+            .join(', ');
         };
-        const run = async (mode: EmployeeColumnMode, includeTerminationType: boolean) => {
+        const run = async (
+          mode: EmployeeColumnMode,
+          includeTerminationType: boolean,
+          includeTerminationReason: boolean
+        ) => {
           const rows: EmployeeRow[] = [];
           const pageSize = 1000;
           for (let from = 0; ; from += pageSize) {
             const to = from + pageSize - 1;
             const result = await supabase
               .from(EMPLOYEE_TABLE)
-              .select(buildSelect(mode, includeTerminationType))
+              .select(buildSelect(mode, includeTerminationType, includeTerminationReason))
               .not('terminated_at', 'is', null)
               .order('terminated_at', { ascending: false })
               .range(from, to);
@@ -7268,15 +7335,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           }
         };
         let mode = await resolveEmployeeColumnMode();
-        let res = await run(mode, true);
+        const runWithColumnFallback = async (targetMode: EmployeeColumnMode) => {
+          let result = await run(targetMode, true, true);
+          if (result.error && /termination_reason/i.test(String(result.error.message ?? ''))) {
+            result = await run(targetMode, true, false);
+          }
+          if (result.error && /termination_type/i.test(String(result.error.message ?? ''))) {
+            result = await run(targetMode, false, false);
+          }
+          return result;
+        };
+        let res = await runWithColumnFallback(mode);
         if (res.error) {
           const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
           employeeColumnModeRef.current = flipped;
           mode = flipped;
-          res = await run(mode, true);
-        }
-        if (res.error && /termination_type/i.test(String(res.error.message ?? ''))) {
-          res = await run(mode, false);
+          res = await runWithColumnFallback(mode);
         }
         if (res.error) {
           setDepartedEmployees([]);
@@ -7309,6 +7383,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const openDepartedEmployees = async () => {
     setDepartedEmployeesOpen(true);
     await fetchDepartedEmployees({ lockUi: false });
+  };
+
+  const exportDepartedEmployees = (rows: EmployeeRow[]) => {
+    const csv = buildDepartedEmployeesCsv(rows, t, displayStaffId);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `departed-employees-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
   };
 
   useEffect(() => {
@@ -7421,13 +7508,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const rehirePayload = {
         active: true,
         terminated_at: null,
-        termination_type: null
+        termination_type: null,
+        termination_reason: null
       };
       const res = await supabase.from(EMPLOYEE_TABLE).update(rehirePayload as any).eq('staff_id', staff);
       if (res.error) {
         setDepartedEmployeesError(
-          /active|terminated_at|termination_type/i.test(String(res.error.message ?? ''))
-            ? `Rehire failed: ${res.error.message}. Please run sql/2026-06-14_add_employee_termination_type.sql`
+          /active|terminated_at|termination_type|termination_reason/i.test(String(res.error.message ?? ''))
+            ? `Rehire failed: ${res.error.message}. Please run the latest SQL migrations.`
             : res.error.message
         );
         return;
@@ -7437,7 +7525,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         staff_id: staff,
         active: true,
         terminated_at: null,
-        termination_type: null
+        termination_type: null,
+        termination_reason: null
       };
       setDepartedEmployees((prev) => prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== staff));
       setEmployees((prev) => {
@@ -7717,7 +7806,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       staff,
       displayName,
       employeeSnapshot,
-      type: 'normal'
+      type: 'normal',
+      reason: ''
     });
     return;
 
@@ -7789,6 +7879,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (!departureConfirm || !supabase) return;
     const { staff, displayName, employeeSnapshot } = departureConfirm;
     const terminationType = departureConfirm.type;
+    const terminationReason = normalizeTerminationReason(departureConfirm.reason);
+    if (!terminationReason) {
+      setEmployeesError(t('请填写离职原因。', 'Please enter a departure reason.'));
+      return;
+    }
     const normalizedStaff = normalizeStaffId(staff);
     await runLocked('employee_delete', async () => {
       setEmployeesError(null);
@@ -7802,13 +7897,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const departPayload = {
         active: false,
         terminated_at: new Date(serverTime).toISOString(),
-        termination_type: terminationType
+        termination_type: terminationType,
+        termination_reason: terminationReason
       };
       const employeeDeleteRes = await supabase.from(EMPLOYEE_TABLE).update(departPayload as any).eq('staff_id', staff);
       if (employeeDeleteRes.error) {
         setEmployeesError(
-          /active|terminated_at|termination_type/i.test(String(employeeDeleteRes.error.message ?? ''))
-            ? `Departure failed: ${employeeDeleteRes.error.message}. Please run sql/2026-06-14_add_employee_termination_type.sql`
+          /active|terminated_at|termination_type|termination_reason/i.test(String(employeeDeleteRes.error.message ?? ''))
+            ? `Departure failed: ${employeeDeleteRes.error.message}. Please run the latest SQL migrations.`
             : employeeDeleteRes.error.message
         );
         return;
@@ -7857,6 +7953,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           deleted_schedule_rows: deletedScheduleCount,
           soft_deleted: true,
           termination_type: terminationType,
+          termination_reason: terminationReason,
           staff_id: staff,
           name: String(employeeSnapshot?.name ?? '').trim() || null,
           agency: String(employeeSnapshot?.agency ?? employeeSnapshot?.Agency ?? '').trim() || null,
@@ -7885,7 +7982,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           staff_id: staff,
           active: false,
           terminated_at: departPayload.terminated_at,
-          termination_type: terminationType
+          termination_type: terminationType,
+          termination_reason: terminationReason
         },
         ...prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== normalizedStaff)
       ]);
@@ -9073,6 +9171,76 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setEmployeeEditLabel('');
     setEmployeeEditWorkAccount('');
     setEmployeeEditWorkPassword('');
+  };
+
+  const canEditEmployeeAdminNote = (target: { position: string } | null) => {
+    if (!target) return false;
+    return (
+      canOperatePosition('employees', resolveEmployeeOperatePosition(target.position)) ||
+      canOperatePosition('schedule', target.position)
+    );
+  };
+
+  const openEmployeeNotes = ({
+    staff,
+    name,
+    position
+  }: {
+    staff: string;
+    name: string;
+    position: string;
+  }) => {
+    const normalizedStaff = normalizeStaffId(String(staff ?? '').trim());
+    if (!normalizedStaff) return;
+    const notes = employeeNotesByStaffId[normalizedStaff];
+    setEmployeeNotesTarget({
+      staff: normalizedStaff,
+      name: String(name ?? '').trim(),
+      position: String(position ?? '').trim()
+    });
+    setEmployeeAdminNoteDraft(String(notes?.adminNote ?? ''));
+    setEmployeeNoteError(null);
+    setEmployeeNotesOpen(true);
+  };
+
+  const closeEmployeeNotes = () => {
+    if (employeeNoteSaving) return;
+    setEmployeeNotesOpen(false);
+    setEmployeeNotesTarget(null);
+    setEmployeeAdminNoteDraft('');
+    setEmployeeNoteError(null);
+  };
+
+  const saveEmployeeAdminNote = async () => {
+    if (!supabase || !employeeNotesTarget) return;
+    if (!canEditEmployeeAdminNote(employeeNotesTarget)) {
+      setEmployeeNoteError(t('当前账号只有查看权限。', 'This account is read-only.'));
+      return;
+    }
+    const nextNote = employeeAdminNoteDraft.trim().slice(0, 500);
+    setEmployeeNoteSaving(true);
+    setEmployeeNoteError(null);
+    try {
+      const result = await supabase.rpc('admin_upsert_employee_note', {
+        p_staff_id: employeeNotesTarget.staff,
+        p_note: nextNote
+      });
+      if (result.error) throw new Error(result.error.message);
+      setEmployeeNotesByStaffId((current) => ({
+        ...current,
+        [employeeNotesTarget.staff]: {
+          agencyNote: current[employeeNotesTarget.staff]?.agencyNote ?? '',
+          adminNote: nextNote,
+          agencyNoteUpdatedBy: current[employeeNotesTarget.staff]?.agencyNoteUpdatedBy ?? '',
+          adminNoteUpdatedBy: nextNote ? String(userDisplayName || user?.email || '').trim() : ''
+        }
+      }));
+      setEmployeeAdminNoteDraft(nextNote);
+    } catch (error) {
+      setEmployeeNoteError(error instanceof Error ? error.message : t('留言保存失败。', 'Failed to save note.'));
+    } finally {
+      setEmployeeNoteSaving(false);
+    }
   };
 
   const closeEmployeeAdd = () => {
@@ -13285,6 +13453,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     if (page === 'employees') {
       void fetchEmployees({ reset: true, lockUi: false });
+      void fetchEmployeeNotes();
     }
     if (page === 'accounts') {
       void fetchEmployees({ reset: true, lockUi: false });
@@ -18184,7 +18353,7 @@ ${rowsToHtml(late)}
                                 ? t('JDL员工不能离职', 'JDL employees cannot be departed')
                                 : undefined;
                           const scheduleDriverInfo = scheduleDriverGroupByStaffId[staff] ?? null;
-                          const scheduleAgencyNote = String(scheduleAgencyNoteByStaffId[staff] ?? '').trim();
+                          const scheduleEmployeeNotes = employeeNotesByStaffId[staff];
                           if (!staff) return null;
 
                           let workDays = 0;
@@ -18256,22 +18425,14 @@ ${rowsToHtml(late)}
                               <td className="px-1 py-2 text-center font-mono text-[10px] tabular-nums text-slate-400">{renderedIndex + 1}</td>
                               <td className={['px-1 py-2 text-left font-mono', scheduleBodyTextClass].join(' ')}>{staff}</td>
                               <td className={['px-1 py-2 text-left', scheduleBodyTextClass].join(' ')}>
-                                <div className="relative inline-flex max-w-full items-start">
-                                  <span
-                                    className="group relative inline-flex max-w-full items-start pr-2"
-                                    title={scheduleAgencyNote ? undefined : name || '-'}
-                                  >
-                                    <span className="block truncate">{name || '-'}</span>
-                                    {scheduleAgencyNote ? (
-                                      <>
-                                        <span className="absolute -right-0.5 -top-1 h-2 w-2 rounded-full border border-slate-950 bg-rose-400 shadow-[0_0_0_2px_rgba(244,63,94,0.18)]" />
-                                        <span className="pointer-events-none absolute left-0 top-full z-40 mt-1 hidden w-48 rounded-lg border border-rose-300/25 bg-slate-950/95 px-2 py-1.5 text-[11px] font-medium leading-snug text-slate-100 shadow-2xl backdrop-blur group-hover:block">
-                                          {scheduleAgencyNote}
-                                        </span>
-                                      </>
-                                    ) : null}
-                                  </span>
-                                </div>
+                                <EmployeeNoteNameButton
+                                  staff={staff}
+                                  name={name}
+                                  position={position}
+                                  notes={scheduleEmployeeNotes}
+                                  isLight={themeMode === 'light'}
+                                  onOpen={openEmployeeNotes}
+                                />
                                 {hasPendingTermination && (
                                   <div
                                     className={[
@@ -19549,7 +19710,11 @@ ${rowsToHtml(late)}
                   exportEmployees={exportEmployees}
                   setEmployeeAddOpen={setEmployeeAddOpen}
                   openDepartedEmployees={openDepartedEmployees}
-                  fetchEmployees={fetchEmployees}
+                  fetchEmployees={async (args) => {
+                    const rows = await fetchEmployees(args);
+                    await fetchEmployeeNotes();
+                    return rows;
+                  }}
                   setEmployeeSearch={setEmployeeSearch}
                   setEmployeeAgency={setEmployeeAgency}
                   setEmployeeDepartment={setEmployeeDepartment}
@@ -19657,7 +19822,9 @@ ${rowsToHtml(late)}
                   toDateOnly={toDateOnly}
                   employeeBadgePrintingStaffId={employeeBadgePrintingStaffId}
                   employeeBadgeBatchSelectedStaffIds={employeeBadgeBatchSelectedStaffIds}
+                  employeeNotesByStaffId={employeeNotesByStaffId}
                   toggleEmployeeBadgeBatchSelectedStaffId={toggleEmployeeBadgeBatchSelectedStaffId}
+                  openEmployeeNotes={openEmployeeNotes}
                   openEmployeeAuditLog={openEmployeeAuditLog}
                   printEmployeeTempBadge={printEmployeeTempBadge}
                   canOperateEmployeePosition={(position) => canOperatePosition('employees', resolveEmployeeOperatePosition(position))}
@@ -19676,6 +19843,7 @@ ${rowsToHtml(late)}
                   canHardDelete={adminAccessContext?.role === 'level1'}
                   onClose={() => setDepartedEmployeesOpen(false)}
                   onRefresh={() => fetchDepartedEmployees({ lockUi: false })}
+                  onExport={exportDepartedEmployees}
                   onToggleTerminationType={updateDepartedEmployeeTerminationType}
                   onRehire={rehireDepartedEmployee}
                   onHardDelete={hardDeleteDepartedEmployee}
@@ -20170,44 +20338,19 @@ ${rowsToHtml(late)}
             )}
 
             {departureConfirm ? (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm">
-                <div className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-950 p-5 text-white shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
-                  <div className="font-display text-xl tracking-[0.08em]">{t('离职确认', 'Departure')}</div>
-                  <div className="mt-4 text-sm text-slate-300">{departureConfirm.displayName}</div>
-                  <div className="mt-5 grid gap-3">
-                    <label className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                      <span className="flex items-center gap-3 text-sm font-semibold">
-                        <input
-                          type="radio"
-                          name="termination_type"
-                          checked={departureConfirm.type === 'normal'}
-                          onChange={() => setDepartureConfirm((prev) => (prev ? { ...prev, type: 'normal' } : prev))}
-                        />
-                        {t('正常离职', 'Normal')}
-                      </span>
-                    </label>
-                    <label className="rounded-2xl border border-rose-300/20 bg-rose-500/[0.06] p-3">
-                      <span className="flex items-center gap-3 text-sm font-semibold text-rose-100">
-                        <input
-                          type="radio"
-                          name="termination_type"
-                          checked={departureConfirm.type === 'blacklist'}
-                          onChange={() => setDepartureConfirm((prev) => (prev ? { ...prev, type: 'blacklist' } : prev))}
-                        />
-                        {t('黑名单', 'Blacklist')}
-                      </span>
-                    </label>
-                  </div>
-                  <div className="mt-5 flex justify-end gap-2">
-                    <button type="button" className="admin-btn admin-btn-toolbar admin-btn-secondary px-4" onClick={() => setDepartureConfirm(null)} disabled={isLocked}>
-                      {t('取消', 'Cancel')}
-                    </button>
-                    <button type="button" className="admin-btn admin-btn-toolbar admin-btn-primary px-4" onClick={() => void confirmEmployeeDeparture()} disabled={isLocked}>
-                      {t('确认', 'Confirm')}
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <DepartureConfirmDialog
+                t={t}
+                displayName={departureConfirm.displayName}
+                type={departureConfirm.type}
+                reason={departureConfirm.reason}
+                adminNote={employeeNotesByStaffId[normalizeStaffId(departureConfirm.staff)]?.adminNote ?? ''}
+                agencyNote={employeeNotesByStaffId[normalizeStaffId(departureConfirm.staff)]?.agencyNote ?? ''}
+                isLocked={isLocked}
+                onTypeChange={(type) => setDepartureConfirm((prev) => (prev ? { ...prev, type } : prev))}
+                onReasonChange={(reason) => setDepartureConfirm((prev) => (prev ? { ...prev, reason } : prev))}
+                onCancel={() => setDepartureConfirm(null)}
+                onConfirm={confirmEmployeeDeparture}
+              />
             ) : null}
                 </div>
               </main>
@@ -20312,6 +20455,46 @@ ${rowsToHtml(late)}
             </div>,
             document.body
           )}
+
+        <EmployeeNotesModal
+          open={employeeNotesOpen}
+          t={t}
+          themeMode={themeMode}
+          staff={employeeNotesTarget?.staff ?? ''}
+          name={employeeNotesTarget?.name ?? ''}
+          agencyNote={
+            employeeNotesTarget
+              ? employeeNotesByStaffId[employeeNotesTarget.staff]?.agencyNote ?? ''
+              : ''
+          }
+          adminNote={
+            employeeNotesTarget
+              ? employeeNotesByStaffId[employeeNotesTarget.staff]?.adminNote ?? ''
+              : ''
+          }
+          agencyNoteUpdatedBy={
+            employeeNotesTarget
+              ? employeeNotesByStaffId[employeeNotesTarget.staff]?.agencyNoteUpdatedBy ?? ''
+              : ''
+          }
+          adminNoteUpdatedBy={
+            employeeNotesTarget
+              ? employeeNotesByStaffId[employeeNotesTarget.staff]?.adminNoteUpdatedBy ?? ''
+              : ''
+          }
+          draft={employeeAdminNoteDraft}
+          canEdit={canEditEmployeeAdminNote(employeeNotesTarget)}
+          dirty={
+            Boolean(employeeNotesTarget) &&
+            employeeAdminNoteDraft.trim().slice(0, 500) !==
+              (employeeNotesByStaffId[employeeNotesTarget?.staff ?? '']?.adminNote ?? '').trim()
+          }
+          saving={employeeNoteSaving}
+          error={employeeNoteError}
+          onDraftChange={setEmployeeAdminNoteDraft}
+          onClose={closeEmployeeNotes}
+          onSave={() => void saveEmployeeAdminNote()}
+        />
 
         <BusyOverlay
           visible={busyVisible || (page === 'home' && homePanelLoading)}

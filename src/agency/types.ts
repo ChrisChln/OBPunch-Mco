@@ -27,6 +27,9 @@ export type AgencyEmployeeRow = {
   driver_group_role: 'driver' | 'member' | '';
   driver_group_label: string;
   agency_note: string;
+  admin_note: string;
+  agency_note_updated_by: string;
+  admin_note_updated_by: string;
 };
 
 export type AgencyScheduleState =
@@ -78,6 +81,9 @@ export type AgencyWeekScheduleRow = {
   driver_group_role: 'driver' | 'member' | '';
   driver_group_label: string;
   agency_note: string;
+  admin_note: string;
+  agency_note_updated_by: string;
+  admin_note_updated_by: string;
   days: AgencyWeekScheduleCell[];
 };
 

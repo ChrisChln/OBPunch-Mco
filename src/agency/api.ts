@@ -101,7 +101,15 @@ export const fetchAgencyScheduleWeek = async (supabase: SupabaseClient, workDate
       groups?: Array<Record<string, unknown>>;
       next_code?: string | number | null;
     }>(supabase.rpc('agency_get_driver_groups')),
-    expectRpcSuccess<Array<{ staff_id?: string | null; note?: string | null }>>(supabase.rpc('agency_get_employee_notes'))
+    expectRpcSuccess<Array<{
+      staff_id?: string | null;
+      agency_note?: string | null;
+      admin_note?: string | null;
+      agency_note_updated_by?: string | null;
+      admin_note_updated_by?: string | null;
+    }>>(
+      supabase.rpc('get_employee_notes')
+    )
   ]);
   const driverAssignmentByStaffId = new Map(
     (Array.isArray(driverPayload.assignments) ? driverPayload.assignments : [])
@@ -121,7 +129,18 @@ export const fetchAgencyScheduleWeek = async (supabase: SupabaseClient, workDate
   );
   const noteByStaffId = new Map(
     (Array.isArray(notePayload) ? notePayload : [])
-      .map((row) => [String(row?.staff_id ?? '').trim(), String(row?.note ?? '').trim()] as const)
+      .map(
+        (row) =>
+          [
+            String(row?.staff_id ?? '').trim(),
+            {
+              agencyNote: String(row?.agency_note ?? '').trim(),
+              adminNote: String(row?.admin_note ?? '').trim(),
+              agencyNoteUpdatedBy: String(row?.agency_note_updated_by ?? '').trim(),
+              adminNoteUpdatedBy: String(row?.admin_note_updated_by ?? '').trim()
+            }
+          ] as const
+      )
       .filter(([staffId]) => Boolean(staffId))
   );
   const weekDates = Array.isArray(payload.week_dates) ? payload.week_dates.map((item) => String(item ?? '').trim()).filter(Boolean) : [];
@@ -140,7 +159,10 @@ export const fetchAgencyScheduleWeek = async (supabase: SupabaseClient, workDate
           driver_group_code: driverAssignmentByStaffId.get(String(row?.staff_id ?? '').trim())?.code ?? '',
           driver_group_role: (driverAssignmentByStaffId.get(String(row?.staff_id ?? '').trim())?.role ?? '') as 'driver' | 'member' | '',
           driver_group_label: driverAssignmentByStaffId.get(String(row?.staff_id ?? '').trim())?.label ?? '',
-          agency_note: noteByStaffId.get(String(row?.staff_id ?? '').trim()) ?? '',
+          agency_note: noteByStaffId.get(String(row?.staff_id ?? '').trim())?.agencyNote ?? '',
+          admin_note: noteByStaffId.get(String(row?.staff_id ?? '').trim())?.adminNote ?? '',
+          agency_note_updated_by: noteByStaffId.get(String(row?.staff_id ?? '').trim())?.agencyNoteUpdatedBy ?? '',
+          admin_note_updated_by: noteByStaffId.get(String(row?.staff_id ?? '').trim())?.adminNoteUpdatedBy ?? '',
           days: Array.isArray(row?.days)
             ? row.days.map((cell) => ({
                 work_date: String(cell?.work_date ?? '').trim(),

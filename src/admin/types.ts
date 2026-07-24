@@ -69,6 +69,7 @@ export type EmployeeRow = {
   active?: boolean | null;
   terminated_at?: string | null;
   termination_type?: TerminationType | string | null;
+  termination_reason?: string | null;
   created_at?: string | null;
 };
 
