@@ -147,6 +147,12 @@ import {
   getTimecardTerminatedByDay
 } from './timecardDisplay';
 import {
+  buildTimecardPunchSavePayload,
+  canOperateTimecardPunches,
+  computeConfirmedOperationalDayHours,
+  parseTimecardPunchSaveResult
+} from './timecardPunchSave';
+import {
   getDefaultPositionToneKey,
   getPositionToneFromMap,
   mergeLegacyPositionToneMap,
@@ -4255,7 +4261,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setCellAuditRows((prev) => [row, ...prev].slice(0, 1200));
     }
 
-    if (!supabase) return;
+    if (!supabase) return false;
     try {
       const { error } = await supabase.from(AUDIT_TABLE).insert([
         {
@@ -4269,9 +4275,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (error) {
         // keep local log even if remote fails
         setAuditError(error.message);
+        return false;
       }
+      return true;
     } catch (err: any) {
       setAuditError(String(err?.message ?? err));
+      return false;
     }
   };
 
@@ -12450,6 +12459,24 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return { rows, error: null as string | null };
   };
 
+  const getTimecardPunchPosition = (staffId: string | null) => {
+    const staffKey = normalizeStaffId(String(staffId ?? '').trim());
+    if (!staffKey) return '';
+    const employee = employees.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
+    const timecardRow = timecardRows.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
+    const position = String(employee?.position ?? employee?.Position ?? timecardRow?.position ?? '').trim();
+    return normalizePositionKey(position) || position;
+  };
+
+  const canOperateTimecardPunchStaff = (staffId: string | null) => {
+    const position = getTimecardPunchPosition(staffId);
+    return canOperateTimecardPunches(
+      timecardCanOperate,
+      position,
+      (position) => canOperatePosition('timecard', position)
+    );
+  };
+
   const openTimecardPunchModal = async (staffId: string, dayIndex: number | null, weekOffsetOverride = timecardWeekOffset) => {
     const staff = staffId.trim();
     if (!staff) return;
@@ -13001,8 +13028,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const addSingleTimecardPunchRow = async () => {
-    if (!timecardCanOperate) {
-      setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
+    if (!canOperateTimecardPunchStaff(timecardPunchStaffId)) {
+      setTimecardPunchError(t('当前账号没有该岗位的操作权限。', 'No operation access for this employee position.'));
       return;
     }
     const staff = timecardPunchStaffId;
@@ -13033,8 +13060,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const addTimecardPunchRow = async () => {
-    if (!timecardCanOperate) {
-      setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
+    if (!canOperateTimecardPunchStaff(timecardPunchStaffId)) {
+      setTimecardPunchError(t('当前账号没有该岗位的操作权限。', 'No operation access for this employee position.'));
       return;
     }
     const staff = timecardPunchStaffId;
@@ -13081,8 +13108,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const saveAllTimecardPunchRows = async () => {
-    if (!timecardCanOperate) {
-      setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
+    if (!canOperateTimecardPunchStaff(timecardPunchStaffId)) {
+      setTimecardPunchError(t('当前账号没有该岗位的操作权限。', 'No operation access for this employee position.'));
       return;
     }
     if (!supabase) {
@@ -13265,161 +13292,153 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
     }
 
+    if (!dayRangeForAudit || !dayDateForAudit) {
+      setTimecardPunchError(t('请选择单个日期后再保存。', 'Select one day before saving.'));
+      return;
+    }
+
+    let savePayload;
+    try {
+      savePayload = buildTimecardPunchSavePayload({
+        staffId: staff,
+        workDate: dayDateForAudit,
+        edits: changed.map((item) => ({
+          id: item.rowId,
+          action: item.edit.action,
+          createdAt: parseLocalDateTimeInputValue(item.edit.atLocal) as string
+        })),
+        additions: pendingAdds.map((row) => {
+          const rowId = String(row.id);
+          const edit = timecardPunchEdits[rowId] ?? {
+            action: row.action,
+            atLocal: row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : ''
+          };
+          return {
+            action: edit.action,
+            createdAt: parseLocalDateTimeInputValue(edit.atLocal) as string
+          };
+        }),
+        deleteIds,
+        operator: user?.email ?? null
+      });
+    } catch (error) {
+      setTimecardPunchError(String((error as Error)?.message ?? error));
+      return;
+    }
+
     let saveFailed = false;
+    let auditSaved = true;
     await runLocked('timecard_edit_all', async () => {
       setTimecardPunchError(null);
       const hoursBeforeBatch = computeSnapshotDayHours();
-      let editedCount = 0;
-      let addedCount = 0;
-      let deletedCount = 0;
-      if (changed.length > 0) {
-        const editedAtIso = new Date(serverTime).toISOString();
-        for (const batch of chunk(changed, 20)) {
-          const updateJobs = batch.map(async (item) => {
-            const createdAt = parseLocalDateTimeInputValue(item.edit.atLocal);
-            if (!createdAt) return { ok: false as const, error: '时间格式不正确。', item };
-            const { error } = await supabase
-              .from('ob_punches')
-              .update({
-                action: item.edit.action,
-                created_at: createdAt,
-                device: 'admin_console',
-                source: 'manual_edit',
-                operator: user?.email ?? null,
-                note: `manual_edit:${editedAtIso}`
-              })
-              .eq('id', item.rowId);
-            if (error) return { ok: false as const, error: error.message, item };
-            return { ok: true as const, item, createdAt };
-          });
-          const updateResults = await Promise.all(updateJobs);
-          const firstError = updateResults.find((r) => !r.ok);
-          if (firstError && !firstError.ok) {
-            saveFailed = true;
-            setTimecardPunchError(firstError.error);
-            return;
-          }
-          for (const result of updateResults) {
-            if (!result.ok) continue;
-            punchSnapshot.set(result.item.rowId, {
-              action: result.item.edit.action,
-              created_at: result.createdAt
-            });
-            editedCount += 1;
-          }
-        }
-        if (saveFailed) return;
-      }
-      if (pendingAdds.length > 0) {
-        const rowsToInsert = pendingAdds
-          .map((row) => {
-            const rowId = String(row.id);
-            const edit = timecardPunchEdits[rowId] ?? {
-              action: row.action,
-              atLocal: row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : ''
-            };
-            const createdAt = parseLocalDateTimeInputValue(edit.atLocal);
-            if (!createdAt) return null;
-            return {
-              staff_id: staff,
-              action: edit.action,
-              created_at: createdAt,
-              device: 'admin_console',
-              source: 'manual_add',
-              operator: user?.email ?? null,
-              note: 'manual_add'
-            };
-          })
-          .filter(Boolean) as Array<Record<string, unknown>>;
-        if (rowsToInsert.length > 0) {
-          const insertRes = await supabase.from('ob_punches').insert(rowsToInsert).select('id');
-          if (insertRes.error) {
-            saveFailed = true;
-            setTimecardPunchError(insertRes.error.message);
-            return;
-          }
-          const insertedIds = ((insertRes.data as any[] | null) ?? []).map((x: any) => String(x?.id ?? '').trim());
-          for (let i = 0; i < rowsToInsert.length; i += 1) {
-            const row = rowsToInsert[i] as { action?: string; created_at?: string };
-            const insertedId = insertedIds[i] || null;
-            const rowAction = String(row.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-            const rowCreatedAt = String(row.created_at ?? '');
-            if (insertedId && rowCreatedAt) {
-              punchSnapshot.set(insertedId, { action: rowAction, created_at: rowCreatedAt });
-            }
-            addedCount += 1;
-          }
-        }
-      }
-      if (deleteIds.length > 0) {
-        const beforeDeleteRes = await supabase
-          .from('ob_punches')
-          .select('id, action, created_at')
-          .in('id', deleteIds as any[]);
-        if (beforeDeleteRes.error) {
-          saveFailed = true;
-          setTimecardPunchError(beforeDeleteRes.error.message);
-          return;
-        }
-        const { error: deleteError } = await supabase.from('ob_punches').delete().in('id', deleteIds as any[]);
-        if (deleteError) {
-          saveFailed = true;
-          setTimecardPunchError(deleteError.message);
-          return;
-        }
-        const beforeRows = ((beforeDeleteRes.data as any[]) ?? []) as Array<{ id?: string | number; action?: string; created_at?: string }>;
-        for (const row of beforeRows) {
-          const rowId = String(row.id ?? '').trim();
-          if (rowId) punchSnapshot.delete(rowId);
-          deletedCount += 1;
-        }
+      const rpcResult = await supabase.rpc('save_timecard_punch_changes', savePayload);
+      if (rpcResult.error) {
+        saveFailed = true;
+        setTimecardPunchError(rpcResult.error.message);
+        return;
       }
 
+      let confirmed;
+      try {
+        confirmed = parseTimecardPunchSaveResult(
+          rpcResult.data,
+          staff,
+          dayRangeForAudit.start,
+          dayRangeForAudit.end
+        );
+      } catch (error) {
+        saveFailed = true;
+        setTimecardPunchError(String((error as Error)?.message ?? error));
+        return;
+      }
+
+      if (
+        confirmed.editedCount !== changed.length ||
+        confirmed.addedCount !== pendingAdds.length ||
+        confirmed.deletedCount !== deleteIds.length
+      ) {
+        saveFailed = true;
+        setTimecardPunchError(
+          t(
+            '数据库确认的修改数量与提交内容不一致，请刷新后重试。',
+            'Database-confirmed change counts do not match the submitted batch. Refresh and retry.'
+          )
+        );
+        return;
+      }
+
+      const editedCount = confirmed.editedCount;
+      const addedCount = confirmed.addedCount;
+      const deletedCount = confirmed.deletedCount;
       const totalChanged = editedCount + addedCount + deletedCount;
-      if (totalChanged > 0) {
-        const hoursAfterBatch = computeSnapshotDayHours();
-        const punchCountAfterBatch = computeSnapshotDayPunchCount();
-        let batchAction = 'punch_manual_edit';
-        if (editedCount === 0 && addedCount > 0 && deletedCount === 0) batchAction = 'punch_manual_add';
-        else if (editedCount === 0 && addedCount === 0 && deletedCount > 0) batchAction = 'punch_manual_delete';
-        await writeAudit({
-          action: batchAction,
+      const capEnd = new Date(
+        clamp(new Date(serverTime).getTime(), dayRangeForAudit.start.getTime(), dayRangeForAudit.end.getTime())
+      );
+      const hoursAfterBatch = computeConfirmedOperationalDayHours(
+        confirmed.rows,
+        dayRangeForAudit.start,
+        dayRangeForAudit.end,
+        capEnd
+      );
+      const punchCountAfterBatch = confirmed.rows.length;
+      let batchAction = 'punch_manual_edit';
+      if (editedCount === 0 && addedCount > 0 && deletedCount === 0) batchAction = 'punch_manual_add';
+      else if (editedCount === 0 && addedCount === 0 && deletedCount > 0) batchAction = 'punch_manual_delete';
+
+      const primaryAuditSaved = await writeAudit({
+        action: batchAction,
+        staffId: staff,
+        target: 'ob_punches',
+        payload: {
+          changed_rows: totalChanged,
+          edited_rows: editedCount,
+          added_rows: addedCount,
+          deleted_rows: deletedCount,
+          work_date: dayDateForAudit,
+          hours_before: Number.isFinite(hoursBeforeBatch) ? Math.round(hoursBeforeBatch * 100) / 100 : null,
+          hours_after: Math.round(hoursAfterBatch * 100) / 100
+        }
+      });
+      auditSaved = primaryAuditSaved;
+      if (punchCountAfterBatch > 0 && punchCountAfterBatch !== 4) {
+        const countAuditSaved = await writeAudit({
+          action: 'punch_count_verified',
           staffId: staff,
           target: 'ob_punches',
           payload: {
-            changed_rows: totalChanged,
-            edited_rows: editedCount,
-            added_rows: addedCount,
-            deleted_rows: deletedCount,
-            work_date: dayDateForAudit || null,
-            hours_before: Number.isFinite(hoursBeforeBatch) ? Math.round(hoursBeforeBatch * 100) / 100 : null,
-            hours_after: Number.isFinite(hoursAfterBatch) ? Math.round(hoursAfterBatch * 100) / 100 : null
+            work_date: dayDateForAudit,
+            punch_count: punchCountAfterBatch,
+            expected_count: 4
           }
         });
-        if (dayDateForAudit && Number.isFinite(punchCountAfterBatch) && punchCountAfterBatch > 0 && punchCountAfterBatch !== 4) {
-          await writeAudit({
-            action: 'punch_count_verified',
-            staffId: staff,
-            target: 'ob_punches',
-            payload: {
-              work_date: dayDateForAudit,
-              punch_count: punchCountAfterBatch,
-              expected_count: 4
-            }
-          });
-        }
+        auditSaved = countAuditSaved && auditSaved;
       }
     });
     if (saveFailed) return;
-    setStatus({ tone: 'success', message: t('打卡流水已保存。', 'Punch records saved.') });
+    setStatus(
+      auditSaved
+        ? { tone: 'success', message: t('打卡流水已保存。', 'Punch records saved.') }
+        : {
+            tone: 'error',
+            message: t(
+              '打卡已保存，但操作记录写入失败。',
+              'Punches were saved, but the audit log could not be written.'
+            )
+          }
+    );
     if (dayDateForAudit) notifyTimecardPunchSaved(staff, dayDateForAudit);
     closeTimecardPunchModal();
     void fetchCellAuditLogs();
-    queueTimecardRefresh();
+    if (page === 'home') {
+      await refreshHomePanel({ lockUi: false });
+    } else {
+      timecardWeekCacheRef.current = null;
+      await fetchTimecard({ reset: true, lockUi: false });
+    }
   };
   const deleteTimecardPunchRow = async (row: PunchRow) => {
-    if (!timecardCanOperate) {
-      setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
+    if (!canOperateTimecardPunchStaff(timecardPunchStaffId)) {
+      setTimecardPunchError(t('当前账号没有该岗位的操作权限。', 'No operation access for this employee position.'));
       return;
     }
     const rowId = String(row.id ?? '').trim();
@@ -15164,7 +15183,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     rows[toIdx] = tmp!;
     return rows;
   }, [timecardPunchCardsVisible, timecardPunchDraggingId, timecardPunchDragOverId]);
-  const timecardPunchReadOnly = timecardPunchDayIndex === null || !timecardCanOperate;
+  const timecardPunchCanOperate = canOperateTimecardPunchStaff(timecardPunchStaffId);
+  const timecardPunchReadOnly = timecardPunchDayIndex === null || !timecardPunchCanOperate;
   const timecardPunchHeaderMeta = useMemo(() => {
     const staff = normalizeStaffId(String(timecardPunchStaffId ?? '').trim());
     if (!staff) {
