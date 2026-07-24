@@ -123,6 +123,11 @@ import {
 } from '../shared/positions';
 import { useScheduleRealtime } from './useScheduleRealtime';
 import { shouldEnableEmployeeRealtime, useEmployeeRealtime } from './useEmployeeRealtime';
+import {
+  buildEmployeePositionWritePayload,
+  probeEmployeePositionColumnMode,
+  type EmployeePositionColumnMode
+} from './employeePositionColumns';
 import { sortEmployeesByPositionOrder } from './employeePositionSort';
 import { sortScheduleEmployees } from './scheduleEmployeeSort';
 import {
@@ -1481,6 +1486,7 @@ export default function AdminAppPage() {
   type EmployeeColumnMode = 'lower' | 'cased';
   type EmployeeFetchProfile = 'full' | 'home';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
+  const employeePositionColumnModeRef = useRef<EmployeePositionColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
   const dailyCapacityRequestRef = useRef(0);
   const scheduleMistakeRequestRef = useRef(0);
@@ -2989,6 +2995,19 @@ export default function AdminAppPage() {
 
     employeeColumnModeRef.current = 'cased';
     return 'cased';
+  };
+  const resolveEmployeePositionColumnMode = async (): Promise<EmployeePositionColumnMode> => {
+    const cached = employeePositionColumnModeRef.current;
+    if (cached) return cached;
+    if (!supabase) return 'lower';
+
+    const mode = await probeEmployeePositionColumnMode(async (column) => {
+      const select = column === 'Position' ? 'staff_id, "Position"' : 'staff_id, position';
+      const result = await supabase.from(EMPLOYEE_TABLE).select(select).limit(1);
+      return !result.error;
+    });
+    employeePositionColumnModeRef.current = mode;
+    return mode;
   };
   const buildEmployeeSelectColumns = (mode: EmployeeColumnMode, profile: EmployeeFetchProfile) => {
     if (profile === 'home') {
@@ -7669,13 +7688,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setEmployeesError(null);
 
       const mode = await resolveEmployeeColumnMode();
+      const positionMode = await resolveEmployeePositionColumnMode();
+      const positionPayload = buildEmployeePositionWritePayload(positionMode, normalizedPos);
       let payload =
         mode === 'cased'
           ? {
               staff_id: staff,
               name,
               Agency: agency,
-              Position: normalizedPos,
+              ...positionPayload,
               employment_type: employmentType,
               shift: shift || null,
               shift_time: resolvedShiftTime || null,
@@ -7689,7 +7710,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               staff_id: staff,
               name,
               agency,
-              position: normalizedPos,
+              ...positionPayload,
               employment_type: employmentType,
               shift: shift || null,
               shift_time: resolvedShiftTime || null,
