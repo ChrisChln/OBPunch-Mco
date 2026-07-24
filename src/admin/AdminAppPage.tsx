@@ -25,6 +25,10 @@ import {
   resolveEmployeeEditStaffIds,
   shouldAllocateTemporaryStaffIdOnEdit
 } from './tempStaffIds';
+import {
+  getEmployeeUpdateError,
+  isGeneratedEmployeeColumnWriteError
+} from './employeeWrites';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import AdminHeader from './components/AdminHeader';
@@ -137,6 +141,8 @@ import {
   getTimecardExportDayCellText,
   getTimecardTerminatedByDay
 } from './timecardDisplay';
+import { shouldUseTimecardWeekCache } from './timecardCache';
+import { getPunchUpdateError } from './timecardPunchWrites';
 import {
   getDefaultPositionToneKey,
   getPositionToneFromMap,
@@ -9227,7 +9233,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         scheduleIdsToMigrate = ((scheduleListRes.data as any[]) ?? []).map((r) => r.id).filter((id) => id !== null && id !== undefined);
       }
 
-      const mode = await resolveEmployeeColumnMode();
+      let mode = await resolveEmployeeColumnMode();
       const originalEmployeeRes = await supabase
         .from(EMPLOYEE_TABLE)
         .select(
@@ -9247,8 +9253,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return;
       }
 
-      const payload =
-        mode === 'cased'
+      const buildEmployeePayload = (writeMode: EmployeeColumnMode) =>
+        writeMode === 'cased'
           ? {
               staff_id: nextStaff,
               name,
@@ -9277,16 +9283,44 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               active: true,
               terminated_at: null
             };
-      let { error } = await supabase.from(EMPLOYEE_TABLE).update(payload as any).eq('staff_id', originalStaff);
-      if (error && /active|terminated_at/i.test(String(error.message ?? ''))) {
+      let payload = buildEmployeePayload(mode);
+      let employeeUpdateRes = await supabase
+        .from(EMPLOYEE_TABLE)
+        .update(payload as any)
+        .eq('staff_id', originalStaff)
+        .select('staff_id');
+      if (isGeneratedEmployeeColumnWriteError(employeeUpdateRes.error)) {
+        mode = mode === 'cased' ? 'lower' : 'cased';
+        employeeColumnModeRef.current = mode;
+        payload = buildEmployeePayload(mode);
+        employeeUpdateRes = await supabase
+          .from(EMPLOYEE_TABLE)
+          .update(payload as any)
+          .eq('staff_id', originalStaff)
+          .select('staff_id');
+      }
+      let employeeUpdateError = getEmployeeUpdateError({
+        expectedStaffId: nextStaff,
+        data: employeeUpdateRes.data as Array<{ staff_id?: string | null }> | null,
+        error: employeeUpdateRes.error
+      });
+      if (employeeUpdateError && /active|terminated_at/i.test(employeeUpdateError)) {
         const fallbackPayload = { ...payload } as Record<string, unknown>;
         delete fallbackPayload.active;
         delete fallbackPayload.terminated_at;
-        const retry = await supabase.from(EMPLOYEE_TABLE).update(fallbackPayload as any).eq('staff_id', originalStaff);
-        error = retry.error as any;
+        employeeUpdateRes = await supabase
+          .from(EMPLOYEE_TABLE)
+          .update(fallbackPayload as any)
+          .eq('staff_id', originalStaff)
+          .select('staff_id');
+        employeeUpdateError = getEmployeeUpdateError({
+          expectedStaffId: nextStaff,
+          data: employeeUpdateRes.data as Array<{ staff_id?: string | null }> | null,
+          error: employeeUpdateRes.error
+        });
       }
-      if (error) {
-        setEmployeesError(error.message);
+      if (employeeUpdateError) {
+        setEmployeesError(employeeUpdateError);
         return;
       }
 
@@ -9297,8 +9331,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               ? {
                   staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
                   name: originalEmployeeRow.name ?? null,
-                  Agency: originalEmployeeRow.Agency ?? null,
-                  Position: originalEmployeeRow.Position ?? null,
+                  Agency: originalEmployeeRow.Agency ?? originalEmployeeRow.agency ?? null,
+                  Position: originalEmployeeRow.Position ?? originalEmployeeRow.position ?? null,
                   employment_type: originalEmployeeRow.employment_type ?? null,
                   shift: originalEmployeeRow.shift ?? null,
                   shift_time: originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime ?? null,
@@ -9309,8 +9343,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
               : {
                   staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
                   name: originalEmployeeRow.name ?? null,
-                  agency: originalEmployeeRow.agency ?? null,
-                  position: originalEmployeeRow.position ?? null,
+                  agency: originalEmployeeRow.agency ?? originalEmployeeRow.Agency ?? null,
+                  position: originalEmployeeRow.position ?? originalEmployeeRow.Position ?? null,
                   employment_type: originalEmployeeRow.employment_type ?? null,
                   shift: originalEmployeeRow.shift ?? null,
                   shift_time: originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime ?? null,
@@ -10662,7 +10696,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     position,
     missingEmployeeOnly,
     lockUi,
-    deferLateSync
+    deferLateSync,
+    bypassCache
   }: {
     reset: boolean;
     weekOffset?: number;
@@ -10673,6 +10708,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     missingEmployeeOnly?: boolean;
     lockUi?: boolean;
     deferLateSync?: boolean;
+    bypassCache?: boolean;
   }) => {
     if (!supabase) {
       setTimecardError('缺少 Supabase 配置。');
@@ -11458,7 +11494,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const cachedWeek = timecardWeekCacheRef.current;
-      if (cachedWeek && cachedWeek.weekKey === weekStartDate) {
+      if (
+        cachedWeek &&
+        shouldUseTimecardWeekCache({
+          cachedWeekKey: cachedWeek.weekKey,
+          requestedWeekKey: weekStartDate,
+          bypassCache: bypassCache ?? false
+        })
+      ) {
         advanceTimecardLoadingProgress(70);
         const viewEmployees = filterEmployeesForView(cachedWeek.allEmployees);
         const now = new Date(serverTime);
@@ -11593,6 +11636,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       advanceTimecardLoadingProgress(88);
 
+      if (isStale()) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
+      }
       timecardWeekCacheRef.current = {
         weekKey: weekStartDate,
         allEmployees,
@@ -13104,7 +13150,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           const updateJobs = batch.map(async (item) => {
             const createdAt = parseLocalDateTimeInputValue(item.edit.atLocal);
             if (!createdAt) return { ok: false as const, error: '时间格式不正确。', item };
-            const { error } = await supabase
+            const updateResult = await supabase
               .from('ob_punches')
               .update({
                 action: item.edit.action,
@@ -13114,8 +13160,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
                 operator: user?.email ?? null,
                 note: `manual_edit:${editedAtIso}`
               })
-              .eq('id', item.rowId);
-            if (error) return { ok: false as const, error: error.message, item };
+              .eq('id', item.rowId)
+              .select('id');
+            const updateError = getPunchUpdateError({
+              expectedId: item.rowId,
+              data: updateResult.data as Array<{ id?: string | number | null }> | null,
+              error: updateResult.error
+            });
+            if (updateError) return { ok: false as const, error: updateError, item };
             return { ok: true as const, item, createdAt };
           });
           const updateResults = await Promise.all(updateJobs);
@@ -13237,11 +13289,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
     });
     if (saveFailed) return;
-    setStatus({ tone: 'success', message: t('打卡流水已保存。', 'Punch records saved.') });
     if (dayDateForAudit) notifyTimecardPunchSaved(staff, dayDateForAudit);
-    closeTimecardPunchModal();
     void fetchCellAuditLogs();
-    queueTimecardRefresh();
+    timecardWeekCacheRef.current = null;
+    await fetchTimecard({ reset: true, lockUi: false, bypassCache: true });
+    setStatus({ tone: 'success', message: t('打卡流水已保存。', 'Punch records saved.') });
+    closeTimecardPunchModal();
   };
   const deleteTimecardPunchRow = async (row: PunchRow) => {
     if (!timecardCanOperate) {
