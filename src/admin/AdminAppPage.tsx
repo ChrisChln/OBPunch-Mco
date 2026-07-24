@@ -147,6 +147,7 @@ import {
   getTimecardTerminatedByDay
 } from './timecardDisplay';
 import {
+  buildOperationalDayRange,
   buildTimecardPunchSavePayload,
   canOperateTimecardPunches,
   computeConfirmedOperationalDayHours,
@@ -891,12 +892,7 @@ const SHIFT_ANALYSIS_DAYS_RAW = Number(import.meta.env.VITE_SHIFT_ANALYSIS_DAYS 
 const SHIFT_ANALYSIS_DAYS = Number.isFinite(SHIFT_ANALYSIS_DAYS_RAW) ? clamp(SHIFT_ANALYSIS_DAYS_RAW, 1, 90) : 30;
 
 const getDayRange = (weekStart: Date, dayIndex: number, dayCount = 1) => {
-  const startBase = addDays(weekStart, dayIndex);
-  const endBase = addDays(weekStart, dayIndex + dayCount);
-  return {
-    start: new Date(startBase.getTime() + DAY_CUTOFF_MS),
-    end: new Date(endBase.getTime() + DAY_CUTOFF_MS)
-  };
+  return buildOperationalDayRange(weekStart, dayIndex, DAY_CUTOFF_HOUR, dayCount);
 };
 // Day bucketing uses [start, end). Shift OUT by 1ms so exact-cutoff OUT belongs to previous operational day.
 const getOperationalBucketTimeMs = (at: Date, action: 'IN' | 'OUT') => at.getTime() - (action === 'OUT' ? 1 : 0);
@@ -12480,10 +12476,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const openTimecardPunchModal = async (staffId: string, dayIndex: number | null, weekOffsetOverride = timecardWeekOffset) => {
     const staff = staffId.trim();
     if (!staff) return;
-    const staffKey = normalizeStaffId(staff);
-    const employee = employees.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
-    const position = String(employee?.position ?? employee?.Position ?? '').trim();
-    const accessPosition = normalizePositionKey(position) || position;
+    const accessPosition = getTimecardPunchPosition(staff);
     if (!canViewPosition('timecard', accessPosition)) {
       setStatus({
         tone: 'error',

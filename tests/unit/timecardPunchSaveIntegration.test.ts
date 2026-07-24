@@ -14,6 +14,7 @@ describe('timecard punch editor integration', () => {
     expect(source).toContain("canOperatePosition('timecard', position)");
     expect(source).toContain('const timecardPunchCanOperate =');
     expect(source).toContain('timecardRows.find((item)');
+    expect(source).toContain('const accessPosition = getTimecardPunchPosition(staff)');
   });
 
   test('saves the staged batch through the atomic RPC', () => {

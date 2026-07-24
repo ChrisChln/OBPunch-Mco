@@ -67,11 +67,10 @@ const normalizeTimestamp = (value: unknown) => {
 };
 
 const parseCount = (value: unknown, label: string) => {
-  const count = Number(value);
-  if (!Number.isInteger(count) || count < 0) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
     throw new Error(`Invalid confirmed ${label} count.`);
   }
-  return count;
+  return value;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -84,6 +83,23 @@ export const canOperateTimecardPunches = (
 ) => {
   const normalizedPosition = String(position ?? '').trim();
   return moduleCanOperate && Boolean(normalizedPosition) && canOperatePosition(normalizedPosition);
+};
+
+export const buildOperationalDayRange = (
+  weekStart: Date,
+  dayIndex: number,
+  cutoffHour: number,
+  dayCount = 1
+) => {
+  const start = new Date(weekStart);
+  start.setDate(start.getDate() + dayIndex);
+  start.setHours(cutoffHour, 0, 0, 0);
+
+  const end = new Date(weekStart);
+  end.setDate(end.getDate() + dayIndex + dayCount);
+  end.setHours(cutoffHour, 0, 0, 0);
+
+  return { start, end };
 };
 
 export const buildTimecardPunchSavePayload = ({

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+  buildOperationalDayRange,
   buildTimecardPunchSavePayload,
   canOperateTimecardPunches,
   computeConfirmedOperationalDayHours,
@@ -85,6 +86,27 @@ describe('timecard punch save contract', () => {
       addedCount: 0,
       deletedCount: 0
     });
+  });
+
+  test('rejects null confirmation counts', () => {
+    expect(() =>
+      parseTimecardPunchSaveResult(
+        { rows: [], edited_count: null, added_count: 0, deleted_count: 0 },
+        'US001',
+        rangeStart,
+        rangeEnd
+      )
+    ).toThrow('edited count');
+  });
+
+  test('keeps the local cutoff hour across DST transitions', () => {
+    const spring = buildOperationalDayRange(new Date(2026, 2, 2), 6, 5);
+    const fall = buildOperationalDayRange(new Date(2026, 9, 26), 6, 5);
+
+    expect(spring.start.getHours()).toBe(5);
+    expect(spring.end.getHours()).toBe(5);
+    expect(fall.start.getHours()).toBe(5);
+    expect(fall.end.getHours()).toBe(5);
   });
 
   test('rejects empty, mismatched, duplicate, or out-of-range confirmations', () => {

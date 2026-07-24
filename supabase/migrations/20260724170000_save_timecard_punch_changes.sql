@@ -77,7 +77,11 @@ begin
     end if;
     v_seen_ids := array_append(v_seen_ids, v_id);
 
-    select p.id::text as id_text, p.staff_id
+    select
+      p.id::text as id_text,
+      p.staff_id,
+      upper(btrim(p.action)) as action,
+      p.created_at
     into v_existing
     from public.ob_punches as p
     where p.id::text = v_id
@@ -93,17 +97,28 @@ begin
     if v_action not in ('IN', 'OUT') then
       raise exception 'Punch action must be IN or OUT.';
     end if;
+    if nullif(btrim(coalesce(v_item ->> 'created_at', '')), '') is null then
+      raise exception 'Invalid punch timestamp.';
+    end if;
     begin
       v_created_at := (v_item ->> 'created_at')::timestamptz;
     exception
       when others then
         raise exception 'Invalid punch timestamp.';
     end;
+    if v_created_at is null then
+      raise exception 'Invalid punch timestamp.';
+    end if;
     if v_created_at < v_range_start
       or v_created_at > v_range_end
       or (v_created_at = v_range_end and v_action <> 'OUT')
     then
       raise exception 'Punch timestamp is outside the operational day.';
+    end if;
+    if v_existing.action = v_action
+      and v_existing.created_at = v_created_at
+    then
+      raise exception 'Punch edit does not change the record: %', v_id;
     end if;
   end loop;
 
@@ -119,7 +134,11 @@ begin
     end if;
     v_seen_ids := array_append(v_seen_ids, v_id);
 
-    select p.id::text as id_text, p.staff_id
+    select
+      p.id::text as id_text,
+      p.staff_id,
+      upper(btrim(p.action)) as action,
+      p.created_at
     into v_existing
     from public.ob_punches as p
     where p.id::text = v_id
@@ -129,6 +148,13 @@ begin
     end if;
     if upper(btrim(coalesce(v_existing.staff_id, ''))) <> v_staff_id then
       raise exception 'Punch record belongs to another employee: %', v_id;
+    end if;
+    if v_existing.created_at is null
+      or v_existing.created_at < v_range_start
+      or v_existing.created_at > v_range_end
+      or (v_existing.created_at = v_range_end and v_existing.action <> 'OUT')
+    then
+      raise exception 'Punch record is outside the operational day: %', v_id;
     end if;
   end loop;
 
@@ -142,12 +168,18 @@ begin
     if v_action not in ('IN', 'OUT') then
       raise exception 'Punch action must be IN or OUT.';
     end if;
+    if nullif(btrim(coalesce(v_item ->> 'created_at', '')), '') is null then
+      raise exception 'Invalid punch timestamp.';
+    end if;
     begin
       v_created_at := (v_item ->> 'created_at')::timestamptz;
     exception
       when others then
         raise exception 'Invalid punch timestamp.';
     end;
+    if v_created_at is null then
+      raise exception 'Invalid punch timestamp.';
+    end if;
     if v_created_at < v_range_start
       or v_created_at > v_range_end
       or (v_created_at = v_range_end and v_action <> 'OUT')

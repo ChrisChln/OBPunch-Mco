@@ -29,6 +29,9 @@ describe('timecard punch save migration', () => {
     expect(source).toContain("raise exception 'Punch record not found:");
     expect(source).toContain("raise exception 'Punch record belongs to another employee:");
     expect(source).toContain("raise exception 'Punch timestamp is outside the operational day.'");
+    expect(source).toContain("raise exception 'Punch edit does not change the record:");
+    expect(source).toContain('v_created_at is null');
+    expect(source).toContain('v_existing.created_at < v_range_start');
     expect(source).toContain('(p_work_date + 1)::timestamp without time zone');
     expect(source).toContain(
       'revoke all on function public.save_timecard_punch_changes(text, date, jsonb, jsonb, jsonb, text) from public'
