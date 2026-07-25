@@ -52,7 +52,11 @@ import EmployeeNoteNameButton, { type EmployeeNotePair } from './components/Empl
 import EmployeeBadgePreviewModal from './pages/EmployeeBadgePreviewModal';
 import DepartedEmployeesModal from './pages/DepartedEmployeesModal';
 import DepartureConfirmDialog from './pages/DepartureConfirmDialog';
-import { buildDepartedEmployeesCsv, normalizeTerminationReason } from './departedEmployees';
+import {
+  attachDepartureOperators,
+  buildDepartedEmployeesCsv,
+  normalizeTerminationReason
+} from './departedEmployees';
 import TimecardControls from './pages/TimecardControls';
 import TimecardTableSection from './pages/TimecardTableSection';
 import HomeDashboardPage from './pages/HomeDashboardPage';
@@ -7393,7 +7397,41 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           positionScopedRows,
           (row) => String(row.agency ?? row.Agency ?? '').trim()
         );
-        setDepartedEmployees(agencyScopedRows);
+        const staffIds = Array.from(
+          new Set(
+            agencyScopedRows
+              .map((row) => normalizeStaffId(String(row.staff_id ?? '').trim()))
+              .filter(Boolean)
+          )
+        );
+        const departureAudits: AuditRow[] = [];
+        let departureAuditError = '';
+        for (let index = 0; index < staffIds.length; index += 100) {
+          const staffChunk = staffIds.slice(index, index + 100);
+          const auditResult = await supabase
+            .from(AUDIT_TABLE)
+            .select('id, created_at, actor, action, staff_id, target, payload')
+            .in('staff_id', staffChunk as any)
+            .in('action', ['employee_delete', 'employee_termination_approve'] as any)
+            .order('created_at', { ascending: false });
+          if (auditResult.error) {
+            departureAuditError = auditResult.error.message;
+            break;
+          }
+          departureAudits.push(...(((auditResult.data as AuditRow[] | null) ?? [])));
+        }
+        await rememberAuditActorDisplayNames(departureAudits.map((row) => row.actor));
+        setDepartedEmployees(
+          attachDepartureOperators(agencyScopedRows, departureAudits, getAuditActorDisplay)
+        );
+        if (departureAuditError) {
+          setDepartedEmployeesError(
+            t(
+              `员工已加载，操作人读取失败：${departureAuditError}`,
+              `Employees loaded, but operators failed: ${departureAuditError}`
+            )
+          );
+        }
       } finally {
         setDepartedEmployeesLoading(false);
       }
@@ -8010,7 +8048,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           active: false,
           terminated_at: departPayload.terminated_at,
           termination_type: terminationType,
-          termination_reason: terminationReason
+          termination_reason: terminationReason,
+          termination_operator: userDisplayName.trim() || user?.email || null
         },
         ...prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== normalizedStaff)
       ]);

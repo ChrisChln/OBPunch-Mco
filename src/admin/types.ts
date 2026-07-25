@@ -70,6 +70,7 @@ export type EmployeeRow = {
   terminated_at?: string | null;
   termination_type?: TerminationType | string | null;
   termination_reason?: string | null;
+  termination_operator?: string | null;
   created_at?: string | null;
 };
 

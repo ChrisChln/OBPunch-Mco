@@ -241,28 +241,29 @@ export default function DepartedEmployeesModal({
 
         <div
           ref={tableScrollRef}
-          className="min-h-0 flex-1 overflow-auto px-5 pb-5"
+          className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-5 pb-5"
           style={{ contain: 'layout paint style' }}
           onScroll={handleScroll}
         >
-          <table className="w-full min-w-[1240px] table-fixed text-left text-sm">
+          <table className="w-full table-fixed text-left text-sm">
             <thead className={['sticky top-0 z-10 border-b text-xs uppercase tracking-[0.18em]', isLight ? 'border-slate-200 bg-white text-slate-500' : 'border-white/10 bg-slate-950 text-slate-400'].join(' ')}>
               <tr>
-                <th className="w-[130px] px-3 py-3">{t('离职日期', 'Date')}</th>
-                <th className="w-[180px] px-3 py-3">{t('名字', 'Name')}</th>
-                <th className="w-[150px] px-3 py-3">USID</th>
-                <th className="w-[130px] px-3 py-3">Agency</th>
-                <th className="w-[130px] px-3 py-3">Position</th>
-                <th className="w-[130px] px-3 py-3">{t('类型', 'Type')}</th>
-                <th className="w-[220px] px-3 py-3">{t('离职原因', 'Departure reason')}</th>
-                {canManageDeparted || canHardDelete ? <th className="w-[190px] px-3 py-3 text-right">{t('操作', 'Action')}</th> : null}
+                <th className="w-[9%] px-2 py-3">{t('离职日期', 'Date')}</th>
+                <th className="w-[12%] px-2 py-3">{t('名字', 'Name')}</th>
+                <th className="w-[10%] px-2 py-3">USID</th>
+                <th className="w-[8%] px-2 py-3">Agency</th>
+                <th className="w-[8%] px-2 py-3">Position</th>
+                <th className="w-[10%] px-2 py-3">{t('类型', 'Type')}</th>
+                <th className="w-[15%] px-2 py-3">{t('离职原因', 'Departure reason')}</th>
+                <th className="w-[10%] px-2 py-3">{t('操作人', 'Operator')}</th>
+                {canManageDeparted || canHardDelete ? <th className="w-[18%] px-2 py-3 text-right">{t('操作', 'Action')}</th> : null}
               </tr>
             </thead>
             <tbody>
               {visibleMeta.topSpacerHeight > 0 ? (
                 <tr aria-hidden="true">
                   <td
-                    colSpan={canManageDeparted || canHardDelete ? 8 : 7}
+                    colSpan={canManageDeparted || canHardDelete ? 9 : 8}
                     style={{ height: visibleMeta.topSpacerHeight, padding: 0, border: 0 }}
                   />
                 </tr>
@@ -272,16 +273,22 @@ export default function DepartedEmployeesModal({
                 const type = normalizeTerminationType(row.termination_type);
                 return (
                   <tr key={`${staffId}:${row.terminated_at}`} className="h-[50px] border-b border-white/5 last:border-0">
-                    <td className="px-3 py-3 font-mono">{formatDate(row.terminated_at)}</td>
-                    <td className="px-3 py-3">
+                    <td className="whitespace-nowrap px-2 py-3 font-mono">{formatDate(row.terminated_at)}</td>
+                    <td className="px-2 py-3">
                       <span className="block truncate" title={normalizeText(row.name) || '-'}>
                         {normalizeText(row.name) || '-'}
                       </span>
                     </td>
-                    <td className="px-3 py-3 font-mono">{staffId ? displayStaffId(staffId) : '-'}</td>
-                    <td className="px-3 py-3">{normalizeText(row.agency ?? row.Agency) || '-'}</td>
-                    <td className="px-3 py-3">{normalizeText(row.position ?? row.Position) || '-'}</td>
-                    <td className="px-3 py-3">
+                    <td className="truncate px-2 py-3 font-mono" title={staffId ? displayStaffId(staffId) : '-'}>
+                      {staffId ? displayStaffId(staffId) : '-'}
+                    </td>
+                    <td className="truncate px-2 py-3" title={normalizeText(row.agency ?? row.Agency) || '-'}>
+                      {normalizeText(row.agency ?? row.Agency) || '-'}
+                    </td>
+                    <td className="truncate px-2 py-3" title={normalizeText(row.position ?? row.Position) || '-'}>
+                      {normalizeText(row.position ?? row.Position) || '-'}
+                    </td>
+                    <td className="px-2 py-3">
                       <button
                         type="button"
                         disabled={loading || !staffId || !canManageDeparted}
@@ -297,13 +304,18 @@ export default function DepartedEmployeesModal({
                         {type === 'blacklist' ? t('黑名单', 'Blacklist') : t('正常离职', 'Normal')}
                       </button>
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-2 py-3">
                       <span className="block truncate" title={normalizeText(row.termination_reason) || '-'}>
                         {normalizeText(row.termination_reason) || '-'}
                       </span>
                     </td>
+                    <td className="px-2 py-3">
+                      <span className="block truncate" title={normalizeText(row.termination_operator) || '-'}>
+                        {normalizeText(row.termination_operator) || '-'}
+                      </span>
+                    </td>
                     {canManageDeparted || canHardDelete ? (
-                      <td className="px-3 py-3">
+                      <td className="px-2 py-3">
                         <div className="flex justify-end gap-2">
                           {canManageDeparted ? (
                             <button
@@ -334,7 +346,7 @@ export default function DepartedEmployeesModal({
               {visibleMeta.bottomSpacerHeight > 0 ? (
                 <tr aria-hidden="true">
                   <td
-                    colSpan={canManageDeparted || canHardDelete ? 8 : 7}
+                    colSpan={canManageDeparted || canHardDelete ? 9 : 8}
                     style={{ height: visibleMeta.bottomSpacerHeight, padding: 0, border: 0 }}
                   />
                 </tr>
