@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import {
+  buildEmployeeEditWritePayload,
   buildEmployeePositionWritePayload,
   probeEmployeePositionColumnMode
 } from '../../src/admin/employeePositionColumns';
@@ -24,5 +25,29 @@ describe('employee position column compatibility', () => {
   test('writes only the available position column on legacy schemas', () => {
     expect(buildEmployeePositionWritePayload('lower', 'Pick')).toEqual({ position: 'Pick' });
     expect(buildEmployeePositionWritePayload('cased', 'Pack')).toEqual({ Position: 'Pack' });
+  });
+
+  test('builds an employee edit payload with both position columns', () => {
+    expect(
+      buildEmployeeEditWritePayload({
+        employeeColumnMode: 'cased',
+        positionColumnMode: 'both',
+        staffId: 'US018637',
+        name: 'Kristi Marmol',
+        agency: 'Prime',
+        position: 'Pick',
+        employmentType: 'FT',
+        shift: 'early',
+        shiftTime: '07:00',
+        label: 'Lead',
+        workAccount: 'KristiMarmol',
+        workPassword: 'Mco123456'
+      })
+    ).toMatchObject({
+      staff_id: 'US018637',
+      Agency: 'Prime',
+      position: 'Pick',
+      Position: 'Pick'
+    });
   });
 });

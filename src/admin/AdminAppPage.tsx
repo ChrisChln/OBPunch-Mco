@@ -124,6 +124,7 @@ import {
 import { useScheduleRealtime } from './useScheduleRealtime';
 import { shouldEnableEmployeeRealtime, useEmployeeRealtime } from './useEmployeeRealtime';
 import {
+  buildEmployeeEditWritePayload,
   buildEmployeePositionWritePayload,
   probeEmployeePositionColumnMode,
   type EmployeePositionColumnMode
@@ -9407,6 +9408,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const mode = await resolveEmployeeColumnMode();
+      const positionMode = await resolveEmployeePositionColumnMode();
       const originalEmployeeRes = await supabase
         .from(EMPLOYEE_TABLE)
         .select(
@@ -9426,36 +9428,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return;
       }
 
-      const payload =
-        mode === 'cased'
-          ? {
-              staff_id: nextStaff,
-              name,
-              Agency: agency || null,
-              Position: normalizedPos,
-              employment_type: employmentType,
-              shift: employeeEditShift || null,
-              shift_time: resolvedShiftTime || null,
-              label: label || null,
-              work_account: workAccount || null,
-              work_password: workPassword || null,
-              active: true,
-              terminated_at: null
-            }
-          : {
-              staff_id: nextStaff,
-              name,
-              agency: agency || null,
-              position: normalizedPos,
-              employment_type: employmentType,
-              shift: employeeEditShift || null,
-              shift_time: resolvedShiftTime || null,
-              label: label || null,
-              work_account: workAccount || null,
-              work_password: workPassword || null,
-              active: true,
-              terminated_at: null
-            };
+      const payload = buildEmployeeEditWritePayload({
+        employeeColumnMode: mode,
+        positionColumnMode: positionMode,
+        staffId: nextStaff,
+        name,
+        agency,
+        position: normalizedPos,
+        employmentType,
+        shift: employeeEditShift,
+        shiftTime: resolvedShiftTime,
+        label,
+        workAccount,
+        workPassword
+      });
       let { error } = await supabase.from(EMPLOYEE_TABLE).update(payload as any).eq('staff_id', originalStaff);
       if (error && /active|terminated_at/i.test(String(error.message ?? ''))) {
         const fallbackPayload = { ...payload } as Record<string, unknown>;
