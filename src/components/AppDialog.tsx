@@ -24,8 +24,6 @@ export default function AppDialog({
   tone = 'neutral',
   themeMode
 }: AppDialogProps) {
-  if (!open || typeof document === 'undefined') return null;
-
   useEffect(() => {
     if (!open || !onCancel) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -47,6 +45,8 @@ export default function AppDialog({
     }
     return 'dark';
   }, [themeMode]);
+
+  if (!open || typeof document === 'undefined') return null;
 
   const panelClass =
     mode === 'light'
