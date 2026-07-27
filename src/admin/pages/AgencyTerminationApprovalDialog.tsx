@@ -1,4 +1,4 @@
-import { Fragment } from 'react';
+import { Fragment, useEffect, useRef } from 'react';
 
 import type { AgencyTerminationDetails } from '../agencyTerminationApproval';
 
@@ -23,6 +23,52 @@ export default function AgencyTerminationApprovalDialog({
   onCancel,
   onConfirm
 }: AgencyTerminationApprovalDialogProps) {
+  const panelRef = useRef<HTMLElement | null>(null);
+  const confirmButtonRef = useRef<HTMLButtonElement | null>(null);
+  const onCancelRef = useRef(onCancel);
+  const submittingRef = useRef(isSubmitting);
+  onCancelRef.current = onCancel;
+  submittingRef.current = isSubmitting;
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    confirmButtonRef.current?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !submittingRef.current) {
+        event.preventDefault();
+        onCancelRef.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusable = Array.from(
+        panelRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      );
+      if (!focusable.length) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, []);
+
   const rows = [
     [t('工号', 'Staff ID'), details.staffId],
     [t('姓名', 'Name'), details.name],
@@ -44,6 +90,7 @@ export default function AgencyTerminationApprovalDialog({
       className={['fixed inset-0 z-[125] flex items-center justify-center px-4 py-6 backdrop-blur-sm', overlayClass].join(' ')}
     >
       <section
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="agency-termination-title"
@@ -76,6 +123,7 @@ export default function AgencyTerminationApprovalDialog({
             {t('取消', 'Cancel')}
           </button>
           <button
+            ref={confirmButtonRef}
             type="button"
             className="admin-btn admin-btn-toolbar admin-btn-primary px-4"
             disabled={isSubmitting}

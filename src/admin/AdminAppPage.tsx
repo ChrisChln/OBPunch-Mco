@@ -59,6 +59,7 @@ import {
   normalizeTerminationReason
 } from './departedEmployees';
 import {
+  createAgencyTerminationSubmissionLock,
   executeAgencyTerminationApproval,
   normalizeAgencyTerminationDetails
 } from './agencyTerminationApproval';
@@ -1515,6 +1516,7 @@ export default function AdminAppPage() {
   const [terminationApprovalRequest, setTerminationApprovalRequest] = useState<TerminationRequestRecord | null>(null);
   const [terminationApprovalSubmitting, setTerminationApprovalSubmitting] = useState(false);
   const [terminationApprovalError, setTerminationApprovalError] = useState('');
+  const terminationApprovalSubmissionLockRef = useRef(createAgencyTerminationSubmissionLock());
   const [adminAccessAccounts, setAdminAccessAccounts] = useState<AdminAccessAccountRecord[]>([]);
   const [adminAccessUserOptions, setAdminAccessUserOptions] = useState<AdminAccessUserOption[]>([]);
   const [positions, setPositions] = useState<PositionRecord[]>([]);
@@ -4123,11 +4125,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setStatus({ tone: 'error', message });
       return;
     }
+    if (!terminationApprovalSubmissionLockRef.current.tryAcquire()) return;
 
     setTerminationApprovalSubmitting(true);
     setTerminationApprovalError('');
     try {
-      await executeAgencyTerminationApproval({
+      const result = await executeAgencyTerminationApproval({
         requestId: terminationApprovalRequest.id,
         review: (requestId) => reviewEmployeeTerminationRequest(supabase, requestId, 'approve'),
         refreshSchedule: () => refreshSchedulePanel({ lockUi: false }),
@@ -4135,16 +4138,27 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       });
       const staffId = terminationApprovalRequest.staff_id;
       setTerminationApprovalRequest(null);
-      setStatus({
-        tone: 'success',
-        message: t(`已确认离职：${staffId}`, `Departure approved: ${staffId}`)
-      });
+      if (result.refreshError) {
+        setStatus({
+          tone: 'error',
+          message: t(
+            `已确认离职，但刷新失败：${result.refreshError}`,
+            `Departure approved, but refresh failed: ${result.refreshError}`
+          )
+        });
+      } else {
+        setStatus({
+          tone: 'success',
+          message: t(`已确认离职：${staffId}`, `Departure approved: ${staffId}`)
+        });
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : t('离职审批失败。', 'Termination approval failed.');
       setTerminationApprovalError(message);
       setStatus({ tone: 'error', message });
     } finally {
+      terminationApprovalSubmissionLockRef.current.release();
       setTerminationApprovalSubmitting(false);
     }
   };

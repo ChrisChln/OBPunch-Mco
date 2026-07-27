@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import {
+  createAgencyTerminationSubmissionLock,
   executeAgencyTerminationApproval,
   normalizeAgencyTerminationDetails
 } from '../../src/admin/agencyTerminationApproval';
@@ -22,7 +23,7 @@ const request: TerminationRequestRecord = {
 
 describe('normalizeAgencyTerminationDetails', () => {
   test('normalizes the five read-only approval fields', () => {
-    expect(normalizeAgencyTerminationDetails(request)).toEqual({
+    expect(normalizeAgencyTerminationDetails({ ...request, staff_id: ' us019737 ' })).toEqual({
       staffId: 'US019737',
       name: 'Karla Hernandez',
       agency: 'Prime',
@@ -52,7 +53,7 @@ describe('normalizeAgencyTerminationDetails', () => {
 describe('executeAgencyTerminationApproval', () => {
   test('reviews before refreshing schedule and requests', async () => {
     const calls: string[] = [];
-    await executeAgencyTerminationApproval({
+    const result = await executeAgencyTerminationApproval({
       requestId: 'request-1',
       review: async (id) => {
         calls.push(`review:${id}`);
@@ -67,6 +68,7 @@ describe('executeAgencyTerminationApproval', () => {
 
     expect(calls[0]).toBe('review:request-1');
     expect(calls.slice(1).sort()).toEqual(['requests', 'schedule']);
+    expect(result).toEqual({ refreshError: null });
   });
 
   test('does not refresh after a failed review', async () => {
@@ -84,5 +86,29 @@ describe('executeAgencyTerminationApproval', () => {
     ).rejects.toThrow('RPC failed');
     expect(refreshSchedule).not.toHaveBeenCalled();
     expect(refreshRequests).not.toHaveBeenCalled();
+  });
+
+  test('reports refresh failure separately after a successful review', async () => {
+    const refreshRequests = vi.fn().mockResolvedValue(undefined);
+    const result = await executeAgencyTerminationApproval({
+      requestId: 'request-1',
+      review: vi.fn().mockResolvedValue(undefined),
+      refreshSchedule: vi.fn().mockRejectedValue(new Error('Schedule refresh failed')),
+      refreshRequests
+    });
+
+    expect(result).toEqual({ refreshError: 'Schedule refresh failed' });
+    expect(refreshRequests).toHaveBeenCalledOnce();
+  });
+});
+
+describe('createAgencyTerminationSubmissionLock', () => {
+  test('rejects a second acquisition until the first submission releases', () => {
+    const lock = createAgencyTerminationSubmissionLock();
+
+    expect(lock.tryAcquire()).toBe(true);
+    expect(lock.tryAcquire()).toBe(false);
+    lock.release();
+    expect(lock.tryAcquire()).toBe(true);
   });
 });

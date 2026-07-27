@@ -1,4 +1,5 @@
 import type { TerminationRequestRecord } from './adminAccessApi';
+import { normalizeStaffId } from '../lib/staffId';
 
 export type AgencyTerminationDetails = {
   staffId: string;
@@ -14,7 +15,7 @@ const readText = (value: unknown): string =>
 export const normalizeAgencyTerminationDetails = (
   request: TerminationRequestRecord
 ): AgencyTerminationDetails => ({
-  staffId: readText(request.staff_id),
+  staffId: normalizeStaffId(request.staff_id) || '-',
   name: readText(request.employee_snapshot?.name),
   agency: readText(request.agency),
   position: readText(request.employee_snapshot?.position),
@@ -28,12 +29,42 @@ type ApprovalDependencies = {
   refreshRequests: () => Promise<unknown>;
 };
 
+export type AgencyTerminationApprovalResult = {
+  refreshError: string | null;
+};
+
+const readErrorMessage = (error: unknown): string =>
+  error instanceof Error && error.message.trim() ? error.message.trim() : String(error || 'Refresh failed.');
+
 export const executeAgencyTerminationApproval = async ({
   requestId,
   review,
   refreshSchedule,
   refreshRequests
-}: ApprovalDependencies): Promise<void> => {
+}: ApprovalDependencies): Promise<AgencyTerminationApprovalResult> => {
   await review(requestId);
-  await Promise.all([refreshSchedule(), refreshRequests()]);
+  const refreshResults = await Promise.allSettled([refreshSchedule(), refreshRequests()]);
+  const refreshErrors = refreshResults
+    .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    .map((result) => readErrorMessage(result.reason));
+  return { refreshError: refreshErrors.length ? refreshErrors.join('; ') : null };
+};
+
+export type AgencyTerminationSubmissionLock = {
+  tryAcquire: () => boolean;
+  release: () => void;
+};
+
+export const createAgencyTerminationSubmissionLock = (): AgencyTerminationSubmissionLock => {
+  let active = false;
+  return {
+    tryAcquire: () => {
+      if (active) return false;
+      active = true;
+      return true;
+    },
+    release: () => {
+      active = false;
+    }
+  };
 };

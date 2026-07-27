@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
@@ -69,5 +69,39 @@ describe('AgencyTerminationApprovalDialog', () => {
     expect(screen.getByRole('button', { name: '处理中' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '取消' })).toBeDisabled();
     expect(screen.getByRole('alert')).toHaveTextContent('RPC failed');
+  });
+
+  test('manages keyboard focus and restores the trigger on close', async () => {
+    const trigger = document.createElement('button');
+    trigger.textContent = 'Open';
+    document.body.appendChild(trigger);
+    trigger.focus();
+    const onCancel = vi.fn();
+    const view = render(
+      <AgencyTerminationApprovalDialog
+        t={(zh) => zh}
+        details={details}
+        themeMode="dark"
+        isSubmitting={false}
+        error=""
+        onCancel={onCancel}
+        onConfirm={vi.fn()}
+      />
+    );
+
+    const cancel = screen.getByRole('button', { name: '取消' });
+    const confirm = screen.getByRole('button', { name: '确定' });
+    await waitFor(() => expect(confirm).toHaveFocus());
+
+    fireEvent.keyDown(window, { key: 'Tab' });
+    expect(cancel).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+    expect(confirm).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onCancel).toHaveBeenCalledOnce();
+    view.unmount();
+    expect(trigger).toHaveFocus();
+    trigger.remove();
   });
 });
