@@ -191,6 +191,7 @@ import {
 } from './employeeUploadPositions';
 import { shouldAutofillShiftTime } from './shiftTimeAutofill';
 import { getScheduleExportCellValue } from './scheduleExport';
+import { normalizeScheduleShiftTime, resolveScheduleShiftTimeChange } from './scheduleShiftTime';
 import {
   loadDailyCapacityStaffStats,
   type DailyCapacityProcKey,
@@ -3114,11 +3115,7 @@ const normalizeShiftValue = (value: string): '' | 'early' | 'late' => {
   if (v === 'late' || v === 'night' || v === 'evening') return 'late';
   return '';
 };
-const normalizeShiftTimeValue = (value: unknown) => {
-  const parsed = parseClockTextToMinutes(String(value ?? '').trim());
-  if (!Number.isFinite(parsed)) return '';
-  return formatClockMinutes(parsed as number);
-};
+const normalizeShiftTimeValue = normalizeScheduleShiftTime;
 const normalizeEmploymentTypeValue = (value: unknown): EmploymentType => {
   const text = String(value ?? '').trim().toUpperCase();
   return text === 'PT' ? 'PT' : 'FT';
