@@ -3,6 +3,7 @@ import BusyOverlay from '../components/BusyOverlay';
 import StyledDateInput from '../components/StyledDateInput';
 import { isValidStaffId, normalizeStaffId } from '../../lib/staffId';
 import {
+  formatLeaveDateTime,
   getApproveWindow,
   getEffectiveLeaveStatus,
   getTemplateDateByActualDate,
@@ -46,6 +47,7 @@ type LeaveRow = {
   position_raw: string;
   leave_date: string;
   leave_type: string;
+  submitted_at: string | null;
   schedule_adjusted: boolean;
   status: LeaveStatus;
   reviewed_by: string;
@@ -246,13 +248,6 @@ const scoreNameMatch = (candidate: string, employeeName: string) => {
   return coverage >= 0.75 ? Math.round(coverage * 80 + shared.length * 5) : 0;
 };
 
-const formatDateTime = (value: string | null | undefined) => {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString('zh-CN', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-};
-
 // Kept temporarily to avoid churn while the old upload path is being retired.
 void buildHeaderMap;
 void parseDateCell;
@@ -313,6 +308,7 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
         position_raw: String(item.position_raw ?? '').trim(),
         leave_date: String(item.leave_date ?? '').trim(),
         leave_type: String(item.leave_type ?? '').trim(),
+        submitted_at: item.submitted_at ? String(item.submitted_at) : null,
         schedule_adjusted: Boolean(item.schedule_adjusted),
         status: (String(item.status ?? 'pending').trim() as LeaveStatus) || 'pending',
         reviewed_by: String(item.reviewed_by ?? '').trim(),
@@ -722,6 +718,7 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
                 <thead>
                   <tr className={isLight ? 'text-slate-600' : 'text-white/70'}>
                     <th className="px-3 py-2 text-left">{t('状态', 'Status')}</th>
+                    <th className="px-3 py-2 text-left">{t('提交时间', 'Submitted')}</th>
                     <th className="px-3 py-2 text-left">{t('请假日期', 'Leave date')}</th>
                     <th className="px-3 py-2 text-left">{t('表单姓名', 'Form name')}</th>
                     <th className="px-3 py-2 text-left">{t('匹配员工', 'Matched employee')}</th>
@@ -739,6 +736,7 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
                     return (
                       <tr key={row.id || row.source_row_key} className={isLight ? 'border-t border-slate-200' : 'border-t border-white/10'}>
                         <td className="px-3 py-2 font-semibold">{effectiveStatus}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">{formatLeaveDateTime(row.submitted_at)}</td>
                         <td className="px-3 py-2 whitespace-nowrap">{row.leave_date}</td>
                         <td className="px-3 py-2">
                           <div>{row.employee_name_raw || '-'}</div>
@@ -759,7 +757,7 @@ export default function LeaveApprovalPage({ t, isLocked, isReadOnly = false, sup
                             <button type="button" disabled={writeLocked || savingRowId === row.id || effectiveStatus !== 'pending'} onClick={() => void updateLeaveStatus(row, 'approved')} className={buttonPrimaryClass}>{savingRowId === row.id ? t('处理中...', 'Saving...') : t('批准', 'Approve')}</button>
                             <button type="button" disabled={writeLocked || savingRowId === row.id || effectiveStatus !== 'pending'} onClick={() => void updateLeaveStatus(row, 'rejected')} className={buttonSecondaryClass}>{t('拒绝', 'Reject')}</button>
                           </div>
-                          {row.reviewed_by ? <div className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-white/50'].join(' ')}>{row.reviewed_by} · {formatDateTime(row.reviewed_at)}</div> : null}
+                          {row.reviewed_by ? <div className={['mt-2 text-xs', isLight ? 'text-slate-500' : 'text-white/50'].join(' ')}>{row.reviewed_by} · {formatLeaveDateTime(row.reviewed_at)}</div> : null}
                         </td>
                       </tr>
                     );

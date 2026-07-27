@@ -33,6 +33,20 @@ const CellHarness = ({ value, canEdit = true, saving = false, onSave }: CellHarn
 };
 
 describe('ScheduleShiftTimeCell', () => {
+  test('keeps the control height unchanged while editing', async () => {
+    const user = userEvent.setup();
+    render(<CellHarness value="07:00" onSave={vi.fn()} />);
+
+    const displayButton = screen.getByRole('button', { name: 'Edit shift time' });
+    expect(displayButton).toHaveClass('h-[22px]');
+
+    await user.click(displayButton);
+
+    const editor = screen.getByLabelText('Shift time');
+    expect(editor).toHaveClass('h-[22px]');
+    expect(editor).toHaveAttribute('data-magic-field-skip', 'true');
+  });
+
   test('shows the normalized value and enters edit mode on click', async () => {
     const user = userEvent.setup();
     render(<CellHarness value="8:00" onSave={vi.fn()} />);

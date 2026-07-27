@@ -12,7 +12,7 @@ import GlowLabelChip, { getGlowToneForPosition, getGlowToneForShift } from '../c
 import { useDeterminateLoadingProgress } from '../components/useDeterminateLoadingProgress';
 import { createSupabaseClient } from '../lib/supabase';
 import { hasModuleAccess, getModuleMapFromContext, type AdminAccessContext } from '../shared/adminAccess';
-import { addDays, startOfWeekMonday, toDateOnly, type AgencyShift } from '../shared/agencyShared';
+import { addDays, canSubmitAgencyLeave, startOfWeekMonday, toDateOnly, type AgencyShift } from '../shared/agencyShared';
 import {
   DAILY_LIST_LIGHTS_KEY,
   createEmptyDailyListLightFlags,
@@ -693,6 +693,7 @@ export default function AgencyAppPage() {
     anchorLeft: 0,
     anchorTop: 0
   });
+  const [leaveDeadlineNow, setLeaveDeadlineNow] = useState(() => new Date());
   const [compactScheduleView, setCompactScheduleView] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth <= MOBILE_SCHEDULE_MAX_WIDTH : false
   );
@@ -798,6 +799,19 @@ export default function AgencyAppPage() {
     return () => {
       window.removeEventListener('resize', updateCompactMode);
     };
+  }, []);
+
+  useEffect(() => {
+    let timerId = 0;
+    const scheduleNextMinute = () => {
+      const delay = 60_000 - (Date.now() % 60_000) + 50;
+      timerId = window.setTimeout(() => {
+        setLeaveDeadlineNow(new Date());
+        scheduleNextMinute();
+      }, delay);
+    };
+    scheduleNextMinute();
+    return () => window.clearTimeout(timerId);
   }, []);
 
   useEffect(() => {
@@ -1453,6 +1467,22 @@ export default function AgencyAppPage() {
     async (staffId: string, workDate: string, state: AgencyScheduleState) => {
       if (!supabase || !canOperateAgency) return;
       setSchedulePicker((prev) => ({ ...prev, open: false }));
+      if (state === 'planned_leave') {
+        const employee = weekSchedule?.employees.find((row) => row.staff_id === staffId);
+        if (
+          !employee ||
+          !canSubmitAgencyLeave({
+            shift: employee.shift,
+            startTime: employee.start_time,
+            workDate,
+            now: new Date()
+          })
+        ) {
+          openNotice('error', 'Leave requests must be submitted more than 24 hours before shift start.');
+          void refreshBoardSilent();
+          return;
+        }
+      }
       const overrideKey = `${staffId}__${workDate}`;
       const previousState = scheduleStateOverrides.get(overrideKey);
       setScheduleStateOverrides((previous) => {
@@ -1486,7 +1516,7 @@ export default function AgencyAppPage() {
         openNotice('error', nextError instanceof Error ? nextError.message : 'Schedule update failed.');
       }
     },
-    [canOperateAgency, openNotice, refreshBoardSilent, scheduleStateOverrides, supabase]
+    [canOperateAgency, openNotice, refreshBoardSilent, scheduleStateOverrides, supabase, weekSchedule]
   );
 
   const handleScheduleCellClick = useCallback(
@@ -1738,7 +1768,15 @@ export default function AgencyAppPage() {
         ];
       }
       const options: SchedulePickerOption[] = [];
-      if (canRequestAgencyLeave(state) && !isAgencyLeaveCutoffPassed(employee.shift, workDate, newYorkNowContext)) {
+      if (
+        canRequestAgencyLeave(state) &&
+        canSubmitAgencyLeave({
+          shift: employee.shift,
+          startTime: employee.start_time,
+          workDate,
+          now: leaveDeadlineNow
+        })
+      ) {
         options.push({ key: 'planned_leave', label: 'Leave', cls: 'bg-amber-500 text-slate-950' });
       }
       if (state === 'temp_work' || state === 'planned_temp_work') {
@@ -1759,8 +1797,22 @@ export default function AgencyAppPage() {
       }
       return options;
     },
-    [newYorkNowContext, openSubstituteSlotsByStaffDate]
+    [leaveDeadlineNow, newYorkNowContext, openSubstituteSlotsByStaffDate]
   );
+
+  const visibleSchedulePickerOptions = useMemo(() => {
+    const employee = employeeRows.find((row) => row.staff_id === schedulePicker.staffId);
+    return schedulePicker.options.filter((option) => {
+      if (option.key !== 'planned_leave') return true;
+      if (!employee) return false;
+      return canSubmitAgencyLeave({
+        shift: employee.shift,
+        startTime: employee.start_time,
+        workDate: schedulePicker.workDate,
+        now: leaveDeadlineNow
+      });
+    });
+  }, [employeeRows, leaveDeadlineNow, schedulePicker]);
 
   const agencyOptions = useMemo(
     () => Array.from(new Set(employeeRows.map((employee) => String(employee.agency ?? '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
@@ -2731,6 +2783,7 @@ export default function AgencyAppPage() {
       </div>
 
       {schedulePicker.open &&
+        visibleSchedulePickerOptions.length > 0 &&
         typeof document !== 'undefined' &&
         createPortal(
           <div
@@ -2738,7 +2791,7 @@ export default function AgencyAppPage() {
             className="fixed z-[90] w-44 -translate-x-1/2 rounded-xl border border-white/10 bg-slate-950/95 p-1.5 shadow-2xl backdrop-blur"
             style={{ left: schedulePicker.anchorLeft, top: schedulePicker.anchorTop }}
           >
-            {schedulePicker.options.map((option) => (
+            {visibleSchedulePickerOptions.map((option) => (
               <button
                 key={option.key}
                 type="button"

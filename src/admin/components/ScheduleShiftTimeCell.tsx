@@ -74,7 +74,7 @@ export default function ScheduleShiftTimeCell({
           setDraft(normalizedValue);
           onStartEditing();
         }}
-        className="rounded-md px-1.5 py-1 font-mono tabular-nums transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon/60"
+        className="inline-flex h-[22px] items-center justify-center rounded-md px-1.5 font-mono tabular-nums transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon/60"
       >
         {normalizedValue || '-'}
       </button>
@@ -86,6 +86,7 @@ export default function ScheduleShiftTimeCell({
       ref={inputRef}
       type="time"
       step={60}
+      data-magic-field-skip="true"
       value={draft}
       disabled={isSaving}
       aria-label={isSaving ? t('正在保存班次时间', 'Saving shift time') : t('班次时间', 'Shift time')}
@@ -102,7 +103,7 @@ export default function ScheduleShiftTimeCell({
           onStopEditing();
         }
       }}
-      className="h-7 w-[72px] rounded-md border border-white/15 bg-slate-950 px-1 font-mono text-[11px] text-slate-100 outline-none focus:border-neon/60 disabled:cursor-wait disabled:opacity-60"
+      className="h-[22px] w-[72px] rounded-md border border-white/15 bg-slate-950 px-1 font-mono text-[11px] text-slate-100 outline-none focus:border-neon/60 disabled:cursor-wait disabled:opacity-60"
     />
   );
 }
