@@ -33,6 +33,7 @@ import BorderGlow from './components/BorderGlow';
 import BusyOverlay from './components/BusyOverlay';
 import AdminLoginPanel from './components/AdminLoginPanel';
 import ScheduleToolbar from './components/ScheduleToolbar';
+import ScheduleShiftTimeCell from './components/ScheduleShiftTimeCell';
 import { matchesScheduleDriverFilter, normalizeScheduleDriverFilterValue } from './scheduleDriverFilter';
 import { getScheduleEmployeeProfileEmail, resolveScheduleEmployeeDisplayName } from './scheduleDisplayName';
 import { buildHiddenJdlStaffIdsForAccounts } from './jdlAdminScheduleStaff';
@@ -197,6 +198,7 @@ import {
 } from './employeeUploadPositions';
 import { shouldAutofillShiftTime } from './shiftTimeAutofill';
 import { getScheduleExportCellValue } from './scheduleExport';
+import { normalizeScheduleShiftTime, resolveScheduleShiftTimeChange } from './scheduleShiftTime';
 import {
   loadDailyCapacityStaffStats,
   type DailyCapacityProcKey,
@@ -2380,6 +2382,8 @@ export default function AdminAppPage() {
   );
   const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
   const [scheduleLabelSavingStaffId, setScheduleLabelSavingStaffId] = useState<string | null>(null);
+  const [scheduleShiftTimeEditingStaffId, setScheduleShiftTimeEditingStaffId] = useState<string | null>(null);
+  const [scheduleShiftTimeSavingStaffId, setScheduleShiftTimeSavingStaffId] = useState<string | null>(null);
   const [scheduleLabelToneByName, setScheduleLabelToneByName] = useState<Record<string, LabelToneKey>>(() =>
     loadLabelToneMap()
   );
@@ -2972,6 +2976,10 @@ export default function AdminAppPage() {
     }
   }, [page, scheduleSearchInput, scheduleAgency, scheduleDriverFilter, scheduleDepartment, schedulePosition, scheduleEmploymentType, scheduleLabels]);
 
+  useEffect(() => {
+    setScheduleShiftTimeEditingStaffId(null);
+  }, [page, scheduleSearchInput, scheduleAgency, scheduleDriverFilter, scheduleDepartment, schedulePosition, scheduleEmploymentType, scheduleLabels]);
+
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFillDuplicates, setUploadFillDuplicates] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -3124,11 +3132,7 @@ const normalizeShiftValue = (value: string): '' | 'early' | 'late' => {
   if (v === 'late' || v === 'night' || v === 'evening') return 'late';
   return '';
 };
-const normalizeShiftTimeValue = (value: unknown) => {
-  const parsed = parseClockTextToMinutes(String(value ?? '').trim());
-  if (!Number.isFinite(parsed)) return '';
-  return formatClockMinutes(parsed as number);
-};
+const normalizeShiftTimeValue = normalizeScheduleShiftTime;
 const normalizeEmploymentTypeValue = (value: unknown): EmploymentType => {
   const text = String(value ?? '').trim().toUpperCase();
   return text === 'PT' ? 'PT' : 'FT';
@@ -16205,6 +16209,75 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
   };
 
+  const updateScheduleEmployeeShiftTime = async (employee: EmployeeRow, draft: string): Promise<boolean> => {
+    const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+    const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+    const currentValue = normalizeScheduleShiftTime(employee.shift_time ?? employee.ShiftTime ?? '');
+    const change = resolveScheduleShiftTimeChange(currentValue, draft);
+
+    if (!staff || !position) return false;
+    if (change.kind === 'unchanged') return true;
+    if (change.kind === 'invalid') {
+      setStatus({ tone: 'error', message: t('请输入有效的班次时间。', 'Enter a valid shift time.') });
+      return false;
+    }
+    if (isLocked || !scheduleCanOperate || !canOperatePosition('schedule', position)) {
+      setStatus({ tone: 'error', message: t('排班模块当前为只读。', 'Schedule is read-only.') });
+      return false;
+    }
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
+      return false;
+    }
+
+    setScheduleShiftTimeSavingStaffId(staff);
+    try {
+      let saved = false;
+      await runLocked('schedule_shift_time_update', async () => {
+        const { error } = await supabase
+          .from(EMPLOYEE_TABLE)
+          .update({ shift_time: change.value } as any)
+          .eq('staff_id', staff);
+        if (error) {
+          setStatus({ tone: 'error', message: `${t('保存失败：', 'Save failed: ')}${error.message}` });
+          return;
+        }
+
+        setEmployees((previous) =>
+          previous.map((row) =>
+            normalizeStaffId(String(row.staff_id ?? '').trim()) === staff
+              ? ({ ...row, shift_time: change.value, ShiftTime: change.value } as EmployeeRow)
+              : row
+          )
+        );
+        await writeAudit({
+          action: 'employee_shift_time_update',
+          staffId: staff,
+          target: EMPLOYEE_TABLE,
+          payload: {
+            staff_id: staff,
+            position,
+            before: { shift_time: currentValue },
+            after: { shift_time: change.value },
+            source: 'schedule'
+          }
+        });
+        setStatus({ tone: 'success', message: t('班次时间已更新。', 'Shift time updated.') });
+        saved = true;
+      });
+      return saved;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error ?? '');
+      setStatus({
+        tone: 'error',
+        message: `${t('保存失败：', 'Save failed: ')}${detail || t('未知错误', 'Unknown error')}`
+      });
+      return false;
+    } finally {
+      setScheduleShiftTimeSavingStaffId((current) => (current === staff ? null : current));
+    }
+  };
+
   const scheduleEmployeesFiltered = useMemo(() => {
     if (page !== 'schedule') return [];
     const search = deferredScheduleSearch.trim().toLowerCase();
@@ -18369,6 +18442,7 @@ ${rowsToHtml(late)}
                         <col className="w-[74px]" />
                         <col className="w-[88px]" />
                         <col className="w-[64px]" />
+                        <col className="w-[78px]" />
                         <col className="w-[56px]" />
                         <col className="w-[64px]" />
                         <col className="w-[58px]" />
@@ -18389,6 +18463,9 @@ ${rowsToHtml(late)}
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('岗位', 'Position')}</th>
                           <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('标签', 'Label')}</th>
                           <th className="sticky top-0 z-20 w-[64px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('班次', 'Shift')}</th>
+                          <th className="sticky top-0 z-20 w-[78px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
+                            {t('班次时间', 'Shift Time')}
+                          </th>
                           <th className="sticky top-0 z-20 w-[56px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
                             <button
                               type="button"
@@ -18469,6 +18546,11 @@ ${rowsToHtml(late)}
                             !scheduleReadOnly &&
                             canOperatePosition('schedule', normalizedPosition);
                           const labelSaving = scheduleLabelSavingStaffId === staff;
+                          const canEditScheduleShiftTime =
+                            Boolean(normalizedPosition) &&
+                            scheduleCanOperate &&
+                            canOperatePosition('schedule', normalizedPosition);
+                          const shiftTimeSaving = scheduleShiftTimeSavingStaffId === staff;
                           const pendingTerminationRequest = pendingTerminationRequestsByStaffId.get(staff) ?? null;
                           const hasPendingTermination = Boolean(pendingTerminationRequest);
                           const canDepartFromSchedule =
@@ -18698,6 +18780,20 @@ ${rowsToHtml(late)}
                                     'h-[22px] w-[58px] px-2 tracking-[0.04em]'
                                   );
                                 })()}
+                              </td>
+                              <td className={['px-1 py-2 text-center', scheduleBodyTextClass].join(' ')}>
+                                <ScheduleShiftTimeCell
+                                  value={employee.shift_time ?? employee.ShiftTime ?? ''}
+                                  canEdit={canEditScheduleShiftTime && !isLocked}
+                                  saving={shiftTimeSaving}
+                                  editing={scheduleShiftTimeEditingStaffId === staff}
+                                  t={t}
+                                  onStartEditing={() => setScheduleShiftTimeEditingStaffId(staff)}
+                                  onStopEditing={() =>
+                                    setScheduleShiftTimeEditingStaffId((current) => (current === staff ? null : current))
+                                  }
+                                  onSave={(draft) => updateScheduleEmployeeShiftTime(employee, draft)}
+                                />
                               </td>
                               <td className={['px-1 py-2 text-center font-mono', scheduleBodyTextClass].join(' ')}>
                                 {(() => {
