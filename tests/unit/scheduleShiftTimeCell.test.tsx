@@ -195,4 +195,19 @@ describe('ScheduleShiftTimeCell', () => {
     await waitFor(() => expect(screen.queryByLabelText('Shift time')).not.toBeInTheDocument());
     expect(onSave).not.toHaveBeenCalled();
   });
+
+  test('keeps the draft visible and disabled when the global lock starts during its save', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const { rerender } = render(
+      <CellHarness value="07:00" canEdit saving={false} onSave={onSave} />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Edit shift time' }));
+    fireEvent.change(screen.getByLabelText('Shift time'), { target: { value: '09:00' } });
+    rerender(<CellHarness value="07:00" canEdit={false} saving onSave={onSave} />);
+
+    expect(screen.getByLabelText('Saving shift time')).toBeDisabled();
+    expect(screen.getByLabelText('Saving shift time')).toHaveValue('09:00');
+  });
 });

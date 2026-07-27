@@ -42,11 +42,11 @@ export default function ScheduleShiftTimeCell({
   }, [editing]);
 
   useEffect(() => {
-    if (!editing || canEdit) return;
+    if (!editing || canEdit || isSaving) return;
     cancelledRef.current = true;
     setDraft(normalizedValue);
     onStopEditing();
-  }, [canEdit, editing, normalizedValue, onStopEditing]);
+  }, [canEdit, editing, isSaving, normalizedValue, onStopEditing]);
 
   const commit = async () => {
     if (cancelledRef.current || commitPendingRef.current || saving) return;
