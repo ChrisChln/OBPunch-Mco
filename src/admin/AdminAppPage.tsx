@@ -7398,7 +7398,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             .from(AUDIT_TABLE)
             .select('id, created_at, actor, action, staff_id, target, payload')
             .in('staff_id', staffChunk as any)
-            .in('action', ['employee_delete', 'employee_termination_approve'] as any)
+            .in(
+              'action',
+              ['employee_delete', 'employee_termination_approve', 'agency_termination_request'] as any
+            )
             .order('created_at', { ascending: false });
           if (auditResult.error) {
             departureAuditError = auditResult.error.message;

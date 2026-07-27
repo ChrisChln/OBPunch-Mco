@@ -12,7 +12,23 @@ export type DepartedEmployeeFilters = {
 };
 
 const normalizeText = (value: unknown) => String(value ?? '').trim();
-const DEPARTURE_AUDIT_ACTIONS = new Set(['employee_delete', 'employee_termination_approve']);
+const DEPARTURE_EVENT_ACTIONS = new Set(['employee_delete', 'employee_termination_approve']);
+const AGENCY_TERMINATION_REQUEST_ACTION = 'agency_termination_request';
+const DEPARTURE_AUDIT_ACTIONS = new Set([
+  ...DEPARTURE_EVENT_ACTIONS,
+  AGENCY_TERMINATION_REQUEST_ACTION
+]);
+
+type TimestampedAudit = {
+  audit: AuditRow;
+  createdAtMs: number;
+};
+
+const getAuditRequestId = (audit: AuditRow) => {
+  const payload = audit.payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return '';
+  return normalizeText((payload as Record<string, unknown>).request_id);
+};
 
 export const normalizeTerminationReason = (value: unknown) => normalizeText(value);
 
@@ -32,7 +48,7 @@ export const attachDepartureOperators = (
   audits: AuditRow[],
   resolveActor: (audit: AuditRow) => string
 ): EmployeeRow[] => {
-  const auditsByStaffId = new Map<string, Array<{ audit: AuditRow; createdAtMs: number }>>();
+  const auditsByStaffId = new Map<string, TimestampedAudit[]>();
   for (const audit of audits) {
     if (!DEPARTURE_AUDIT_ACTIONS.has(normalizeText(audit.action))) continue;
     const staffId = normalizeText(audit.staff_id).toUpperCase();
@@ -42,20 +58,45 @@ export const attachDepartureOperators = (
     staffAudits.push({ audit, createdAtMs });
     auditsByStaffId.set(staffId, staffAudits);
   }
-  for (const staffAudits of auditsByStaffId.values()) {
-    staffAudits.sort((left, right) => right.createdAtMs - left.createdAtMs);
-  }
-
   return rows.map((row) => {
     const staffId = normalizeText(row.staff_id).toUpperCase();
     const terminatedAtMs = new Date(normalizeText(row.terminated_at)).getTime();
     if (!staffId || !Number.isFinite(terminatedAtMs)) {
       return { ...row, termination_operator: null };
     }
-    const matchingAudit = (auditsByStaffId.get(staffId) ?? []).find(
-      ({ createdAtMs }) => createdAtMs <= terminatedAtMs
-    );
-    const terminationOperator = matchingAudit ? normalizeText(resolveActor(matchingAudit.audit)) : '';
+    const staffAudits = auditsByStaffId.get(staffId) ?? [];
+    const matchingEvent = staffAudits
+      .filter(({ audit }) => DEPARTURE_EVENT_ACTIONS.has(normalizeText(audit.action)))
+      .reduce<TimestampedAudit | null>((nearest, candidate) => {
+        if (!nearest) return candidate;
+        const candidateDistance = Math.abs(candidate.createdAtMs - terminatedAtMs);
+        const nearestDistance = Math.abs(nearest.createdAtMs - terminatedAtMs);
+        if (candidateDistance !== nearestDistance) {
+          return candidateDistance < nearestDistance ? candidate : nearest;
+        }
+        return candidate.createdAtMs > nearest.createdAtMs ? candidate : nearest;
+      }, null);
+    if (!matchingEvent) {
+      return { ...row, termination_operator: null };
+    }
+
+    let operatorAudit = matchingEvent.audit;
+    if (normalizeText(operatorAudit.action) === 'employee_termination_approve') {
+      const requestId = getAuditRequestId(operatorAudit);
+      const matchingRequest = requestId
+        ? staffAudits.find(
+            ({ audit }) =>
+              normalizeText(audit.action) === AGENCY_TERMINATION_REQUEST_ACTION &&
+              getAuditRequestId(audit) === requestId
+          )
+        : null;
+      if (!matchingRequest) {
+        return { ...row, termination_operator: null };
+      }
+      operatorAudit = matchingRequest.audit;
+    }
+
+    const terminationOperator = normalizeText(resolveActor(operatorAudit));
     return { ...row, termination_operator: terminationOperator || null };
   });
 };

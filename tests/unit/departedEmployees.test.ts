@@ -71,39 +71,87 @@ describe('departed employee helpers', () => {
     expect(csv).toContain('2026-06-14');
   });
 
-  test('uses the latest applicable departure audit actor for each employee', () => {
+  test('uses the agency request submitter instead of the approval actor', () => {
     const audits: AuditRow[] = [
       {
         staff_id: 'US010001',
-        action: 'employee_delete',
-        actor: 'first@example.com',
-        created_at: '2026-06-14T08:00:00.000Z'
+        action: 'agency_termination_request',
+        actor: 'submitter@example.com',
+        created_at: '2026-06-14T08:00:00.000Z',
+        payload: { request_id: 'request-1' }
       },
       {
         staff_id: 'US010001',
         action: 'employee_termination_approve',
-        actor: 'latest@example.com',
-        created_at: '2026-06-14T09:59:58.000Z'
-      },
-      {
-        staff_id: 'US010001',
-        action: 'employee_delete',
-        actor: 'future@example.com',
-        created_at: '2026-06-15T10:00:00.000Z'
-      },
-      {
-        staff_id: 'US010001',
-        action: 'employee_update',
-        actor: 'unrelated@example.com',
-        created_at: '2026-06-14T09:59:59.000Z'
+        actor: 'approver@example.com',
+        created_at: '2026-06-14T10:00:00.000Z',
+        payload: { request_id: 'request-1' }
       }
     ];
 
-    expect(
-      attachDepartureOperators(rows, audits, (audit) => `Admin: ${String(audit.actor ?? '')}`)
-    ).toEqual([
-      expect.objectContaining({ termination_operator: 'Admin: latest@example.com' }),
-      expect.objectContaining({ termination_operator: null })
-    ]);
+    const result = attachDepartureOperators(
+      [rows[0]],
+      audits,
+      (audit) => `${audit.action === 'agency_termination_request' ? 'Agency' : 'Admin'}: ${String(audit.actor ?? '')}`
+    );
+
+    expect(result[0].termination_operator).toBe('Agency: submitter@example.com');
+  });
+
+  test('uses a direct Admin departure audit written immediately after termination', () => {
+    const result = attachDepartureOperators(
+      [rows[0]],
+      [
+        {
+          staff_id: 'US010001',
+          action: 'employee_delete',
+          actor: 'admin@example.com',
+          created_at: '2026-06-14T10:00:00.250Z'
+        }
+      ],
+      (audit) => `Admin: ${String(audit.actor ?? '')}`
+    );
+
+    expect(result[0].termination_operator).toBe('Admin: admin@example.com');
+  });
+
+  test('selects the audit nearest the current termination across departure cycles', () => {
+    const result = attachDepartureOperators(
+      [rows[0]],
+      [
+        {
+          staff_id: 'US010001',
+          action: 'employee_delete',
+          actor: 'old@example.com',
+          created_at: '2026-05-01T10:00:00.250Z'
+        },
+        {
+          staff_id: 'US010001',
+          action: 'employee_delete',
+          actor: 'current@example.com',
+          created_at: '2026-06-14T10:00:00.250Z'
+        }
+      ],
+      (audit) => `Admin: ${String(audit.actor ?? '')}`
+    );
+
+    expect(result[0].termination_operator).toBe('Admin: current@example.com');
+  });
+
+  test('returns no operator when departure audit evidence is missing', () => {
+    const result = attachDepartureOperators(
+      [rows[0]],
+      [
+        {
+          staff_id: 'US010001',
+          action: 'employee_update',
+          actor: 'unrelated@example.com',
+          created_at: '2026-06-14T10:00:00.000Z'
+        }
+      ],
+      (audit) => String(audit.actor ?? '')
+    );
+
+    expect(result[0].termination_operator).toBeNull();
   });
 });
