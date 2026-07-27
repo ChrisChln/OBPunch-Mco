@@ -191,7 +191,7 @@ import {
 } from './employeeUploadPositions';
 import { shouldAutofillShiftTime } from './shiftTimeAutofill';
 import { getScheduleExportCellValue } from './scheduleExport';
-import { normalizeScheduleShiftTime, resolveScheduleShiftTimeChange } from './scheduleShiftTime';
+import { normalizeScheduleShiftTime } from './scheduleShiftTime';
 import {
   loadDailyCapacityStaffStats,
   type DailyCapacityProcKey,

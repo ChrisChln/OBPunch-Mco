@@ -3,7 +3,7 @@ import { formatClockMinutes, parseClockTextToMinutes } from './lateMarks';
 export const normalizeScheduleShiftTime = (value: unknown): string => {
   const normalizedText = String(value ?? '')
     .trim()
-    .replaceAll('：', ':')
+    .replace(/：/g, ':')
     .replace(/^(\d{1,2}:\d{2}):\d{2}$/, '$1');
   const parsed = parseClockTextToMinutes(normalizedText);
   if (!Number.isFinite(parsed)) return '';
