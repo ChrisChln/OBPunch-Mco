@@ -2372,6 +2372,7 @@ export default function AdminAppPage() {
   );
   const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
   const [scheduleLabelSavingStaffId, setScheduleLabelSavingStaffId] = useState<string | null>(null);
+  const [scheduleShiftTimeEditingStaffId, setScheduleShiftTimeEditingStaffId] = useState<string | null>(null);
   const [scheduleShiftTimeSavingStaffId, setScheduleShiftTimeSavingStaffId] = useState<string | null>(null);
   const [scheduleLabelToneByName, setScheduleLabelToneByName] = useState<Record<string, LabelToneKey>>(() =>
     loadLabelToneMap()
@@ -2963,6 +2964,10 @@ export default function AdminAppPage() {
     if (scheduleError === 'Invalid staff id.') {
       setScheduleError(null);
     }
+  }, [page, scheduleSearchInput, scheduleAgency, scheduleDriverFilter, scheduleDepartment, schedulePosition, scheduleEmploymentType, scheduleLabels]);
+
+  useEffect(() => {
+    setScheduleShiftTimeEditingStaffId(null);
   }, [page, scheduleSearchInput, scheduleAgency, scheduleDriverFilter, scheduleDepartment, schedulePosition, scheduleEmploymentType, scheduleLabels]);
 
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -16144,7 +16149,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setStatus({ tone: 'error', message: t('请输入有效的班次时间。', 'Enter a valid shift time.') });
       return false;
     }
-    if (!scheduleCanOperate || !canOperatePosition('schedule', position)) {
+    if (isLocked || !scheduleCanOperate || !canOperatePosition('schedule', position)) {
       setStatus({ tone: 'error', message: t('排班模块当前为只读。', 'Schedule is read-only.') });
       return false;
     }
@@ -16189,6 +16194,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         saved = true;
       });
       return saved;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error ?? '');
+      setStatus({
+        tone: 'error',
+        message: `${t('保存失败：', 'Save failed: ')}${detail || t('未知错误', 'Unknown error')}`
+      });
+      return false;
     } finally {
       setScheduleShiftTimeSavingStaffId((current) => (current === staff ? null : current));
     }
@@ -18702,7 +18714,12 @@ ${rowsToHtml(late)}
                                   value={employee.shift_time ?? employee.ShiftTime ?? ''}
                                   canEdit={canEditScheduleShiftTime && !isLocked}
                                   saving={shiftTimeSaving}
+                                  editing={scheduleShiftTimeEditingStaffId === staff}
                                   t={t}
+                                  onStartEditing={() => setScheduleShiftTimeEditingStaffId(staff)}
+                                  onStopEditing={() =>
+                                    setScheduleShiftTimeEditingStaffId((current) => (current === staff ? null : current))
+                                  }
                                   onSave={(draft) => updateScheduleEmployeeShiftTime(employee, draft)}
                                 />
                               </td>

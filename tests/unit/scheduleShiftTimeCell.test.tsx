@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import ScheduleShiftTimeCell from '../../src/admin/components/ScheduleShiftTimeCell';
@@ -8,10 +9,33 @@ afterEach(cleanup);
 
 const t = (_zh: string, en: string) => en;
 
+type CellHarnessProps = {
+  value: string;
+  canEdit?: boolean;
+  saving?: boolean;
+  onSave: (draft: string) => Promise<boolean>;
+};
+
+const CellHarness = ({ value, canEdit = true, saving = false, onSave }: CellHarnessProps) => {
+  const [editing, setEditing] = useState(false);
+  return (
+    <ScheduleShiftTimeCell
+      value={value}
+      canEdit={canEdit}
+      saving={saving}
+      editing={editing}
+      t={t}
+      onStartEditing={() => setEditing(true)}
+      onStopEditing={() => setEditing(false)}
+      onSave={onSave}
+    />
+  );
+};
+
 describe('ScheduleShiftTimeCell', () => {
   test('shows the normalized value and enters edit mode on click', async () => {
     const user = userEvent.setup();
-    render(<ScheduleShiftTimeCell value="8:00" canEdit saving={false} t={t} onSave={vi.fn()} />);
+    render(<CellHarness value="8:00" onSave={vi.fn()} />);
 
     await user.click(screen.getByRole('button', { name: 'Edit shift time' }));
 
@@ -20,7 +44,7 @@ describe('ScheduleShiftTimeCell', () => {
   });
 
   test('shows a dash and no button when editing is not allowed', () => {
-    render(<ScheduleShiftTimeCell value="" canEdit={false} saving={false} t={t} onSave={vi.fn()} />);
+    render(<CellHarness value="" canEdit={false} onSave={vi.fn()} />);
 
     expect(screen.getByText('-')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit shift time' })).not.toBeInTheDocument();
@@ -29,7 +53,7 @@ describe('ScheduleShiftTimeCell', () => {
   test('saves on Enter through blur', async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(true);
-    render(<ScheduleShiftTimeCell value="07:00" canEdit saving={false} t={t} onSave={onSave} />);
+    render(<CellHarness value="07:00" onSave={onSave} />);
 
     await user.click(screen.getByRole('button', { name: 'Edit shift time' }));
     fireEvent.change(screen.getByLabelText('Shift time'), { target: { value: '08:30' } });
@@ -42,7 +66,7 @@ describe('ScheduleShiftTimeCell', () => {
   test('saves on blur', async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(true);
-    render(<ScheduleShiftTimeCell value="07:00" canEdit saving={false} t={t} onSave={onSave} />);
+    render(<CellHarness value="07:00" onSave={onSave} />);
 
     await user.click(screen.getByRole('button', { name: 'Edit shift time' }));
     fireEvent.change(screen.getByLabelText('Shift time'), { target: { value: '09:00' } });
@@ -54,7 +78,7 @@ describe('ScheduleShiftTimeCell', () => {
   test('cancels with Escape without saving', async () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
-    render(<ScheduleShiftTimeCell value="07:00" canEdit saving={false} t={t} onSave={onSave} />);
+    render(<CellHarness value="07:00" onSave={onSave} />);
 
     await user.click(screen.getByRole('button', { name: 'Edit shift time' }));
     fireEvent.change(screen.getByLabelText('Shift time'), { target: { value: '09:00' } });
@@ -68,7 +92,7 @@ describe('ScheduleShiftTimeCell', () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(false);
     const { rerender } = render(
-      <ScheduleShiftTimeCell value="07:00" canEdit saving={false} t={t} onSave={onSave} />
+      <CellHarness value="07:00" saving={false} onSave={onSave} />
     );
 
     await user.click(screen.getByRole('button', { name: 'Edit shift time' }));
@@ -77,7 +101,7 @@ describe('ScheduleShiftTimeCell', () => {
     await waitFor(() => expect(onSave).toHaveBeenCalled());
 
     expect(screen.getByLabelText('Shift time')).toHaveValue('09:00');
-    rerender(<ScheduleShiftTimeCell value="07:00" canEdit saving t={t} onSave={onSave} />);
+    rerender(<CellHarness value="07:00" saving onSave={onSave} />);
     expect(screen.getByLabelText('Saving shift time')).toBeDisabled();
   });
 
@@ -90,7 +114,7 @@ describe('ScheduleShiftTimeCell', () => {
           resolveSave = resolve;
         })
     );
-    render(<ScheduleShiftTimeCell value="07:00" canEdit saving={false} t={t} onSave={onSave} />);
+    render(<CellHarness value="07:00" onSave={onSave} />);
 
     await user.click(screen.getByRole('button', { name: 'Edit shift time' }));
     const input = screen.getByLabelText('Shift time');
@@ -100,5 +124,75 @@ describe('ScheduleShiftTimeCell', () => {
 
     expect(onSave).toHaveBeenCalledOnce();
     resolveSave?.(true);
+  });
+
+  test('keeps only one row in edit mode when another row is selected after a failed save', async () => {
+    const user = userEvent.setup();
+    const firstSave = vi.fn().mockResolvedValue(false);
+    const secondSave = vi.fn().mockResolvedValue(true);
+
+    const TwoRows = () => {
+      const [activeStaff, setActiveStaff] = useState<string | null>(null);
+      return (
+        <>
+          <ScheduleShiftTimeCell
+            value="07:00"
+            canEdit
+            saving={false}
+            editing={activeStaff === 'A'}
+            t={t}
+            onStartEditing={() => setActiveStaff('A')}
+            onStopEditing={() => setActiveStaff((current) => (current === 'A' ? null : current))}
+            onSave={firstSave}
+          />
+          <ScheduleShiftTimeCell
+            value="08:00"
+            canEdit
+            saving={false}
+            editing={activeStaff === 'B'}
+            t={t}
+            onStartEditing={() => setActiveStaff('B')}
+            onStopEditing={() => setActiveStaff((current) => (current === 'B' ? null : current))}
+            onSave={secondSave}
+          />
+        </>
+      );
+    };
+
+    render(<TwoRows />);
+    const editButtons = screen.getAllByRole('button', { name: 'Edit shift time' });
+    await user.click(editButtons[0]);
+    fireEvent.change(screen.getByLabelText('Shift time'), { target: { value: '09:00' } });
+    fireEvent.blur(screen.getByLabelText('Shift time'));
+    await waitFor(() => expect(firstSave).toHaveBeenCalled());
+    await user.click(screen.getAllByRole('button', { name: 'Edit shift time' })[0]);
+
+    expect(screen.getAllByLabelText('Shift time')).toHaveLength(1);
+    expect(screen.getByLabelText('Shift time')).toHaveValue('08:00');
+  });
+
+  test('contains a rejected save callback and keeps the draft editable', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockRejectedValue(new Error('network failure'));
+    render(<CellHarness value="07:00" onSave={onSave} />);
+
+    await user.click(screen.getByRole('button', { name: 'Edit shift time' }));
+    fireEvent.change(screen.getByLabelText('Shift time'), { target: { value: '09:00' } });
+    fireEvent.blur(screen.getByLabelText('Shift time'));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(screen.getByLabelText('Shift time')).toHaveValue('09:00');
+  });
+
+  test('closes an active editor when permission becomes read-only', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const { rerender } = render(<CellHarness value="07:00" canEdit onSave={onSave} />);
+
+    await user.click(screen.getByRole('button', { name: 'Edit shift time' }));
+    rerender(<CellHarness value="07:00" canEdit={false} onSave={onSave} />);
+
+    await waitFor(() => expect(screen.queryByLabelText('Shift time')).not.toBeInTheDocument());
+    expect(onSave).not.toHaveBeenCalled();
   });
 });
