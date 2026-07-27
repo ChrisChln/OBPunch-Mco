@@ -288,9 +288,9 @@ export default function EmployeesTableSection({
             {employeesVisible.map((e) => {
               const staff = String(e.staff_id ?? '').trim();
               const name = getEmployeeDisplayName(e).trim() || String(e.name ?? '').trim();
-              const agency = String(e.agency ?? e.Agency ?? '').trim();
+              const agency = String(e.agency ?? '').trim();
               const isProtectedAgencyEmployee = isScheduleOnlyAgency(agency);
-              const position = String(e.position ?? e.Position ?? '').trim();
+              const position = String(e.position ?? '').trim();
               const employmentType = normalizeEmploymentType((e as any).employment_type ?? (e as any).EmploymentType ?? '');
               const label = String(e.label ?? e.Label ?? '').trim();
               const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();

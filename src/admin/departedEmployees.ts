@@ -63,8 +63,8 @@ export const attachDepartureOperators = (
 export const filterDepartedEmployees = (rows: EmployeeRow[], filters: DepartedEmployeeFilters) => {
   const needle = normalizeText(filters.search).toLowerCase();
   return rows.filter((row) => {
-    const rowAgency = normalizeText(row.agency ?? row.Agency);
-    const rowPosition = normalizeText(row.position ?? row.Position);
+    const rowAgency = normalizeText(row.agency);
+    const rowPosition = normalizeText(row.position);
     const rowType = normalizeTerminationType(row.termination_type);
     const terminatedDate = formatTerminationDate(row.terminated_at);
     if (filters.agency && rowAgency !== filters.agency) return false;
@@ -116,8 +116,8 @@ export const buildDepartedEmployeesCsv = (
       formatTerminationDate(row.terminated_at),
       normalizeText(row.name),
       staffId ? displayStaffId(staffId) : '',
-      normalizeText(row.agency ?? row.Agency),
-      normalizeText(row.position ?? row.Position),
+      normalizeText(row.agency),
+      normalizeText(row.position),
       type === 'blacklist' ? t('黑名单', 'Blacklist') : t('正常离职', 'Normal'),
       normalizeTerminationReason(row.termination_reason),
       normalizeText(row.termination_operator)

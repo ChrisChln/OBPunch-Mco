@@ -34,9 +34,7 @@ type EmployeeRow = {
   staff_id?: string | null;
   name?: string | null;
   agency?: string | null;
-  Agency?: string | null;
   position?: string | null;
-  Position?: string | null;
   shift?: string | null;
   active?: boolean | string | number | null;
   terminated_at?: string | null;
@@ -383,7 +381,7 @@ const fetchEmployees = async (supabase: SupabaseLike, staffIds: string[]) => {
     const rows = await fetchAllRows<EmployeeRow>((from, to) =>
       supabase
         .from('ob_employees')
-        .select('staff_id, name, agency, "Agency", position, "Position", shift, active, terminated_at')
+        .select('staff_id, name, agency, position, shift, active, terminated_at')
         .in('staff_id', batch)
         .order('created_at', { ascending: false })
         .range(from, to)
@@ -458,14 +456,14 @@ export const buildDashboardAttendanceSnapshotStats = async (
   const visibleStaffIds = activeDisplayStaffIds.filter((staffId) => {
     const employee = employees.get(staffId);
     const schedule = scheduledByStaff.get(staffId);
-    const employeePosition = resolveStaffPosition('', employee?.position ?? employee?.Position, positionNames);
+    const employeePosition = resolveStaffPosition('', employee?.position, positionNames);
     const schedulePosition = resolveStaffPosition(schedule?.position, '', positionNames);
     return !hidden.has(employeePosition.toLowerCase()) && !hidden.has(schedulePosition.toLowerCase());
   });
   const attendanceTrackedStaffIds = new Set(
     visibleStaffIds.filter((staffId) => {
       const employee = employees.get(staffId);
-      const agency = String(employee?.agency ?? employee?.Agency ?? '').trim();
+      const agency = String(employee?.agency ?? '').trim();
       return !isScheduleOnlyAgency(agency) && !isNewHirePlaceholderStaffId(staffId);
     })
   );
@@ -479,7 +477,7 @@ export const buildDashboardAttendanceSnapshotStats = async (
     if (!attendanceTrackedStaffIds.has(staffId)) continue;
     const schedule = scheduledByStaff.get(staffId);
     const employee = employees.get(staffId);
-    const position = resolveStaffPosition(schedule?.position, employee?.position ?? employee?.Position, positionNames);
+    const position = resolveStaffPosition(schedule?.position, employee?.position, positionNames);
     const shift = normalizeShiftValue(employee?.shift) || 'early';
     if (!position || !shift) continue;
     const key = `${shift}:${position}`;
@@ -501,7 +499,7 @@ export const buildDashboardAttendanceSnapshotStats = async (
     if (!attendanceTrackedStaffIds.has(staffId)) continue;
     if (keysByStaff.has(staffId) || hasWorkScheduleStaff.has(staffId) || hasRestScheduleStaff.has(staffId)) continue;
     const employee = employees.get(staffId);
-    const position = resolveStaffPosition('', employee?.position ?? employee?.Position, positionNames);
+    const position = resolveStaffPosition('', employee?.position, positionNames);
     const shift = normalizeShiftValue(employee?.shift) || getShiftBucketFromPunchTime(punches[0]?.created_at);
     if (!position || !shift) continue;
     keysByStaff.set(staffId, [`${shift}:${position}`]);

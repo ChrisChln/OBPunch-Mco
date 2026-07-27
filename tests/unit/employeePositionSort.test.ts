@@ -32,13 +32,25 @@ describe('employeePositionSort', () => {
     const rows = [
       { staff_id: 'US003', position: 'Unknown' },
       { staff_id: 'US001', position: 'Pick' },
-      { staff_id: 'US002', Position: 'Pack' }
+      { staff_id: 'US002', position: 'Pack' }
     ];
 
     expect(sortEmployeesByPositionOrder(rows, ['Pick', 'Pack'], normalizeStaffId).map((row) => row.staff_id)).toEqual([
       'US001',
       'US002',
       'US003'
+    ]);
+  });
+
+  test('does not read the removed quoted Position field', () => {
+    const rows = [
+      { staff_id: 'US002', position: undefined, Position: 'Pick' },
+      { staff_id: 'US001', position: 'Pack' }
+    ];
+
+    expect(sortEmployeesByPositionOrder(rows, ['Pick', 'Pack'], normalizeStaffId).map((row) => row.staff_id)).toEqual([
+      'US001',
+      'US002'
     ]);
   });
 

@@ -1,7 +1,6 @@
 type EmployeePositionLike = {
   staff_id?: string | null;
   position?: string | null;
-  Position?: string | null;
 };
 
 export const buildEmployeePositionRankMap = (positionNames: readonly string[]) => {
@@ -25,8 +24,8 @@ export const sortEmployeesByPositionOrder = <T extends EmployeePositionLike>(
     const priorityCompare = comparePriority?.(a, b) ?? 0;
     if (priorityCompare !== 0) return priorityCompare;
 
-    const positionA = String(a.position ?? a.Position ?? '').trim();
-    const positionB = String(b.position ?? b.Position ?? '').trim();
+    const positionA = String(a.position ?? '').trim();
+    const positionB = String(b.position ?? '').trim();
     const keyA = positionA.toLowerCase();
     const keyB = positionB.toLowerCase();
     const rankA = rankMap.get(keyA) ?? Number.MAX_SAFE_INTEGER;

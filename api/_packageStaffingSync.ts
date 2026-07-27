@@ -11,7 +11,6 @@ type ScheduleSnapshotRow = {
 type EmployeeSnapshotRow = {
   staff_id?: string | null;
   position?: string | null;
-  Position?: string | null;
   active?: boolean | null;
   terminated_at?: string | null;
 };
@@ -126,7 +125,7 @@ export const computeScheduledHeadcountForDate = async (supabase: any, metricDate
     try {
       employeeRows = await loadEmployeeRows('staff_id, position, active, terminated_at');
     } catch {
-      employeeRows = await loadEmployeeRows('staff_id, "Position", active, terminated_at');
+      employeeRows = await loadEmployeeRows('staff_id, position, active, terminated_at');
     }
 
     for (const row of employeeRows) {
@@ -136,7 +135,7 @@ export const computeScheduledHeadcountForDate = async (supabase: any, metricDate
       if (terminatedAt) continue;
       if (row.active === false) continue;
       activeStaffIds.add(staffId);
-      positionByStaffId.set(staffId, String(row.position ?? row.Position ?? '').trim());
+      positionByStaffId.set(staffId, String(row.position ?? '').trim());
     }
   }
 

@@ -3,7 +3,6 @@ import { isScheduleOnlyAgency } from '../shared/agencyRules';
 type ScheduleNameEmployee = {
   name?: unknown;
   agency?: unknown;
-  Agency?: unknown;
   work_account?: unknown;
   WorkAccount?: unknown;
 };
@@ -29,7 +28,7 @@ export const resolveScheduleEmployeeDisplayName = (
   registeredNameByEmail: Record<string, string>
 ) => {
   const rawName = String(employee.name ?? '').trim();
-  const agency = String(employee.agency ?? employee.Agency ?? '').trim();
+  const agency = String(employee.agency ?? '').trim();
   if (!isScheduleOnlyAgency(agency)) return rawName;
 
   const accountEmail = getScheduleEmployeeProfileEmail(employee);

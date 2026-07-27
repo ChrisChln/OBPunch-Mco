@@ -98,9 +98,7 @@ type HistoricalEmployeeRow = {
   staff_id: string | null;
   name?: string | null;
   agency?: string | null;
-  Agency?: string | null;
   position?: string | null;
-  Position?: string | null;
   shift?: string | null;
   label?: string | null;
   Label?: string | null;
@@ -521,7 +519,7 @@ function HomeDashboardPage({
         const batch = staffIds.slice(index, index + 200);
         const employeeRes = await supabase
           .from('ob_employees')
-          .select('staff_id, name, agency, "Agency", position, "Position", shift, label, "Label", work_account, "WorkAccount"')
+          .select('staff_id, name, agency, position, shift, label, "Label", work_account, "WorkAccount"')
           .in('staff_id', batch)
           .limit(500);
         if (employeeRes.error) continue;
@@ -542,8 +540,8 @@ function HomeDashboardPage({
           return {
             staff_id: staff,
             name: String(employee?.name ?? '').trim(),
-            agency: String(employee?.agency ?? employee?.Agency ?? '').trim(),
-            position: String(employee?.position ?? employee?.Position ?? '').trim(),
+            agency: String(employee?.agency ?? '').trim(),
+            position: String(employee?.position ?? '').trim(),
             shift: shift === 'early' ? 'Morning' : 'Night',
             attendance,
             label: String(employee?.label ?? employee?.Label ?? '').trim(),

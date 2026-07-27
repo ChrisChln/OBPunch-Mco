@@ -544,8 +544,6 @@ export default function App() {
     rows: []
   });
 
-  type EmployeeColumnMode = 'lower' | 'cased';
-  const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
 
   const [page, setPage] = useState<Page>('punch');
   const PUNCH_UNLOCKED_KEY = 'punch_screen_unlocked';
@@ -1758,43 +1756,18 @@ export default function App() {
     };
   }, [normalizedId, isValidId]);
 
-  const resolveEmployeeColumnMode = async (): Promise<EmployeeColumnMode> => {
-    const cached = employeeColumnModeRef.current;
-    if (cached) return cached;
-    if (!supabase) {
-      employeeColumnModeRef.current = 'lower';
-      return 'lower';
-    }
-
-    const cased = await supabase.from(EMPLOYEE_TABLE).select('staff_id, "Agency", "Position"').limit(1);
-    if (!cased.error) {
-      employeeColumnModeRef.current = 'cased';
-      return 'cased';
-    }
-
-    const lower = await supabase.from(EMPLOYEE_TABLE).select('staff_id, agency, position').limit(1);
-    if (!lower.error) {
-      employeeColumnModeRef.current = 'lower';
-      return 'lower';
-    }
-
-    employeeColumnModeRef.current = 'cased';
-    return 'cased';
-  };
-
   const fetchStaffIdsForPosition = async (position: AllowedPosition) => {
     if (!supabase) {
       return { staffIds: [] as string[], error: 'Missing Supabase configuration.' };
     }
 
-    const fetchAll = async (mode: EmployeeColumnMode) => {
-      const positionCol = mode === 'cased' ? 'Position' : 'position';
+    const fetchAll = async () => {
       const res = await fetchAllPagedRows<{ staff_id?: string | null }>(
         async (from, to) =>
           await supabase
             .from(EMPLOYEE_TABLE)
             .select('staff_id')
-            .ilike(positionCol as any, position)
+            .ilike('position', position)
             .range(from, to),
         1000
       );
@@ -1807,14 +1780,7 @@ export default function App() {
       return { staffIds: Array.from(new Set(all)), error: null as string | null };
     };
 
-    const mode = await resolveEmployeeColumnMode();
-    let res = await fetchAll(mode);
-    if (res.error) {
-      const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-      employeeColumnModeRef.current = flipped;
-      res = await fetchAll(flipped);
-    }
-    return res;
+    return await fetchAll();
   };
 
   const fetchEmployeeMap = async (staffIds: string[]) => {
@@ -1841,35 +1807,23 @@ export default function App() {
       };
     }
 
-    const runQuery = async (mode: EmployeeColumnMode) => {
+    const runQuery = async () => {
       // Try queries in order, ensuring we get label if it exists.
-      // Strategy: Try all permutations, label-first (both uppercase Label and lowercase label).
-      const queries =
-        mode === 'cased'
-          ? [
-              'staff_id, name, "Agency", "Position", label, shift, terminated_at',
-              'staff_id, name, "Agency", "Position", "Label", shift, terminated_at',
-              'staff_id, name, "Agency", "Position", label, terminated_at',
-              'staff_id, name, "Agency", "Position", "Label", terminated_at',
-              'staff_id, name, "Agency", "Position", shift, terminated_at',
-              'staff_id, name, "Agency", "Position", terminated_at',
-              'staff_id, name, "Agency", "Position", label, shift',
-              'staff_id, name, "Agency", "Position", "Label", shift',
-              'staff_id, name, "Agency", "Position", label',
-              'staff_id, name, "Agency", "Position", "Label"',
-              'staff_id, name, "Agency", "Position", shift',
-              'staff_id, name, "Agency", "Position"'
-            ]
-          : [
-              'staff_id, name, agency, position, label, shift, terminated_at',
-              'staff_id, name, agency, position, label, terminated_at',
-              'staff_id, name, agency, position, shift, terminated_at',
-              'staff_id, name, agency, position, terminated_at',
-              'staff_id, name, agency, position, label, shift',
-              'staff_id, name, agency, position, label',
-              'staff_id, name, agency, position, shift',
-              'staff_id, name, agency, position'
-            ];
+      // Label casing remains compatible because it is outside this migration.
+      const queries = [
+        'staff_id, name, agency, position, label, shift, terminated_at',
+        'staff_id, name, agency, position, "Label", shift, terminated_at',
+        'staff_id, name, agency, position, label, terminated_at',
+        'staff_id, name, agency, position, "Label", terminated_at',
+        'staff_id, name, agency, position, shift, terminated_at',
+        'staff_id, name, agency, position, terminated_at',
+        'staff_id, name, agency, position, label, shift',
+        'staff_id, name, agency, position, "Label", shift',
+        'staff_id, name, agency, position, label',
+        'staff_id, name, agency, position, "Label"',
+        'staff_id, name, agency, position, shift',
+        'staff_id, name, agency, position'
+      ];
 
       for (const select of queries) {
         const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', ids);
@@ -1883,13 +1837,7 @@ export default function App() {
       return lastAttempt;
     };
 
-    const mode = await resolveEmployeeColumnMode();
-    let rows = await runQuery(mode);
-    if (rows.error) {
-      const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-      employeeColumnModeRef.current = flipped;
-      rows = await runQuery(flipped);
-    }
+    const rows = await runQuery();
     if (rows.error) {
       return {
         map: {} as Record<string, { name: string; agency: string; position: string; label: string; shift: string; terminatedAt: string | null }>,
@@ -1904,8 +1852,8 @@ export default function App() {
       if (!staff) continue;
       const profile = {
         name: String(r.name ?? '').trim(),
-        agency: String(r.agency ?? r.Agency ?? '').trim(),
-        position: String(r.position ?? r.Position ?? '').trim(),
+        agency: String(r.agency ?? '').trim(),
+        position: String(r.position ?? '').trim(),
         label: String(r.label ?? r.Label ?? '').trim(),
         shift: String(r.shift ?? '').trim(),
         terminatedAt: String(r.terminated_at ?? '').trim() || null

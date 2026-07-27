@@ -271,15 +271,7 @@ export const fetchAgencyDepartedEmployees = async (
     }
   };
 
-  let result = await fetchPages('staff_id, name, agency, "Agency", position, "Position", shift, shift_time, terminated_at');
-
-  if (result.error) {
-    result = await fetchPages('staff_id, name, agency, position, shift, shift_time, terminated_at');
-  }
-
-  if (result.error) {
-    result = await fetchPages('staff_id, name, "Agency", "Position", shift, shift_time, terminated_at');
-  }
+  const result = await fetchPages('staff_id, name, agency, position, shift, shift_time, terminated_at');
 
   if (result.error) {
     throw new Error(String(result.error.message ?? 'Failed to load departed employees.'));
@@ -289,8 +281,8 @@ export const fetchAgencyDepartedEmployees = async (
     .map((row) => ({
         staff_id: readFirstText(row, ['staff_id']),
         name: readFirstText(row, ['name']),
-        agency: readFirstText(row, ['agency', 'Agency']),
-        position: readFirstText(row, ['position', 'Position']),
+        agency: readFirstText(row, ['agency']),
+        position: readFirstText(row, ['position']),
         shift: (readFirstText(row, ['shift']) === 'late'
           ? 'late'
           : readFirstText(row, ['shift']) === 'early'

@@ -3,7 +3,6 @@ import { isScheduleOnlyAgency } from '../shared/agencyRules';
 type ScheduleEmployeeSortRow = {
   staff_id?: string | null;
   agency?: string | null;
-  Agency?: string | null;
 };
 
 type SortScheduleEmployeesOptions = {
@@ -14,8 +13,8 @@ type SortScheduleEmployeesOptions = {
 };
 
 const compareScheduleOnlyAgencyPriority = <T extends ScheduleEmployeeSortRow>(a: T, b: T) => {
-  const agencyA = String(a.agency ?? a.Agency ?? '').trim();
-  const agencyB = String(b.agency ?? b.Agency ?? '').trim();
+  const agencyA = String(a.agency ?? '').trim();
+  const agencyB = String(b.agency ?? '').trim();
   const isScheduleOnlyA = isScheduleOnlyAgency(agencyA);
   const isScheduleOnlyB = isScheduleOnlyAgency(agencyB);
   if (isScheduleOnlyA === isScheduleOnlyB) return 0;

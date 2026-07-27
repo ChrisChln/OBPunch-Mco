@@ -4,29 +4,28 @@ import { fetchAgencyDepartedEmployees } from '../../src/agency/api';
 type MockDepartedRow = {
   staff_id: string;
   name: string;
-  agency?: string;
-  Agency?: string;
-  position?: string;
-  Position?: string;
+  agency: string;
+  position: string;
   shift: string;
   shift_time: string;
   terminated_at: string;
 };
 
-const createMockSupabase = (rows: MockDepartedRow[], options: { failLowercase?: boolean } = {}) => ({
+const createMockSupabase = (rows: MockDepartedRow[], selectedColumns: string[] = []) => ({
   from: () => ({
-    select: (columns: string) => ({
-      not: () => ({
-        order: () => ({
-          range: async (from: number, to: number) => {
-            if (options.failLowercase && columns.includes('agency')) {
-              return { data: null, error: { message: 'column agency does not exist' } };
-            }
-            return { data: rows.slice(from, to + 1), error: null };
-          }
+    select: (columns: string) => {
+      selectedColumns.push(columns);
+      return {
+        not: () => ({
+          order: () => ({
+            range: async (from: number, to: number) => ({
+              data: rows.slice(from, to + 1),
+              error: null
+            })
+          })
         })
-      })
-    })
+      };
+    }
   })
 });
 
@@ -50,27 +49,13 @@ describe('fetchAgencyDepartedEmployees', () => {
     expect(rows.some((row) => row.staff_id === 'US001005')).toBe(true);
   });
 
-  test('falls back to cased agency and position columns', async () => {
-    const rows = await fetchAgencyDepartedEmployees(
-      createMockSupabase(makeRows(2, { agency: undefined, position: undefined, Agency: 'Lyneer', Position: 'Shipping' }), {
-        failLowercase: true
-      }) as any,
-      ['Lyneer']
-    );
-
-    expect(rows).toHaveLength(2);
-    expect(rows[0]?.agency).toBe('Lyneer');
-    expect(rows[0]?.position).toBe('Shipping');
-  });
-
-  test('uses cased agency and position values when lowercase fields are empty', async () => {
-    const rows = await fetchAgencyDepartedEmployees(
-      createMockSupabase(makeRows(1, { agency: '', position: '', Agency: 'Central', Position: 'Pick' })) as any,
-      ['Central']
-    );
+  test('queries only canonical lowercase employee metadata columns', async () => {
+    const selectedColumns: string[] = [];
+    const rows = await fetchAgencyDepartedEmployees(createMockSupabase(makeRows(1), selectedColumns) as any, ['Central']);
 
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.agency).toBe('Central');
-    expect(rows[0]?.position).toBe('Pick');
+    expect(selectedColumns).toEqual([
+      'staff_id, name, agency, position, shift, shift_time, terminated_at'
+    ]);
   });
 });

@@ -969,7 +969,7 @@ export default function DashboardPage() {
             staff_id: staffId,
             name: String(row.name ?? '').trim(),
             agency: String(row.agency ?? '').trim(),
-            position: String(row.position ?? row.Position ?? '').trim(),
+            position: String(row.position ?? '').trim(),
             label: String(row.label ?? row.Label ?? '').trim(),
             work_account: normalizeWorkAccountValue(row.work_account),
             work_password: resolveDefaultPassword(

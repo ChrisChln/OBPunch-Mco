@@ -42,7 +42,6 @@ export type ExistingEmployeeIdentityRow = {
   staff_id?: string | null;
   name?: string | null;
   agency?: string | null;
-  Agency?: string | null;
   work_account?: string | null;
 };
 
@@ -227,7 +226,7 @@ export const findTemporaryEmployeeUploadMatches = (
     if (!isGeneratedEmployeeUploadStaffId(staff)) continue;
 
     const name = String(row.name ?? '').trim().toLowerCase();
-    const agency = String(row.agency ?? row.Agency ?? '').trim().toLowerCase();
+    const agency = String(row.agency ?? '').trim().toLowerCase();
     if (!name || !agency) continue;
 
     const key = `${name}__${agency}`;

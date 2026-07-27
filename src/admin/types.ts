@@ -59,8 +59,6 @@ export type EmployeeRow = {
   work_account?: string | null;
   work_password?: string | null;
   shift_time?: string | null;
-  Agency?: string | null;
-  Position?: string | null;
   EmploymentType?: EmploymentType | string | null;
   Label?: string | null;
   WorkAccount?: string | null;

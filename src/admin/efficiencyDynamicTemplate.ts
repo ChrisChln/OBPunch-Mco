@@ -13,7 +13,6 @@ type EmployeeDynamicRow = {
   created_at?: string | null;
   staff_id?: string | null;
   position?: string | null;
-  Position?: string | null;
   label?: string | null;
   Label?: string | null;
   shift?: string | null;
@@ -114,7 +113,7 @@ const isEmployeeActive = (employee: EmployeeDynamicRow) => {
   return true;
 };
 
-const getDynamicPosition = (row: EmployeeDynamicRow) => String(row.position ?? row.Position ?? '').trim();
+const getDynamicPosition = (row: EmployeeDynamicRow) => String(row.position ?? '').trim();
 const getDynamicLabel = (row: EmployeeDynamicRow) => String(row.label ?? row.Label ?? '').trim();
 const getDynamicWorkAccount = (row: EmployeeDynamicRow) => String(row.work_account ?? row.WorkAccount ?? '').trim();
 
@@ -138,18 +137,14 @@ const resolveDynamicStage = (procKey: DynamicProcKey): ObupStage => {
 const formatAverageUph = (value: number) => value.toFixed(2);
 
 const EMPLOYEE_SELECTS = [
-  'id, updated_at, created_at, staff_id, "Position", label, shift, active, terminated_at, work_account',
-  'id, updated_at, created_at, staff_id, "Position", "Label", shift, active, terminated_at, work_account',
-  'id, updated_at, created_at, staff_id, "Position", label, shift, active, terminated_at, "WorkAccount"',
-  'id, updated_at, created_at, staff_id, "Position", "Label", shift, active, terminated_at, "WorkAccount"',
   'id, updated_at, created_at, staff_id, position, label, shift, active, terminated_at, work_account',
+  'id, updated_at, created_at, staff_id, position, "Label", shift, active, terminated_at, work_account',
   'id, updated_at, created_at, staff_id, position, label, shift, active, terminated_at, "WorkAccount"',
-  'id, created_at, staff_id, "Position", label, shift, active, terminated_at, work_account',
-  'id, created_at, staff_id, "Position", "Label", shift, active, terminated_at, work_account',
-  'id, created_at, staff_id, "Position", label, shift, active, terminated_at, "WorkAccount"',
-  'id, created_at, staff_id, "Position", "Label", shift, active, terminated_at, "WorkAccount"',
+  'id, updated_at, created_at, staff_id, position, "Label", shift, active, terminated_at, "WorkAccount"',
   'id, created_at, staff_id, position, label, shift, active, terminated_at, work_account',
-  'id, created_at, staff_id, position, label, shift, active, terminated_at, "WorkAccount"'
+  'id, created_at, staff_id, position, "Label", shift, active, terminated_at, work_account',
+  'id, created_at, staff_id, position, label, shift, active, terminated_at, "WorkAccount"',
+  'id, created_at, staff_id, position, "Label", shift, active, terminated_at, "WorkAccount"'
 ];
 
 const fetchDynamicEmployees = async (supabase: SupabaseClient) => {

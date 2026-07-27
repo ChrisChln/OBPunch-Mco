@@ -68,14 +68,14 @@ export default function DepartedEmployeesModal({
 
   const agencyOptions = useMemo(
     () =>
-      Array.from(new Set(rows.map((row) => normalizeText(row.agency ?? row.Agency)).filter(Boolean))).sort((a, b) =>
+      Array.from(new Set(rows.map((row) => normalizeText(row.agency)).filter(Boolean))).sort((a, b) =>
         a.localeCompare(b)
       ),
     [rows]
   );
   const positionOptions = useMemo(
     () =>
-      Array.from(new Set(rows.map((row) => normalizeText(row.position ?? row.Position)).filter(Boolean))).sort((a, b) =>
+      Array.from(new Set(rows.map((row) => normalizeText(row.position)).filter(Boolean))).sort((a, b) =>
         a.localeCompare(b)
       ),
     [rows]
@@ -282,11 +282,11 @@ export default function DepartedEmployeesModal({
                     <td className="truncate px-2 py-3 font-mono" title={staffId ? displayStaffId(staffId) : '-'}>
                       {staffId ? displayStaffId(staffId) : '-'}
                     </td>
-                    <td className="truncate px-2 py-3" title={normalizeText(row.agency ?? row.Agency) || '-'}>
-                      {normalizeText(row.agency ?? row.Agency) || '-'}
+                    <td className="truncate px-2 py-3" title={normalizeText(row.agency) || '-'}>
+                      {normalizeText(row.agency) || '-'}
                     </td>
-                    <td className="truncate px-2 py-3" title={normalizeText(row.position ?? row.Position) || '-'}>
-                      {normalizeText(row.position ?? row.Position) || '-'}
+                    <td className="truncate px-2 py-3" title={normalizeText(row.position) || '-'}>
+                      {normalizeText(row.position) || '-'}
                     </td>
                     <td className="px-2 py-3">
                       <button

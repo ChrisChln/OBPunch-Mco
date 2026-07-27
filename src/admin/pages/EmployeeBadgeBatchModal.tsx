@@ -47,8 +47,8 @@ export default function EmployeeBadgeBatchModal({
       return {
         staff,
         name: String(e.name ?? '').trim() || '-',
-        agency: String(e.agency ?? e.Agency ?? '').trim() || '-',
-        position: String(e.position ?? e.Position ?? '').trim() || '-',
+        agency: String(e.agency ?? '').trim() || '-',
+        position: String(e.position ?? '').trim() || '-',
         workAccount: String(e.work_account ?? e.WorkAccount ?? '').trim() || '-',
         workPassword: String(e.work_password ?? e.WorkPassword ?? '').trim() || '-'
       };
@@ -159,4 +159,3 @@ export default function EmployeeBadgeBatchModal({
     document.body
   );
 }
-

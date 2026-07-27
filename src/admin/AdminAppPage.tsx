@@ -604,7 +604,7 @@ const isEmployeeActive = (employee: EmployeeRow | null | undefined) => {
 const isAttendanceQueryableStaffId = (value: unknown) => isValidPunchStaffId(normalizeStaffId(String(value ?? '').trim()));
 const isAttendanceQueryableEmployee = (employee: EmployeeRow | null | undefined) => {
   if (!employee) return false;
-  const agency = String(employee.agency ?? employee.Agency ?? '').trim();
+  const agency = String(employee.agency ?? '').trim();
   return isAttendanceQueryableStaffId(employee.staff_id) && !isScheduleOnlyAgency(agency);
 };
 
@@ -1493,9 +1493,7 @@ export default function AdminAppPage() {
   const scheduleLabelToneLastSavedJsonRef = useRef('');
   const scheduleRenderFilterKeyRef = useRef('');
   const scheduleTableScrollRef = useRef<HTMLDivElement | null>(null);
-  type EmployeeColumnMode = 'lower' | 'cased';
   type EmployeeFetchProfile = 'full' | 'home';
-  const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
   const dailyCapacityRequestRef = useRef(0);
   const scheduleMistakeRequestRef = useRef(0);
@@ -1678,7 +1676,7 @@ export default function AdminAppPage() {
   const isInactiveJdlEmployee = useCallback(
     (employee: EmployeeRow | null | undefined) => {
       const staff = normalizeStaffId(String(employee?.staff_id ?? '').trim());
-      const agency = String(employee?.agency ?? employee?.Agency ?? '').trim();
+      const agency = String(employee?.agency ?? '').trim();
       return Boolean(staff && isScheduleOnlyAgency(agency) && hiddenJdlStaffIds.has(staff));
     },
     [hiddenJdlStaffIds]
@@ -2992,34 +2990,9 @@ export default function AdminAppPage() {
   const [homeOnClockShiftByStaffId, setHomeOnClockShiftByStaffId] = useState<Record<string, 'early' | 'late'>>({});
   const [homeRosterPositionFilter, setHomeRosterPositionFilter] = useState<string>('ALL');
 
-  const resolveEmployeeColumnMode = async (): Promise<EmployeeColumnMode> => {
-    const cached = employeeColumnModeRef.current;
-    if (cached) return cached;
-    if (!supabase) {
-      employeeColumnModeRef.current = 'lower';
-      return 'lower';
-    }
-
-    const cased = await supabase.from(EMPLOYEE_TABLE).select('staff_id, "Agency", "Position"').limit(1);
-    if (!cased.error) {
-      employeeColumnModeRef.current = 'cased';
-      return 'cased';
-    }
-
-    const lower = await supabase.from(EMPLOYEE_TABLE).select('staff_id, agency, position').limit(1);
-    if (!lower.error) {
-      employeeColumnModeRef.current = 'lower';
-      return 'lower';
-    }
-
-    employeeColumnModeRef.current = 'cased';
-    return 'cased';
-  };
-  const buildEmployeeSelectColumns = (mode: EmployeeColumnMode, profile: EmployeeFetchProfile) => {
+  const buildEmployeeSelectColumns = (profile: EmployeeFetchProfile) => {
     if (profile === 'home') {
-      return mode === 'cased'
-        ? 'id, staff_id, name, "Agency", "Position", shift, "Label", "WorkAccount", "ShiftTime", active, terminated_at, created_at'
-        : 'id, staff_id, name, agency, position, shift, label, work_account, shift_time, active, terminated_at, created_at';
+      return 'id, staff_id, name, agency, position, shift, label, work_account, shift_time, active, terminated_at, created_at';
     }
     return '*';
   };
@@ -3193,19 +3166,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return;
       }
 
-      const mode = await resolveEmployeeColumnMode();
       const staffToPosition = new Map<string, string>();
       const allStaff = Array.from(new Set([...activeStaff, ...attendanceStaff]));
       const batches = chunk(allStaff, 200);
       for (const batch of batches) {
-        const select = mode === 'cased' ? 'staff_id, "Position"' : 'staff_id, position';
-        let res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch);
-        if (res.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          const select2 = flipped === 'cased' ? 'staff_id, "Position"' : 'staff_id, position';
-          res = await supabase.from(EMPLOYEE_TABLE).select(select2).in('staff_id', batch);
-        }
+        const res = await supabase.from(EMPLOYEE_TABLE).select('staff_id, position').in('staff_id', batch);
         if (seq !== attendanceFetchSeqRef.current) return;
         if (res.error) {
           if (!isAbortLikeError(res.error)) setAttendanceError(normalizeAttendanceFetchError(res.error));
@@ -3213,7 +3178,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         }
         for (const r of (res.data as any[] | null) ?? []) {
           const staff = normalizeStaffId(String(r.staff_id ?? '').trim());
-          const posRaw = String(r.position ?? r.Position ?? '').trim();
+          const posRaw = String(r.position ?? '').trim();
           if (!staff || !posRaw) continue;
           const key = normalizePositionKey(posRaw);
           if (!key) continue;
@@ -5369,7 +5334,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
     const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-    const agency = String(employee.agency ?? employee.Agency ?? '').trim();
+    const agency = String(employee.agency ?? '').trim();
     if (!staff || !isValidScheduleStaffId(staff, agency)) {
       setScheduleError('Invalid staff id.');
       return;
@@ -5521,7 +5486,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return;
       }
 
-      const employeePosition = String(employee.position ?? employee.Position ?? '').trim();
+      const employeePosition = String(employee.position ?? '').trim();
       const normalizedPosition = normalizePositionKey(employeePosition);
       if (!normalizedPosition) {
         setScheduleError(`Employee position is missing or inactive: ${staff}`);
@@ -6497,7 +6462,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     for (const employee of latestEmployeeByStaff.values()) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       const workAccount = String(employee.work_account ?? employee.WorkAccount ?? '').trim();
-      const stage = positionToStage(String(employee.position ?? employee.Position ?? '').trim());
+      const stage = positionToStage(String(employee.position ?? '').trim());
       if (!staff || !stage) continue;
       stageByStaff.set(staff, stage);
       const key = normalizeWorkAccountKey(workAccount);
@@ -6931,7 +6896,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
     if (!staff) return;
     const name = String(employee.name ?? '').trim();
-    const position = String(employee.position ?? employee.Position ?? '').trim();
+    const position = String(employee.position ?? '').trim();
     setScheduleMistakeDraft({
       open: true,
       staff_id: staff,
@@ -7018,18 +6983,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       const searchStaffIds = async (): Promise<string[]> => {
         const term = `%${searchValue}%`;
-        const mode = await resolveEmployeeColumnMode();
-        const run = async (m: EmployeeColumnMode) => {
-          const select = m === 'cased' ? 'staff_id, name, "Agency"' : 'staff_id, name, agency';
-          return await supabase.from(EMPLOYEE_TABLE).select(select).or(`staff_id.ilike.${term},name.ilike.${term}`).limit(200);
-        };
-
-        let res = await run(mode);
-        if (res.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          res = await run(flipped);
-        }
+        const res = await supabase
+          .from(EMPLOYEE_TABLE)
+          .select('staff_id, name, agency')
+          .or(`staff_id.ilike.${term},name.ilike.${term}`)
+          .limit(200);
 
         if (res.error) {
           return [];
@@ -7086,18 +7044,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const fetchEmployeeMap = async () => {
-        const mode = await resolveEmployeeColumnMode();
-        const run = async (m: EmployeeColumnMode) => {
-          const select = m === 'cased' ? 'staff_id, name, "Agency"' : 'staff_id, name, agency';
-          return await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', staffIds);
-        };
-
-        let res = await run(mode);
-        if (res.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          res = await run(flipped);
-        }
+        const res = await supabase.from(EMPLOYEE_TABLE).select('staff_id, name, agency').in('staff_id', staffIds);
 
         if (res.error) {
           return null;
@@ -7117,7 +7064,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (!staff) continue;
         map[staff] = {
           name: String(e.name ?? '').trim(),
-          agency: String(e.agency ?? e.Agency ?? '').trim()
+          agency: String(e.agency ?? '').trim()
         };
       }
       return { rows, employeeMap: map, error: null as string | null };
@@ -7257,15 +7204,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const firstPageSize = 60;
       const nextPageSize = 200;
 
-      const build = (mode: EmployeeColumnMode, from: number, to: number) => {
-        const selectColumns = buildEmployeeSelectColumns(mode, profile);
+      const build = (from: number, to: number) => {
+        const selectColumns = buildEmployeeSelectColumns(profile);
         return supabase.from(EMPLOYEE_TABLE).select(selectColumns).order('staff_id', { ascending: true }).range(from, to);
       };
 
-      const mode = await resolveEmployeeColumnMode();
-      const run = async (m: EmployeeColumnMode, from: number, to: number) => {
-        const attemptCreatedAt = await build(m, from, to).order('created_at', { ascending: false });
-        return attemptCreatedAt.error ? await build(m, from, to).order('id', { ascending: false }) : attemptCreatedAt;
+      const run = async (from: number, to: number) => {
+        const attemptCreatedAt = await build(from, to).order('created_at', { ascending: false });
+        return attemptCreatedAt.error ? await build(from, to).order('id', { ascending: false }) : attemptCreatedAt;
       };
 
       const all: EmployeeRow[] = [];
@@ -7277,12 +7223,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       while (!done) {
         const pageSize = pageCount === 0 ? firstPageSize : nextPageSize;
         const to = from + pageSize - 1;
-        let attempt = await run(mode, from, to);
-        if (attempt.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          attempt = await run(flipped, from, to);
-        }
+        const attempt = await run(from, to);
 
         if (attempt.error) {
           if (!isAbortLikeError(attempt.error.message)) setEmployeesError(attempt.error.message);
@@ -7381,14 +7322,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setDepartedEmployeesError(null);
       try {
         const buildSelect = (
-          mode: EmployeeColumnMode,
           includeTerminationType: boolean,
           includeTerminationReason: boolean
         ) => {
-          const base =
-            mode === 'cased'
-              ? 'staff_id, name, "Agency", "Position", active, terminated_at'
-              : 'staff_id, name, agency, position, active, terminated_at';
+          const base = 'staff_id, name, agency, position, active, terminated_at';
           return [
             base,
             includeTerminationType ? 'termination_type' : '',
@@ -7398,7 +7335,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             .join(', ');
         };
         const run = async (
-          mode: EmployeeColumnMode,
           includeTerminationType: boolean,
           includeTerminationReason: boolean
         ) => {
@@ -7408,7 +7344,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             const to = from + pageSize - 1;
             const result = await supabase
               .from(EMPLOYEE_TABLE)
-              .select(buildSelect(mode, includeTerminationType, includeTerminationReason))
+              .select(buildSelect(includeTerminationType, includeTerminationReason))
               .not('terminated_at', 'is', null)
               .order('terminated_at', { ascending: false })
               .range(from, to);
@@ -7420,24 +7356,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             if (pageRows.length < pageSize) return { data: rows, error: null };
           }
         };
-        let mode = await resolveEmployeeColumnMode();
-        const runWithColumnFallback = async (targetMode: EmployeeColumnMode) => {
-          let result = await run(targetMode, true, true);
+        const runWithColumnFallback = async () => {
+          let result = await run(true, true);
           if (result.error && /termination_reason/i.test(String(result.error.message ?? ''))) {
-            result = await run(targetMode, true, false);
+            result = await run(true, false);
           }
           if (result.error && /termination_type/i.test(String(result.error.message ?? ''))) {
-            result = await run(targetMode, false, false);
+            result = await run(false, false);
           }
           return result;
         };
-        let res = await runWithColumnFallback(mode);
-        if (res.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          mode = flipped;
-          res = await runWithColumnFallback(mode);
-        }
+        const res = await runWithColumnFallback();
         if (res.error) {
           setDepartedEmployees([]);
           setDepartedEmployeesError(res.error.message);
@@ -7447,12 +7376,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           adminAccessContext,
           'employees',
           res.data ?? [],
-          (row) => String(row.position ?? row.Position ?? '').trim()
+          (row) => String(row.position ?? '').trim()
         );
         const agencyScopedRows = filterRowsByManagedAgencyAccess(
           adminAccessContext,
           positionScopedRows,
-          (row) => String(row.agency ?? row.Agency ?? '').trim()
+          (row) => String(row.agency ?? '').trim()
         );
         const staffIds = Array.from(
           new Set(
@@ -7899,7 +7828,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const normalizedStaff = normalizeStaffId(staff);
     const employeeSnapshot =
       employees.find((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) === normalizedStaff) ?? null;
-    if (isScheduleOnlyAgency(String(employeeSnapshot?.agency ?? employeeSnapshot?.Agency ?? '').trim())) {
+    if (isScheduleOnlyAgency(String(employeeSnapshot?.agency ?? '').trim())) {
       setEmployeesError(t('JDL员工不能离职。', 'JDL employees cannot be departed.'));
       return;
     }
@@ -7955,8 +7884,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           soft_deleted: true,
           staff_id: staff,
           name: String(employeeSnapshot?.name ?? '').trim() || null,
-          agency: String(employeeSnapshot?.agency ?? employeeSnapshot?.Agency ?? '').trim() || null,
-          position: String(employeeSnapshot?.position ?? employeeSnapshot?.Position ?? '').trim() || null,
+          agency: String(employeeSnapshot?.agency ?? '').trim() || null,
+          position: String(employeeSnapshot?.position ?? '').trim() || null,
           shift: normalizeShiftValue(String(employeeSnapshot?.shift ?? '').trim()) || null
         }
       });
@@ -8059,8 +7988,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           termination_reason: terminationReason,
           staff_id: staff,
           name: String(employeeSnapshot?.name ?? '').trim() || null,
-          agency: String(employeeSnapshot?.agency ?? employeeSnapshot?.Agency ?? '').trim() || null,
-          position: String(employeeSnapshot?.position ?? employeeSnapshot?.Position ?? '').trim() || null,
+          agency: String(employeeSnapshot?.agency ?? '').trim() || null,
+          position: String(employeeSnapshot?.position ?? '').trim() || null,
           shift: normalizeShiftValue(String(employeeSnapshot?.shift ?? '').trim()) || null
         }
       });
@@ -8668,8 +8597,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return {
           staff,
           name: String(e.name ?? '').trim() || '-',
-          agency: String(e.agency ?? e.Agency ?? '').trim() || '-',
-          position: String(e.position ?? e.Position ?? '').trim() || '-',
+          agency: String(e.agency ?? '').trim() || '-',
+          position: String(e.position ?? '').trim() || '-',
           workAccount: String(e.work_account ?? e.WorkAccount ?? '').trim() || '-',
           workPassword: String(e.work_password ?? e.WorkPassword ?? '').trim() || '-'
         };
@@ -9399,7 +9328,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const name = employeeEditName.trim();
     const originalEmployeeForEdit =
       employees.find((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) === originalStaff) ?? null;
-    const originalAgencyForEdit = String(originalEmployeeForEdit?.agency ?? originalEmployeeForEdit?.Agency ?? '').trim();
+    const originalAgencyForEdit = String(originalEmployeeForEdit?.agency ?? '').trim();
     const isProtectedAgencyEdit = isScheduleOnlyAgency(originalAgencyForEdit);
     const agency = isProtectedAgencyEdit ? 'JDL' : employeeEditAgency.trim();
     if (!isProtectedAgencyEdit && isScheduleOnlyAgency(agency)) {
@@ -9633,8 +9562,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           before: {
             staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
             name: String(originalEmployeeRow.name ?? '').trim(),
-            agency: String(originalEmployeeRow.agency ?? originalEmployeeRow.Agency ?? '').trim(),
-            position: String(originalEmployeeRow.position ?? originalEmployeeRow.Position ?? '').trim(),
+            agency: String(originalEmployeeRow.agency ?? '').trim(),
+            position: String(originalEmployeeRow.position ?? '').trim(),
             employment_type: normalizeEmploymentTypeValue(originalEmployeeRow.employment_type),
             shift: normalizeShiftValue(String(originalEmployeeRow.shift ?? '').trim()),
             shift_time: normalizeShiftTimeValue(originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime),
@@ -10136,46 +10065,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!ok) return;
 
       await runLocked('audit_undo_employee_delete', async () => {
-        const mode = await resolveEmployeeColumnMode();
-        const payloadRow =
-          mode === 'cased'
-            ? {
-                staff_id: staffFromPayload,
-                name: name || null,
-                Agency: agency || null,
-                Position: position || null,
-                shift: shift || null,
-                active: true,
-                terminated_at: null
-              }
-            : {
-                staff_id: staffFromPayload,
-                name: name || null,
-                agency: agency || null,
-                position: position || null,
-                shift: shift || null,
-                active: true,
-                terminated_at: null
-              };
+        const payloadRow = {
+          staff_id: staffFromPayload,
+          name: name || null,
+          agency: agency || null,
+          position: position || null,
+          shift: shift || null,
+          active: true,
+          terminated_at: null
+        };
         const restoreRes = await supabase.from(EMPLOYEE_TABLE).upsert([payloadRow as any], { onConflict: 'staff_id' });
         if (restoreRes.error) {
           if (/active|terminated_at/i.test(String(restoreRes.error.message ?? ''))) {
-            const fallbackRow =
-              mode === 'cased'
-                ? {
-                    staff_id: staffFromPayload,
-                    name: name || null,
-                    Agency: agency || null,
-                    Position: position || null,
-                    shift: shift || null
-                  }
-                : {
-                    staff_id: staffFromPayload,
-                    name: name || null,
-                    agency: agency || null,
-                    position: position || null,
-                    shift: shift || null
-                  };
+            const fallbackRow = {
+              staff_id: staffFromPayload,
+              name: name || null,
+              agency: agency || null,
+              position: position || null,
+              shift: shift || null
+            };
             const fallbackRes = await supabase.from(EMPLOYEE_TABLE).upsert([fallbackRow as any], { onConflict: 'staff_id' });
             if (fallbackRes.error) {
               setStatus({ tone: 'error', message: `${t('撤销失败：', 'Undo failed: ')}${fallbackRes.error.message}` });
@@ -10519,13 +10427,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const fetchEmployeeShiftByStaffIds = async (staffIds: string[]) => {
       const shiftByStaff = new Map<string, '' | 'early' | 'late'>();
       if (staffIds.length === 0) return shiftByStaff;
-      const mode = await resolveEmployeeColumnMode();
       for (const batch of chunk(staffIds, 200)) {
-        const select =
-          mode === 'cased'
-            ? 'staff_id, shift, shift_time, "Position", name, "Agency", terminated_at'
-            : 'staff_id, shift, shift_time, position, name, agency, terminated_at';
-        const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch as any);
+        const res = await supabase
+          .from(EMPLOYEE_TABLE)
+          .select('staff_id, shift, shift_time, position, name, agency, terminated_at')
+          .in('staff_id', batch as any);
         if (res.error) throw new Error(res.error.message);
         for (const row of ((res.data as any[]) ?? [])) {
           const staff = normalizeStaffId(String(row?.staff_id ?? '').trim());
@@ -10533,12 +10439,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           shiftByStaff.set(staff, normalizeShiftValue(String(row?.shift ?? '').trim()));
           if (!profileByStaff.has(staff)) {
             profileByStaff.set(staff, {
-              position: String(row?.position ?? row?.Position ?? '').trim(),
+              position: String(row?.position ?? '').trim(),
               shift: normalizeShiftValue(String(row?.shift ?? '').trim()),
               shiftTime: normalizeShiftTimeValue(row?.shift_time ?? ''),
               terminatedAt: String(row?.terminated_at ?? '').trim() || null,
               name: String(row?.name ?? '').trim(),
-              agency: String(row?.agency ?? row?.Agency ?? '').trim()
+              agency: String(row?.agency ?? '').trim()
             });
           }
         }
@@ -11005,7 +10911,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return { staffToProfile, error: null as string | null };
       }
 
-      const mode = await resolveEmployeeColumnMode();
       if (isStale()) {
         return {
           staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }>(),
@@ -11014,24 +10919,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       const batches = chunk(staffIds, 200);
       for (const batch of batches) {
-        const run = async (m: EmployeeColumnMode) => {
-          const select = m === 'cased'
-            ? 'staff_id, name, "Agency", "Position", shift, terminated_at'
-            : 'staff_id, name, agency, position, shift, terminated_at';
-          return await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch);
-        };
-
-        let res = await run(mode);
+        const res = await supabase
+          .from(EMPLOYEE_TABLE)
+          .select('staff_id, name, agency, position, shift, terminated_at')
+          .in('staff_id', batch);
         if (isStale()) {
           return {
             staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }>(),
             error: STALE_TIMECARD_REQUEST
           };
-        }
-        if (res.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          res = await run(flipped);
         }
         if (res.error) {
           return {
@@ -11045,8 +10941,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           if (!staff) continue;
           staffToProfile.set(staff, {
             name: String(r.name ?? '').trim(),
-            agency: String(r.agency ?? r.Agency ?? '').trim(),
-            position: String(r.position ?? r.Position ?? '').trim(),
+            agency: String(r.agency ?? '').trim(),
+            position: String(r.position ?? '').trim(),
             shift: normalizeShiftValue(String(r.shift ?? '').trim()),
             terminatedAt: String((r as any).terminated_at ?? '').trim() || null
           });
@@ -12113,8 +12009,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             return {
               staff_id: staff,
               name: String(employee?.name ?? '').trim(),
-              agency: String(employee?.agency ?? employee?.Agency ?? '').trim(),
-              position: String(employee?.position ?? employee?.Position ?? '').trim(),
+              agency: String(employee?.agency ?? '').trim(),
+              position: String(employee?.position ?? '').trim(),
               shift: normalizeShiftValue(String(employee?.shift ?? '').trim()),
               terminated_at: String((employee as any)?.terminated_at ?? '').trim() || null
             };
@@ -12343,19 +12239,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const staffIds = Array.from(new Set(filteredPunches.map((p) => p.staff_id)));
-      const mode = await resolveEmployeeColumnMode();
       const staffToProfile = new Map<string, { name: string; agency: string; position: string }>();
       const batches = chunk(staffIds, 200);
       for (const batch of batches) {
-        const select = mode === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
-        let res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch);
-        if (res.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          const select2 =
-            flipped === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
-          res = await supabase.from(EMPLOYEE_TABLE).select(select2).in('staff_id', batch);
-        }
+        const res = await supabase.from(EMPLOYEE_TABLE).select('staff_id, name, agency, position').in('staff_id', batch);
         if (res.error) {
           setStatus({ tone: 'error', message: `读取员工信息失败：${res.error.message}` });
           return;
@@ -12365,8 +12252,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           if (!staff) continue;
           staffToProfile.set(staff, {
             name: String(r.name ?? '').trim(),
-            agency: String(r.agency ?? r.Agency ?? '').trim(),
-            position: String(r.position ?? r.Position ?? '').trim()
+            agency: String(r.agency ?? '').trim(),
+            position: String(r.position ?? '').trim()
           });
         }
       }
@@ -12501,7 +12388,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (!staffKey) return '';
     const employee = employees.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
     const timecardRow = timecardRows.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
-    const position = String(employee?.position ?? employee?.Position ?? timecardRow?.position ?? '').trim();
+    const position = String(employee?.position ?? timecardRow?.position ?? '').trim();
     return normalizePositionKey(position) || position;
   };
 
@@ -12580,7 +12467,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const dayIndex = Math.floor((targetDate.getTime() - targetWeekStart.getTime()) / (24 * 60 * 60 * 1000));
     if (dayIndex < 0 || dayIndex > 6) return;
     const employee = employees.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staff);
-    const position = String(employee?.position ?? employee?.Position ?? '').trim();
+    const position = String(employee?.position ?? '').trim();
     const accessPosition = normalizePositionKey(position) || position;
     if (!canViewPosition('timecard', accessPosition)) {
       setStatus({
@@ -13814,21 +13701,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     // Guard rail: only reject work accounts that are already occupied.
     const detectUploadIdentityConflicts = async () => {
-      const mode = await resolveEmployeeColumnMode();
-      const run = async (m: EmployeeColumnMode) => {
-        const select =
-          m === 'cased'
-            ? 'staff_id, name, "Agency", work_account'
-            : 'staff_id, name, agency, work_account';
-        return await supabase.from(EMPLOYEE_TABLE).select(select);
-      };
-
-      let res = await run(mode);
-      if (res.error) {
-        const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-        employeeColumnModeRef.current = flipped;
-        res = await run(flipped);
-      }
+      const res = await supabase.from(EMPLOYEE_TABLE).select('staff_id, name, agency, work_account');
       if (res.error) {
         return {
           error: res.error.message,
@@ -13866,34 +13739,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const fetchExistingDetails = async () => {
-        const mode = await resolveEmployeeColumnMode();
-        const run = async (m: EmployeeColumnMode) => {
-          const select =
-            m === 'cased'
-              ? 'staff_id, name, "Agency", "Position", employment_type, shift, shift_time, label, work_account, work_password'
-              : 'staff_id, name, agency, position, employment_type, shift, shift_time, label, work_account, work_password';
-          const [batchRes, allRes] = await Promise.all([
-            supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batchStaffIds),
-            supabase.from(EMPLOYEE_TABLE).select(select)
-          ]);
-          return { mode: m, batchRes, allRes };
-        };
+        const select =
+          'staff_id, name, agency, position, employment_type, shift, shift_time, label, work_account, work_password';
+        const [batchRes, allRes] = await Promise.all([
+          supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batchStaffIds),
+          supabase.from(EMPLOYEE_TABLE).select(select)
+        ]);
 
-        let attempt = await run(mode);
-        if (attempt.batchRes.error || attempt.allRes.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          attempt = await run(flipped);
-        }
-
-        if (attempt.batchRes.error || attempt.allRes.error) {
-          return { mode: mode, rows: [] as any[], allRows: [] as any[], error: attempt.batchRes.error ?? attempt.allRes.error };
+        if (batchRes.error || allRes.error) {
+          return { rows: [] as any[], allRows: [] as any[], error: batchRes.error ?? allRes.error };
         }
 
         return {
-          mode: attempt.mode,
-          rows: ((attempt.batchRes.data as any[]) ?? []) as any[],
-          allRows: ((attempt.allRes.data as any[]) ?? []) as any[],
+          rows: ((batchRes.data as any[]) ?? []) as any[],
+          allRows: ((allRes.data as any[]) ?? []) as any[],
           error: null as any
         };
       };
@@ -14336,7 +14195,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         adminAccessContext,
         'employees',
         employees,
-        (employee) => String(employee.position ?? employee.Position ?? '').trim()
+        (employee) => String(employee.position ?? '').trim()
       ),
     [adminAccessContext, employees]
   );
@@ -14345,7 +14204,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const out = new Set<string>();
     for (const e of employeesAllowedByPositionScope) {
       if (isInactiveJdlEmployee(e)) continue;
-      const agency = String(e.agency ?? e.Agency ?? '').trim();
+      const agency = String(e.agency ?? '').trim();
       if (agency) out.add(agency);
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
@@ -14362,7 +14221,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const employeePositionOptions = useMemo(() => {
     const out = new Set<string>();
     for (const e of employeesAllowedByPositionScope) {
-      const position = String(e.position ?? e.Position ?? '').trim();
+      const position = String(e.position ?? '').trim();
       if (!matchesDepartmentFilter(position, employeeDepartment)) continue;
       if (position) out.add(position);
     }
@@ -14377,7 +14236,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const label = String(e.label ?? e.Label ?? '').trim();
       if (!label) continue;
       if (targetPositions.size > 0) {
-        const rowPosition = normalizePositionKey(String(e.position ?? e.Position ?? '').trim());
+        const rowPosition = normalizePositionKey(String(e.position ?? '').trim());
         if (!rowPosition || !targetPositions.has(rowPosition)) continue;
       }
       out.add(label);
@@ -14436,8 +14295,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (isInactiveJdlEmployee(e)) return false;
       const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
       const name = String(e.name ?? '').trim();
-      const agency = String(e.agency ?? e.Agency ?? '').trim();
-      const position = String(e.position ?? e.Position ?? '').trim();
+      const agency = String(e.agency ?? '').trim();
+      const position = String(e.position ?? '').trim();
       const employmentType = normalizeEmploymentTypeValue((e as any).employment_type ?? (e as any).EmploymentType ?? '');
       const label = String(e.label ?? e.Label ?? '').trim();
       const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
@@ -14458,8 +14317,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }, [page, employeesAllowedByPositionScope, employeeFilterNeedles, employeeShiftByStaffId, getDepartmentForPosition, isInactiveJdlEmployee]);
 
   const compareEmployeeJdlPriority = useCallback((a: EmployeeRow, b: EmployeeRow) => {
-    const agencyA = String(a.agency ?? a.Agency ?? '').trim().toLowerCase();
-    const agencyB = String(b.agency ?? b.Agency ?? '').trim().toLowerCase();
+    const agencyA = String(a.agency ?? '').trim().toLowerCase();
+    const agencyB = String(b.agency ?? '').trim().toLowerCase();
     const isJdlA = agencyA === 'jdl';
     const isJdlB = agencyB === 'jdl';
     if (isJdlA === isJdlB) return 0;
@@ -14908,8 +14767,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const body = rows.map((e) => {
         const staff = String(e.staff_id ?? '').trim();
         const name = String(e.name ?? '').trim();
-        const agency = String(e.agency ?? e.Agency ?? '').trim();
-        const position = String(e.position ?? e.Position ?? '').trim();
+        const agency = String(e.agency ?? '').trim();
+        const position = String(e.position ?? '').trim();
         const employmentType = normalizeEmploymentTypeValue((e as any).employment_type ?? (e as any).EmploymentType ?? '');
         const label = String(e.label ?? e.Label ?? '').trim();
         const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
@@ -15191,7 +15050,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const row = timecardRows.find((r) => normalizeStaffId(String(r.staff_id ?? '').trim()) === staff);
     const employee = employees.find((e) => normalizeStaffId(String(e.staff_id ?? '').trim()) === staff);
     const name = String(row?.name ?? employee?.name ?? '').trim() || '-';
-    const position = String(employee?.position ?? employee?.Position ?? '').trim() || '-';
+    const position = String(employee?.position ?? '').trim() || '-';
     const label = String(employee?.label ?? employee?.Label ?? '').trim() || '-';
 
     if (timecardPunchDayIndex === null || timecardPunchDayIndex < 0 || timecardPunchDayIndex > 6) {
@@ -15373,7 +15232,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff) continue;
-      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+      const position = normalizePositionKey(String(employee.position ?? '').trim());
       if (position !== 'FLEX TEAM') continue;
       const targetPosition = normalizeFlexCoverageTargetPosition(String(employee.label ?? employee.Label ?? '').trim());
       if (!targetPosition) continue;
@@ -15434,8 +15293,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!staff) continue;
       map.set(staff, {
         name: getScheduleEmployeeDisplayName(employee),
-        agency: String(employee.agency ?? employee.Agency ?? '').trim(),
-        position: String(employee.position ?? employee.Position ?? '').trim(),
+        agency: String(employee.agency ?? '').trim(),
+        position: String(employee.position ?? '').trim(),
         shiftTime: normalizeShiftTimeValue((employee as any).shift_time ?? (employee as any).ShiftTime ?? '')
       });
     }
@@ -15445,7 +15304,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const next = new Set<string>();
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-      const agency = String(employee.agency ?? employee.Agency ?? '').trim();
+      const agency = String(employee.agency ?? '').trim();
       if (!staff || !isScheduleOnlyAgency(agency)) continue;
       next.add(staff);
     }
@@ -15456,7 +15315,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const emails = Array.from(
       new Set(
         employees
-          .filter((employee) => isScheduleOnlyAgency(String(employee.agency ?? employee.Agency ?? '').trim()))
+          .filter((employee) => isScheduleOnlyAgency(String(employee.agency ?? '').trim()))
           .map(getScheduleEmployeeProfileEmail)
           .filter(Boolean)
       )
@@ -15900,8 +15759,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       .filter((employee) => {
         if (isInactiveJdlEmployee(employee)) return false;
         const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-        const agency = String(employee.agency ?? employee.Agency ?? '').trim();
-        const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim()) ?? '';
+        const agency = String(employee.agency ?? '').trim();
+        const position = normalizePositionKey(String(employee.position ?? '').trim()) ?? '';
         if (!canViewPosition('schedule', position)) return false;
         const employmentType = normalizeEmploymentTypeValue((employee as any).employment_type ?? (employee as any).EmploymentType ?? '');
         const label = String(employee.label ?? employee.Label ?? '').trim();
@@ -15954,7 +15813,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const out = new Set<string>();
     for (const employee of employees) {
       if (isInactiveJdlEmployee(employee)) continue;
-      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim()) ?? '';
+      const position = normalizePositionKey(String(employee.position ?? '').trim()) ?? '';
       if (!matchesDepartmentFilter(position, deferredScheduleDepartment)) continue;
       if (selectedSchedulePositionSet.size > 0 && !selectedSchedulePositionSet.has(position)) continue;
       const label = String(employee.label ?? employee.Label ?? '').trim();
@@ -15966,7 +15825,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const byPosition: Record<string, Set<string>> = {};
     for (const employee of employees) {
       if (isInactiveJdlEmployee(employee)) continue;
-      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+      const position = normalizePositionKey(String(employee.position ?? '').trim());
       const label = String(employee.label ?? employee.Label ?? '').trim();
       if (!position || !label) continue;
       (byPosition[position] ??= new Set<string>()).add(label);
@@ -15983,7 +15842,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (!targetPosition) return [];
     const out = new Set<string>();
     for (const employee of employees) {
-      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+      const position = normalizePositionKey(String(employee.position ?? '').trim());
       if (!position || position !== targetPosition) continue;
       const label = String(employee.label ?? employee.Label ?? '').trim();
       if (label) out.add(label);
@@ -16015,7 +15874,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const positionCountByLabel: Record<string, Record<string, number>> = {};
     for (const employee of employees) {
       const label = String(employee.label ?? employee.Label ?? '').trim();
-      const position = normalizePositionToneKey(String(employee.position ?? employee.Position ?? '').trim());
+      const position = normalizePositionToneKey(String(employee.position ?? '').trim());
       if (!label || !position) continue;
       const key = label.toLowerCase();
       const next = positionCountByLabel[key] ?? {};
@@ -16059,7 +15918,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
     const currentLabel = String(employee.label ?? employee.Label ?? '').trim();
     const nextLabel = String(nextLabelRaw ?? '').trim();
-    const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+    const position = normalizePositionKey(String(employee.position ?? '').trim());
     if (!staff || !position || nextLabel === currentLabel) return;
     if (!scheduleCanOperate || !canOperatePosition('schedule', position)) {
       setStatus({ tone: 'error', message: t('排班模块当前为只读。', 'Schedule is read-only.') });
@@ -16078,7 +15937,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setScheduleLabelSavingStaffId(staff);
     try {
       await runLocked('schedule_label_update', async () => {
-        const mode = await resolveEmployeeColumnMode();
         const { error } = await supabase
           .from(EMPLOYEE_TABLE)
           .update({ label: nextLabel } as any)
@@ -16091,7 +15949,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           prev.map((row) => {
             const rowStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
             if (rowStaff !== staff) return row;
-            return mode === 'cased' ? ({ ...row, Label: nextLabel, label: nextLabel } as EmployeeRow) : ({ ...row, label: nextLabel } as EmployeeRow);
+            return { ...row, label: nextLabel } as EmployeeRow;
           })
         );
         await writeAudit({
@@ -16115,7 +15973,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
   const updateScheduleEmployeeShiftTime = async (employee: EmployeeRow, draft: string): Promise<boolean> => {
     const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-    const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+    const position = normalizePositionKey(String(employee.position ?? '').trim());
     const currentValue = normalizeScheduleShiftTime(employee.shift_time ?? employee.ShiftTime ?? '');
     const change = resolveScheduleShiftTimeChange(currentValue, draft);
 
@@ -16190,7 +16048,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       : scheduleEmployeesBase.filter((employee) => {
           const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
           const name = getScheduleEmployeeDisplayName(employee);
-          const position = String(employee.position ?? employee.Position ?? '').trim();
+          const position = String(employee.position ?? '').trim();
           return [staff, name, position].join(' ').toLowerCase().includes(search);
         });
     return sortScheduleEmployees(filtered, {
@@ -16478,9 +16336,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!staff || !Array.isArray(punchesRaw) || punchesRaw.length === 0) continue;
       const employee = homeEmployeeByStaffId.get(staff);
       const profile = employeeProfileByStaffId.get(staff);
-      const agency = String(profile?.agency ?? employee?.agency ?? employee?.Agency ?? '').trim();
+      const agency = String(profile?.agency ?? employee?.agency ?? '').trim();
       if (isScheduleOnlyAgency(agency)) continue;
-      const positionRaw = String(profile?.position ?? employee?.position ?? employee?.Position ?? '').trim();
+      const positionRaw = String(profile?.position ?? employee?.position ?? '').trim();
       const position = normalizePositionKey(positionRaw);
       if (!position || !scheduleVisiblePositionSet.has(position)) continue;
       const firstIn = punchesRaw.find((punch) => punch.action === 'IN')?.created_at ?? punchesRaw[0]?.created_at ?? '';
@@ -16591,8 +16449,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return {
         staff_id: staff,
         name: String(profile?.name ?? employee?.name ?? '').trim(),
-        agency: String(profile?.agency ?? employee?.agency ?? employee?.Agency ?? '').trim(),
-        position: String(positionRaw ?? profile?.position ?? employee?.position ?? employee?.Position ?? '').trim(),
+        agency: String(profile?.agency ?? employee?.agency ?? '').trim(),
+        position: String(positionRaw ?? profile?.position ?? employee?.position ?? '').trim(),
         shift: shift === 'early' ? 'Morning' : shift === 'late' ? 'Night' : '-',
         attendance: attendanceOverride ?? (isOnClock ? 'Normal' : 'Absent'),
         label,
@@ -16633,7 +16491,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         staff,
         profile,
         employee,
-        positionRaw: String(profile?.position ?? '').trim() || String(employee.position ?? employee.Position ?? '').trim(),
+        positionRaw: String(profile?.position ?? '').trim() || String(employee.position ?? '').trim(),
         shift,
         isOnClock: false
       });
@@ -16664,10 +16522,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
       const fallbackEmp = homeEmployeeByStaffId.get(staff);
       const baseState = row ? getScheduleBaseStateFromNote(row.note) : 'rest';
-      const position = String(profile?.position ?? fallbackEmp?.position ?? fallbackEmp?.Position ?? '').trim();
+      const position = String(profile?.position ?? fallbackEmp?.position ?? '').trim();
       const normalizedPosition = normalizePositionKey(position);
       if (!normalizedPosition || !scheduleVisiblePositionSet.has(normalizedPosition)) continue;
-      const agency = String(profile?.agency ?? fallbackEmp?.agency ?? fallbackEmp?.Agency ?? '').trim();
+      const agency = String(profile?.agency ?? fallbackEmp?.agency ?? '').trim();
       if (isScheduleOnlyAgency(agency)) continue;
       onClock.push(
         buildHomeRosterItem({
@@ -16966,7 +16824,6 @@ ${rowsToHtml(late)}
     const nextSeq = existingSeqSet.size > 0 ? Math.max(...Array.from(existingSeqSet)) + 1 : 1;
 
     await runLocked('daily_list_new_hire', async () => {
-      const mode = await resolveEmployeeColumnMode();
       const nowIso = new Date(serverTime).toISOString();
       const employeeRows: Array<Record<string, unknown>> = [];
       const scheduleRowsToWrite: Array<Record<string, unknown>> = [];
@@ -16976,28 +16833,16 @@ ${rowsToHtml(late)}
         const seq = nextSeq + i;
         const internalStaffId = `${mmddCompact}${positionUpper}${String(seq).padStart(3, '0')}`;
         const employeeName = note || '-';
-        const employeePayload =
-          mode === 'cased'
-            ? {
-                staff_id: internalStaffId,
-                name: employeeName,
-                Agency: agency || null,
-                Position: position,
-                employment_type: 'FT',
-                shift,
-                label: label || null,
-                created_at: nowIso
-              }
-            : {
-                staff_id: internalStaffId,
-                name: employeeName,
-                agency: agency || null,
-                position,
-                employment_type: 'FT',
-                shift,
-                label: label || null,
-                created_at: nowIso
-              };
+        const employeePayload = {
+          staff_id: internalStaffId,
+          name: employeeName,
+          agency: agency || null,
+          position,
+          employment_type: 'FT',
+          shift,
+          label: label || null,
+          created_at: nowIso
+        };
         employeeRows.push(employeePayload as Record<string, unknown>);
         scheduleRowsToWrite.push({
           staff_id: internalStaffId,
@@ -17126,7 +16971,7 @@ ${rowsToHtml(late)}
           .map((employee) => {
             const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
             const name = getScheduleEmployeeDisplayName(employee);
-            const position = String(employee.position ?? employee.Position ?? '').trim();
+            const position = String(employee.position ?? '').trim();
             const resolvedShiftStartTime = resolveShiftStartTime(
               shift,
               position,
@@ -17239,7 +17084,7 @@ ${rowsToHtml(late)}
         return {
           staff_id: staff,
           name: getScheduleEmployeeDisplayName(employee),
-          agency: String(employee.agency ?? employee.Agency ?? '').trim(),
+          agency: String(employee.agency ?? '').trim(),
           label: String(employee.label ?? employee.Label ?? '').trim(),
           shift
         };
@@ -17536,7 +17381,7 @@ ${rowsToHtml(late)}
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff || scheduleOnlyStaffIds.has(staff)) continue;
       const shift = normalizeShiftValue(String(employee.shift ?? '').trim()) || 'early';
-      const position = String(employee.position ?? employee.Position ?? '').trim();
+      const position = String(employee.position ?? '').trim();
       const shiftTime = normalizeShiftTimeValue((employee as any).shift_time ?? (employee as any).ShiftTime ?? '');
       if (!position) continue;
       if (shift === 'early' && normalizePositionKey(position) === 'Pick') continue;
@@ -17624,7 +17469,7 @@ ${rowsToHtml(late)}
         const createdAt = new Date(`${operationalDate}T00:00:00`).toISOString();
         details.push({
           operational_date: operationalDate,
-          position: String(employee.position ?? employee.Position ?? '').trim() || '-',
+          position: String(employee.position ?? '').trim() || '-',
           reason: state === 'absent' ? 'Absent' : 'Off Worked',
           reporter_staff_id: 'SYSTEM',
           created_at: createdAt
@@ -18438,9 +18283,9 @@ ${rowsToHtml(late)}
                         {scheduleEmployeesRendered.map((employee, renderedIndex) => {
                           const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
                           const name = getScheduleEmployeeDisplayName(employee);
-                          const agency = String(employee.agency ?? employee.Agency ?? '').trim();
+                          const agency = String(employee.agency ?? '').trim();
                           const attendanceTrackingDisabled = scheduleOnlyStaffIds.has(staff);
-                          const position = String(employee.position ?? employee.Position ?? '').trim();
+                          const position = String(employee.position ?? '').trim();
                           const label = String(employee.label ?? employee.Label ?? '').trim();
                           const normalizedPosition = normalizePositionKey(position);
                           const labelOptions = normalizedPosition ? (scheduleLabelOptionsByPosition[normalizedPosition] ?? []) : [];

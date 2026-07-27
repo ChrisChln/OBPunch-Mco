@@ -972,10 +972,7 @@ const fetchEmployeePositions = async (supabase: any, staffIds: string[]) => {
   }
 
   for (const batch of batches) {
-    let response = await supabase.from(EMPLOYEE_TABLE).select('staff_id, active, terminated_at, position').in('staff_id', batch);
-    if (response.error) {
-      response = await supabase.from(EMPLOYEE_TABLE).select('staff_id, active, terminated_at, "Position"').in('staff_id', batch);
-    }
+    const response = await supabase.from(EMPLOYEE_TABLE).select('staff_id, active, terminated_at, position').in('staff_id', batch);
     if (response.error) {
       throw new Error(String(response.error.message ?? 'Failed to load employee positions.'));
     }
@@ -985,7 +982,6 @@ const fetchEmployeePositions = async (supabase: any, staffIds: string[]) => {
       active?: boolean | null;
       terminated_at?: string | null;
       position?: string | null;
-      Position?: string | null;
     }> | null) ?? []) {
       const staffId = normalizeStaffId(String(row.staff_id ?? ''));
       if (!staffId) continue;
@@ -993,7 +989,7 @@ const fetchEmployeePositions = async (supabase: any, staffIds: string[]) => {
       if (terminatedAt) continue;
       if (row.active === false) continue;
       activeStaffIds.add(staffId);
-      const position = normalizeOutboundStaffingPosition(row.position ?? row.Position ?? '');
+      const position = normalizeOutboundStaffingPosition(row.position ?? '');
       if (position) positionByStaff.set(staffId, position);
     }
   }
