@@ -134,12 +134,7 @@ import {
 } from '../shared/positions';
 import { useScheduleRealtime } from './useScheduleRealtime';
 import { shouldEnableEmployeeRealtime, useEmployeeRealtime } from './useEmployeeRealtime';
-import {
-  buildEmployeeEditWritePayload,
-  buildEmployeePositionWritePayload,
-  probeEmployeePositionColumnMode,
-  type EmployeePositionColumnMode
-} from './employeePositionColumns';
+import { buildEmployeeEditWritePayload } from './employeePositionColumns';
 import { sortEmployeesByPositionOrder } from './employeePositionSort';
 import { sortScheduleEmployees } from './scheduleEmployeeSort';
 import {
@@ -1501,7 +1496,6 @@ export default function AdminAppPage() {
   type EmployeeColumnMode = 'lower' | 'cased';
   type EmployeeFetchProfile = 'full' | 'home';
   const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
-  const employeePositionColumnModeRef = useRef<EmployeePositionColumnMode | null>(null);
   const scheduleUphRequestRef = useRef(0);
   const dailyCapacityRequestRef = useRef(0);
   const scheduleMistakeRequestRef = useRef(0);
@@ -3020,19 +3014,6 @@ export default function AdminAppPage() {
 
     employeeColumnModeRef.current = 'cased';
     return 'cased';
-  };
-  const resolveEmployeePositionColumnMode = async (): Promise<EmployeePositionColumnMode> => {
-    const cached = employeePositionColumnModeRef.current;
-    if (cached) return cached;
-    if (!supabase) return 'lower';
-
-    const mode = await probeEmployeePositionColumnMode(async (column) => {
-      const select = column === 'Position' ? 'staff_id, "Position"' : 'staff_id, position';
-      const result = await supabase.from(EMPLOYEE_TABLE).select(select).limit(1);
-      return !result.error;
-    });
-    employeePositionColumnModeRef.current = mode;
-    return mode;
   };
   const buildEmployeeSelectColumns = (mode: EmployeeColumnMode, profile: EmployeeFetchProfile) => {
     if (profile === 'home') {
@@ -7807,39 +7788,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       await runLocked('employee_add', async () => {
       setEmployeesError(null);
 
-      const mode = await resolveEmployeeColumnMode();
-      const positionMode = await resolveEmployeePositionColumnMode();
-      const positionPayload = buildEmployeePositionWritePayload(positionMode, normalizedPos);
-      let payload =
-        mode === 'cased'
-          ? {
-              staff_id: staff,
-              name,
-              Agency: agency,
-              ...positionPayload,
-              employment_type: employmentType,
-              shift: shift || null,
-              shift_time: resolvedShiftTime || null,
-              label: label || null,
-              work_account: workAccount || null,
-              work_password: workPassword || null,
-              active: true,
-              terminated_at: null
-            }
-          : {
-              staff_id: staff,
-              name,
-              agency,
-              ...positionPayload,
-              employment_type: employmentType,
-              shift: shift || null,
-              shift_time: resolvedShiftTime || null,
-              label: label || null,
-              work_account: workAccount || null,
-              work_password: workPassword || null,
-              active: true,
-              terminated_at: null
-            };
+      let payload = {
+        staff_id: staff,
+        name,
+        agency,
+        position: normalizedPos,
+        employment_type: employmentType,
+        shift: shift || null,
+        shift_time: resolvedShiftTime || null,
+        label: label || null,
+        work_account: workAccount || null,
+        work_password: workPassword || null,
+        active: true,
+        terminated_at: null
+      };
 
       let attemptUpsert = await supabase
         .from(EMPLOYEE_TABLE)
@@ -9522,15 +9484,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         scheduleIdsToMigrate = ((scheduleListRes.data as any[]) ?? []).map((r) => r.id).filter((id) => id !== null && id !== undefined);
       }
 
-      const mode = await resolveEmployeeColumnMode();
-      const positionMode = await resolveEmployeePositionColumnMode();
       const originalEmployeeRes = await supabase
         .from(EMPLOYEE_TABLE)
-        .select(
-          mode === 'cased'
-            ? 'staff_id,name,"Agency","Position",employment_type,shift,shift_time,label,work_account,work_password'
-            : 'staff_id,name,agency,position,employment_type,shift,shift_time,label,work_account,work_password'
-        )
+        .select('staff_id,name,agency,position,employment_type,shift,shift_time,label,work_account,work_password')
         .eq('staff_id', originalStaff)
         .maybeSingle();
       if (originalEmployeeRes.error) {
@@ -9544,8 +9500,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const payload = buildEmployeeEditWritePayload({
-        employeeColumnMode: mode,
-        positionColumnMode: positionMode,
         staffId: nextStaff,
         name,
         agency,
@@ -9572,32 +9526,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       if (isStaffIdChanged) {
         const rollbackEmployee = async () => {
-          const restorePayload =
-            mode === 'cased'
-              ? {
-                  staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
-                  name: originalEmployeeRow.name ?? null,
-                  Agency: originalEmployeeRow.Agency ?? null,
-                  Position: originalEmployeeRow.Position ?? null,
-                  employment_type: originalEmployeeRow.employment_type ?? null,
-                  shift: originalEmployeeRow.shift ?? null,
-                  shift_time: originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime ?? null,
-                  label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null,
-                  work_account: originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? null,
-                  work_password: originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? null
-                }
-              : {
-                  staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
-                  name: originalEmployeeRow.name ?? null,
-                  agency: originalEmployeeRow.agency ?? null,
-                  position: originalEmployeeRow.position ?? null,
-                  employment_type: originalEmployeeRow.employment_type ?? null,
-                  shift: originalEmployeeRow.shift ?? null,
-                  shift_time: originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime ?? null,
-                  label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null,
-                  work_account: originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? null,
-                  work_password: originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? null
-                };
+          const restorePayload = {
+            staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
+            name: originalEmployeeRow.name ?? null,
+            agency: originalEmployeeRow.agency ?? null,
+            position: originalEmployeeRow.position ?? null,
+            employment_type: originalEmployeeRow.employment_type ?? null,
+            shift: originalEmployeeRow.shift ?? null,
+            shift_time: originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime ?? null,
+            label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null,
+            work_account: originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? null,
+            work_password: originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? null
+          };
           await supabase.from(EMPLOYEE_TABLE).update(restorePayload as any).eq('staff_id', nextStaff);
         };
 
@@ -13982,40 +13922,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       let insertedCount = 0;
       if (toInsert.length > 0) {
-        const mode = await resolveEmployeeColumnMode();
-        const buildPayload = (m: EmployeeColumnMode) =>
-          m === 'cased'
-            ? toInsert.map((row: any) => ({
-                staff_id: row.staff_id,
-                name: row.name ?? null,
-                Agency: row.agency ?? null,
-                Position: row.position ?? null,
-                employment_type: normalizeEmploymentTypeValue(row.employment_type),
-                shift: normalizeShiftValue(String(row.shift ?? '')) || null,
-                shift_time: row.shift_time ?? null,
-                label: row.label ?? null,
-                work_account: row.work_account ?? null,
-                work_password: row.work_password ?? null
-              }))
-            : toInsert.map((row: any) => ({
-                staff_id: row.staff_id,
-                name: row.name ?? null,
-                agency: row.agency ?? null,
-                position: row.position ?? null,
-                employment_type: normalizeEmploymentTypeValue(row.employment_type),
-                shift: normalizeShiftValue(String(row.shift ?? '')) || null,
-                shift_time: row.shift_time ?? null,
-                label: row.label ?? null,
-                work_account: row.work_account ?? null,
-                work_password: row.work_password ?? null
-              }));
+        const insertPayload = toInsert.map((row: any) => ({
+          staff_id: row.staff_id,
+          name: row.name ?? null,
+          agency: row.agency ?? null,
+          position: row.position ?? null,
+          employment_type: normalizeEmploymentTypeValue(row.employment_type),
+          shift: normalizeShiftValue(String(row.shift ?? '')) || null,
+          shift_time: row.shift_time ?? null,
+          label: row.label ?? null,
+          work_account: row.work_account ?? null,
+          work_password: row.work_password ?? null
+        }));
 
-        let attempt = await tryInsert(buildPayload(mode));
-        if (attempt.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          attempt = await tryInsert(buildPayload(flipped));
-        }
+        const attempt = await tryInsert(insertPayload);
 
         if (!attempt.error) {
           insertedCount = toInsert.length;
@@ -14075,8 +13995,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (!staff) continue;
         existingByStaff.set(staff, {
           name: String(r.name ?? '').trim(),
-          agency: String(r.agency ?? r.Agency ?? '').trim(),
-          position: String(r.position ?? r.Position ?? '').trim(),
+          agency: String(r.agency ?? '').trim(),
+          position: String(r.position ?? '').trim(),
           employment_type: normalizeEmploymentTypeValue(r.employment_type),
           shift: normalizeShiftValue(String(r.shift ?? '').trim()),
           shift_time: normalizeShiftTimeValue(r.shift_time),
@@ -14119,12 +14039,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (sourceStaffKey !== staffKey) payload.staff_id = staffKey;
         if (row.name && String(row.name).trim() && String(row.name).trim() !== existing.name) payload.name = String(row.name).trim();
         if (row.agency && String(row.agency).trim() && String(row.agency).trim() !== existing.agency) {
-          if (existingDetailsRes.mode === 'cased') payload.Agency = String(row.agency).trim();
-          else payload.agency = String(row.agency).trim();
+          payload.agency = String(row.agency).trim();
         }
         if (row.position && String(row.position).trim() && String(row.position).trim() !== existing.position) {
-          if (existingDetailsRes.mode === 'cased') payload.Position = String(row.position).trim();
-          else payload.position = String(row.position).trim();
+          payload.position = String(row.position).trim();
         }
         const nextEmploymentType = normalizeEmploymentTypeValue(row.employment_type);
         if (nextEmploymentType !== existing.employment_type) {
@@ -14161,8 +14079,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           const after = {
             staff_id: payload.staff_id ?? staffKey,
             name: payload.name ?? existing.name,
-            agency: payload.agency ?? payload.Agency ?? existing.agency,
-            position: payload.position ?? payload.Position ?? existing.position,
+            agency: payload.agency ?? existing.agency,
+            position: payload.position ?? existing.position,
             employment_type: payload.employment_type ?? existing.employment_type,
             shift: payload.shift ?? existing.shift,
             shift_time: payload.shift_time ?? existing.shift_time,
@@ -14226,32 +14144,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           scheduleIdsToMigrate = ((scheduleListRes.data as any[]) ?? []).map((r) => r.id).filter((id) => id !== null && id !== undefined);
         }
 
-        const restorePayload =
-          existingDetailsRes.mode === 'cased'
-            ? {
-                staff_id: u.source_staff_id,
-                name: u.before.name ?? null,
-                Agency: u.before.agency ?? null,
-                Position: u.before.position ?? null,
-                employment_type: u.before.employment_type ?? null,
-                shift: u.before.shift || null,
-                shift_time: u.before.shift_time || null,
-                label: u.before.label || null,
-                work_account: u.before.work_account || null,
-                work_password: u.before.work_password || null
-              }
-            : {
-                staff_id: u.source_staff_id,
-                name: u.before.name ?? null,
-                agency: u.before.agency ?? null,
-                position: u.before.position ?? null,
-                employment_type: u.before.employment_type ?? null,
-                shift: u.before.shift || null,
-                shift_time: u.before.shift_time || null,
-                label: u.before.label || null,
-                work_account: u.before.work_account || null,
-                work_password: u.before.work_password || null
-              };
+        const restorePayload = {
+          staff_id: u.source_staff_id,
+          name: u.before.name ?? null,
+          agency: u.before.agency ?? null,
+          position: u.before.position ?? null,
+          employment_type: u.before.employment_type ?? null,
+          shift: u.before.shift || null,
+          shift_time: u.before.shift_time || null,
+          label: u.before.label || null,
+          work_account: u.before.work_account || null,
+          work_password: u.before.work_password || null
+        };
 
         const res = await supabase.from(EMPLOYEE_TABLE).update(u.payload).eq('staff_id', u.source_staff_id);
         if (res.error) {
