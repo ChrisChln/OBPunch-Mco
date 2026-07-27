@@ -52,11 +52,16 @@ import EmployeeNoteNameButton, { type EmployeeNotePair } from './components/Empl
 import EmployeeBadgePreviewModal from './pages/EmployeeBadgePreviewModal';
 import DepartedEmployeesModal from './pages/DepartedEmployeesModal';
 import DepartureConfirmDialog from './pages/DepartureConfirmDialog';
+import AgencyTerminationApprovalDialog from './pages/AgencyTerminationApprovalDialog';
 import {
   attachDepartureOperators,
   buildDepartedEmployeesCsv,
   normalizeTerminationReason
 } from './departedEmployees';
+import {
+  executeAgencyTerminationApproval,
+  normalizeAgencyTerminationDetails
+} from './agencyTerminationApproval';
 import TimecardControls from './pages/TimecardControls';
 import TimecardTableSection from './pages/TimecardTableSection';
 import HomeDashboardPage from './pages/HomeDashboardPage';
@@ -1507,6 +1512,9 @@ export default function AdminAppPage() {
   const [adminAccessContext, setAdminAccessContext] = useState<AdminAccessContext | null>(null);
   const [adminAccessRequests, setAdminAccessRequests] = useState<AdminAccessRequestRecord[]>([]);
   const [terminationRequests, setTerminationRequests] = useState<TerminationRequestRecord[]>([]);
+  const [terminationApprovalRequest, setTerminationApprovalRequest] = useState<TerminationRequestRecord | null>(null);
+  const [terminationApprovalSubmitting, setTerminationApprovalSubmitting] = useState(false);
+  const [terminationApprovalError, setTerminationApprovalError] = useState('');
   const [adminAccessAccounts, setAdminAccessAccounts] = useState<AdminAccessAccountRecord[]>([]);
   const [adminAccessUserOptions, setAdminAccessUserOptions] = useState<AdminAccessUserOption[]>([]);
   const [positions, setPositions] = useState<PositionRecord[]>([]);
@@ -4086,7 +4094,62 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setStatus({ tone: 'success', message: t('Position 已保存。', 'Position saved.') });
     });
   };
-  const reviewTerminationRequest = async (request: TerminationRequestRecord, action: 'approve' | 'reject') => {
+  const openTerminationApproval = (request: TerminationRequestRecord) => {
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
+      return;
+    }
+    if (!scheduleCanReviewTermination) {
+      setStatus({ tone: 'error', message: t('当前账号不能审批离职。', 'This account cannot review termination requests.') });
+      return;
+    }
+    if (isLocked) return;
+
+    setTerminationApprovalError('');
+    setTerminationApprovalRequest(request);
+  };
+
+  const submitTerminationApproval = async () => {
+    if (!terminationApprovalRequest || terminationApprovalSubmitting) return;
+    if (!supabase) {
+      const message = t('缺少 Supabase 配置。', 'Missing Supabase config.');
+      setTerminationApprovalError(message);
+      setStatus({ tone: 'error', message });
+      return;
+    }
+    if (!scheduleCanReviewTermination) {
+      const message = t('当前账号不能审批离职。', 'This account cannot review termination requests.');
+      setTerminationApprovalError(message);
+      setStatus({ tone: 'error', message });
+      return;
+    }
+
+    setTerminationApprovalSubmitting(true);
+    setTerminationApprovalError('');
+    try {
+      await executeAgencyTerminationApproval({
+        requestId: terminationApprovalRequest.id,
+        review: (requestId) => reviewEmployeeTerminationRequest(supabase, requestId, 'approve'),
+        refreshSchedule: () => refreshSchedulePanel({ lockUi: false }),
+        refreshRequests: () => fetchTerminationRequests({ lockUi: false })
+      });
+      const staffId = terminationApprovalRequest.staff_id;
+      setTerminationApprovalRequest(null);
+      setStatus({
+        tone: 'success',
+        message: t(`已确认离职：${staffId}`, `Departure approved: ${staffId}`)
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : t('离职审批失败。', 'Termination approval failed.');
+      setTerminationApprovalError(message);
+      setStatus({ tone: 'error', message });
+    } finally {
+      setTerminationApprovalSubmitting(false);
+    }
+  };
+
+  const rejectTerminationRequest = async (request: TerminationRequestRecord) => {
     if (!supabase) {
       setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
       return;
@@ -4097,21 +4160,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
 
     const ok = await askConfirm(
-      action === 'approve'
-        ? t(`确认离职 ${request.staff_id} 吗？`, `Approve departure for ${request.staff_id}?`)
-        : t(`拒绝离职 ${request.staff_id} 吗？`, `Reject departure for ${request.staff_id}?`),
-      action === 'approve' ? t('确认离职', 'Confirm Departure') : t('拒绝离职', 'Reject Departure')
+      t(`拒绝离职 ${request.staff_id} 吗？`, `Reject departure for ${request.staff_id}?`),
+      t('拒绝离职', 'Reject Departure')
     );
     if (!ok) return;
 
-    await runLocked(`termination_${action}`, async () => {
-      await reviewEmployeeTerminationRequest(supabase, request.id, action);
+    await runLocked('termination_reject', async () => {
+      await reviewEmployeeTerminationRequest(supabase, request.id, 'reject');
       setStatus({
         tone: 'success',
-        message:
-          action === 'approve'
-            ? t(`已确认离职：${request.staff_id}`, `Departure approved: ${request.staff_id}`)
-            : t(`已拒绝离职：${request.staff_id}`, `Departure rejected: ${request.staff_id}`)
+        message: t(`已拒绝离职：${request.staff_id}`, `Departure rejected: ${request.staff_id}`)
       });
       await Promise.all([refreshSchedulePanel({ lockUi: false }), fetchTerminationRequests({ lockUi: false })]);
     });
@@ -18914,7 +18972,7 @@ ${rowsToHtml(late)}
                                       title={pendingTerminationRequest?.reason || undefined}
                                       onClick={() => {
                                         if (!pendingTerminationRequest) return;
-                                        void reviewTerminationRequest(pendingTerminationRequest, 'approve');
+                                        openTerminationApproval(pendingTerminationRequest);
                                       }}
                                       className="rounded-md bg-ember px-1.5 py-1 text-[9px] font-semibold leading-none text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
                                     >
@@ -18925,7 +18983,7 @@ ${rowsToHtml(late)}
                                       disabled={isLocked || !scheduleCanReviewTermination}
                                       onClick={() => {
                                         if (!pendingTerminationRequest) return;
-                                        void reviewTerminationRequest(pendingTerminationRequest, 'reject');
+                                        void rejectTerminationRequest(pendingTerminationRequest);
                                       }}
                                       className="rounded-md bg-white/10 px-1.5 py-1 text-[9px] font-semibold leading-none text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                                     >
@@ -20409,6 +20467,21 @@ ${rowsToHtml(late)}
                 onReasonChange={(reason) => setDepartureConfirm((prev) => (prev ? { ...prev, reason } : prev))}
                 onCancel={() => setDepartureConfirm(null)}
                 onConfirm={confirmEmployeeDeparture}
+              />
+            ) : null}
+            {terminationApprovalRequest ? (
+              <AgencyTerminationApprovalDialog
+                t={t}
+                details={normalizeAgencyTerminationDetails(terminationApprovalRequest)}
+                themeMode={themeMode}
+                isSubmitting={terminationApprovalSubmitting}
+                error={terminationApprovalError}
+                onCancel={() => {
+                  if (terminationApprovalSubmitting) return;
+                  setTerminationApprovalError('');
+                  setTerminationApprovalRequest(null);
+                }}
+                onConfirm={submitTerminationApproval}
               />
             ) : null}
                 </div>
