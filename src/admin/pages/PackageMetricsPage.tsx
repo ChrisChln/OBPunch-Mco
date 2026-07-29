@@ -1773,14 +1773,14 @@ export default function PackageMetricsPage({
         detailZh={metricsBusyOverlay?.detailZh}
         detailEn={metricsBusyOverlay?.detailEn}
       />
-      <div className={mode === 'consumables' ? shellClass : ['w-full px-4 py-4 md:px-5', shellClass].join(' ')}>
-        <div className="flex flex-col gap-4">
+      <div className={mode === 'consumables' ? ['min-w-0 max-w-full overflow-x-hidden', shellClass].join(' ') : ['min-w-0 w-full max-w-full overflow-x-hidden px-4 py-4 md:px-5', shellClass].join(' ')}>
+        <div className="flex min-w-0 max-w-full flex-col gap-4">
           {showMetrics ? (
           <>
-          <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.55fr)_360px]">
+          <div className="grid min-w-0 max-w-full items-stretch gap-4 xl:grid-cols-[minmax(0,1.55fr)_360px]">
             <div
               className={[
-                'overflow-hidden rounded-[28px] border',
+                'min-w-0 overflow-hidden rounded-[28px] border',
                 themeMode === 'light'
                   ? 'border-slate-200 bg-[radial-gradient(circle_at_top_left,rgba(15,23,42,0.07),transparent_38%),linear-gradient(180deg,rgba(248,250,252,0.99),rgba(241,245,249,0.94))]'
                   : 'border-slate-800/80 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_28%),linear-gradient(180deg,rgba(15,23,42,0.96),rgba(2,6,23,0.82))]'
@@ -1846,7 +1846,7 @@ export default function PackageMetricsPage({
               ) : null}
             </div>
 
-            <div className="grid h-full gap-4">
+            <div className="grid h-full min-w-0 gap-4">
               <div className={[subtlePanelClass, 'flex h-full min-h-[356px] flex-col rounded-[28px] p-4'].join(' ')}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0 flex-1">
@@ -1908,10 +1908,10 @@ export default function PackageMetricsPage({
             </div>
           </div>
 
-          <div className={[subtlePanelClass, 'overflow-hidden rounded-[28px] p-0'].join(' ')}>
+          <div className={[subtlePanelClass, 'min-w-0 max-w-full overflow-hidden rounded-[28px] p-0'].join(' ')}>
             <div
               className={[
-                'grid gap-4 border-b px-4 py-4 md:px-5 xl:grid-cols-[minmax(280px,1fr)_auto]',
+                'grid min-w-0 gap-4 border-b px-4 py-4 md:px-5 xl:grid-cols-[minmax(280px,1fr)_auto]',
                 themeMode === 'light' ? 'border-slate-200 bg-white/65' : 'border-slate-800 bg-slate-950/25'
               ].join(' ')}
             >
@@ -2003,7 +2003,7 @@ export default function PackageMetricsPage({
 
               <div
                 className={[
-                  'rounded-[22px] border p-2 xl:col-span-2',
+                  'min-w-0 max-w-full overflow-hidden rounded-[22px] border p-2 xl:col-span-2',
                   themeMode === 'light' ? 'border-slate-200 bg-white/80' : 'border-slate-800 bg-slate-950/45'
                 ].join(' ')}
               >
@@ -2069,7 +2069,7 @@ export default function PackageMetricsPage({
 
             <div
               className={[
-                'overflow-hidden',
+                'w-full max-w-full overflow-hidden',
                 themeMode === 'light'
                   ? 'bg-white'
                   : 'bg-slate-950/45'
@@ -2080,7 +2080,7 @@ export default function PackageMetricsPage({
                   {tableLoading ? 'Loading...' : 'No saved metrics in the selected range.'}
                 </div>
               ) : (
-                <div className="flex min-w-0">
+                <div className="flex w-full min-w-0 max-w-full overflow-hidden">
                   <div className={['shrink-0', frozenWrapClass].join(' ')}>
                     <table className="w-[250px] border-separate border-spacing-0 text-left">
                       <thead className={tableHeadClass}>

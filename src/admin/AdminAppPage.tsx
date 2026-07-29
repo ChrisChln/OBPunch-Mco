@@ -153,6 +153,7 @@ import {
   getTimecardExportDayCellText,
   getTimecardTerminatedByDay
 } from './timecardDisplay';
+import { shouldUseTimecardWeekCache } from './timecardCache';
 import {
   buildOperationalDayRange,
   buildTimecardPunchSavePayload,
@@ -10791,7 +10792,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     position,
     missingEmployeeOnly,
     lockUi,
-    deferLateSync
+    deferLateSync,
+    bypassCache
   }: {
     reset: boolean;
     weekOffset?: number;
@@ -10802,6 +10804,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     missingEmployeeOnly?: boolean;
     lockUi?: boolean;
     deferLateSync?: boolean;
+    bypassCache?: boolean;
   }) => {
     if (!supabase) {
       setTimecardError('缺少 Supabase 配置。');
@@ -11577,7 +11580,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const cachedWeek = timecardWeekCacheRef.current;
-      if (cachedWeek && cachedWeek.weekKey === weekStartDate) {
+      if (
+        cachedWeek &&
+        shouldUseTimecardWeekCache({
+          cachedWeekKey: cachedWeek.weekKey,
+          requestedWeekKey: weekStartDate,
+          bypassCache: bypassCache ?? false
+        })
+      ) {
         advanceTimecardLoadingProgress(70);
         const viewEmployees = filterEmployeesForView(cachedWeek.allEmployees);
         const now = new Date(serverTime);
@@ -11712,6 +11722,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       advanceTimecardLoadingProgress(88);
 
+      if (isStale()) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
+      }
       timecardWeekCacheRef.current = {
         weekKey: weekStartDate,
         allEmployees,
@@ -17535,7 +17548,7 @@ ${rowsToHtml(late)}
             />
           </main>
         ) : (
-          <div className="grid h-screen max-h-screen overflow-hidden grid-rows-[64px_minmax(0,1fr)]">
+          <div className="grid h-screen max-h-screen min-w-0 max-w-full overflow-hidden grid-rows-[64px_minmax(0,1fr)]">
             <AdminHeader
               t={t}
               isLocked={isLocked}
@@ -17556,7 +17569,7 @@ ${rowsToHtml(late)}
               onLogout={doLogout}
             />
 
-            <div className="flex min-h-0 flex-1">
+            <div className="flex min-h-0 min-w-0 max-w-full flex-1 overflow-hidden">
               <AdminNav
                 page={page}
                 isLocked={isLocked}
@@ -17571,7 +17584,7 @@ ${rowsToHtml(late)}
 
               <main
                 className={[
-                  'flex-1 min-w-0 min-h-0',
+                  'flex-1 min-w-0 min-h-0 max-w-full',
                   themeMode === 'light'
                     ? 'bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.12),transparent_28%),linear-gradient(180deg,rgba(245,247,255,0.95),rgba(242,245,255,0.98))] text-slate-900'
                     : 'bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.14),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(139,92,246,0.12),transparent_26%),linear-gradient(180deg,rgba(7,10,16,0.98),rgba(10,14,22,0.98))] text-slate-100',
@@ -17579,7 +17592,7 @@ ${rowsToHtml(late)}
                   'px-0 py-0 [scrollbar-gutter:stable]'
                 ].join(' ')}
               >
-                <div className="flex h-full min-h-0 w-full flex-col gap-6">
+                <div className="flex h-full min-h-0 min-w-0 w-full max-w-full flex-col gap-6">
                   {status.message ? (
                     <div className="pointer-events-none fixed left-4 top-20 z-[80] w-[min(calc(100vw-2rem),34rem)] md:left-24">
                       <div

@@ -11,6 +11,15 @@
   --admin-btn-shadow-light: 0 8px 18px rgba(71, 85, 105, 0.1);
 }
 
+html,
+body,
+#root,
+#admin-root {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 body[data-theme='light'] {
   color-scheme: light;
 }
