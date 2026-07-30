@@ -4,6 +4,8 @@ import BusyOverlay from '../components/BusyOverlay';
 import StyledDateInput from '../components/StyledDateInput';
 import type { ForecastModelRow } from '../forecast';
 import { FORECAST_HOURS, calculateForecast, getIsoWeekday } from '../forecast';
+import type { ReportProgress } from '../forecastInflowReport';
+import { runInflowImportWorker } from '../forecastInflowWorkerClient';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -95,6 +97,9 @@ const LOOKBACK_OPTIONS: { value: LookbackMode; label: string }[] = [
 const FORECAST_INPUT_TABLE = 'volume_forecast_daily_inputs';
 const FIXED_FORECAST_HOUR = 12;
 const YESTERDAY_INFLOW_HOUR_KEYS = HOUR_COLUMNS.slice(0, 14);
+const MAX_OUTBOUND_REPORT_BYTES = 100 * 1024 * 1024;
+const VOLUME_HISTORY_WRITE_BATCH_SIZE = 100;
+type ReportImportStage = 'reading' | 'parsing' | 'saving' | 'verifying' | 'refreshing';
 const WEEKDAY_OPTIONS: { value: WeekdayValue; zh: string; en: string; shortEn: string }[] = [
   { value: 1, zh: '周一', en: 'Monday', shortEn: 'Mon' },
   { value: 2, zh: '周二', en: 'Tuesday', shortEn: 'Tue' },
@@ -773,6 +778,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const isLight = themeMode === 'light';
   const initialWeekday = getIsoWeekday(serverTime) as WeekdayValue;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const reportFileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedWeekday, setSelectedWeekday] = useState<WeekdayValue>(initialWeekday);
   const [lookbackMode, setLookbackMode] = useState<LookbackMode>('all');
   const [modelRows, setModelRows] = useState<ForecastModelRow[]>([]);
@@ -802,6 +808,9 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [reportImporting, setReportImporting] = useState(false);
+  const [reportProgress, setReportProgress] = useState<ReportProgress | null>(null);
+  const [reportImportStage, setReportImportStage] = useState<ReportImportStage | null>(null);
   const [volumeTrendRangeStart, setVolumeTrendRangeStart] = useState(() => toDateOnly(addDays(serverTime, -6)));
   const [volumeTrendRangeEnd, setVolumeTrendRangeEnd] = useState(() => toDateOnly(serverTime));
   const [inventoryTrendRangeStart, setInventoryTrendRangeStart] = useState(() => toDateOnly(addDays(serverTime, -29)));
@@ -1626,6 +1635,63 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     const total = HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0);
     return t(`已写入 ${row.date}，${hourCount} 小时，合计 ${formatNumber(total)}。`, `Saved ${row.date}, ${hourCount} hours, total ${formatNumber(total)}.`);
   };
+  const onOutboundReportSelected = async (file: File | null) => {
+    if (!file || reportImporting) return;
+    if (!supabase) {
+      setUploadError(t('Missing Supabase configuration.', 'Missing Supabase configuration.'));
+      return;
+    }
+    if (file.size > MAX_OUTBOUND_REPORT_BYTES) {
+      setUploadError(t('文件超过 100 MB。', 'The file exceeds 100 MB.'));
+      return;
+    }
+
+    let writeStarted = false;
+    setReportImporting(true);
+    setReportImportStage('reading');
+    setReportProgress(null);
+    setUploadError(null);
+    setUploadMessage(null);
+    setHistoryWindowError(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      setReportImportStage('parsing');
+      const result = await runInflowImportWorker(buffer, setReportProgress);
+      const parsedRows = result.rows as VolumeHistoryUploadRow[];
+
+      setReportImportStage('saving');
+      for (let index = 0; index < parsedRows.length; index += VOLUME_HISTORY_WRITE_BATCH_SIZE) {
+        writeStarted = true;
+        const batch = parsedRows.slice(index, index + VOLUME_HISTORY_WRITE_BATCH_SIZE);
+        const response = await upsertVolumeHistoryRows(batch);
+        if (response.error) {
+          throw new Error(String(response.error.message ?? 'Upload failed.'));
+        }
+      }
+
+      setReportImportStage('verifying');
+      await verifyVolumeHistoryRowsPersisted(parsedRows);
+      mergeHistoryRows(parsedRows);
+      setReportImportStage('refreshing');
+      await Promise.all([loadModel(lookbackMode), loadHistoryWindow(currentWeekDates), loadAutoForecastSnapshot(selectedWeekday)]);
+      setUploadMessage(
+        t(
+          `已导入 ${result.stats.dayCount} 天 · ${result.stats.importedRows} 行 · ${formatNumber(result.stats.totalQuantity)} 件`,
+          `Imported ${result.stats.dayCount} days · ${result.stats.importedRows} rows · ${formatNumber(result.stats.totalQuantity)} items`
+        )
+      );
+    } catch (err) {
+      setUploadError(String((err as Error)?.message ?? err ?? 'Upload failed.'));
+      if (writeStarted) {
+        await loadHistoryWindow(currentWeekDates);
+      }
+    } finally {
+      setReportImporting(false);
+      setReportProgress(null);
+      setReportImportStage(null);
+      if (reportFileInputRef.current) reportFileInputRef.current.value = '';
+    }
+  };
   const saveManualInput = async () => {
     if (!supabase) {
       setManualInputSaveError(t('Missing Supabase configuration.', 'Missing Supabase configuration.'));
@@ -1923,6 +1989,24 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     }
   };
   const busyOverlay = useMemo(() => {
+    if (reportImporting && reportImportStage) {
+      const detail = {
+        reading: { zh: '正在读取文件', en: 'Reading file' },
+        parsing: {
+          zh: `正在解析 ${reportProgress?.percent ?? 0}%`,
+          en: `Parsing ${reportProgress?.percent ?? 0}%`
+        },
+        saving: { zh: '正在保存', en: 'Saving' },
+        verifying: { zh: '正在校验', en: 'Verifying' },
+        refreshing: { zh: '正在刷新', en: 'Refreshing' }
+      }[reportImportStage];
+      return {
+        titleZh: '历史流入导入中',
+        titleEn: 'Importing Inflow',
+        detailZh: detail.zh,
+        detailEn: detail.en
+      };
+    }
     if (uploading) {
       return {
         titleZh: 'Forecast 导入中',
@@ -1956,7 +2040,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       };
     }
     return null;
-  }, [historyPasteSaving, historyWindowLoading, loading, manualInputSaving, manualInputsLoading, uploading]);
+  }, [historyPasteSaving, historyWindowLoading, loading, manualInputSaving, manualInputsLoading, reportImportStage, reportImporting, reportProgress?.percent, uploading]);
 
   return (
     <>
@@ -2711,10 +2795,28 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                       <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
                         <div className="flex items-center justify-between gap-3">
                           <input
+                            ref={reportFileInputRef}
+                            type="file"
+                            className="hidden"
+                            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                            onChange={(event) => void onOutboundReportSelected(event.target.files?.[0] ?? null)}
+                          />
+                          <button
+                            type="button"
+                            disabled={isLocked || uploading || historyPasteSaving || reportImporting}
+                            onClick={() => reportFileInputRef.current?.click()}
+                            className={[
+                              'shrink-0 rounded-2xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                              isLight ? 'bg-slate-900 text-white hover:bg-slate-700' : 'bg-neon text-slate-950 hover:shadow-glow'
+                            ].join(' ')}
+                          >
+                            {t('导入报表', 'Import report')}
+                          </button>
+                          <input
                             type="date"
                             value={historyPasteDate}
                             onChange={(e) => setHistoryPasteDate(e.target.value)}
-                            disabled={isLocked || uploading || historyPasteSaving}
+                            disabled={isLocked || uploading || historyPasteSaving || reportImporting}
                             className={[
                               'h-10 w-full max-w-[220px] rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
                               isLight
@@ -2724,7 +2826,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                           />
                           <button
                             type="button"
-                            disabled={isLocked || uploading || historyPasteSaving || !historyPasteValue.trim()}
+                            disabled={isLocked || uploading || historyPasteSaving || reportImporting || !historyPasteValue.trim()}
                             onClick={() => void applyPastedHistoryData()}
                             className={[
                               'rounded-2xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
@@ -2739,7 +2841,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                           onChange={(e) => setHistoryPasteValue(e.target.value)}
                           placeholder=""
                           rows={4}
-                          disabled={isLocked || uploading || historyPasteSaving}
+                          disabled={isLocked || uploading || historyPasteSaving || reportImporting}
                           className={[
                             'mt-3 w-full rounded-2xl px-4 py-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
                             isLight
