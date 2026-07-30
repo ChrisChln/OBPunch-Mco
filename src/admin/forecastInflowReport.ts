@@ -106,13 +106,14 @@ const parseQuantity = (value: unknown, rowNumber: number) => {
 
 export function aggregateOutboundRows(
   rows: ReadonlyArray<readonly [unknown, unknown]>,
-  firstExcelRowNumber = 1
+  firstExcelRowNumber = 1,
+  excelRowNumbers?: readonly number[]
 ): OutboundReportResult {
   const dailyRows = new Map<string, MutableDailyRow>();
   let totalQuantity = 0;
 
   rows.forEach(([createdAtValue, quantityValue], index) => {
-    const rowNumber = firstExcelRowNumber + index;
+    const rowNumber = excelRowNumbers?.[index] ?? firstExcelRowNumber + index;
     const createdAt = parseReportTimestamp(createdAtValue, rowNumber);
     const quantity = parseQuantity(quantityValue, rowNumber);
     const daily = dailyRows.get(createdAt.date) ?? {
@@ -201,8 +202,13 @@ export function parseOutboundReportWorkbook(
   }
 
   const importRows: Array<readonly [unknown, unknown]> = [];
+  const importRowNumbers: number[] = [];
   sourceRows.forEach((row, index) => {
-    importRows.push([row[createdAtColumnIndex], row[quantityColumnIndex]]);
+    const quantity = row[quantityColumnIndex];
+    if (!isBlankCell(quantity)) {
+      importRows.push([row[createdAtColumnIndex], quantity]);
+      importRowNumbers.push(headerRowIndex + 2 + index);
+    }
     const processedRows = index + 1;
     if (processedRows % 5_000 === 0 || processedRows === sourceRows.length) {
       onProgress?.({
@@ -213,6 +219,17 @@ export function parseOutboundReportWorkbook(
     }
   });
 
-  return aggregateOutboundRows(importRows, headerRowIndex + 2);
+  if (importRows.length === 0) {
+    throw new OutboundReportError('文件中没有可导入的数据。');
+  }
+
+  const result = aggregateOutboundRows(importRows, headerRowIndex + 2, importRowNumbers);
+  return {
+    ...result,
+    stats: {
+      ...result.stats,
+      sourceRows: sourceRows.length
+    }
+  };
 }
 import * as XLSX from 'xlsx';

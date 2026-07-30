@@ -93,6 +93,34 @@ describe('parseOutboundReportWorkbook', () => {
     expect(() => parseOutboundReportWorkbook(bytes)).toThrow('文件中没有可导入的数据。');
   });
 
+  test('skips package rows that do not contain goods quantity', () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ['包裹号', '货品数量', '创建时间'],
+      ['PKG-EMPTY', '', '07/01/2026 12:50:01 PM'],
+      ['PKG-GOODS', 2, '07/01/2026 05:18:00 PM']
+    ]), 'Data');
+    const bytes = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+
+    const result = parseOutboundReportWorkbook(bytes);
+
+    expect(result.stats).toMatchObject({ sourceRows: 2, importedRows: 1, totalQuantity: 2 });
+    expect(result.rows[0]).toMatchObject({ h12: 0, h17: 2, last_filled_hour: 17 });
+  });
+
+  test('keeps the original Excel row number after skipped no-goods rows', () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ['包裹号', '货品数量', '创建时间'],
+      ['PKG-EMPTY', '', '07/01/2026 12:50:01 PM'],
+      ['PKG-GOODS', 2, '07/01/2026 05:18:00 PM'],
+      ['PKG-BAD', 'abc', '07/01/2026 06:18:00 PM']
+    ]), 'Data');
+    const bytes = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+
+    expect(() => parseOutboundReportWorkbook(bytes)).toThrow('第 4 行“货品数量”无效');
+  });
+
   test('reports progress and aggregates 100,000 rows', () => {
     const rows = Array.from({ length: 100_000 }, (_, index) => {
       const day = index % 2 === 0 ? '01' : '02';

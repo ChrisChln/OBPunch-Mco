@@ -123,7 +123,7 @@ export function aggregateOutboundRows(
 }
 ```
 
-Implement timestamp parsing without `Date.parse` for the AM/PM report string. Match `MM/DD/YYYY hh:mm:ss AM|PM`, validate calendar parts by round-tripping through `new Date(year, month - 1, day, hour, minute, second)`, and format from local getters. Accept `Date` objects using local getters. Reject empty or invalid timestamps with `OutboundReportError('第 N 行“创建时间”无效', N, '创建时间')`. Accept numeric strings for quantities only when they produce a finite, non-negative integer; otherwise throw the matching quantity error.
+Implement timestamp parsing without `Date.parse` for the AM/PM report string. Match `MM/DD/YYYY hh:mm:ss AM|PM`, validate calendar parts by round-tripping through `new Date(year, month - 1, day, hour, minute, second)`, and format from local getters. Accept `Date` objects using local getters. Reject empty or invalid timestamps with `OutboundReportError('第 N 行“创建时间”无效', N, '创建时间')`. Accept numeric strings for quantities only when they produce a finite, non-negative integer; otherwise throw the matching quantity error. Workbook parsing skips report rows whose goods quantity is blank and reports them only in `sourceRows`.
 
 - [ ] **Step 4: Run tests and verify GREEN**
 
@@ -146,7 +146,7 @@ git commit -m "Add outbound report hourly aggregation"
 
 - [ ] **Step 1: Add failing validation tests**
 
-Add table-driven tests for blank, negative, fractional, and nonnumeric quantities; invalid calendar dates; empty datasets; missing headers; and header whitespace. Assert the error row number uses Excel's one-based row including the header:
+Add table-driven tests for direct aggregator blank, negative, fractional, and nonnumeric quantities; invalid calendar dates; empty datasets; missing headers; header whitespace; and workbook rows with blank goods quantity. Assert blank-quantity workbook rows are skipped while nonblank invalid quantities retain the original Excel row number:
 
 ```ts
 test.each([
@@ -202,7 +202,7 @@ export function parseOutboundReportWorkbook(
 ): OutboundReportResult;
 ```
 
-Use `XLSX.read(data, { type: 'array', cellDates: true })`. Inspect sheets in workbook order and select the first with a non-empty `!ref`. Convert only the used range to arrays with `raw: true` and `defval: null`. Search rows from top to bottom for one row containing both trimmed target headers. Capture their indices, then pass only the two target cells plus `headerRowIndex + 2` as the first Excel data-row number to the aggregator. Ignore rows only when every cell in the used row is blank; every other row must validate. Emit progress after each 5,000 validated/visited data rows and once at 100%.
+Use `XLSX.read(data, { type: 'array', cellDates: true })`. Inspect sheets in workbook order and select the first with a non-empty `!ref`. Convert only the used range to arrays with `raw: true` and `defval: null`. Search rows from top to bottom for one row containing both trimmed target headers. Capture their indices, then pass only the two target cells and their original Excel row numbers to the aggregator. Ignore fully blank rows and rows whose goods quantity is blank; validate every other row. Emit progress after each 5,000 visited data rows and once at 100%.
 
 Use these exact file-level errors:
 
