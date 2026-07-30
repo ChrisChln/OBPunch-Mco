@@ -6,6 +6,7 @@ import type { ForecastModelRow } from '../forecast';
 import { FORECAST_HOURS, calculateForecast, getIsoWeekday } from '../forecast';
 import type { ReportProgress } from '../forecastInflowReport';
 import { runInflowImportWorker } from '../forecastInflowWorkerClient';
+import { formatSignedDifferenceQuantity, getForecastVariancePresentation } from '../forecastVariance';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -851,6 +852,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     { key: 'weekday', width: 72 },
     { key: 'forecast', width: 120 },
     { key: 'variance', width: 104 },
+    { key: 'differenceQuantity', width: 112 },
     { key: 'dailyTotal', width: 108 },
     { key: 'cutoff', width: 104 },
     { key: 'itr', width: 96 },
@@ -861,6 +863,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     { key: 'weekday', width: 72 },
     { key: 'forecast', width: 120 },
     { key: 'variance', width: 104 },
+    { key: 'differenceQuantity', width: 112 },
     { key: 'dailyTotal', width: 108 },
     { key: 'itr', width: 96 },
     { key: 'weather', width: 104 }
@@ -2324,17 +2327,18 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
               <div className={['min-w-0 rounded-2xl overflow-hidden', tableWrapClass].join(' ')}>
                 <div className="flex min-w-0">
                   <div className={['shrink-0 border-r', isLight ? 'border-slate-200 bg-white shadow-[10px_0_24px_rgba(15,23,42,0.05)]' : 'border-white/10 bg-slate-950 shadow-[10px_0_28px_rgba(2,6,23,0.5)]'].join(' ')}>
-                    <table className="w-[836px] table-fixed text-left text-xs">
+                    <table className="w-[948px] table-fixed text-left text-xs">
                       <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
                         <tr>
                           <th className="px-3 py-2" style={{ width: historyFrozenColumns[0].width, minWidth: historyFrozenColumns[0].width }}>{t('日期', 'Date')}</th>
                           <th className="px-3 py-2" style={{ width: historyFrozenColumns[1].width, minWidth: historyFrozenColumns[1].width }}>{t('星期', 'Weekday')}</th>
                           <th className="px-3 py-2" style={{ width: historyFrozenColumns[2].width, minWidth: historyFrozenColumns[2].width }}>{t('截止12点预测', '12:00 forecast')}</th>
                           <th className="px-3 py-2" style={{ width: historyFrozenColumns[3].width, minWidth: historyFrozenColumns[3].width }}>{t('实际差异', 'Actual variance')}</th>
-                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[4].width, minWidth: historyFrozenColumns[4].width }}>{t('当日总流入', 'Daily total')}</th>
-                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[5].width, minWidth: historyFrozenColumns[5].width }}>{t('12点截单', '12:00 cutoff')}</th>
-                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[6].width, minWidth: historyFrozenColumns[6].width }}>{t('库存转换率', 'ITR')}</th>
-                          <th className="border-r px-3 py-2" style={{ width: historyFrozenColumns[7].width, minWidth: historyFrozenColumns[7].width }}>{t('恶劣天气', 'Severe weather')}</th>
+                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[4].width, minWidth: historyFrozenColumns[4].width }}>{t('差异件数', 'Difference')}</th>
+                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[5].width, minWidth: historyFrozenColumns[5].width }}>{t('当日总流入', 'Daily total')}</th>
+                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[6].width, minWidth: historyFrozenColumns[6].width }}>{t('12点截单', '12:00 cutoff')}</th>
+                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[7].width, minWidth: historyFrozenColumns[7].width }}>{t('库存转换率', 'ITR')}</th>
+                          <th className="border-r px-3 py-2" style={{ width: historyFrozenColumns[8].width, minWidth: historyFrozenColumns[8].width }}>{t('恶劣天气', 'Severe weather')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2358,17 +2362,21 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                           const inventoryLevel = Number(manualInputRow?.inventory_level ?? 0);
                           const severeWeather = Boolean(manualInputRow?.severe_weather ?? false);
                           const isCompleteDay = lastFilledHour !== null && lastFilledHour >= 23;
-                          const actualVariance =
-                            isCompleteDay && dailyTotal !== null && noonForecast !== null && noonForecast > 0
-                              ? (dailyTotal - noonForecast) / noonForecast
-                              : null;
+                          const variancePresentation = getForecastVariancePresentation(noonForecast, isCompleteDay ? dailyTotal : null);
+                          const varianceClass =
+                            variancePresentation.tone === 'danger'
+                              ? isLight ? 'font-bold text-rose-600' : 'font-bold text-rose-400'
+                              : variancePresentation.tone === 'success'
+                                ? isLight ? 'font-bold text-emerald-600' : 'font-bold text-emerald-400'
+                                : '';
                           const itr = dailyTotal !== null && inventoryLevel > 0 ? dailyTotal / inventoryLevel : null;
                           return (
                             <tr key={`page-history-frozen-${date}`} className={tableRowClass}>
                               <td className="px-3 py-2 font-semibold">{date}</td>
                               <td className="px-3 py-2">{t(WEEKDAY_OPTIONS[weekday - 1]?.zh ?? '周一', WEEKDAY_OPTIONS[weekday - 1]?.shortEn ?? 'Mon')}</td>
                               <td className="px-3 py-2">{formatNumber(noonForecast)}</td>
-                              <td className="px-3 py-2">{actualVariance === null ? '-' : formatPercent(actualVariance, 2)}</td>
+                              <td className={['px-3 py-2', varianceClass].join(' ')}>{variancePresentation.variance === null ? '-' : formatPercent(variancePresentation.variance, 2)}</td>
+                              <td className="px-3 py-2">{formatSignedDifferenceQuantity(variancePresentation.differenceQuantity)}</td>
                               <td className="px-3 py-2">{formatNumber(dailyTotal)}</td>
                               <td className="px-3 py-2">{formatNumber(noonCutoffVolume)}</td>
                               <td className="px-3 py-2">{itr === null ? '-' : formatPercent(itr, 2)}</td>
@@ -2911,16 +2919,17 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                     <div className={['overflow-auto rounded-2xl', tableWrapClass].join(' ')}>
                       <div className="flex min-w-0">
                         <div className={['shrink-0 border-r', isLight ? 'border-slate-200 bg-white shadow-[10px_0_24px_rgba(15,23,42,0.05)]' : 'border-white/10 bg-slate-950 shadow-[10px_0_28px_rgba(2,6,23,0.5)]'].join(' ')}>
-                          <table className="w-[728px] table-fixed text-left text-xs">
+                          <table className="w-[840px] table-fixed text-left text-xs">
                             <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
                               <tr>
                                 <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[0].width, minWidth: weeklyFrozenColumns[0].width }}>{t('日期', 'Date')}</th>
                                 <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[1].width, minWidth: weeklyFrozenColumns[1].width }}>{t('星期', 'Weekday')}</th>
                                 <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[2].width, minWidth: weeklyFrozenColumns[2].width }}>{t('截止12点预测', '12:00 forecast')}</th>
                                 <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[3].width, minWidth: weeklyFrozenColumns[3].width }}>{t('实际差异', 'Actual variance')}</th>
-                                <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[4].width, minWidth: weeklyFrozenColumns[4].width }}>{t('当日总流入', 'Daily total')}</th>
-                                <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[5].width, minWidth: weeklyFrozenColumns[5].width }}>{t('库存转换率', 'ITR')}</th>
-                                <th className={['border-r px-3 py-2', isLight ? 'border-slate-200' : 'border-white/10'].join(' ')} style={{ width: weeklyFrozenColumns[6].width, minWidth: weeklyFrozenColumns[6].width }}>{t('恶劣天气', 'Severe weather')}</th>
+                                <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[4].width, minWidth: weeklyFrozenColumns[4].width }}>{t('差异件数', 'Difference')}</th>
+                                <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[5].width, minWidth: weeklyFrozenColumns[5].width }}>{t('当日总流入', 'Daily total')}</th>
+                                <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[6].width, minWidth: weeklyFrozenColumns[6].width }}>{t('库存转换率', 'ITR')}</th>
+                                <th className={['border-r px-3 py-2', isLight ? 'border-slate-200' : 'border-white/10'].join(' ')} style={{ width: weeklyFrozenColumns[7].width, minWidth: weeklyFrozenColumns[7].width }}>{t('恶劣天气', 'Severe weather')}</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -2942,17 +2951,21 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                 const inventoryLevel = Number(manualInputRow?.inventory_level ?? 0);
                                 const severeWeather = Boolean(manualInputRow?.severe_weather ?? false);
                                 const isCompleteHistoryDay = lastFilledHour !== null && lastFilledHour >= 23;
-                                const actualVariance =
-                                  isCompleteHistoryDay && dailyTotal !== null && noonForecast !== null && noonForecast > 0
-                                    ? (dailyTotal - noonForecast) / noonForecast
-                                    : null;
+                                const variancePresentation = getForecastVariancePresentation(noonForecast, isCompleteHistoryDay ? dailyTotal : null);
+                                const varianceClass =
+                                  variancePresentation.tone === 'danger'
+                                    ? isLight ? 'font-bold text-rose-600' : 'font-bold text-rose-400'
+                                    : variancePresentation.tone === 'success'
+                                      ? isLight ? 'font-bold text-emerald-600' : 'font-bold text-emerald-400'
+                                      : '';
                                 const itr = dailyTotal !== null && inventoryLevel > 0 ? dailyTotal / inventoryLevel : null;
                                 return (
                                   <tr key={`weekly-frozen-${date}`} className={tableRowClass}>
                                     <td className="px-3 py-2 font-semibold">{date}</td>
                                     <td className="px-3 py-2">{t(WEEKDAY_OPTIONS[weekday - 1]?.zh ?? '周一', WEEKDAY_OPTIONS[weekday - 1]?.shortEn ?? 'Mon')}</td>
                                     <td className="px-3 py-2">{formatNumber(noonForecast)}</td>
-                                    <td className="px-3 py-2">{actualVariance === null ? '-' : formatPercent(actualVariance, 2)}</td>
+                                    <td className={['px-3 py-2', varianceClass].join(' ')}>{variancePresentation.variance === null ? '-' : formatPercent(variancePresentation.variance, 2)}</td>
+                                    <td className="px-3 py-2">{formatSignedDifferenceQuantity(variancePresentation.differenceQuantity)}</td>
                                     <td className="px-3 py-2">{formatNumber(dailyTotal)}</td>
                                     <td className="px-3 py-2">{itr === null ? '-' : formatPercent(itr, 2)}</td>
                                     <td className={['border-r px-3 py-2', isLight ? 'border-slate-200' : 'border-white/10'].join(' ')}>{severeWeather ? t('是', 'Yes') : t('否', 'No')}</td>

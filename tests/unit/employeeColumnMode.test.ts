@@ -2,24 +2,21 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
-describe('employee column mode detection', () => {
-  test('prefers canonical lowercase columns when both schemas are available', () => {
+describe('employee canonical columns', () => {
+  test('selects canonical lowercase employee metadata columns', () => {
     const source = readFileSync(join(process.cwd(), 'src', 'admin', 'AdminAppPage.tsx'), 'utf8');
-    const resolverStart = source.indexOf('const resolveEmployeeColumnMode = async');
-    const resolverEnd = source.indexOf('const normalizePositionKey', resolverStart);
-    const resolverSource = source.slice(resolverStart, resolverEnd);
+    const builderStart = source.indexOf('const buildEmployeeSelectColumns =');
+    const builderEnd = source.indexOf('const normalizePositionKey', builderStart);
+    const builderSource = source.slice(builderStart, builderEnd);
 
-    const lowerProbe = resolverSource.indexOf("select('staff_id, agency, position')");
-    const legacyProbe = resolverSource.indexOf('select(\'staff_id, "Agency", "Position"\')');
-
-    expect(resolverStart).toBeGreaterThanOrEqual(0);
-    expect(resolverEnd).toBeGreaterThan(resolverStart);
-    expect(lowerProbe).toBeGreaterThanOrEqual(0);
-    expect(legacyProbe).toBeGreaterThanOrEqual(0);
-    expect(lowerProbe).toBeLessThan(legacyProbe);
+    expect(builderStart).toBeGreaterThanOrEqual(0);
+    expect(builderEnd).toBeGreaterThan(builderStart);
+    expect(builderSource).toContain('agency, position');
+    expect(builderSource).not.toContain('"Agency"');
+    expect(builderSource).not.toContain('"Position"');
   });
 
-  test('retries employee creation with the alternate mode when a selected column is generated', () => {
+  test('creates employees with canonical lowercase metadata columns', () => {
     const source = readFileSync(join(process.cwd(), 'src', 'admin', 'AdminAppPage.tsx'), 'utf8');
     const addStart = source.indexOf('const addEmployeeRow = async');
     const addEnd = source.indexOf('const deleteEmployeeRow = async', addStart);
@@ -27,8 +24,9 @@ describe('employee column mode detection', () => {
 
     expect(addStart).toBeGreaterThanOrEqual(0);
     expect(addEnd).toBeGreaterThan(addStart);
-    expect(addSource).toContain('isGeneratedEmployeeColumnWriteError');
-    expect(addSource).toContain('employeeColumnModeRef.current = fallbackMode');
-    expect(addSource).toContain('await upsertEmployeePayload(buildPayload(fallbackMode))');
+    expect(addSource).toContain('agency,');
+    expect(addSource).toContain('position: normalizedPos');
+    expect(addSource).not.toContain('isGeneratedEmployeeColumnWriteError');
+    expect(addSource).not.toContain('employeeColumnModeRef');
   });
 });

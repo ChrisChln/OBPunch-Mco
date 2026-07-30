@@ -58,6 +58,15 @@ describe('ForecastPage outbound report import', () => {
     expect(await screen.findByRole('button', { name: '导入报表' })).toBeInTheDocument();
   }, 10_000);
 
+  test('shows difference quantity in both historical inflow tables', async () => {
+    renderPage();
+
+    expect(screen.getAllByRole('columnheader', { name: '差异件数' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: '历史流入' }));
+
+    await waitFor(() => expect(screen.getAllByRole('columnheader', { name: '差异件数' })).toHaveLength(2));
+  }, 10_000);
+
   test('uses a high-contrast report import button in dark mode', async () => {
     render(pageElement(null, 'dark'));
     fireEvent.click(screen.getByRole('button', { name: '历史流入' }));
