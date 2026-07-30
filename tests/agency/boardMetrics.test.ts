@@ -10,6 +10,7 @@ const makeEmployee = (overrides: Partial<AgencyEmployeeRow>): AgencyEmployeeRow 
   shift: 'early',
   start_time: '09:00',
   label: '',
+  payrate: '',
   state: 'rest',
   fixed_work_count: 0,
   has_absent: false,
@@ -19,6 +20,9 @@ const makeEmployee = (overrides: Partial<AgencyEmployeeRow>): AgencyEmployeeRow 
   driver_group_role: '',
   driver_group_label: '',
   agency_note: '',
+  admin_note: '',
+  agency_note_updated_by: '',
+  admin_note_updated_by: '',
   ...overrides
 });
 
@@ -30,6 +34,7 @@ const makeNewHire = (overrides: Partial<AgencyNewHireRequestRow>): AgencyNewHire
   shift: 'early',
   start_time: '',
   label: '',
+  payrate: '',
   state: '',
   can_delete: true,
   ...overrides

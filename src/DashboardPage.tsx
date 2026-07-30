@@ -10,6 +10,7 @@ import { isScheduleOnlyAgency } from './shared/agencyRules';
 import AppDialog from './components/AppDialog';
 import ElectricBorder from './components/ElectricBorder';
 import GlowLabelChip, { getGlowToneForPosition, getGlowToneForPunch, getGlowToneForShift } from './components/GlowLabelChip';
+import { MagicMultiSelect, MagicSingleSelect } from './components/MagicSelectControls';
 import {
   DEFAULT_DASHBOARD_CARD_POSITIONS,
   buildDashboardCardPositions,
@@ -85,6 +86,22 @@ type MistakeDetailRow = {
   reporter_name?: string;
   operational_date: string;
   created_at: string;
+};
+
+type DashboardSnapshotRow = {
+  work_date: string;
+  shift: 'early' | 'late';
+  position: string;
+  department: string;
+  expected: number;
+  present: number;
+  on_clock: number;
+  off_worked: number;
+  work_hours: number;
+  snapshot_status: string;
+  expected_captured_at: string | null;
+  actual_captured_at: string | null;
+  updated_at: string | null;
 };
 
 type IconProps = {
@@ -179,6 +196,8 @@ const EMPLOYEE_TABLE = (import.meta.env.VITE_EMPLOYEE_TABLE as string | undefine
 const POSITIONS_TABLE = (import.meta.env.VITE_POSITIONS_TABLE as string | undefined) ?? 'ob_positions';
 const PUNCHES_TABLE = 'ob_punches';
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
+const DASHBOARD_ATTENDANCE_SNAPSHOT_TABLE =
+  (import.meta.env.VITE_DASHBOARD_ATTENDANCE_SNAPSHOT_TABLE as string | undefined) ?? 'ob_dashboard_attendance_snapshots';
 
 const isEmployeeActive = (employee: { active?: unknown; terminated_at?: unknown } | null | undefined) => {
   if (!employee) return false;
@@ -301,13 +320,13 @@ export const resolveDashboardStaffPosition = (
 };
 const getPositionBadgeClass = (value: string) => {
   const pos = normalizePositionKey(value);
-  if (pos === 'Pick') return 'badge-elevated-dark label-glow-chip border-sky-300/30 text-sky-100 bg-sky-400/[0.13]';
-  if (pos === 'Pack') return 'badge-elevated-dark label-glow-chip border-rose-300/30 text-rose-100 bg-rose-400/[0.13]';
-  if (pos === 'Rebin') return 'badge-elevated-dark label-glow-chip border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]';
-  if (pos === 'Preship') return 'badge-elevated-dark label-glow-chip border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
-  if (pos === 'Transfer') return 'badge-elevated-dark label-glow-chip border-violet-300/30 text-violet-100 bg-violet-400/[0.13]';
-  if (pos === 'FLEX TEAM') return 'badge-elevated-dark label-glow-chip border-slate-300/30 text-slate-100 bg-slate-400/[0.13]';
-  return 'badge-elevated-dark label-glow-chip border-white/12 text-stone-100 bg-white/[0.05]';
+  if (pos === 'Pick') return 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]';
+  if (pos === 'Pack') return 'badge-elevated-dark border-rose-300/30 text-rose-100 bg-rose-400/[0.13]';
+  if (pos === 'Rebin') return 'badge-elevated-dark border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]';
+  if (pos === 'Preship') return 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
+  if (pos === 'Transfer') return 'badge-elevated-dark border-violet-300/30 text-violet-100 bg-violet-400/[0.13]';
+  if (pos === 'FLEX TEAM') return 'badge-elevated-dark border-slate-300/30 text-slate-100 bg-slate-400/[0.13]';
+  return 'badge-elevated-dark border-white/12 text-stone-100 bg-white/[0.05]';
 };
 const getAttendanceCardClass = (position: string) => {
   const pos = normalizePositionKey(position) || normalizePositionName(position);
@@ -361,6 +380,14 @@ const chunkArray = <T,>(list: T[], size: number): T[][] => {
   const chunks: T[][] = [];
   for (let i = 0; i < list.length; i += size) chunks.push(list.slice(i, i + size));
   return chunks;
+};
+
+const formatDashboardHours = (value: number) => {
+  const rounded = Math.round(Math.max(0, Number(value) || 0) * 100) / 100;
+  return rounded.toLocaleString('en-US', {
+    minimumFractionDigits: rounded % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2
+  });
 };
 
 const computeWorkHoursFromPunches = (punches: PunchRow[], capEnd: Date) => {
@@ -573,7 +600,7 @@ export default function DashboardPage() {
     };
   }, []);
   const [rows, setRows] = useState<DashboardRow[]>([]);
-  const [cardStatsByKey, setCardStatsByKey] = useState<Record<string, { expected: number; present: number; onClock: number; offWorked: number }>>({});
+  const [cardStatsByKey, setCardStatsByKey] = useState<Record<string, { expected: number; present: number; onClock: number; offWorked: number; workHours: number }>>({});
   const [dashboardPositionNames, setDashboardPositionNames] = useState<string[]>([...DEFAULT_POSITION_NAMES]);
   const [dashboardPositionDepartments, setDashboardPositionDepartments] = useState<Record<string, string>>({});
   const [cardPositions, setCardPositions] = useState<string[]>([...DEFAULT_DASHBOARD_CARD_POSITIONS]);
@@ -582,13 +609,14 @@ export default function DashboardPage() {
   const [search, setSearch] = useState('');
   const [departmentFilters, setDepartmentFilters] = useState<string[]>([]);
   const [positionFilters, setPositionFilters] = useState<string[]>([]);
-  const [positionFilterOpen, setPositionFilterOpen] = useState(false);
   const [shiftFilter, setShiftFilter] = useState('');
   const [absentOnly, setAbsentOnly] = useState(false);
   const [onClockOnly, setOnClockOnly] = useState(false);
   const [offWorkOnly, setOffWorkOnly] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState('');
   const [operationalDate, setOperationalDate] = useState('');
+  const [selectedOperationalDate, setSelectedOperationalDate] = useState(() => getOperationalRange().operationalDate);
+  const [snapshotStatus, setSnapshotStatus] = useState('');
   const [renderCount, setRenderCount] = useState(120);
   const [badgePrintingStaffId, setBadgePrintingStaffId] = useState<string | null>(null);
   const [accountPrintingStaffId, setAccountPrintingStaffId] = useState<string | null>(null);
@@ -624,12 +652,100 @@ export default function DashboardPage() {
   };
   const [accountUsageRows, setAccountUsageRows] = useState<TempAccountUsageRow[]>([]);
   const inFlightRef = useRef(false);
-  const positionFilterRef = useRef<HTMLDivElement | null>(null);
   const mistakeEmployeePickerRef = useRef<HTMLDivElement | null>(null);
   const fetchSeqRef = useRef(0);
   const employeeCacheRef = useRef<Map<string, EmployeeRow>>(new Map());
   const qrDataUrlCacheRef = useRef<Map<string, string>>(new Map());
   const rowsDigestRef = useRef('');
+
+  const isLiveDate = selectedOperationalDate === getOperationalRange().operationalDate;
+
+  const fetchSnapshotData = async (targetDate: string) => {
+    if (!supabase) {
+      setError('Missing Supabase configuration.');
+      setRows([]);
+      return;
+    }
+    const normalizedDate = normalizeDateOnly(targetDate);
+    if (!normalizedDate) {
+      setError('Invalid date.');
+      setRows([]);
+      return;
+    }
+
+    const currentSeq = fetchSeqRef.current + 1;
+    fetchSeqRef.current = currentSeq;
+    setLoading(true);
+    setError(null);
+
+    try {
+      const snapshotRes = await supabase
+        .from(DASHBOARD_ATTENDANCE_SNAPSHOT_TABLE)
+        .select('work_date, shift, position, department, expected, present, on_clock, off_worked, work_hours, snapshot_status, expected_captured_at, actual_captured_at, updated_at')
+        .eq('work_date', normalizedDate)
+        .order('shift', { ascending: true })
+        .order('position', { ascending: true })
+        .limit(1000);
+
+      if (snapshotRes.error) {
+        if (fetchSeqRef.current === currentSeq) {
+          if (isMissingTableError(snapshotRes.error.message, DASHBOARD_ATTENDANCE_SNAPSHOT_TABLE)) {
+            setRows([]);
+            setCardStatsByKey({});
+            setOperationalDate(normalizedDate);
+            setLastUpdatedAt('');
+            setSnapshotStatus('');
+            rowsDigestRef.current = '';
+            return;
+          }
+          setError(snapshotRes.error.message);
+          setRows([]);
+        }
+        return;
+      }
+
+      const snapshotRows = ((snapshotRes.data as DashboardSnapshotRow[] | null) ?? []).filter(
+        (row) => normalizeDateOnly(row.work_date) === normalizedDate
+      );
+
+      const nextStats: Record<string, { expected: number; present: number; onClock: number; offWorked: number; workHours: number }> = {};
+      const observedPositions: string[] = [];
+      const nextDepartments = { ...dashboardPositionDepartments };
+      let latestUpdated = '';
+      let hasActual = false;
+      for (const row of snapshotRows) {
+        const shift = row.shift === 'late' ? 'late' : 'early';
+        const position = normalizePositionKey(String(row.position ?? '').trim(), dashboardPositionNames) || normalizePositionName(row.position);
+        if (!position) continue;
+        observedPositions.push(position);
+        nextDepartments[position] = normalizePositionDepartment(row.department);
+        const key = `${shift}:${position}`;
+        nextStats[key] = {
+          expected: Math.max(0, Number(row.expected ?? 0) || 0),
+          present: Math.max(0, Number(row.present ?? 0) || 0),
+          onClock: Math.max(0, Number(row.on_clock ?? 0) || 0),
+          offWorked: Math.max(0, Number(row.off_worked ?? 0) || 0),
+          workHours: Math.max(0, Number(row.work_hours ?? 0) || 0)
+        };
+        const updatedAt = String(row.actual_captured_at ?? row.expected_captured_at ?? row.updated_at ?? '').trim();
+        if (updatedAt && (!latestUpdated || updatedAt > latestUpdated)) latestUpdated = updatedAt;
+        if (String(row.snapshot_status ?? '').trim() === 'actual' || row.actual_captured_at) hasActual = true;
+      }
+
+      if (fetchSeqRef.current !== currentSeq) return;
+      rowsDigestRef.current = '';
+      setRows([]);
+      setAccountUsageRows([]);
+      setCardStatsByKey(nextStats);
+      setCardPositions(buildDashboardCardPositions(dashboardPositionNames, observedPositions));
+      setDashboardPositionDepartments(nextDepartments);
+      setOperationalDate(normalizedDate);
+      setLastUpdatedAt(latestUpdated ? formatDateTime(latestUpdated) : '');
+      setSnapshotStatus(snapshotRows.length === 0 ? '' : hasActual ? 'actual' : 'expected');
+    } finally {
+      if (fetchSeqRef.current === currentSeq) setLoading(false);
+    }
+  };
 
   const fetchData = async (force = false) => {
     if (!supabase) {
@@ -853,7 +969,7 @@ export default function DashboardPage() {
             staff_id: staffId,
             name: String(row.name ?? '').trim(),
             agency: String(row.agency ?? '').trim(),
-            position: String(row.position ?? row.Position ?? '').trim(),
+            position: String(row.position ?? '').trim(),
             label: String(row.label ?? row.Label ?? '').trim(),
             work_account: normalizeWorkAccountValue(row.work_account),
             work_password: resolveDefaultPassword(
@@ -970,8 +1086,18 @@ export default function DashboardPage() {
           restWorkedByKey.get(key)?.add(staffId);
         }
       }
-      const nextCardStatsByKey: Record<string, { expected: number; present: number; onClock: number; offWorked: number }> = {};
-      const observedCardPositions = [...staffByKey.keys(), ...restByKey.keys(), ...arrivedByKey.keys(), ...onClockByKey.keys(), ...restWorkedByKey.keys()]
+      const workHoursByKey = new Map<string, number>();
+      for (const [staffId, punches] of punchesByStaff.entries()) {
+        if (!activeEmployeeStaffIds.has(staffId) || !attendanceTrackedStaffIds.has(staffId)) continue;
+        const hours = computeWorkHoursFromPunches(punches, capEnd);
+        if (!Number.isFinite(hours) || hours <= 0) continue;
+        const keys = keysByStaff.get(staffId) ?? [];
+        for (const key of keys) {
+          workHoursByKey.set(key, (workHoursByKey.get(key) ?? 0) + hours);
+        }
+      }
+      const nextCardStatsByKey: Record<string, { expected: number; present: number; onClock: number; offWorked: number; workHours: number }> = {};
+      const observedCardPositions = [...staffByKey.keys(), ...restByKey.keys(), ...arrivedByKey.keys(), ...onClockByKey.keys(), ...restWorkedByKey.keys(), ...workHoursByKey.keys()]
         .map((key) => String(key.split(':')[1] ?? '').trim())
         .filter(Boolean);
       const orderedCardPositions = buildDashboardCardPositions(activePositionNames, observedCardPositions);
@@ -980,12 +1106,12 @@ export default function DashboardPage() {
           const key = `${shift}:${position}`;
           const expectedIds = staffByKey.get(key) ?? new Set<string>();
           const arrivedIds = arrivedByKey.get(key) ?? new Set<string>();
-          const presentIds = new Set(Array.from(expectedIds).filter((staffId) => arrivedIds.has(staffId)));
           nextCardStatsByKey[key] = {
             expected: expectedIds.size,
-            present: presentIds.size,
+            present: arrivedIds.size,
             onClock: onClockByKey.get(key)?.size ?? 0,
-            offWorked: restWorkedByKey.get(key)?.size ?? 0
+            offWorked: restWorkedByKey.get(key)?.size ?? 0,
+            workHours: workHoursByKey.get(key) ?? 0
           };
         }
       }
@@ -1295,7 +1421,7 @@ export default function DashboardPage() {
       const digest = `${nextRows.length}|${nextRows
         .map(
           (r) =>
-            `${r.staff_id}:${r.name}:${r.agency}:${r.position}:${r.label}:${r.shift}:${r.attendance}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}:${r.schedule_state}:${r.work_account}:${r.temp_account_name}:${r.mistake_count_7d ?? 0}`
+            `${r.staff_id}:${r.name}:${r.agency}:${r.position}:${r.label}:${r.shift}:${r.attendance}:${r.work_hours_today}:${r.punches.length}:${r.punches[r.punches.length - 1]?.id ?? ''}:${r.borrowed_device}:${r.schedule_state}:${r.work_account}:${r.temp_account_name}:${r.mistake_count_7d ?? 0}`
         )
         .join(';')}`;
 
@@ -1309,6 +1435,7 @@ export default function DashboardPage() {
       setAccountUsageRows(nextUsageRows);
       setOperationalDate(currentOperationalDate);
       setLastUpdatedAt(new Date().toLocaleString('en-CA', { hour12: false }));
+      setSnapshotStatus('');
     } finally {
       if (fetchSeqRef.current === currentSeq) setLoading(false);
       inFlightRef.current = false;
@@ -1316,11 +1443,16 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
-    void fetchData(true);
-  }, []);
+    if (selectedOperationalDate === getOperationalRange().operationalDate) {
+      void fetchData(true);
+      return;
+    }
+    void fetchSnapshotData(selectedOperationalDate);
+  }, [selectedOperationalDate]);
 
   useEffect(() => {
     if (!supabase) return;
+    if (selectedOperationalDate !== getOperationalRange().operationalDate) return;
     const tick = () => {
       void fetchData(true);
     };
@@ -1344,7 +1476,7 @@ export default function DashboardPage() {
       document.removeEventListener('visibilitychange', onVisibility);
       void supabase.removeChannel(channel);
     };
-  }, []);
+  }, [selectedOperationalDate]);
 
   const positionOptions = useMemo(
     () =>
@@ -1365,28 +1497,6 @@ export default function DashboardPage() {
   );
   const selectedDepartmentSet = useMemo(() => new Set(departmentFilters), [departmentFilters]);
   const selectedPositionSet = useMemo(() => new Set(positionFilters), [positionFilters]);
-  const positionFilterLabel = useMemo(() => {
-    if (positionFilters.length === 0) return 'All positions';
-    if (positionFilters.length === 1) return positionFilters[0];
-    return `${positionFilters.length} positions`;
-  }, [positionFilters]);
-  const togglePositionFilter = (position: string) => {
-    setPositionFilters((current) =>
-      current.includes(position)
-        ? current.filter((item) => item !== position)
-        : [...current, position]
-    );
-  };
-  useEffect(() => {
-    if (!positionFilterOpen) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!positionFilterRef.current?.contains(event.target as Node)) {
-        setPositionFilterOpen(false);
-      }
-    };
-    document.addEventListener('pointerdown', handlePointerDown);
-    return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, [positionFilterOpen]);
   const shiftOptions = useMemo(
     () =>
       Array.from(new Set(rows.map((row) => String(row.display_shift ?? row.shift ?? '').trim().toLowerCase()).filter(Boolean))).sort((a, b) =>
@@ -2027,14 +2137,39 @@ export default function DashboardPage() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-1">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">Schedule Date</div>
-              <div className="text-xl font-semibold tracking-[-0.02em] text-stone-50">{operationalDate || '-'}</div>
-              <div className="text-sm text-stone-400">Updated {lastUpdatedAt || '-'}</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="date"
+                  value={selectedOperationalDate}
+                  onChange={(event) => setSelectedOperationalDate(normalizeDateOnly(event.target.value) || getOperationalRange().operationalDate)}
+                  className="h-11 rounded-full border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-stone-50 outline-none transition [color-scheme:dark] hover:bg-white/[0.08] focus:border-[#d9cfbf]/50"
+                />
+                <button
+                  type="button"
+                  onClick={() => setSelectedOperationalDate(getOperationalRange().operationalDate)}
+                  className={[
+                    'h-11 rounded-full border px-4 text-sm font-semibold transition',
+                    isLiveDate
+                      ? 'border-[#d9cfbf]/40 bg-[#e8dfcf] text-[#181614]'
+                      : 'border-white/10 bg-white/[0.05] text-stone-100 hover:bg-white/[0.08]'
+                  ].join(' ')}
+                >
+                  Today
+                </button>
+                {!isLiveDate && snapshotStatus && (
+                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-stone-300">
+                    {snapshotStatus}
+                  </span>
+                )}
+              </div>
+              <div className="text-sm text-stone-400">{loading ? 'Loading...' : `Updated ${lastUpdatedAt || '-'}`}</div>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => setMistakeReportOpen(true)}
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-medium text-stone-100 transition hover:bg-white/[0.08]"
+                disabled={!isLiveDate}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-medium text-stone-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <DocumentIcon />
                 Mistake Report
@@ -2042,7 +2177,8 @@ export default function DashboardPage() {
               <button
                 type="button"
                 onClick={() => setAccountUsageOpen(true)}
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-medium text-stone-100 transition hover:bg-white/[0.08]"
+                disabled={!isLiveDate}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-medium text-stone-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <GridIcon />
                 Account Usage
@@ -2059,7 +2195,10 @@ export default function DashboardPage() {
               </button>
               <button
                 type="button"
-                onClick={() => void fetchData()}
+                onClick={() => {
+                  if (isLiveDate) void fetchData(true);
+                  else void fetchSnapshotData(selectedOperationalDate);
+                }}
                 className="inline-flex items-center gap-2 rounded-full border border-[#d9cfbf]/40 bg-[#e8dfcf] px-4 py-2.5 text-sm font-semibold text-[#181614] transition hover:bg-[#f0e9dc]"
               >
                 <RefreshIcon />
@@ -2087,7 +2226,7 @@ export default function DashboardPage() {
                   ].join(' ')}
                 >
                   <div className="flex items-end justify-between gap-4">
-                    <div>
+                    <div className="min-w-0">
                       <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">
                         {getDashboardDepartmentLabel(card.department)} {isMorning ? 'Morning' : 'Night'}
                       </div>
@@ -2107,6 +2246,12 @@ export default function DashboardPage() {
                         >
                           {card.expected > 0 ? `${ratio.toFixed(1)}% coverage` : '0.0% coverage'}
                         </span>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">Hours</div>
+                      <div className={['mt-2 text-2xl font-semibold leading-none', getAttendanceCardValueClass(tonePosition)].join(' ')}>
+                        {formatDashboardHours(card.workHours)}
                       </div>
                     </div>
                   </div>
@@ -2177,6 +2322,7 @@ export default function DashboardPage() {
             ))}
           </div>
 
+          {isLiveDate && (
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1.5fr)_160px_220px_200px_repeat(3,minmax(0,150px))]">
             <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4">
               <SearchIcon className="h-4 w-4 text-stone-400" />
@@ -2187,101 +2333,28 @@ export default function DashboardPage() {
                 className="h-full w-full bg-transparent text-sm text-stone-100 outline-none placeholder:text-stone-500"
               />
             </label>
-            <div className="relative">
-              <select
-                value={departmentFilters[0] ?? ''}
-                onChange={(e) => setDepartmentFilters(e.target.value ? [e.target.value] : [])}
-                className="h-12 w-full appearance-none rounded-[20px] border border-white/10 bg-white/[0.04] px-4 pr-10 text-sm text-stone-100 outline-none transition focus:border-white/20"
-              >
-                <option value="">All dept</option>
-                {departmentOptions.map((department) => (
-                  <option key={department} value={department}>
-                    {department === 'hidden' ? 'Hidden' : department}
-                  </option>
-                ))}
-              </select>
-              <ChevronDownIcon className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
-            </div>
-            <div ref={positionFilterRef} className="relative">
-              <button
-                type="button"
-                onClick={() => setPositionFilterOpen((open) => !open)}
-                aria-haspopup="listbox"
-                aria-expanded={positionFilterOpen}
-                className="flex h-12 w-full items-center justify-between gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4 text-left text-sm text-stone-100 outline-none transition hover:bg-white/[0.06] focus:border-white/20"
-              >
-                <span className="min-w-0 truncate">{positionFilterLabel}</span>
-                <ChevronDownIcon className="h-4 w-4 shrink-0 text-stone-400" />
-              </button>
-              {positionFilterOpen && (
-                <div
-                  role="listbox"
-                  aria-multiselectable="true"
-                  className="absolute left-0 top-[calc(100%+8px)] z-40 w-full rounded-2xl border border-slate-700 bg-slate-900 p-3 shadow-[0_18px_40px_rgba(0,0,0,0.45)]"
-                >
-                  <div className="mb-2 flex items-center justify-between text-[11px] text-slate-300">
-                    <span>Multi-select</span>
-                    <button
-                      type="button"
-                      disabled={positionFilters.length === 0}
-                      onClick={() => setPositionFilters([])}
-                      className="min-w-[52px] rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-[12px] font-medium leading-none text-slate-100 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Clear
-                    </button>
-                  </div>
-                  <div className="max-h-56 space-y-1 overflow-auto pr-1">
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={positionFilters.length === 0}
-                    onClick={() => setPositionFilters([])}
-                    className={[
-                      'flex w-full cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm transition',
-                      positionFilters.length === 0 ? 'border-neon/50 bg-neon/10 text-neon' : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
-                    ].join(' ')}
-                  >
-                    <span className="inline-flex max-w-[80%] items-center truncate rounded-full border border-white/20 px-2 py-0.5 text-xs font-semibold">All positions</span>
-                  </button>
-                  {positionOptions.map((position) => {
-                    const selected = selectedPositionSet.has(position);
-                    return (
-                      <button
-                        key={position}
-                        type="button"
-                        role="option"
-                        aria-selected={selected}
-                        onClick={() => togglePositionFilter(position)}
-                        className={[
-                          'flex w-full cursor-pointer items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm transition',
-                          selected ? 'border-neon/50 bg-neon/10 text-neon' : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
-                        ].join(' ')}
-                      >
-                        <span className={['inline-flex max-w-[80%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-semibold', getPositionBadgeClass(position)].join(' ')}>
-                          {position}
-                        </span>
-                      </button>
-                    );
-                  })}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="relative">
-              <select
-                value={shiftFilter}
-                onChange={(e) => setShiftFilter(e.target.value)}
-                className="h-12 w-full appearance-none rounded-[20px] border border-white/10 bg-white/[0.04] px-4 pr-10 text-sm text-stone-100 outline-none transition focus:border-white/20"
-              >
-                <option value="">All shifts</option>
-                {shiftOptions.map((shift) => (
-                  <option key={shift} value={shift}>
-                    {formatShiftLabel(shift)}
-                  </option>
-                ))}
-              </select>
-              <ChevronDownIcon className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
-            </div>
+            <MagicSingleSelect
+              value={departmentFilters[0] ?? ''}
+              onChange={(value) => setDepartmentFilters(value ? [value] : [])}
+              allLabel="All dept"
+              options={departmentOptions.map((department) => ({ value: department, label: department === 'hidden' ? 'Hidden' : department }))}
+            />
+            <MagicMultiSelect
+              selected={positionFilters}
+              onChange={setPositionFilters}
+              allLabel="All positions"
+              options={positionOptions.map((position) => ({
+                value: position,
+                label: position,
+                badgeClass: getPositionBadgeClass(position)
+              }))}
+            />
+            <MagicSingleSelect
+              value={shiftFilter}
+              onChange={setShiftFilter}
+              allLabel="All shifts"
+              options={shiftOptions.map((shift) => ({ value: shift, label: formatShiftLabel(shift) }))}
+            />
             <label className="flex h-12 items-center gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4 text-sm text-stone-200">
               <input
                 type="checkbox"
@@ -2310,11 +2383,20 @@ export default function DashboardPage() {
               Off Work
             </label>
           </div>
+          )}
         </div>
 
         {error && <p className="mt-4 text-sm text-rose-300">Load failed: {error}</p>}
 
-        {!error && (
+        {!error && !isLiveDate && (
+          <div className="mt-6 rounded-[28px] border border-white/10 bg-black/20 px-5 py-8 text-center">
+            <div className="text-sm font-semibold text-stone-200">
+              {Object.keys(cardStatsByKey).length > 0 ? 'Snapshot summary only.' : 'No snapshot for this date.'}
+            </div>
+          </div>
+        )}
+
+        {!error && isLiveDate && (
           <div className="mt-6 overflow-hidden rounded-[28px] border border-white/10 bg-black/20">
             <div className="overflow-auto">
               <table className="min-w-[1100px] w-full border-collapse text-sm">
@@ -2374,12 +2456,20 @@ export default function DashboardPage() {
                         {row.name || '-'}
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
-                        <GlowLabelChip tone={getGlowToneForPosition(row.position)} className="min-w-[54px] uppercase tracking-[0.12em]">
+                        <GlowLabelChip
+                          tone={getGlowToneForPosition(row.position)}
+                          className="min-w-[54px] uppercase tracking-[0.12em]"
+                          glowSeed={`${row.staff_id}:position:${row.position || '-'}`}
+                        >
                           {row.position || '-'}
                         </GlowLabelChip>
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
-                        <GlowLabelChip tone={(labelToneMap[String(row.label || '').trim().toLowerCase()] ?? 'slate')} className="min-w-[34px]">
+                        <GlowLabelChip
+                          tone={(labelToneMap[String(row.label || '').trim().toLowerCase()] ?? 'slate')}
+                          className="min-w-[34px]"
+                          glowSeed={`${row.staff_id}:label:${row.label || '-'}`}
+                        >
                           {row.label || '-'}
                         </GlowLabelChip>
                       </td>
@@ -2424,7 +2514,11 @@ export default function DashboardPage() {
                         )}
                       </td>
                       <td className={['whitespace-nowrap px-3 py-3 text-stone-300', hasOverPunch ? 'border-y border-rose-500/90' : ''].join(' ')}>
-                        <GlowLabelChip tone={getGlowToneForShift(row.display_shift || row.shift)} className="min-w-[68px]">
+                        <GlowLabelChip
+                          tone={getGlowToneForShift(row.display_shift || row.shift)}
+                          className="min-w-[68px]"
+                          glowSeed={`${row.staff_id}:shift:${row.display_shift || row.shift || '-'}`}
+                        >
                           {formatShiftLabel(row.display_shift || row.shift)}
                         </GlowLabelChip>
                       </td>
@@ -2481,6 +2575,7 @@ export default function DashboardPage() {
                                   tone={isShortGapPunch ? 'rose' : getGlowToneForPunch(punch.action)}
                                   className="min-w-[72px] py-1 text-[11px]"
                                   title={formatDateTime(punch.created_at)}
+                                  glowSeed={`${row.staff_id}:punch:${punch.id || punch.created_at || idx}:${idx}`}
                                 >
                                   {`${punch.action} ${formatTimeOnly(punch.created_at)}`}
                                 </GlowLabelChip>
@@ -2515,7 +2610,7 @@ export default function DashboardPage() {
           </div>
           </div>
         )}
-        {!error && !loading && renderedRows.length < filteredRows.length && (
+        {!error && isLiveDate && !loading && renderedRows.length < filteredRows.length && (
           <div className="mt-4 flex justify-center">
             <button
               type="button"
@@ -2831,7 +2926,11 @@ export default function DashboardPage() {
                       {punchDetailRows.map((punch, idx) => (
                         <tr key={punch.id || `${punch.staff_id}-${punch.created_at}-${idx}`} className="border-t border-white/5 odd:bg-white/[0.03]">
                           <td className="px-3 py-2 align-top">
-                            <GlowLabelChip tone={getGlowToneForPunch(punch.action)} className="min-w-[72px] py-1 text-xs">
+                            <GlowLabelChip
+                              tone={getGlowToneForPunch(punch.action)}
+                              className="min-w-[72px] py-1 text-xs"
+                              glowSeed={`${punch.staff_id}:detail-punch:${punch.id || punch.created_at || idx}:${idx}`}
+                            >
                               {punch.action}
                             </GlowLabelChip>
                           </td>

@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 import { createSupabaseClient, createSupabaseClientWithCredentials } from '../lib/supabase';
@@ -12,10 +12,19 @@ import { matchesLooseSearch } from '../lib/textSearch';
 import {
   LABEL_TONE_KEYS,
   type LabelToneKey,
+  buildLabelToneRows,
   loadLabelToneMap,
+  normalizeLabelToneMap,
+  readLabelToneMapFromRows,
   saveLabelToneMap
 } from '../lib/labelTone';
 import { matchesAuditSearch } from './auditSearch';
+import {
+  allocateTemporaryStaffId,
+  isNewHirePlaceholderStaffId,
+  resolveEmployeeEditStaffIds,
+  shouldAllocateTemporaryStaffIdOnEdit
+} from './tempStaffIds';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import AdminHeader from './components/AdminHeader';
@@ -24,7 +33,10 @@ import BorderGlow from './components/BorderGlow';
 import BusyOverlay from './components/BusyOverlay';
 import AdminLoginPanel from './components/AdminLoginPanel';
 import ScheduleToolbar from './components/ScheduleToolbar';
+import ScheduleShiftTimeCell from './components/ScheduleShiftTimeCell';
 import { matchesScheduleDriverFilter, normalizeScheduleDriverFilterValue } from './scheduleDriverFilter';
+import { getScheduleEmployeeProfileEmail, resolveScheduleEmployeeDisplayName } from './scheduleDisplayName';
+import { buildHiddenJdlStaffIdsForAccounts } from './jdlAdminScheduleStaff';
 import DailyListNewHireModal from './components/DailyListNewHireModal';
 import AdminUserAvatar from './components/AdminUserAvatar';
 import DevicesPage from './pages/DevicesPage';
@@ -36,8 +48,22 @@ import EmployeeAddModal from './pages/EmployeeAddModal';
 import EmployeesTableSection from './pages/EmployeesTableSection';
 import EmployeeAuditModal from './pages/EmployeeAuditModal';
 import EmployeeEditModal from './pages/EmployeeEditModal';
+import EmployeeNotesModal from './pages/EmployeeNotesModal';
+import EmployeeNoteNameButton, { type EmployeeNotePair } from './components/EmployeeNoteNameButton';
 import EmployeeBadgePreviewModal from './pages/EmployeeBadgePreviewModal';
 import DepartedEmployeesModal from './pages/DepartedEmployeesModal';
+import DepartureConfirmDialog from './pages/DepartureConfirmDialog';
+import AgencyTerminationApprovalDialog from './pages/AgencyTerminationApprovalDialog';
+import {
+  attachDepartureOperators,
+  buildDepartedEmployeesCsv,
+  normalizeTerminationReason
+} from './departedEmployees';
+import {
+  createAgencyTerminationSubmissionLock,
+  executeAgencyTerminationApproval,
+  normalizeAgencyTerminationDetails
+} from './agencyTerminationApproval';
 import TimecardControls from './pages/TimecardControls';
 import TimecardTableSection from './pages/TimecardTableSection';
 import HomeDashboardPage from './pages/HomeDashboardPage';
@@ -49,12 +75,15 @@ import PredictionModelPage from './pages/PredictionModelPage';
 import EfficiencyPage from './pages/EfficiencyPage';
 import WorkHourComparisonPage from './pages/WorkHourComparisonPage';
 import LeaveApprovalPage from './pages/LeaveApprovalPage';
+import { summarizeAttendancePunchRows } from './homeAttendance';
 import TodoPage from './pages/TodoPage';
+import ExceptionsPage from './pages/ExceptionsPage';
 import AppDialog from '../components/AppDialog';
 import ElectricBorder from '../components/ElectricBorder';
 import {
   canManageAdminAccess,
   canReviewTerminationRequests,
+  filterRowsByManagedAgencyAccess,
   filterRowsByPositionAccess,
   getModuleMapFromContext,
   hasPositionAccess,
@@ -63,16 +92,19 @@ import {
 } from '../shared/adminAccess';
 import {
   DAILY_LIST_LIGHTS_KEY,
-  buildDailyListLightsSettingValue,
+  buildDailyListLightRows,
   createEmptyDailyListLightFlags,
   normalizeDailyListLightPosition,
+  readDailyListLightsFromRows,
   readDailyListLightsForDate,
   type DailyListLightFlags,
   type DailyListLightPosition
 } from '../shared/dailyListLights';
 import { isScheduleOnlyAgency } from '../shared/agencyRules';
+import { getScheduleMistakeDateRange } from '../shared/scheduleMistakes';
 import {
   createAdminAccessRequest,
+  cancelPendingEmployeeTerminationRequests,
   fetchAdminAccessContext,
   listPositions,
   listAdminAccessAccounts,
@@ -101,6 +133,10 @@ import {
   type PositionRecord
 } from '../shared/positions';
 import { useScheduleRealtime } from './useScheduleRealtime';
+import { shouldEnableEmployeeRealtime, useEmployeeRealtime } from './useEmployeeRealtime';
+import { buildEmployeeEditWritePayload } from './employeePositionColumns';
+import { sortEmployeesByPositionOrder } from './employeePositionSort';
+import { sortScheduleEmployees } from './scheduleEmployeeSort';
 import {
   activatePlannedScheduleNote,
   buildDailyPlannedActivationUpserts,
@@ -110,10 +146,25 @@ import {
   shouldRunWeeklyScheduleReset,
   shouldRunWeeklyScheduleRollover
 } from './scheduleWeek';
-import { buildTimecardExportDailyPeopleRow, formatRoundedHours, getTimecardExportDayCellText, getTimecardTerminatedByDay } from './timecardDisplay';
+import {
+  buildTimecardExportDailyPeopleRow,
+  formatRoundedHours,
+  formatTimecardPunchExportDateTime,
+  getTimecardExportDayCellText,
+  getTimecardTerminatedByDay
+} from './timecardDisplay';
+import { shouldUseTimecardWeekCache } from './timecardCache';
+import {
+  buildOperationalDayRange,
+  buildTimecardPunchSavePayload,
+  canOperateTimecardPunches,
+  computeConfirmedOperationalDayHours,
+  parseTimecardPunchSaveResult
+} from './timecardPunchSave';
 import {
   getDefaultPositionToneKey,
   getPositionToneFromMap,
+  mergeLegacyPositionToneMap,
   normalizeExplicitPositionToneMap,
   normalizePositionToneKey,
   normalizePositionToneMap,
@@ -142,6 +193,8 @@ import {
   normalizeEmployeeUploadPosition
 } from './employeeUploadPositions';
 import { shouldAutofillShiftTime } from './shiftTimeAutofill';
+import { getScheduleExportCellValue } from './scheduleExport';
+import { normalizeScheduleShiftTime, resolveScheduleShiftTimeChange } from './scheduleShiftTime';
 import {
   loadDailyCapacityStaffStats,
   type DailyCapacityProcKey,
@@ -253,6 +306,12 @@ const AUDIT_TABLE = (import.meta.env.VITE_AUDIT_TABLE as string | undefined) ?? 
 const HIDDEN_AUDIT_ACTIONS = new Set(['admin_page_switch', 'schedule_open_daily_list']);
 const SCHEDULE_TABLE = (import.meta.env.VITE_SCHEDULE_TABLE as string | undefined) ?? 'ob_schedules';
 const APP_SETTINGS_TABLE = (import.meta.env.VITE_APP_SETTINGS_TABLE as string | undefined) ?? 'ob_app_settings';
+const DAILY_LIST_LIGHTS_TABLE =
+  (import.meta.env.VITE_DAILY_LIST_LIGHTS_TABLE as string | undefined) ?? 'ob_daily_list_position_lights';
+const SCHEDULE_LABEL_TONES_TABLE =
+  (import.meta.env.VITE_SCHEDULE_LABEL_TONES_TABLE as string | undefined) ?? 'ob_schedule_label_tones';
+const SCHEDULE_JOB_RUNS_TABLE =
+  (import.meta.env.VITE_SCHEDULE_JOB_RUNS_TABLE as string | undefined) ?? 'ob_schedule_job_runs';
 const USER_PROFILE_TABLE = (import.meta.env.VITE_USER_PROFILE_TABLE as string | undefined) ?? 'ob_user_profiles';
 const PROFILE_AVATAR_BUCKET = (import.meta.env.VITE_PROFILE_AVATAR_BUCKET as string | undefined) ?? 'profile-avatars';
 const ATTENDANCE_MARKS_TABLE = (import.meta.env.VITE_ATTENDANCE_MARKS_TABLE as string | undefined) ?? 'ob_attendance_marks';
@@ -454,13 +513,6 @@ const normalizeWorkAccountKey = (value: string) => {
   return raw.replace(/\s+/g, '');
 };
 
-const buildJdlStaffIdCandidatesForAccount = (email: string, userId: string) => {
-  const userToken = String(userId ?? '').replace(/-/g, '').slice(0, 8).toUpperCase();
-  const emailPrefix = String(email ?? '').split('@')[0] ?? '';
-  const base = emailPrefix.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || `USER${userToken}`;
-  return [base, `${base}${userToken}`].filter(Boolean);
-};
-
 const parseUph = (value: unknown) => {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
@@ -553,7 +605,7 @@ const isEmployeeActive = (employee: EmployeeRow | null | undefined) => {
 const isAttendanceQueryableStaffId = (value: unknown) => isValidPunchStaffId(normalizeStaffId(String(value ?? '').trim()));
 const isAttendanceQueryableEmployee = (employee: EmployeeRow | null | undefined) => {
   if (!employee) return false;
-  const agency = String(employee.agency ?? employee.Agency ?? '').trim();
+  const agency = String(employee.agency ?? '').trim();
   return isAttendanceQueryableStaffId(employee.staff_id) && !isScheduleOnlyAgency(agency);
 };
 
@@ -849,12 +901,7 @@ const SHIFT_ANALYSIS_DAYS_RAW = Number(import.meta.env.VITE_SHIFT_ANALYSIS_DAYS 
 const SHIFT_ANALYSIS_DAYS = Number.isFinite(SHIFT_ANALYSIS_DAYS_RAW) ? clamp(SHIFT_ANALYSIS_DAYS_RAW, 1, 90) : 30;
 
 const getDayRange = (weekStart: Date, dayIndex: number, dayCount = 1) => {
-  const startBase = addDays(weekStart, dayIndex);
-  const endBase = addDays(weekStart, dayIndex + dayCount);
-  return {
-    start: new Date(startBase.getTime() + DAY_CUTOFF_MS),
-    end: new Date(endBase.getTime() + DAY_CUTOFF_MS)
-  };
+  return buildOperationalDayRange(weekStart, dayIndex, DAY_CUTOFF_HOUR, dayCount);
 };
 // Day bucketing uses [start, end). Shift OUT by 1ms so exact-cutoff OUT belongs to previous operational day.
 const getOperationalBucketTimeMs = (at: Date, action: 'IN' | 'OUT') => at.getTime() - (action === 'OUT' ? 1 : 0);
@@ -930,24 +977,6 @@ const normalizeAllowedPosition = (value: string): AllowedPosition | '' => {
   }
   return '';
 };
-const isNewHirePlaceholderStaffId = (value: string) => {
-  const staff = String(value ?? '').trim().toUpperCase();
-  if (!staff) return false;
-  if (/^TUS\d{7,}$/i.test(staff)) return true;
-  if (/^TEMP-USID-[A-Z0-9]+-\d{4,}$/i.test(staff)) return true;
-  if (/^NEWREQ-\d{8}(?:-[A-Z]+)?-\d{3,}$/i.test(staff)) return true; // legacy format
-  return /^\d{4}[A-Z]+\d{3,}$/i.test(staff); // MMDD + POSITION + SEQ
-};
-const createManualTemporaryStaffId = (existingStaffIds: string[] = []) => {
-  let max = 0;
-  for (const value of existingStaffIds) {
-    const match = String(value ?? '').trim().toUpperCase().match(/^TUS(\d{7,})$/);
-    if (!match) continue;
-    const n = Number(match[1]);
-    if (Number.isFinite(n)) max = Math.max(max, n);
-  }
-  return `TUS${String(max + 1).padStart(7, '0')}`;
-};
 const isNewHirePlaceholderName = (value: string) => /^\d{2}\/\d{2}NEW\s+[A-Z]+(\d+)$/i.test(String(value ?? '').trim());
 const isNewHireFirstWorkDate = (staffId: string, workDate: Date | string) => {
   const staff = String(staffId ?? '').trim().toUpperCase();
@@ -967,6 +996,16 @@ const isNewHireFirstWorkDate = (staffId: string, workDate: Date | string) => {
   const day = match[2];
   return dateText.slice(5, 7) === month && dateText.slice(8, 10) === day;
 };
+const isDailyListNewHireForDate = (value: string, workDate: Date | string) => {
+  const text = String(value ?? '').trim().toUpperCase();
+  if (!text) return false;
+  const dateText = typeof workDate === 'string' ? workDate : toDateOnly(workDate);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateText)) return false;
+  if (isNewHireFirstWorkDate(text, dateText)) return true;
+  const displayMatch = text.match(/^(\d{2})\/(\d{2})NEW\s+[A-Z]+\d+$/i);
+  if (!displayMatch) return false;
+  return dateText.slice(5, 7) === displayMatch[1] && dateText.slice(8, 10) === displayMatch[2];
+};
 const displayStaffId = (value: string) => String(value ?? '').trim();
 const normalizeDeviceSn = (value: string) => String(value ?? '').trim().toUpperCase();
 const normalizeDeviceType = (value: string): DeviceType => {
@@ -982,18 +1021,18 @@ const normalizeDeviceType = (value: string): DeviceType => {
 };
 
 const POSITION_TONE_CLASS_DARK: Record<LabelToneKey, string> = {
-  sky: 'badge-elevated-dark label-glow-chip border-sky-300/30 text-sky-100 bg-sky-400/[0.13]',
-  cyan: 'badge-elevated-dark label-glow-chip border-cyan-300/30 text-cyan-100 bg-cyan-400/[0.13]',
-  teal: 'badge-elevated-dark label-glow-chip border-teal-300/30 text-teal-100 bg-teal-400/[0.13]',
-  emerald: 'badge-elevated-dark label-glow-chip border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]',
-  lime: 'badge-elevated-dark label-glow-chip border-lime-300/30 text-lime-100 bg-lime-400/[0.13]',
-  amber: 'badge-elevated-dark label-glow-chip border-amber-300/30 text-amber-100 bg-amber-400/[0.13]',
-  orange: 'badge-elevated-dark label-glow-chip border-orange-300/30 text-orange-100 bg-orange-400/[0.13]',
-  rose: 'badge-elevated-dark label-glow-chip border-rose-300/30 text-rose-100 bg-rose-400/[0.13]',
-  fuchsia: 'badge-elevated-dark label-glow-chip border-fuchsia-300/30 text-fuchsia-100 bg-fuchsia-400/[0.13]',
-  violet: 'badge-elevated-dark label-glow-chip border-violet-300/30 text-violet-100 bg-violet-400/[0.13]',
-  indigo: 'badge-elevated-dark label-glow-chip border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]',
-  slate: 'badge-elevated-dark label-glow-chip border-white/12 text-slate-200 bg-white/[0.05]'
+  sky: 'badge-elevated-dark border-sky-300/30 text-sky-100 bg-sky-400/[0.13]',
+  cyan: 'badge-elevated-dark border-cyan-300/30 text-cyan-100 bg-cyan-400/[0.13]',
+  teal: 'badge-elevated-dark border-teal-300/30 text-teal-100 bg-teal-400/[0.13]',
+  emerald: 'badge-elevated-dark border-emerald-300/30 text-emerald-100 bg-emerald-400/[0.13]',
+  lime: 'badge-elevated-dark border-lime-300/30 text-lime-100 bg-lime-400/[0.13]',
+  amber: 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]',
+  orange: 'badge-elevated-dark border-orange-300/30 text-orange-100 bg-orange-400/[0.13]',
+  rose: 'badge-elevated-dark border-rose-300/30 text-rose-100 bg-rose-400/[0.13]',
+  fuchsia: 'badge-elevated-dark border-fuchsia-300/30 text-fuchsia-100 bg-fuchsia-400/[0.13]',
+  violet: 'badge-elevated-dark border-violet-300/30 text-violet-100 bg-violet-400/[0.13]',
+  indigo: 'badge-elevated-dark border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]',
+  slate: 'badge-elevated-dark border-white/12 text-slate-200 bg-white/[0.05]'
 };
 
 const POSITION_TONE_CLASS_LIGHT: Record<LabelToneKey, string> = {
@@ -1324,6 +1363,7 @@ const getVisibleAdminPages = (accessContext: AdminAccessContext | null | undefin
   if (hasModuleAccess(moduleMap, 'forecast', 'view')) pages.push('forecast');
   if (hasModuleAccess(moduleMap, 'prediction_model', 'view')) pages.push('prediction_model');
   if (hasModuleAccess(moduleMap, 'efficiency', 'view')) pages.push('efficiency');
+  if (hasModuleAccess(moduleMap, 'exceptions', 'view')) pages.push('exceptions');
 
   return pages.length > 0 ? pages : ['home'];
 };
@@ -1405,6 +1445,10 @@ export default function AdminAppPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const isLocked = Boolean(busy);
   const [busyVisible, setBusyVisible] = useState(false);
+  const [homePanelLoading, setHomePanelLoading] = useState(false);
+  const [homePanelLoadingStage, setHomePanelLoadingStage] = useState<'syncing' | 'finalizing'>('syncing');
+  const [homePanelLoadingProgress, setHomePanelLoadingProgress] = useState(0);
+  const homePanelLoadingTokenRef = useRef(0);
   const timecardFetchSeqRef = useRef(0);
   const punchesFetchSeqRef = useRef(0);
   const attendanceFetchSeqRef = useRef(0);
@@ -1450,8 +1494,7 @@ export default function AdminAppPage() {
   const scheduleLabelToneLastSavedJsonRef = useRef('');
   const scheduleRenderFilterKeyRef = useRef('');
   const scheduleTableScrollRef = useRef<HTMLDivElement | null>(null);
-  type EmployeeColumnMode = 'lower' | 'cased';
-  const employeeColumnModeRef = useRef<EmployeeColumnMode | null>(null);
+  type EmployeeFetchProfile = 'full' | 'home';
   const scheduleUphRequestRef = useRef(0);
   const dailyCapacityRequestRef = useRef(0);
   const scheduleMistakeRequestRef = useRef(0);
@@ -1465,6 +1508,10 @@ export default function AdminAppPage() {
   const [adminAccessContext, setAdminAccessContext] = useState<AdminAccessContext | null>(null);
   const [adminAccessRequests, setAdminAccessRequests] = useState<AdminAccessRequestRecord[]>([]);
   const [terminationRequests, setTerminationRequests] = useState<TerminationRequestRecord[]>([]);
+  const [terminationApprovalRequest, setTerminationApprovalRequest] = useState<TerminationRequestRecord | null>(null);
+  const [terminationApprovalSubmitting, setTerminationApprovalSubmitting] = useState(false);
+  const [terminationApprovalError, setTerminationApprovalError] = useState('');
+  const terminationApprovalSubmissionLockRef = useRef(createAgencyTerminationSubmissionLock());
   const [adminAccessAccounts, setAdminAccessAccounts] = useState<AdminAccessAccountRecord[]>([]);
   const [adminAccessUserOptions, setAdminAccessUserOptions] = useState<AdminAccessUserOption[]>([]);
   const [positions, setPositions] = useState<PositionRecord[]>([]);
@@ -1484,8 +1531,10 @@ export default function AdminAppPage() {
       predictionModel: hasModuleAccess(adminModuleMap, 'prediction_model', 'operate'),
       efficiency: hasModuleAccess(adminModuleMap, 'efficiency', 'operate'),
       leaveApproval: hasModuleAccess(adminModuleMap, 'leave_approval', 'operate'),
+      workHourComparison: hasModuleAccess(adminModuleMap, 'work_hour_comparison', 'operate'),
       todo: hasModuleAccess(adminModuleMap, 'todo', 'operate'),
-      audit: hasModuleAccess(adminModuleMap, 'audit', 'operate')
+      audit: hasModuleAccess(adminModuleMap, 'audit', 'operate'),
+      exceptions: hasModuleAccess(adminModuleMap, 'exceptions', 'operate')
     }),
     [adminModuleMap]
   );
@@ -1501,8 +1550,10 @@ export default function AdminAppPage() {
     predictionModel: predictionModelCanOperate,
     efficiency: efficiencyCanOperate,
     leaveApproval: leaveApprovalCanOperate,
+    workHourComparison: workHourComparisonCanOperate,
     todo: todoCanOperate,
-    audit: auditCanOperate
+    audit: auditCanOperate,
+    exceptions: exceptionsCanOperate
   } = canOperateFlags;
   const employeesReadOnly = isLocked || !employeesCanOperate;
   const scheduleReadOnly = isLocked || !scheduleCanOperate;
@@ -1619,24 +1670,17 @@ export default function AdminAppPage() {
     () => canManageAdminAccess(adminAccessContext),
     [adminAccessContext]
   );
-  const inactiveJdlStaffIds = useMemo(() => {
-    const next = new Set<string>();
-    for (const account of adminAccessAccounts) {
-      if (account.is_active) continue;
-      for (const staff of buildJdlStaffIdCandidatesForAccount(account.user_email, account.user_id)) {
-        const normalized = normalizeStaffId(staff);
-        if (normalized) next.add(normalized);
-      }
-    }
-    return next;
-  }, [adminAccessAccounts]);
+  const hiddenJdlStaffIds = useMemo(
+    () => buildHiddenJdlStaffIdsForAccounts(adminAccessAccounts, normalizeStaffId),
+    [adminAccessAccounts]
+  );
   const isInactiveJdlEmployee = useCallback(
     (employee: EmployeeRow | null | undefined) => {
       const staff = normalizeStaffId(String(employee?.staff_id ?? '').trim());
-      const agency = String(employee?.agency ?? employee?.Agency ?? '').trim();
-      return Boolean(staff && isScheduleOnlyAgency(agency) && inactiveJdlStaffIds.has(staff));
+      const agency = String(employee?.agency ?? '').trim();
+      return Boolean(staff && isScheduleOnlyAgency(agency) && hiddenJdlStaffIds.has(staff));
     },
-    [inactiveJdlStaffIds]
+    [hiddenJdlStaffIds]
   );
   const pendingTerminationRequestsByStaffId = useMemo(() => {
     const map = new Map<string, TerminationRequestRecord>();
@@ -1794,7 +1838,7 @@ export default function AdminAppPage() {
   const scheduleBadgeBaseClass =
     themeMode === 'light'
       ? 'badge-elevated-light inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold'
-      : 'badge-elevated-dark label-glow-chip inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold';
+      : 'badge-elevated-dark inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold';
   const getScheduleTablePositionBadgeClass = (position: string) => {
     const toneClass =
       themeMode === 'light'
@@ -1922,12 +1966,23 @@ export default function AdminAppPage() {
     );
   };
 
-  const [, setStatus] = useState<Status>({ tone: 'idle', message: '请登录后台' });
+  const [status, setStatus] = useState<Status>({ tone: 'idle', message: '请登录后台' });
   const [loginErrorDialog, setLoginErrorDialog] = useState<{ open: boolean; title: string; message: string }>({
     open: false,
     title: '',
     message: ''
   });
+  useEffect(() => {
+    if (!status.message || status.tone === 'pending') return undefined;
+    if (status.message === '请登录后台' || status.message === 'Please sign in') return undefined;
+
+    const timer = window.setTimeout(() => {
+      setStatus((current) => (current.message === status.message ? { ...current, message: '' } : current));
+    }, 3000);
+
+    return () => window.clearTimeout(timer);
+  }, [status]);
+
   const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; title: string; message: string }>({
     open: false,
     title: '',
@@ -2151,7 +2206,14 @@ export default function AdminAppPage() {
   const [employeeNewWorkAccount, setEmployeeNewWorkAccount] = useState('');
   const [employeeNewWorkPassword, setEmployeeNewWorkPassword] = useState('');
   const [employeeAddOpen, setEmployeeAddOpen] = useState(false);
+  const [employeeAddFeedback, setEmployeeAddFeedback] = useState<{ tone: 'pending' | 'success' | 'error'; message: string } | null>(null);
   const [employeeEditOpen, setEmployeeEditOpen] = useState(false);
+  const [employeeNotesOpen, setEmployeeNotesOpen] = useState(false);
+  const [employeeNotesTarget, setEmployeeNotesTarget] = useState<{ staff: string; name: string; position: string } | null>(null);
+  const [employeeAdminNoteDraft, setEmployeeAdminNoteDraft] = useState('');
+  const [employeeNoteSaving, setEmployeeNoteSaving] = useState(false);
+  const [employeeNoteError, setEmployeeNoteError] = useState<string | null>(null);
+  const [employeeNotesByStaffId, setEmployeeNotesByStaffId] = useState<Record<string, EmployeeNotePair>>({});
   const [employeeEditOriginalStaffId, setEmployeeEditOriginalStaffId] = useState<string | null>(null);
   const [employeeEditStaffId, setEmployeeEditStaffId] = useState<string | null>(null);
   const [employeeEditName, setEmployeeEditName] = useState('');
@@ -2174,6 +2236,7 @@ export default function AdminAppPage() {
   const [employeeLastPunchSortNowMs, setEmployeeLastPunchSortNowMs] = useState(() => Date.now());
   const [employeeSortByLastPunchDesc, setEmployeeSortByLastPunchDesc] = useState(false);
   const [employeeSortByHireDateDesc, setEmployeeSortByHireDateDesc] = useState(false);
+  const [employeeSortByPosition, setEmployeeSortByPosition] = useState(false);
   const [employeeBadgePrintingStaffId, setEmployeeBadgePrintingStaffId] = useState<string | null>(null);
   const [accountCardPrintingStaffId, setAccountCardPrintingStaffId] = useState<string | null>(null);
   const [employeeBadgeBatchPrinting, setEmployeeBadgeBatchPrinting] = useState(false);
@@ -2185,12 +2248,19 @@ export default function AdminAppPage() {
   const [departedEmployees, setDepartedEmployees] = useState<EmployeeRow[]>([]);
   const [departedEmployeesLoading, setDepartedEmployeesLoading] = useState(false);
   const [departedEmployeesError, setDepartedEmployeesError] = useState<string | null>(null);
+  const employeeRealtimeDebounceTimerRef = useRef<number | null>(null);
   const [departureConfirm, setDepartureConfirm] = useState<{
     staff: string;
     displayName: string;
     employeeSnapshot: EmployeeRow | null;
     type: TerminationType;
+    reason: string;
   } | null>(null);
+
+  useEffect(() => {
+    if (!employeesError) return;
+    setStatus({ tone: 'error', message: employeesError });
+  }, [employeesError]);
   const [employeeBadgePreview, setEmployeeBadgePreview] = useState<{
     staff: string;
     name: string;
@@ -2206,6 +2276,7 @@ export default function AdminAppPage() {
   const [timecardRows, setTimecardRows] = useState<TimecardRow[]>([]);
   const [timecardError, setTimecardError] = useState<string | null>(null);
   const [timecardLoading, setTimecardLoading] = useState(false);
+  const [timecardLoadingProgress, setTimecardLoadingProgress] = useState(0);
   const [timecardSearch, setTimecardSearch] = useState('');
   const [timecardAgency, setTimecardAgency] = useState<string[]>([]);
   const [timecardKnownAgencyOptions, setTimecardKnownAgencyOptions] = useState<string[]>([]);
@@ -2234,11 +2305,15 @@ export default function AdminAppPage() {
   const [timecardPunchPendingAddRows, setTimecardPunchPendingAddRows] = useState<PunchRow[]>([]);
   const [timecardPunchPendingDeleteIds, setTimecardPunchPendingDeleteIds] = useState<string[]>([]);
   const [timecardPunchAddOpen, setTimecardPunchAddOpen] = useState(false);
+  const [timecardPunchAddMenuOpen, setTimecardPunchAddMenuOpen] = useState(false);
   const [timecardPunchEdits, setTimecardPunchEdits] = useState<Record<string, { action: 'IN' | 'OUT'; atLocal: string }>>({});
   const [timecardPunchDraggingId, setTimecardPunchDraggingId] = useState<string | null>(null);
   const [timecardPunchDragOverId, setTimecardPunchDragOverId] = useState<string | null>(null);
   const [timecardPunchOrderIds, setTimecardPunchOrderIds] = useState<string[]>([]);
-  const [timecardPunchNew, setTimecardPunchNew] = useState<{ inAtLocal: string; outAtLocal: string }>({
+  const [timecardPunchAddMode, setTimecardPunchAddMode] = useState<'single' | 'pair'>('single');
+  const [timecardPunchNew, setTimecardPunchNew] = useState<{ action: 'IN' | 'OUT'; atLocal: string; inAtLocal: string; outAtLocal: string }>({
+    action: 'IN',
+    atLocal: '',
     inAtLocal: '',
     outAtLocal: ''
   });
@@ -2271,13 +2346,13 @@ export default function AdminAppPage() {
   const [dailyCapacityStaffStatsByStaffId, setDailyCapacityStaffStatsByStaffId] = useState<Record<string, DailyCapacityStaffStats>>({});
   const [dailyCapacityTemplatePayload, setDailyCapacityTemplatePayload] = useState<EffPayloadLite>(() => effDefaultPayload());
   const [dailyCapacityLoading, setDailyCapacityLoading] = useState(false);
-  const [dailyCapacityError, setDailyCapacityError] = useState<string | null>(null);
+  const [, setDailyCapacityError] = useState<string | null>(null);
   const [scheduleMistakeByStaffId, setScheduleMistakeByStaffId] = useState<Record<string, number>>({});
   const [scheduleMistakeDetailsByStaffId, setScheduleMistakeDetailsByStaffId] = useState<Record<string, ScheduleMistakeDetail[]>>({});
   const [scheduleMonthlyAbsentDatesByStaffId, setScheduleMonthlyAbsentDatesByStaffId] = useState<Record<string, string[]>>({});
   const [scheduleLateByStaffDayKey, setScheduleLateByStaffDayKey] = useState<Record<string, LateMarkView>>({});
   const [scheduleDriverGroupByStaffId, setScheduleDriverGroupByStaffId] = useState<Record<string, ScheduleDriverGroupInfo>>({});
-  const [scheduleAgencyNoteByStaffId, setScheduleAgencyNoteByStaffId] = useState<Record<string, string>>({});
+  const [scheduleRegisteredNameByEmail, setScheduleRegisteredNameByEmail] = useState<Record<string, string>>({});
   const [scheduleMistakeDraft, setScheduleMistakeDraft] = useState<ScheduleMistakeDraft>({
     open: false,
     staff_id: '',
@@ -2287,7 +2362,6 @@ export default function AdminAppPage() {
     saving: false
   });
   const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
-  const [scheduleWeekInput, setScheduleWeekInput] = useState(() => toDateOnly(startOfWeekMonday(new Date())));
   const [schedulePrintDate, setSchedulePrintDate] = useState(() => toDateOnly(new Date()));
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [scheduleSearchInput, setScheduleSearchInput] = useState('');
@@ -2301,6 +2375,8 @@ export default function AdminAppPage() {
   );
   const [scheduleLabels, setScheduleLabels] = useState<string[]>([]);
   const [scheduleLabelSavingStaffId, setScheduleLabelSavingStaffId] = useState<string | null>(null);
+  const [scheduleShiftTimeEditingStaffId, setScheduleShiftTimeEditingStaffId] = useState<string | null>(null);
+  const [scheduleShiftTimeSavingStaffId, setScheduleShiftTimeSavingStaffId] = useState<string | null>(null);
   const [scheduleLabelToneByName, setScheduleLabelToneByName] = useState<Record<string, LabelToneKey>>(() =>
     loadLabelToneMap()
   );
@@ -2324,6 +2400,8 @@ export default function AdminAppPage() {
   const [dailyListOpen, setDailyListOpen] = useState(false);
   const [dailyListDateInput, setDailyListDateInput] = useState(() => toDateOnly(addDays(new Date(), 1)));
   const [dailyListNewHireOpen, setDailyListNewHireOpen] = useState(false);
+  const [dailyListNewHireDetailOpen, setDailyListNewHireDetailOpen] = useState(false);
+  const [dailyListNewHireDetailPosition, setDailyListNewHireDetailPosition] = useState('');
   const [dailyListNewHirePosition, setDailyListNewHirePosition] = useState<string>('');
   const [dailyListNewHireCount, setDailyListNewHireCount] = useState(1);
   const [dailyListNewHireAgency, setDailyListNewHireAgency] = useState('');
@@ -2339,6 +2417,7 @@ export default function AdminAppPage() {
   const [dailyListFilterPositions, setDailyListFilterPositions] = useState<DailyListLightFlags>(
     createEmptyDailyListLightFlags
   );
+  const [dailyListFilterAgency, setDailyListFilterAgency] = useState('');
   const dailyListSelectedPositionsRef = useRef<DailyListLightFlags>(createEmptyDailyListLightFlags());
   const dailyListLightsSaveSeqRef = useRef(0);
   const dailyListLightsPendingRef = useRef<{
@@ -2393,6 +2472,25 @@ export default function AdminAppPage() {
       }, 300); // Debounce for 300ms
     },
     enabled: page === 'schedule' && !!supabase
+  });
+
+  useEmployeeRealtime({
+    supabase,
+    employeeTableName: EMPLOYEE_TABLE,
+    onEmployeeChange: (event) => {
+      console.log(`[Employee Realtime] Change detected: staff_id=${event.staffId}, type=${event.type}`);
+      if (employeeRealtimeDebounceTimerRef.current !== null) {
+        window.clearTimeout(employeeRealtimeDebounceTimerRef.current);
+      }
+      employeeRealtimeDebounceTimerRef.current = window.setTimeout(() => {
+        employeeRealtimeDebounceTimerRef.current = null;
+        void fetchEmployees({ reset: true, lockUi: false });
+        if (departedEmployeesOpen) {
+          void fetchDepartedEmployees({ lockUi: false });
+        }
+      }, 300);
+    },
+    enabled: !!supabase && shouldEnableEmployeeRealtime(page, departedEmployeesOpen)
   });
 
   useEffect(() => {
@@ -2735,35 +2833,15 @@ export default function AdminAppPage() {
     });
   }, [deviceRowsFiltered]);
 
-  const normalizeLabelToneMap = (value: unknown): Record<string, LabelToneKey> => {
-    const raw = (value ?? {}) as Record<string, unknown>;
-    const next: Record<string, LabelToneKey> = {};
-    for (const [k, v] of Object.entries(raw)) {
-      const name = String(k ?? '').trim().toLowerCase();
-      const tone = String(v ?? '').trim() as LabelToneKey;
-      if (!name || !LABEL_TONE_KEYS.includes(tone)) continue;
-      next[name] = tone;
-    }
-    return next;
-  };
-
   const saveScheduleLabelToneGlobal = async (next: Record<string, LabelToneKey>) => {
     if (!supabase) return;
     const nowIso = new Date(serverTime).toISOString();
-    const payload = {
-      key: SCHEDULE_LABEL_TONES_KEY,
-      value: {
-        tones: next,
-        updated_at: nowIso,
-        operator: user?.email ?? null
-      },
-      updated_at: nowIso
-    };
-    const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
-    if (!upsertRes.error) return;
-    const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', SCHEDULE_LABEL_TONES_KEY);
-    if (!updateRes.error) return;
-    await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
+    const rows = buildLabelToneRows(next, {
+      updatedAt: nowIso,
+      operator: user?.email ?? null
+    });
+    if (rows.length === 0) return;
+    await supabase.from(SCHEDULE_LABEL_TONES_TABLE).upsert(rows as any[], { onConflict: 'label' });
   };
 
   const loadScheduleLabelToneGlobal = async () => {
@@ -2772,6 +2850,21 @@ export default function AdminAppPage() {
       return;
     }
     try {
+      const tableRes = await supabase
+        .from(SCHEDULE_LABEL_TONES_TABLE)
+        .select('label, tone, updated_at, operator')
+        .order('updated_at', { ascending: false });
+      if (!tableRes.error && Array.isArray(tableRes.data) && tableRes.data.length > 0) {
+        const next = readLabelToneMapFromRows(tableRes.data);
+        const nextJson = JSON.stringify(next);
+        if (nextJson === scheduleLabelToneLastSavedJsonRef.current) return;
+        scheduleLabelToneHydratingRef.current = true;
+        scheduleLabelToneLastSavedJsonRef.current = nextJson;
+        saveLabelToneMap(next);
+        setScheduleLabelToneByName(next);
+        return;
+      }
+
       const res = await supabase
         .from(APP_SETTINGS_TABLE)
         .select('id, key, value, updated_at')
@@ -2814,7 +2907,7 @@ export default function AdminAppPage() {
             .map((position) => normalizePositionToneKey(position.name))
             .filter(Boolean)
         );
-        const merged = { ...current, ...next };
+        const merged = mergeLegacyPositionToneMap(current, next, positions.map((position) => position.name));
         for (const key of positionToneKeys) {
           merged[key] = current[key] ?? merged[key] ?? getDefaultPositionToneKey(key);
         }
@@ -2843,7 +2936,7 @@ export default function AdminAppPage() {
     scheduleLabelToneReadyRef.current = false;
     void loadScheduleLabelToneGlobal();
     void loadSchedulePositionToneGlobal();
-  }, [user?.email]);
+  }, [user?.email, positions]);
 
   useEffect(() => {
     if (page !== 'schedule') return;
@@ -2860,7 +2953,7 @@ export default function AdminAppPage() {
       active = false;
       window.clearInterval(timer);
     };
-  }, [page, user?.email, offsetMs]);
+  }, [page, user?.email, offsetMs, positions]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -2876,11 +2969,20 @@ export default function AdminAppPage() {
     }
   }, [page, scheduleSearchInput, scheduleAgency, scheduleDriverFilter, scheduleDepartment, schedulePosition, scheduleEmploymentType, scheduleLabels]);
 
+  useEffect(() => {
+    setScheduleShiftTimeEditingStaffId(null);
+  }, [page, scheduleSearchInput, scheduleAgency, scheduleDriverFilter, scheduleDepartment, schedulePosition, scheduleEmploymentType, scheduleLabels]);
+
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFillDuplicates, setUploadFillDuplicates] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [deviceUploadError, setDeviceUploadError] = useState<string | null>(null);
   const deviceFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!uploadError) return;
+    setStatus({ tone: 'error', message: uploadError });
+  }, [uploadError]);
 
   const [, setAttendanceStats] = useState<
     Record<string, { early: number; late: number; active: number }>
@@ -2889,28 +2991,11 @@ export default function AdminAppPage() {
   const [homeOnClockShiftByStaffId, setHomeOnClockShiftByStaffId] = useState<Record<string, 'early' | 'late'>>({});
   const [homeRosterPositionFilter, setHomeRosterPositionFilter] = useState<string>('ALL');
 
-  const resolveEmployeeColumnMode = async (): Promise<EmployeeColumnMode> => {
-    const cached = employeeColumnModeRef.current;
-    if (cached) return cached;
-    if (!supabase) {
-      employeeColumnModeRef.current = 'lower';
-      return 'lower';
+  const buildEmployeeSelectColumns = (profile: EmployeeFetchProfile) => {
+    if (profile === 'home') {
+      return 'id, staff_id, name, agency, position, shift, label, work_account, shift_time, active, terminated_at, created_at';
     }
-
-    const cased = await supabase.from(EMPLOYEE_TABLE).select('staff_id, "Agency", "Position"').limit(1);
-    if (!cased.error) {
-      employeeColumnModeRef.current = 'cased';
-      return 'cased';
-    }
-
-    const lower = await supabase.from(EMPLOYEE_TABLE).select('staff_id, agency, position').limit(1);
-    if (!lower.error) {
-      employeeColumnModeRef.current = 'lower';
-      return 'lower';
-    }
-
-    employeeColumnModeRef.current = 'cased';
-    return 'cased';
+    return '*';
   };
 
   const normalizePositionKey = (value: string) => {
@@ -2992,9 +3077,9 @@ const getShiftBucket = (inAtIso: string) => {
 };
 
 const getShiftBadgeClass = (value: '' | 'early' | 'late') => {
-  if (value === 'early') return 'badge-elevated-dark label-glow-chip border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
-  if (value === 'late') return 'badge-elevated-dark label-glow-chip border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]';
-  return 'badge-elevated-dark label-glow-chip border-white/12 text-slate-200 bg-white/[0.05]';
+  if (value === 'early') return 'badge-elevated-dark border-amber-300/30 text-amber-100 bg-amber-400/[0.13]';
+  if (value === 'late') return 'badge-elevated-dark border-indigo-300/30 text-indigo-100 bg-indigo-400/[0.13]';
+  return 'badge-elevated-dark border-white/12 text-slate-200 bg-white/[0.05]';
 };
 const normalizeShiftValue = (value: string): '' | 'early' | 'late' => {
   const v = value.trim().toLowerCase();
@@ -3002,11 +3087,7 @@ const normalizeShiftValue = (value: string): '' | 'early' | 'late' => {
   if (v === 'late' || v === 'night' || v === 'evening') return 'late';
   return '';
 };
-const normalizeShiftTimeValue = (value: unknown) => {
-  const parsed = parseClockTextToMinutes(String(value ?? '').trim());
-  if (!Number.isFinite(parsed)) return '';
-  return formatClockMinutes(parsed as number);
-};
+const normalizeShiftTimeValue = normalizeScheduleShiftTime;
 const normalizeEmploymentTypeValue = (value: unknown): EmploymentType => {
   const text = String(value ?? '').trim().toUpperCase();
   return text === 'PT' ? 'PT' : 'FT';
@@ -3042,8 +3123,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const pageSize = 1000;
-      const latestByStaff = new Map<string, { action: 'IN' | 'OUT'; at: string }>();
-      const firstInByStaff = new Map<string, { at: string }>();
       const runAttendanceQuery = async <T,>(queryFactory: () => PromiseLike<{ data: T | null; error: any }>) => {
         let lastRes = await queryFactory();
         if (!lastRes.error) return lastRes;
@@ -3075,40 +3154,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         setAttendanceError(normalizeAttendanceFetchError(latestPunchRowsRes.error));
         return;
       }
-      for (const r of latestPunchRowsRes.rows) {
-        const staff = String(r.staff_id ?? '').trim();
-        if (!staff || latestByStaff.has(staff)) continue;
-        const action = String(r.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-        const at = String(r.created_at ?? '').trim();
-        if (!at) continue;
-        latestByStaff.set(staff, { action, at });
-      }
-
-      const firstPunchRowsRes = await fetchAllPagedRows<any>({
-        pageSize,
-        shouldStop: () => seq !== attendanceFetchSeqRef.current,
-        stopError: STALE_TIMECARD_REQUEST,
-        fetchPage: async (from, to) =>
-          await runAttendanceQuery(() =>
-            supabase
-              .from('ob_punches')
-              .select('staff_id, created_at, id')
-              .order('created_at', { ascending: true })
-              .range(from, to)
-          )
-      });
-      if (firstPunchRowsRes.error) {
-        if (firstPunchRowsRes.error === STALE_TIMECARD_REQUEST) return;
-        setAttendanceError(normalizeAttendanceFetchError(firstPunchRowsRes.error));
-        return;
-      }
-      for (const r of firstPunchRowsRes.rows) {
-        const staff = String(r.staff_id ?? '').trim();
-        if (!staff || firstInByStaff.has(staff)) continue;
-        const at = String(r.created_at ?? '').trim();
-        if (!at) continue;
-        firstInByStaff.set(staff, { at });
-      }
+      const { latestByStaff, firstInByStaff } = summarizeAttendancePunchRows(latestPunchRowsRes.rows, normalizeStaffId);
 
       const activeStaff = Array.from(latestByStaff.entries())
         .filter(([, v]) => v.action === 'IN')
@@ -3121,27 +3167,19 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return;
       }
 
-      const mode = await resolveEmployeeColumnMode();
       const staffToPosition = new Map<string, string>();
       const allStaff = Array.from(new Set([...activeStaff, ...attendanceStaff]));
       const batches = chunk(allStaff, 200);
       for (const batch of batches) {
-        const select = mode === 'cased' ? 'staff_id, "Position"' : 'staff_id, position';
-        let res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch);
-        if (res.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          const select2 = flipped === 'cased' ? 'staff_id, "Position"' : 'staff_id, position';
-          res = await supabase.from(EMPLOYEE_TABLE).select(select2).in('staff_id', batch);
-        }
+        const res = await supabase.from(EMPLOYEE_TABLE).select('staff_id, position').in('staff_id', batch);
         if (seq !== attendanceFetchSeqRef.current) return;
         if (res.error) {
           if (!isAbortLikeError(res.error)) setAttendanceError(normalizeAttendanceFetchError(res.error));
           return;
         }
         for (const r of (res.data as any[] | null) ?? []) {
-          const staff = String(r.staff_id ?? '').trim();
-          const posRaw = String(r.position ?? r.Position ?? '').trim();
+          const staff = normalizeStaffId(String(r.staff_id ?? '').trim());
+          const posRaw = String(r.position ?? '').trim();
           if (!staff || !posRaw) continue;
           const key = normalizePositionKey(posRaw);
           if (!key) continue;
@@ -3233,6 +3271,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }, 180);
     return () => window.clearTimeout(timer);
   }, [busy]);
+  const beginHomePanelLoading = () => {
+    const nextToken = homePanelLoadingTokenRef.current + 1;
+    homePanelLoadingTokenRef.current = nextToken;
+    setHomePanelLoadingStage('syncing');
+    setHomePanelLoadingProgress(0);
+    setHomePanelLoading(true);
+    return nextToken;
+  };
+  const advanceHomePanelLoading = (token: number, stage: 'syncing' | 'finalizing', progress: number) => {
+    if (homePanelLoadingTokenRef.current !== token) return;
+    setHomePanelLoadingStage(stage);
+    setHomePanelLoadingProgress((current) => Math.max(current, Math.max(0, Math.min(100, progress))));
+  };
+  const finishHomePanelLoading = (token: number) => {
+    if (homePanelLoadingTokenRef.current !== token) return;
+    setHomePanelLoading(false);
+  };
 
   const resolveDailyListLightsTargetDate = (targetDateOverride?: string) => {
     const fallbackDate = toDateOnly(addDays(new Date(serverTime), 1));
@@ -3256,37 +3311,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     dailyListLightsSaveSeqRef.current = seq;
     dailyListLightsPendingRef.current = { targetDate, flags: next, seq };
     if (!supabase) return;
-    const baseRes = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('id, key, value, updated_at')
-      .eq('key', DAILY_LIST_LIGHTS_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
+    const rows = buildDailyListLightRows(targetDate, next, {
+      updatedAt,
+      operator: user?.email ?? null
+    });
     if (dailyListLightsPendingRef.current?.seq !== seq) return;
-    const currentValue = ((((baseRes.data as any[]) ?? [])[0] as AppSettingRow | undefined)?.value ?? {}) as Record<string, unknown>;
-    const payload = {
-      key: DAILY_LIST_LIGHTS_KEY,
-      value: buildDailyListLightsSettingValue(currentValue, targetDate, next, {
-        updatedAt,
-        operator: user?.email ?? null
-      }),
-      updated_at: updatedAt
-    };
-    if (dailyListLightsPendingRef.current?.seq !== seq) return;
-    const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
+    const upsertRes = await supabase.from(DAILY_LIST_LIGHTS_TABLE).upsert(rows as any[], { onConflict: 'work_date,position' });
     if (!upsertRes.error) {
       if (dailyListLightsPendingRef.current?.seq === seq) dailyListLightsPendingRef.current = null;
-      return;
     }
-    if (dailyListLightsPendingRef.current?.seq !== seq) return;
-    const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', DAILY_LIST_LIGHTS_KEY);
-    if (!updateRes.error) {
-      if (dailyListLightsPendingRef.current?.seq === seq) dailyListLightsPendingRef.current = null;
-      return;
-    }
-    if (dailyListLightsPendingRef.current?.seq !== seq) return;
-    const insertRes = await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
-    if (!insertRes.error && dailyListLightsPendingRef.current?.seq === seq) dailyListLightsPendingRef.current = null;
   };
 
   const loadDailyListSelectedPositionsGlobal = async (options?: { targetDateOverride?: string }) => {
@@ -3302,6 +3335,32 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       applyDailyListSelectedPositions(localCache.flags);
     }
     if (!supabase) return;
+    const tableRes = await supabase
+      .from(DAILY_LIST_LIGHTS_TABLE)
+      .select('work_date, position, enabled, updated_at, operator')
+      .eq('work_date', targetDate);
+    if (!tableRes.error && Array.isArray(tableRes.data) && tableRes.data.length > 0) {
+      if (dailyListLightsSaveSeqRef.current !== loadStartedAtSeq) {
+        const changedWhileLoading = dailyListLightsPendingRef.current;
+        if (changedWhileLoading?.targetDate === targetDate) {
+          applyDailyListSelectedPositions(changedWhileLoading.flags);
+        }
+        return;
+      }
+      const latestPending = dailyListLightsPendingRef.current;
+      if (latestPending?.targetDate === targetDate) {
+        applyDailyListSelectedPositions(latestPending.flags);
+        return;
+      }
+      const remoteFlags = readDailyListLightsFromRows(tableRes.data);
+      applyDailyListSelectedPositions(remoteFlags);
+      const remoteUpdatedMs = Math.max(...tableRes.data.map((row: any) => getDailyListLightsUpdatedMs(row?.updated_at)), 0);
+      if (remoteUpdatedMs > 0) {
+        writeDailyListLightsLocalCacheForDate(targetDate, remoteFlags, new Date(remoteUpdatedMs).toISOString());
+      }
+      return;
+    }
+
     const res = await supabase
       .from(APP_SETTINGS_TABLE)
       .select('id, key, value, updated_at')
@@ -3988,7 +4047,74 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setStatus({ tone: 'success', message: t('Position 已保存。', 'Position saved.') });
     });
   };
-  const reviewTerminationRequest = async (request: TerminationRequestRecord, action: 'approve' | 'reject') => {
+  const openTerminationApproval = (request: TerminationRequestRecord) => {
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
+      return;
+    }
+    if (!scheduleCanReviewTermination) {
+      setStatus({ tone: 'error', message: t('当前账号不能审批离职。', 'This account cannot review termination requests.') });
+      return;
+    }
+    if (isLocked) return;
+
+    setTerminationApprovalError('');
+    setTerminationApprovalRequest(request);
+  };
+
+  const submitTerminationApproval = async () => {
+    if (!terminationApprovalRequest || terminationApprovalSubmitting) return;
+    if (!supabase) {
+      const message = t('缺少 Supabase 配置。', 'Missing Supabase config.');
+      setTerminationApprovalError(message);
+      setStatus({ tone: 'error', message });
+      return;
+    }
+    if (!scheduleCanReviewTermination) {
+      const message = t('当前账号不能审批离职。', 'This account cannot review termination requests.');
+      setTerminationApprovalError(message);
+      setStatus({ tone: 'error', message });
+      return;
+    }
+    if (!terminationApprovalSubmissionLockRef.current.tryAcquire()) return;
+
+    setTerminationApprovalSubmitting(true);
+    setTerminationApprovalError('');
+    try {
+      const result = await executeAgencyTerminationApproval({
+        requestId: terminationApprovalRequest.id,
+        review: (requestId) => reviewEmployeeTerminationRequest(supabase, requestId, 'approve'),
+        refreshSchedule: () => refreshSchedulePanel({ lockUi: false }),
+        refreshRequests: () => fetchTerminationRequests({ lockUi: false })
+      });
+      const staffId = terminationApprovalRequest.staff_id;
+      setTerminationApprovalRequest(null);
+      if (result.refreshError) {
+        setStatus({
+          tone: 'error',
+          message: t(
+            `已确认离职，但刷新失败：${result.refreshError}`,
+            `Departure approved, but refresh failed: ${result.refreshError}`
+          )
+        });
+      } else {
+        setStatus({
+          tone: 'success',
+          message: t(`已确认离职：${staffId}`, `Departure approved: ${staffId}`)
+        });
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : t('离职审批失败。', 'Termination approval failed.');
+      setTerminationApprovalError(message);
+      setStatus({ tone: 'error', message });
+    } finally {
+      terminationApprovalSubmissionLockRef.current.release();
+      setTerminationApprovalSubmitting(false);
+    }
+  };
+
+  const rejectTerminationRequest = async (request: TerminationRequestRecord) => {
     if (!supabase) {
       setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
       return;
@@ -3999,21 +4125,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
 
     const ok = await askConfirm(
-      action === 'approve'
-        ? t(`确认离职 ${request.staff_id} 吗？`, `Approve departure for ${request.staff_id}?`)
-        : t(`拒绝离职 ${request.staff_id} 吗？`, `Reject departure for ${request.staff_id}?`),
-      action === 'approve' ? t('确认离职', 'Confirm Departure') : t('拒绝离职', 'Reject Departure')
+      t(`拒绝离职 ${request.staff_id} 吗？`, `Reject departure for ${request.staff_id}?`),
+      t('拒绝离职', 'Reject Departure')
     );
     if (!ok) return;
 
-    await runLocked(`termination_${action}`, async () => {
-      await reviewEmployeeTerminationRequest(supabase, request.id, action);
+    await runLocked('termination_reject', async () => {
+      await reviewEmployeeTerminationRequest(supabase, request.id, 'reject');
       setStatus({
         tone: 'success',
-        message:
-          action === 'approve'
-            ? t(`已确认离职：${request.staff_id}`, `Departure approved: ${request.staff_id}`)
-            : t(`已拒绝离职：${request.staff_id}`, `Departure rejected: ${request.staff_id}`)
+        message: t(`已拒绝离职：${request.staff_id}`, `Departure rejected: ${request.staff_id}`)
       });
       await Promise.all([refreshSchedulePanel({ lockUi: false }), fetchTerminationRequests({ lockUi: false })]);
     });
@@ -4164,7 +4285,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setCellAuditRows((prev) => [row, ...prev].slice(0, 1200));
     }
 
-    if (!supabase) return;
+    if (!supabase) return false;
     try {
       const { error } = await supabase.from(AUDIT_TABLE).insert([
         {
@@ -4178,9 +4299,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (error) {
         // keep local log even if remote fails
         setAuditError(error.message);
+        return false;
       }
+      return true;
     } catch (err: any) {
       setAuditError(String(err?.message ?? err));
+      return false;
     }
   };
 
@@ -4195,25 +4319,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     };
   };
 
-  const changeScheduleWeek = (nextOffset: number, source: string) => {
-    const previousWeek = getWeekAuditPayload(scheduleWeekOffset);
+  const changeScheduleWeek = (nextOffset: number, _source: string) => {
     const nextWeek = getWeekAuditPayload(nextOffset);
     setScheduleWorkDayFilter(null);
     setScheduleWeekOffset(nextOffset);
-    setScheduleWeekInput(nextWeek.week_start);
-    void writeAudit({
-      action: 'schedule_week_switch',
-      target: SCHEDULE_TABLE,
-      payload: {
-        source,
-        previous_week_offset: previousWeek.week_offset,
-        previous_week_start: previousWeek.week_start,
-        previous_week_end: previousWeek.week_end,
-        next_week_offset: nextWeek.week_offset,
-        next_week_start: nextWeek.week_start,
-        next_week_end: nextWeek.week_end
-      }
-    });
+    setSchedulePrintDate(nextWeek.week_start);
+  };
+
+  const selectScheduleDate = (dateOnly: string) => {
+    setSchedulePrintDate(dateOnly);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) return;
+    const parsed = new Date(`${dateOnly}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return;
+    const weekStart = startOfWeekMonday(parsed);
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const offset = Math.round((weekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
+    setScheduleWorkDayFilter(null);
+    setScheduleWeekOffset(offset);
   };
 
   const openScheduleDailyList = (_source: string) => {
@@ -4240,24 +4362,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     await refreshSchedulePanel();
   };
 
-  const changeTimecardWeek = async (nextOffset: number, source: string) => {
-    const previousWeek = getWeekAuditPayload(timecardWeekOffset);
+  const changeTimecardWeek = async (nextOffset: number, _source: string) => {
     const nextWeek = getWeekAuditPayload(nextOffset);
     setTimecardWeekOffset(nextOffset);
     setTimecardWeekInput(nextWeek.week_start);
-    void writeAudit({
-      action: 'timecard_week_switch',
-      target: 'timecard',
-      payload: {
-        source,
-        previous_week_offset: previousWeek.week_offset,
-        previous_week_start: previousWeek.week_start,
-        previous_week_end: previousWeek.week_end,
-        next_week_offset: nextWeek.week_offset,
-        next_week_start: nextWeek.week_start,
-        next_week_end: nextWeek.week_end
-      }
-    });
     await fetchTimecard({ reset: true, weekOffset: nextOffset, lockUi: false });
   };
 
@@ -4921,6 +5029,127 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   };
 
+  const exportDevices = async () => {
+    await runLocked('devices_export', async () => {
+      const rows = deviceRowsFiltered;
+      if (rows.length === 0) {
+        setStatus({ tone: 'error', message: t('暂无可导出的设备数据。', 'No device data to export.') });
+        return;
+      }
+
+      const headers = [
+        t('设备名', 'Device name'),
+        'SN',
+        t('类型', 'Type'),
+        t('岗位', 'Position'),
+        t('状态', 'Status'),
+        t('当前借用人ID', 'Current borrower ID'),
+        t('当前借用人', 'Current borrower'),
+        t('借出时间', 'Borrowed at'),
+        t('最后使用者', 'Last user'),
+        t('最后借还时间', 'Last loan at'),
+        t('盘点时间', 'Counted at'),
+        t('启用', 'Active'),
+        t('备注', 'Note'),
+        t('创建时间', 'Created at'),
+        t('更新时间', 'Updated at')
+      ];
+
+      const body = rows.map((row) => {
+        const sn = normalizeDeviceSn(String(row.device_sn ?? row.sn ?? ''));
+        const borrowed = deviceCurrentBorrowBySn.get(sn);
+        const active = row.active !== false;
+        const countedAtMs = Date.parse(parseDeviceCountedAtFromNote(row.note)) || 0;
+        const lastLoanAt = String(deviceLastLoanAtBySn.get(sn) ?? '').trim();
+        const status = !active
+          ? t('停用', 'Disabled')
+          : borrowed
+            ? t('借用中', 'Borrowed')
+            : t('空闲', 'Available');
+        return [
+          String(row.device_name ?? row.name ?? '').trim() || '-',
+          sn || '-',
+          normalizeDeviceType(String(row.device_type ?? row.type ?? '')),
+          String(row.position ?? '').trim() || '-',
+          status,
+          String(borrowed?.staff_id ?? '').trim() || '-',
+          String(borrowed?.staff_name ?? '').trim() || '-',
+          String(borrowed?.created_at ?? '').trim() || '-',
+          deviceLastUserBySn.get(sn) ?? '-',
+          lastLoanAt || '-',
+          countedAtMs > 0 ? new Date(countedAtMs).toISOString() : '-',
+          active ? 'TRUE' : 'FALSE',
+          String(row.note ?? '').trim() || '-',
+          String(row.created_at ?? '').trim() || '-',
+          String(row.updated_at ?? '').trim() || '-'
+        ];
+      });
+
+      const filename = `ob_devices_${toDateOnly(serverTime)}.xlsx`;
+      try {
+        const XLSX = await import('xlsx');
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...body]);
+        ws['!cols'] = [
+          { wch: 18 },
+          { wch: 18 },
+          { wch: 16 },
+          { wch: 16 },
+          { wch: 14 },
+          { wch: 18 },
+          { wch: 18 },
+          { wch: 24 },
+          { wch: 18 },
+          { wch: 24 },
+          { wch: 24 },
+          { wch: 10 },
+          { wch: 28 },
+          { wch: 24 },
+          { wch: 24 }
+        ];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'devices');
+        XLSX.writeFile(wb, filename);
+        setStatus({ tone: 'success', message: t(`已导出：${filename}`, `Exported: ${filename}`) });
+      } catch {
+        const csvName = filename.replace(/\.xlsx$/i, '.csv');
+        const csv = [headers, ...body]
+          .map((line) =>
+            line
+              .map((cell) => {
+                const value = String(cell ?? '');
+                if (value.includes('"') || value.includes(',') || value.includes('\n')) return `"${value.replace(/"/g, '""')}"`;
+                return value;
+              })
+              .join(',')
+          )
+          .join('\n');
+        const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = csvName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setStatus({ tone: 'success', message: t(`已导出：${csvName}`, `Exported: ${csvName}`) });
+      }
+
+      await writeAudit({
+        action: 'device_export',
+        target: DEVICE_TABLE,
+        payload: {
+          exported_rows: rows.length,
+          search: deviceSearch.trim() || null,
+          type: deviceFilterType || null,
+          department: deviceFilterDepartment,
+          position: deviceFilterPosition || null,
+          borrowed_only: deviceBorrowedOnly
+        }
+      });
+    });
+  };
+
   const fetchSchedule = async (options?: { weekOffsetOverride?: number; lockUi?: boolean }) => {
     if (!supabase) {
       setScheduleError('缺少 Supabase 配置。');
@@ -4989,17 +5218,50 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   // Save fetchSchedule reference for use in realtime callbacks
   fetchScheduleRef.current = fetchSchedule;
 
+  const fetchEmployeeNotes = async () => {
+    if (!supabase) {
+      setEmployeeNotesByStaffId({});
+      return;
+    }
+    const result = await supabase.rpc('get_employee_notes');
+    if (result.error) {
+      console.warn('[Employees] Failed to load employee notes:', result.error.message);
+      setEmployeeNotesByStaffId({});
+      return;
+    }
+    const rows = Array.isArray(result.data) ? result.data : [];
+    const nextNoteMap: Record<string, EmployeeNotePair> = {};
+    for (const raw of rows) {
+      const row = raw as {
+        staff_id?: unknown;
+        agency_note?: unknown;
+        admin_note?: unknown;
+        agency_note_updated_by?: unknown;
+        admin_note_updated_by?: unknown;
+      };
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) continue;
+      nextNoteMap[staff] = {
+        agencyNote: String(row.agency_note ?? '').trim(),
+        adminNote: String(row.admin_note ?? '').trim(),
+        agencyNoteUpdatedBy: String(row.agency_note_updated_by ?? '').trim(),
+        adminNoteUpdatedBy: String(row.admin_note_updated_by ?? '').trim()
+      };
+    }
+    setEmployeeNotesByStaffId(nextNoteMap);
+  };
+
   const fetchScheduleAgencyInfo = async () => {
     if (!supabase) {
       setScheduleDriverGroupByStaffId({});
-      setScheduleAgencyNoteByStaffId({});
+      setEmployeeNotesByStaffId({});
       return;
     }
 
     try {
       const [driverRes, noteRes] = await Promise.all([
         supabase.rpc('agency_get_driver_groups'),
-        supabase.rpc('agency_get_employee_notes')
+        supabase.rpc('get_employee_notes')
       ]);
 
       if (driverRes.error) {
@@ -5026,24 +5288,34 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       if (noteRes.error) {
-        console.warn('[Schedule] Failed to load agency notes:', noteRes.error.message);
-        setScheduleAgencyNoteByStaffId({});
+        console.warn('[Schedule] Failed to load employee notes:', noteRes.error.message);
+        setEmployeeNotesByStaffId({});
       } else {
         const rows = Array.isArray(noteRes.data) ? noteRes.data : [];
-        const nextNoteMap: Record<string, string> = {};
+        const nextNoteMap: Record<string, EmployeeNotePair> = {};
         for (const raw of rows) {
-          const row = raw as { staff_id?: unknown; note?: unknown };
+          const row = raw as {
+            staff_id?: unknown;
+            agency_note?: unknown;
+            admin_note?: unknown;
+            agency_note_updated_by?: unknown;
+            admin_note_updated_by?: unknown;
+          };
           const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-          const note = String(row.note ?? '').trim();
-          if (!staff || !note) continue;
-          nextNoteMap[staff] = note;
+          if (!staff) continue;
+          nextNoteMap[staff] = {
+            agencyNote: String(row.agency_note ?? '').trim(),
+            adminNote: String(row.admin_note ?? '').trim(),
+            agencyNoteUpdatedBy: String(row.agency_note_updated_by ?? '').trim(),
+            adminNoteUpdatedBy: String(row.admin_note_updated_by ?? '').trim()
+          };
         }
-        setScheduleAgencyNoteByStaffId(nextNoteMap);
+        setEmployeeNotesByStaffId(nextNoteMap);
       }
     } catch (error) {
       console.warn('[Schedule] Failed to load agency info:', error);
       setScheduleDriverGroupByStaffId({});
-      setScheduleAgencyNoteByStaffId({});
+      setEmployeeNotesByStaffId({});
     }
   };
 
@@ -5063,7 +5335,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
     const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-    const agency = String(employee.agency ?? employee.Agency ?? '').trim();
+    const agency = String(employee.agency ?? '').trim();
     if (!staff || !isValidScheduleStaffId(staff, agency)) {
       setScheduleError('Invalid staff id.');
       return;
@@ -5215,7 +5487,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return;
       }
 
-      const employeePosition = String(employee.position ?? employee.Position ?? '').trim();
+      const employeePosition = String(employee.position ?? '').trim();
       const normalizedPosition = normalizePositionKey(employeePosition);
       if (!normalizedPosition) {
         setScheduleError(`Employee position is missing or inactive: ${staff}`);
@@ -5324,6 +5596,52 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   };
 
+  const acquireScheduleJobRun = async (jobKey: string, periodKey: string, operator: string | null) => {
+    if (!supabase) return false;
+    const res = await supabase.from(SCHEDULE_JOB_RUNS_TABLE).insert([
+      {
+        job_key: jobKey,
+        period_key: periodKey,
+        status: 'running',
+        operator,
+        updated_at: new Date(serverTime).toISOString()
+      }
+    ] as any[]);
+    if (!res.error) return true;
+    const message = String(res.error.message ?? '').toLowerCase();
+    if (String((res.error as any).code ?? '') === '23505' || message.includes('duplicate') || message.includes('unique')) return false;
+    setScheduleError(res.error.message);
+    return false;
+  };
+
+  const completeScheduleJobRun = async (jobKey: string, periodKey: string, metadata?: Record<string, unknown>) => {
+    if (!supabase) return;
+    const nowIso = new Date(serverTime).toISOString();
+    await supabase
+      .from(SCHEDULE_JOB_RUNS_TABLE)
+      .update({
+        status: 'done',
+        metadata: metadata ?? {},
+        completed_at: nowIso,
+        updated_at: nowIso
+      } as any)
+      .eq('job_key', jobKey)
+      .eq('period_key', periodKey);
+  };
+
+  const hasCompletedScheduleJobRun = async (jobKey: string, periodKey: string): Promise<boolean | null> => {
+    if (!supabase) return null;
+    const res = await supabase
+      .from(SCHEDULE_JOB_RUNS_TABLE)
+      .select('status')
+      .eq('job_key', jobKey)
+      .eq('period_key', periodKey)
+      .eq('status', 'done')
+      .limit(1);
+    if (res.error) return null;
+    return ((res.data as Array<{ status?: string }> | null) ?? []).length > 0;
+  };
+
   const scheduleWeekResetInFlightRef = useRef(false);
   const scheduleWeekResetDoneKeyRef = useRef('');
   const resetScheduleTransientStatesForWeek = async (options?: { lockUi?: boolean }) => {
@@ -5342,19 +5660,24 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const weekStart = toDateOnly(thisMonday);
     const lockUi = options?.lockUi ?? true;
 
-    const settingRes = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('key, value, updated_at')
-      .eq('key', SCHEDULE_WEEK_RESET_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    if (settingRes.error) {
-      scheduleWeekResetInFlightRef.current = false;
-      return;
+    let existingWeek = '';
+    const completedJob = await hasCompletedScheduleJobRun('schedule_week_reset', weekStart);
+    if (completedJob === true) {
+      existingWeek = weekStart;
+    } else if (completedJob === null) {
+      const settingRes = await supabase
+        .from(APP_SETTINGS_TABLE)
+        .select('key, value, updated_at')
+        .eq('key', SCHEDULE_WEEK_RESET_KEY)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      if (settingRes.error) {
+        scheduleWeekResetInFlightRef.current = false;
+        return;
+      }
+      const existing = (((settingRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
+      existingWeek = String(existing?.value?.week_start ?? '');
     }
-
-    const existing = (((settingRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-    const existingWeek = String(existing?.value?.week_start ?? '');
     const gate = shouldRunWeeklyScheduleReset({
       now: gateNow,
       inFlight: scheduleWeekResetInFlightRef.current,
@@ -5363,6 +5686,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
     if (!gate.shouldRun) {
       if (existingWeek === weekStart) scheduleWeekResetDoneKeyRef.current = weekStart;
+      return;
+    }
+    const acquired = await acquireScheduleJobRun('schedule_week_reset', weekStart, user?.email ?? null);
+    if (!acquired) {
+      scheduleWeekResetDoneKeyRef.current = weekStart;
       return;
     }
     scheduleWeekResetInFlightRef.current = true;
@@ -5393,27 +5721,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const tempRestToWorkCount = Array.isArray(toWorkRes.data) ? toWorkRes.data.length : 0;
       const tempWorkToRestCount = Array.isArray(toRestRes.data) ? toRestRes.data.length : 0;
 
-      const payload = {
-        key: SCHEDULE_WEEK_RESET_KEY,
-        value: {
-          week_start: weekStart,
-          updated_at: nowIso,
-          operator: user?.email ?? null
-        },
-        updated_at: nowIso
-      };
-      const upsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([payload as any], { onConflict: 'key' });
-      if (upsertRes.error) {
-        const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(payload as any).eq('key', SCHEDULE_WEEK_RESET_KEY);
-        if (updateRes.error) {
-          const insertRes = await supabase.from(APP_SETTINGS_TABLE).insert([payload as any]);
-          if (insertRes.error) {
-            setScheduleError(insertRes.error.message);
-            return;
-          }
-        }
-      }
-
       setScheduleRows((prev) =>
         prev.map((row) => {
           const nextNote = normalizeScheduleNoteForWeeklyReset(
@@ -5433,6 +5740,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           temp_rest_to_work_count: tempRestToWorkCount,
           temp_work_to_rest_count: tempWorkToRestCount
         }
+      });
+      await completeScheduleJobRun('schedule_week_reset', weekStart, {
+        temp_rest_to_work_count: tempRestToWorkCount,
+        temp_work_to_rest_count: tempWorkToRestCount
       });
       scheduleWeekResetDoneKeyRef.current = weekStart;
     };
@@ -5465,20 +5776,27 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const activationTemplateDateKey = getTemplateDateByDayIndex(operationalDayIndex, 0);
     const lockUi = options?.lockUi ?? true;
 
-    const markerRes = await supabase
-      .from(APP_SETTINGS_TABLE)
-      .select('key, value, updated_at')
-      .eq('key', SCHEDULE_DAILY_PLAN_ACTIVATION_KEY)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    if (markerRes.error) {
-      scheduleDailyPlanActivationInFlightRef.current = false;
-      return;
+    let existingDate = '';
+    let existingStatus = '';
+    const completedJob = await hasCompletedScheduleJobRun('schedule_daily_plan_activation', dateKey);
+    if (completedJob === true) {
+      existingDate = dateKey;
+      existingStatus = 'done';
+    } else if (completedJob === null) {
+      const markerRes = await supabase
+        .from(APP_SETTINGS_TABLE)
+        .select('key, value, updated_at')
+        .eq('key', SCHEDULE_DAILY_PLAN_ACTIVATION_KEY)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      if (markerRes.error) {
+        scheduleDailyPlanActivationInFlightRef.current = false;
+        return;
+      }
+      const existing = (((markerRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
+      existingDate = String(existing?.value?.date ?? '');
+      existingStatus = String(existing?.value?.status ?? '').trim();
     }
-
-    const existing = (((markerRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-    const existingDate = String(existing?.value?.date ?? '');
-    const existingStatus = String(existing?.value?.status ?? '').trim();
     const gate = shouldActivateDailyPlannedStates({
       now,
       inFlight: scheduleDailyPlanActivationInFlightRef.current,
@@ -5490,49 +5808,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (existingStatus === 'done' && existingDate === dateKey) scheduleDailyPlanActivationDoneDateRef.current = dateKey;
       return;
     }
+    const acquired = await acquireScheduleJobRun('schedule_daily_plan_activation', dateKey, 'system');
+    if (!acquired) {
+      scheduleDailyPlanActivationDoneDateRef.current = dateKey;
+      return;
+    }
     scheduleDailyPlanActivationInFlightRef.current = true;
 
     const exec = async () => {
       setScheduleError(null);
       const nowIso = new Date(serverTime).toISOString();
       const op = 'system';
-      const lockToken = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-      const lockPayload = {
-        key: SCHEDULE_DAILY_PLAN_ACTIVATION_KEY,
-        value: {
-          date: dateKey,
-          status: 'running',
-          lock_token: lockToken,
-          updated_at: nowIso,
-          operator: op
-        },
-        updated_at: nowIso
-      };
-      const lockRes = await supabase.from(APP_SETTINGS_TABLE).upsert([lockPayload as any], { onConflict: 'key' });
-      if (lockRes.error) {
-        setScheduleError(lockRes.error.message);
-        return;
-      }
-
-      const lockCheckRes = await supabase
-        .from(APP_SETTINGS_TABLE)
-        .select('value')
-        .eq('key', SCHEDULE_DAILY_PLAN_ACTIVATION_KEY)
-        .order('updated_at', { ascending: false })
-        .limit(1);
-      if (lockCheckRes.error) {
-        setScheduleError(lockCheckRes.error.message);
-        return;
-      }
-      const lockRow = (((lockCheckRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-      const lockValue = (lockRow?.value ?? {}) as Record<string, unknown>;
-      if (
-        String(lockValue.date ?? '') !== dateKey ||
-        String(lockValue.status ?? '') !== 'running' ||
-        String(lockValue.lock_token ?? '') !== lockToken
-      ) {
-        return;
-      }
 
       const planRowsRes = await supabase
         .from(SCHEDULE_TABLE)
@@ -5552,6 +5838,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         note?: string | null;
         operator?: string | null;
       }>);
+      let activatedCount = 0;
       if (rows.length > 0) {
         const payload = buildDailyPlannedActivationUpserts(
           rows,
@@ -5569,6 +5856,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           staff_id: normalizeStaffId(row.staff_id),
           operator: op
         }));
+        activatedCount = payload.length;
         const employeeNameByStaffId = new Map(
           employees.map((employee) => [normalizeStaffId(String(employee.staff_id ?? '').trim()), String(employee.name ?? '').trim()] as const)
         );
@@ -5603,28 +5891,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         });
       }
 
-      const markerPayload = {
-        key: SCHEDULE_DAILY_PLAN_ACTIVATION_KEY,
-        value: {
-          date: dateKey,
-          status: 'done',
-          lock_token: lockToken,
-          updated_at: new Date(serverTime).toISOString(),
-          operator: op
-        },
-        updated_at: new Date(serverTime).toISOString()
-      };
-      const markerUpsertRes = await supabase.from(APP_SETTINGS_TABLE).upsert([markerPayload as any], { onConflict: 'key' });
-      if (markerUpsertRes.error) {
-        const updateRes = await supabase.from(APP_SETTINGS_TABLE).update(markerPayload as any).eq('key', SCHEDULE_DAILY_PLAN_ACTIVATION_KEY);
-        if (updateRes.error) {
-          const insertRes = await supabase.from(APP_SETTINGS_TABLE).insert([markerPayload as any]);
-          if (insertRes.error) {
-            setScheduleError(insertRes.error.message);
-            return;
-          }
-        }
-      }
+      await completeScheduleJobRun('schedule_daily_plan_activation', dateKey, {
+        activated_count: activatedCount,
+        activation_template_date: activationTemplateDateKey
+      });
 
       if (rows.length > 0) {
         setScheduleRows((prev) =>
@@ -5696,8 +5966,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
   const refreshHomePanel = async (options?: { lockUi?: boolean }) => {
     const lockUi = options?.lockUi ?? true;
-    await fetchSchedule({ weekOffsetOverride: 0, lockUi: false });
-    const latestEmployees = await fetchEmployees({
+    const loadingToken = beginHomePanelLoading();
+    const settleCompleteProgress = (completed: number) => Math.round((completed / 3) * 72);
+    let completedInitialLoads = 0;
+    const markInitialLoadComplete = () => {
+      completedInitialLoads += 1;
+      advanceHomePanelLoading(loadingToken, 'syncing', settleCompleteProgress(completedInitialLoads));
+    };
+    const scheduleTask = fetchSchedule({ weekOffsetOverride: 0, lockUi: false }).finally(markInitialLoadComplete);
+    const employeeTask = fetchEmployees({
       reset: true,
       search: '',
       agency: '',
@@ -5705,16 +5982,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       labels: [],
       lockUi,
       includePunchMeta: false,
-      streamPartialState: false
-    });
-    await fetchRealtimeAttendance();
-    // Home dashboard should use current week punch presence, independent of Schedule page week navigation.
-    await fetchSchedulePunchPresence({
-      employeesOverride: latestEmployees,
-      weekOffsetOverride: 0,
-      mode: 'operational_day',
-      keepPreviousWhileLoading: true
-    });
+      streamPartialState: false,
+      profile: 'home'
+    }).finally(markInitialLoadComplete);
+    const attendanceTask = fetchRealtimeAttendance().finally(markInitialLoadComplete);
+    try {
+      const [, latestEmployees] = await Promise.all([scheduleTask, employeeTask, attendanceTask]);
+      advanceHomePanelLoading(loadingToken, 'finalizing', 80);
+      // Home dashboard should use current week punch presence, independent of Schedule page week navigation.
+      await fetchSchedulePunchPresence({
+        employeesOverride: latestEmployees,
+        weekOffsetOverride: 0,
+        mode: 'operational_day',
+        keepPreviousWhileLoading: true
+      });
+      advanceHomePanelLoading(loadingToken, 'finalizing', 100);
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 180));
+    } finally {
+      finishHomePanelLoading(loadingToken);
+    }
   };
 
   const scheduleWeekRolloverInFlightRef = useRef(false);
@@ -5724,16 +6010,22 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const now = new Date(Date.now() + offsetMs);
     const thisMonday = startOfWeekMonday(now);
     try {
-      const markerRes = await supabase
-        .from(APP_SETTINGS_TABLE)
-        .select('value')
-        .eq('key', SCHEDULE_WEEK_ROLLOVER_KEY)
-        .order('updated_at', { ascending: false })
-        .limit(1);
-      if (markerRes.error) return;
-      const marker = (((markerRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
-      const doneWeek = String(marker?.value?.week_start ?? '').trim();
       const weekKey = toDateOnly(thisMonday);
+      let doneWeek = '';
+      const completedJob = await hasCompletedScheduleJobRun('schedule_week_rollover', weekKey);
+      if (completedJob === true) {
+        doneWeek = weekKey;
+      } else if (completedJob === null) {
+        const markerRes = await supabase
+          .from(APP_SETTINGS_TABLE)
+          .select('value')
+          .eq('key', SCHEDULE_WEEK_ROLLOVER_KEY)
+          .order('updated_at', { ascending: false })
+          .limit(1);
+        if (markerRes.error) return;
+        const marker = (((markerRes.data as any[]) ?? [])[0] ?? null) as { value?: Record<string, unknown> } | null;
+        doneWeek = String(marker?.value?.week_start ?? '').trim();
+      }
       const gate = shouldRunWeeklyScheduleRollover({
         now,
         inFlight: scheduleWeekRolloverInFlightRef.current,
@@ -5742,6 +6034,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       });
       if (!gate.shouldRun) {
         if (doneWeek === weekKey) scheduleWeekRolloverDoneKeyRef.current = weekKey;
+        return;
+      }
+      const acquired = await acquireScheduleJobRun('schedule_week_rollover', weekKey, user?.email ?? null);
+      if (!acquired) {
+        scheduleWeekRolloverDoneKeyRef.current = weekKey;
         return;
       }
       scheduleWeekRolloverInFlightRef.current = true;
@@ -5770,17 +6067,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       // 不删除下周数据，仅复制到本周，下周保持不变，实现永久循环
       // Do NOT delete next week; only copy to this week; next week stays for permanent cycle
 
-      await supabase.from(APP_SETTINGS_TABLE).upsert(
-        [
-          {
-            key: SCHEDULE_WEEK_ROLLOVER_KEY,
-            value: { week_start: weekKey, rolled_at: now.toISOString() },
-            operator: user?.email ?? null,
-            updated_at: now.toISOString()
-          }
-        ] as any[],
-        { onConflict: 'key' }
-      );
+      await completeScheduleJobRun('schedule_week_rollover', weekKey, {
+        migrated_count: migrated.length,
+        rolled_at: now.toISOString()
+      });
       scheduleWeekRolloverDoneKeyRef.current = weekKey;
       await fetchSchedule();
     } finally {
@@ -5957,6 +6247,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setSchedulePunchPresenceWeekOffset(null);
     }
 
+    const mode = options?.mode ?? 'week';
     const sourceEmployees = options?.employeesOverride ?? employees;
     const staffSet = new Set(
       sourceEmployees
@@ -5964,7 +6255,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         .map((e) => normalizeStaffId(String(e.staff_id ?? '').trim()))
         .filter((staff): staff is string => Boolean(staff))
     );
-    if (staffSet.size === 0) {
+    if (staffSet.size === 0 && mode !== 'operational_day') {
       if (!isStale()) {
         setSchedulePunchPresenceKeys(new Set());
         setScheduleFirstInByStaffDayKey({});
@@ -5975,14 +6266,23 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
 
-    const mode = options?.mode ?? 'week';
     const dayMs = 24 * 60 * 60 * 1000;
     const found = new Set<string>();
     const firstInByDayKey: Record<string, string> = {};
     const operationalPunchesByStaffId: Record<string, Array<{ action: 'IN' | 'OUT'; created_at: string }>> = {};
-    const staffBatches = chunk(Array.from(staffSet), 120);
 
     if (mode === 'operational_day') {
+      const staffBatches = chunk(Array.from(staffSet), 120);
+      if (staffBatches.length === 0) {
+        if (!isStale()) {
+          setSchedulePunchPresenceKeys(new Set());
+          setScheduleFirstInByStaffDayKey({});
+          setHomePunchesByStaffId({});
+          setSchedulePunchPresenceReady(true);
+          setSchedulePunchPresenceWeekOffset(options?.weekOffsetOverride ?? scheduleWeekOffset);
+        }
+        return;
+      }
       const now = new Date(serverTime);
       const operationalStart = new Date(now);
       operationalStart.setHours(DAY_CUTOFF_HOUR, 0, 0, 0);
@@ -5991,54 +6291,51 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       const dayIndex = (operationalStart.getDay() + 6) % 7;
 
-      for (const batch of staffBatches) {
-        const res = await fetchAllPagedRows<any>({
-          pageSize: 1000,
-          shouldStop: isStale,
-          fetchPage: async (from, to) =>
-            await supabase
-              .from('ob_punches')
-              .select('staff_id, action, created_at')
-              .in('staff_id', batch)
-              .gte('created_at', operationalStart.toISOString())
-              .lte('created_at', now.toISOString())
-              .order('created_at', { ascending: true })
-              .range(from, to)
-        });
+      const res = await fetchAllPagedRows<any>({
+        pageSize: 1000,
+        shouldStop: isStale,
+        fetchPage: async (from, to) =>
+          await supabase
+            .from('ob_punches')
+            .select('staff_id, action, created_at')
+            .gte('created_at', operationalStart.toISOString())
+            .lte('created_at', now.toISOString())
+            .order('created_at', { ascending: true })
+            .range(from, to)
+      });
 
-        if (res.error) {
-          if (!isStale()) {
-            if (!keepPreviousWhileLoading) {
-              setSchedulePunchPresenceKeys(new Set());
-              setScheduleFirstInByStaffDayKey({});
-              setHomePunchesByStaffId({});
-              setSchedulePunchPresenceReady(false);
-              setSchedulePunchPresenceWeekOffset(null);
-            }
+      if (res.error) {
+        if (!isStale()) {
+          if (!keepPreviousWhileLoading) {
+            setSchedulePunchPresenceKeys(new Set());
+            setScheduleFirstInByStaffDayKey({});
+            setHomePunchesByStaffId({});
+            setSchedulePunchPresenceReady(false);
+            setSchedulePunchPresenceWeekOffset(null);
           }
-          return;
         }
+        return;
+      }
 
-        for (const row of res.rows) {
-          const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
-          if (!staff || !staffSet.has(staff)) continue;
-          const at = new Date(String((row as any).created_at ?? ''));
-          if (Number.isNaN(at.getTime())) continue;
-          const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-          // Keep the home dashboard consistent with its visible punch list:
-          // exact-cutoff OUT events are hidden from display, so they should not
-          // independently make someone count as having punched for the day.
-          if (isExactOperationalCutoffOut(at.toISOString(), action)) continue;
-          found.add(`${staff}__${dayIndex}`);
-          const list = operationalPunchesByStaffId[staff] ?? [];
-          list.push({ action, created_at: at.toISOString() });
-          operationalPunchesByStaffId[staff] = list;
-          if (action === 'IN') {
-            const firstInKey = `${staff}__${dayIndex}`;
-            const prev = firstInByDayKey[firstInKey];
-            if (!prev || at.getTime() < new Date(prev).getTime()) {
-              firstInByDayKey[firstInKey] = at.toISOString();
-            }
+      for (const row of res.rows) {
+        const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+        if (!staff || !isAttendanceQueryableStaffId(staff)) continue;
+        const at = new Date(String((row as any).created_at ?? ''));
+        if (Number.isNaN(at.getTime())) continue;
+        const action = String((row as any).action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+        // Keep the home dashboard consistent with its visible punch list:
+        // exact-cutoff OUT events are hidden from display, so they should not
+        // independently make someone count as having punched for the day.
+        if (isExactOperationalCutoffOut(at.toISOString(), action)) continue;
+        found.add(`${staff}__${dayIndex}`);
+        const list = operationalPunchesByStaffId[staff] ?? [];
+        list.push({ action, created_at: at.toISOString() });
+        operationalPunchesByStaffId[staff] = list;
+        if (action === 'IN') {
+          const firstInKey = `${staff}__${dayIndex}`;
+          const prev = firstInByDayKey[firstInKey];
+          if (!prev || at.getTime() < new Date(prev).getTime()) {
+            firstInByDayKey[firstInKey] = at.toISOString();
           }
         }
       }
@@ -6064,6 +6361,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const weekStart = addDays(baseWeekStart, weekOffset * 7);
     const { start, end } = getDayRange(weekStart, 0, 7);
     const day0StartMs = start.getTime();
+    const staffBatches = chunk(Array.from(staffSet), 120);
 
     for (const batch of staffBatches) {
       const res = await fetchAllPagedRows<any>({
@@ -6165,7 +6463,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     for (const employee of latestEmployeeByStaff.values()) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       const workAccount = String(employee.work_account ?? employee.WorkAccount ?? '').trim();
-      const stage = positionToStage(String(employee.position ?? employee.Position ?? '').trim());
+      const stage = positionToStage(String(employee.position ?? '').trim());
       if (!staff || !stage) continue;
       stageByStaff.set(staff, stage);
       const key = normalizeWorkAccountKey(workAccount);
@@ -6377,8 +6675,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
 
-    const endDate = toDateOnly(serverTime);
-    const startDate = toDateOnly(addDays(serverTime, -6));
+    const mistakeDateRange = getScheduleMistakeDateRange(currentOperationalDate);
+    if (!mistakeDateRange) {
+      if (requestId === scheduleMistakeRequestRef.current) {
+        setScheduleMistakeByStaffId({});
+        setScheduleMistakeDetailsByStaffId({});
+      }
+      return;
+    }
+
+    const { endDate, startDate } = mistakeDateRange;
     const countByStaff = new Map<string, number>();
     const detailByStaff = new Map<string, ScheduleMistakeDetail[]>();
     for (const batch of chunk(staffIds, 200)) {
@@ -6591,7 +6897,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
     if (!staff) return;
     const name = String(employee.name ?? '').trim();
-    const position = String(employee.position ?? employee.Position ?? '').trim();
+    const position = String(employee.position ?? '').trim();
     setScheduleMistakeDraft({
       open: true,
       staff_id: staff,
@@ -6678,18 +6984,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       const searchStaffIds = async (): Promise<string[]> => {
         const term = `%${searchValue}%`;
-        const mode = await resolveEmployeeColumnMode();
-        const run = async (m: EmployeeColumnMode) => {
-          const select = m === 'cased' ? 'staff_id, name, "Agency"' : 'staff_id, name, agency';
-          return await supabase.from(EMPLOYEE_TABLE).select(select).or(`staff_id.ilike.${term},name.ilike.${term}`).limit(200);
-        };
-
-        let res = await run(mode);
-        if (res.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          res = await run(flipped);
-        }
+        const res = await supabase
+          .from(EMPLOYEE_TABLE)
+          .select('staff_id, name, agency')
+          .or(`staff_id.ilike.${term},name.ilike.${term}`)
+          .limit(200);
 
         if (res.error) {
           return [];
@@ -6746,18 +7045,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const fetchEmployeeMap = async () => {
-        const mode = await resolveEmployeeColumnMode();
-        const run = async (m: EmployeeColumnMode) => {
-          const select = m === 'cased' ? 'staff_id, name, "Agency"' : 'staff_id, name, agency';
-          return await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', staffIds);
-        };
-
-        let res = await run(mode);
-        if (res.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          res = await run(flipped);
-        }
+        const res = await supabase.from(EMPLOYEE_TABLE).select('staff_id, name, agency').in('staff_id', staffIds);
 
         if (res.error) {
           return null;
@@ -6777,7 +7065,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (!staff) continue;
         map[staff] = {
           name: String(e.name ?? '').trim(),
-          agency: String(e.agency ?? e.Agency ?? '').trim()
+          agency: String(e.agency ?? '').trim()
         };
       }
       return { rows, employeeMap: map, error: null as string | null };
@@ -6889,7 +7177,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     reset: _reset,
     lockUi: lockUiOption,
     includePunchMeta = false,
-    streamPartialState = true
+    streamPartialState = true,
+    profile = 'full'
   }: {
     reset: boolean;
     search?: string;
@@ -6899,6 +7188,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     lockUi?: boolean;
     includePunchMeta?: boolean;
     streamPartialState?: boolean;
+    profile?: EmployeeFetchProfile;
   }): Promise<EmployeeRow[] | null> => {
     if (!supabase) {
       setEmployeesError('缺少 Supabase 配置。');
@@ -6915,16 +7205,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const firstPageSize = 60;
       const nextPageSize = 200;
 
-      const build = (_mode: EmployeeColumnMode, from: number, to: number) => {
-        // Use wildcard select to tolerate mixed legacy schemas:
-        // some deployments use "Agency"/"Position"/"Label", others use lower-case.
-        return supabase.from(EMPLOYEE_TABLE).select('*').order('staff_id', { ascending: true }).range(from, to);
+      const build = (from: number, to: number) => {
+        const selectColumns = buildEmployeeSelectColumns(profile);
+        return supabase.from(EMPLOYEE_TABLE).select(selectColumns).order('staff_id', { ascending: true }).range(from, to);
       };
 
-      const mode = await resolveEmployeeColumnMode();
-      const run = async (m: EmployeeColumnMode, from: number, to: number) => {
-        const attemptCreatedAt = await build(m, from, to).order('created_at', { ascending: false });
-        return attemptCreatedAt.error ? await build(m, from, to).order('id', { ascending: false }) : attemptCreatedAt;
+      const run = async (from: number, to: number) => {
+        const attemptCreatedAt = await build(from, to).order('created_at', { ascending: false });
+        return attemptCreatedAt.error ? await build(from, to).order('id', { ascending: false }) : attemptCreatedAt;
       };
 
       const all: EmployeeRow[] = [];
@@ -6936,12 +7224,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       while (!done) {
         const pageSize = pageCount === 0 ? firstPageSize : nextPageSize;
         const to = from + pageSize - 1;
-        let attempt = await run(mode, from, to);
-        if (attempt.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          attempt = await run(flipped, from, to);
-        }
+        const attempt = await run(from, to);
 
         if (attempt.error) {
           if (!isAbortLikeError(attempt.error.message)) setEmployeesError(attempt.error.message);
@@ -7039,37 +7322,106 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setDepartedEmployeesLoading(true);
       setDepartedEmployeesError(null);
       try {
-        const buildSelect = (mode: EmployeeColumnMode, includeTerminationType: boolean) => {
-          const base =
-            mode === 'cased'
-              ? 'staff_id, name, "Agency", "Position", active, terminated_at'
-              : 'staff_id, name, agency, position, active, terminated_at';
-          return includeTerminationType ? `${base}, termination_type` : base;
+        const buildSelect = (
+          includeTerminationType: boolean,
+          includeTerminationReason: boolean
+        ) => {
+          const base = 'staff_id, name, agency, position, active, terminated_at';
+          return [
+            base,
+            includeTerminationType ? 'termination_type' : '',
+            includeTerminationReason ? 'termination_reason' : ''
+          ]
+            .filter(Boolean)
+            .join(', ');
         };
-        const run = async (mode: EmployeeColumnMode, includeTerminationType: boolean) =>
-          await supabase
-            .from(EMPLOYEE_TABLE)
-            .select(buildSelect(mode, includeTerminationType))
-            .not('terminated_at', 'is', null)
-            .order('terminated_at', { ascending: false })
-            .limit(1000);
-        let mode = await resolveEmployeeColumnMode();
-        let res = await run(mode, true);
-        if (res.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          mode = flipped;
-          res = await run(mode, true);
-        }
-        if (res.error && /termination_type/i.test(String(res.error.message ?? ''))) {
-          res = await run(mode, false);
-        }
+        const run = async (
+          includeTerminationType: boolean,
+          includeTerminationReason: boolean
+        ) => {
+          const rows: EmployeeRow[] = [];
+          const pageSize = 1000;
+          for (let from = 0; ; from += pageSize) {
+            const to = from + pageSize - 1;
+            const result = await supabase
+              .from(EMPLOYEE_TABLE)
+              .select(buildSelect(includeTerminationType, includeTerminationReason))
+              .not('terminated_at', 'is', null)
+              .order('terminated_at', { ascending: false })
+              .range(from, to);
+            if (result.error) return { data: rows, error: result.error };
+            const pageRows = ((result.data as EmployeeRow[] | null) ?? []).filter((row) =>
+              String(row.terminated_at ?? '').trim()
+            );
+            rows.push(...pageRows);
+            if (pageRows.length < pageSize) return { data: rows, error: null };
+          }
+        };
+        const runWithColumnFallback = async () => {
+          let result = await run(true, true);
+          if (result.error && /termination_reason/i.test(String(result.error.message ?? ''))) {
+            result = await run(true, false);
+          }
+          if (result.error && /termination_type/i.test(String(result.error.message ?? ''))) {
+            result = await run(false, false);
+          }
+          return result;
+        };
+        const res = await runWithColumnFallback();
         if (res.error) {
           setDepartedEmployees([]);
           setDepartedEmployeesError(res.error.message);
           return;
         }
-        setDepartedEmployees(((res.data as EmployeeRow[] | null) ?? []).filter((row) => String(row.terminated_at ?? '').trim()));
+        const positionScopedRows = filterRowsByPositionAccess(
+          adminAccessContext,
+          'employees',
+          res.data ?? [],
+          (row) => String(row.position ?? '').trim()
+        );
+        const agencyScopedRows = filterRowsByManagedAgencyAccess(
+          adminAccessContext,
+          positionScopedRows,
+          (row) => String(row.agency ?? '').trim()
+        );
+        const staffIds = Array.from(
+          new Set(
+            agencyScopedRows
+              .map((row) => normalizeStaffId(String(row.staff_id ?? '').trim()))
+              .filter(Boolean)
+          )
+        );
+        const departureAudits: AuditRow[] = [];
+        let departureAuditError = '';
+        for (let index = 0; index < staffIds.length; index += 100) {
+          const staffChunk = staffIds.slice(index, index + 100);
+          const auditResult = await supabase
+            .from(AUDIT_TABLE)
+            .select('id, created_at, actor, action, staff_id, target, payload')
+            .in('staff_id', staffChunk as any)
+            .in(
+              'action',
+              ['employee_delete', 'employee_termination_approve', 'agency_termination_request'] as any
+            )
+            .order('created_at', { ascending: false });
+          if (auditResult.error) {
+            departureAuditError = auditResult.error.message;
+            break;
+          }
+          departureAudits.push(...(((auditResult.data as AuditRow[] | null) ?? [])));
+        }
+        await rememberAuditActorDisplayNames(departureAudits.map((row) => row.actor));
+        setDepartedEmployees(
+          attachDepartureOperators(agencyScopedRows, departureAudits, getAuditActorDisplay)
+        );
+        if (departureAuditError) {
+          setDepartedEmployeesError(
+            t(
+              `员工已加载，操作人读取失败：${departureAuditError}`,
+              `Employees loaded, but operators failed: ${departureAuditError}`
+            )
+          );
+        }
       } finally {
         setDepartedEmployeesLoading(false);
       }
@@ -7085,6 +7437,27 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setDepartedEmployeesOpen(true);
     await fetchDepartedEmployees({ lockUi: false });
   };
+
+  const exportDepartedEmployees = (rows: EmployeeRow[]) => {
+    const csv = buildDepartedEmployeesCsv(rows, t, displayStaffId);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `departed-employees-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (employeeRealtimeDebounceTimerRef.current !== null) {
+        window.clearTimeout(employeeRealtimeDebounceTimerRef.current);
+      }
+    };
+  }, []);
 
   const hardDeleteDepartedEmployee = async (staffId: string) => {
     if (!supabase) {
@@ -7188,13 +7561,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const rehirePayload = {
         active: true,
         terminated_at: null,
-        termination_type: null
+        termination_type: null,
+        termination_reason: null
       };
       const res = await supabase.from(EMPLOYEE_TABLE).update(rehirePayload as any).eq('staff_id', staff);
       if (res.error) {
         setDepartedEmployeesError(
-          /active|terminated_at|termination_type/i.test(String(res.error.message ?? ''))
-            ? `Rehire failed: ${res.error.message}. Please run sql/2026-06-14_add_employee_termination_type.sql`
+          /active|terminated_at|termination_type|termination_reason/i.test(String(res.error.message ?? ''))
+            ? `Rehire failed: ${res.error.message}. Please run the latest SQL migrations.`
             : res.error.message
         );
         return;
@@ -7204,7 +7578,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         staff_id: staff,
         active: true,
         terminated_at: null,
-        termination_type: null
+        termination_type: null,
+        termination_reason: null
       };
       setDepartedEmployees((prev) => prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== staff));
       setEmployees((prev) => {
@@ -7267,21 +7642,29 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   };
 
   const addEmployeeRow = async () => {
+    const failAddEmployee = (message: string) => {
+      setEmployeesError(message);
+      setEmployeeAddFeedback({ tone: 'error', message });
+      setStatus({ tone: 'error', message });
+    };
     if (!employeesCanOperate) {
-      setEmployeesError(t('员工模块当前为只读。', 'Employees is read-only.'));
+      failAddEmployee(t('员工模块当前为只读。', 'Employees is read-only.'));
       return;
     }
     if (!supabase) {
-      setEmployeesError('缺少 Supabase 配置。');
+      failAddEmployee('缺少 Supabase 配置。');
       return;
     }
 
     const staffRaw = employeeNewStaffId.trim();
     const staff = staffRaw
       ? normalizeStaffId(staffRaw)
-      : createManualTemporaryStaffId(employees.map((row) => String(row.staff_id ?? '').trim()));
+      : await allocateTemporaryStaffId(
+        supabase,
+        employees.map((row) => String(row.staff_id ?? '').trim())
+      );
     if (!staff || (!isValidStaffIdValue(staff) && !isNewHirePlaceholderStaffId(staff))) {
-      setEmployeesError('员工ID格式不正确。');
+      failAddEmployee('员工ID格式不正确。');
       return;
     }
 
@@ -7295,74 +7678,63 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const workAccount = employeeNewWorkAccount.trim();
     const workPassword = resolveDefaultWorkPassword(workAccount, employeeNewWorkPassword.trim());
     if (!name) {
-      setEmployeesError('Name is required.');
+      failAddEmployee('Name is required.');
       return;
     }
     if (!agency) {
-      setEmployeesError('Agency is required.');
+      failAddEmployee('Agency is required.');
       return;
     }
     if (isScheduleOnlyAgency(agency)) {
-      setEmployeesError(t('JDL只能由系统自动创建。', 'JDL can only be created by the system.'));
+      failAddEmployee(t('JDL只能由系统自动创建。', 'JDL can only be created by the system.'));
       return;
     }
     if (!position) {
-      setEmployeesError('Position is required.');
+      failAddEmployee('Position is required.');
       return;
     }
     if (!shift) {
-      setEmployeesError('Shift is required.');
+      failAddEmployee('Shift is required.');
       return;
     }
     if (!label) {
-      setEmployeesError('Label is required.');
+      failAddEmployee('Label is required.');
       return;
     }
     const normalizedPos = normalizePositionKey(position);
     if (!normalizedPos) {
-      setEmployeesError(`Position 只能是：${activePositionNames.join(', ')}`);
+      failAddEmployee(`Position 只能是：${activePositionNames.join(', ')}`);
       return;
     }
     if (!canOperatePosition('employees', normalizedPos)) {
-      setEmployeesError(t('当前账号不能操作该 Position。', 'This account cannot operate this position.'));
+      failAddEmployee(t('当前账号不能操作该 Position。', 'This account cannot operate this position.'));
       return;
     }
     const resolvedShiftTime = resolveShiftStartTime(shift, normalizedPos, shiftTime);
 
-    await runLocked('employee_add', async () => {
+    if (busyRef.current) {
+      failAddEmployee(t('请等待当前操作完成后再添加员工。', 'Please wait for the current action to finish before adding an employee.'));
+      return;
+    }
+    setEmployeeAddFeedback({ tone: 'pending', message: t('正在添加员工...', 'Adding employee...') });
+    try {
+      await runLocked('employee_add', async () => {
       setEmployeesError(null);
 
-      const mode = await resolveEmployeeColumnMode();
-      const payload =
-        mode === 'cased'
-          ? {
-              staff_id: staff,
-              name,
-              Agency: agency,
-              Position: normalizedPos,
-              employment_type: employmentType,
-              shift: shift || null,
-              shift_time: resolvedShiftTime || null,
-              label: label || null,
-              work_account: workAccount || null,
-              work_password: workPassword || null,
-              active: true,
-              terminated_at: null
-            }
-          : {
-              staff_id: staff,
-              name,
-              agency,
-              position: normalizedPos,
-              employment_type: employmentType,
-              shift: shift || null,
-              shift_time: resolvedShiftTime || null,
-              label: label || null,
-              work_account: workAccount || null,
-              work_password: workPassword || null,
-              active: true,
-              terminated_at: null
-            };
+      let payload = {
+        staff_id: staff,
+        name,
+        agency,
+        position: normalizedPos,
+        employment_type: employmentType,
+        shift: shift || null,
+        shift_time: resolvedShiftTime || null,
+        label: label || null,
+        work_account: workAccount || null,
+        work_password: workPassword || null,
+        active: true,
+        terminated_at: null
+      };
 
       let attemptUpsert = await supabase
         .from(EMPLOYEE_TABLE)
@@ -7374,34 +7746,47 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         attemptUpsert = await supabase
           .from(EMPLOYEE_TABLE)
           .upsert([fallbackPayload as any], { onConflict: 'staff_id', ignoreDuplicates: false });
+        payload = fallbackPayload as typeof payload;
       }
 
       if (attemptUpsert.error) {
         const attemptInsert = await supabase.from(EMPLOYEE_TABLE).insert([payload as any]);
         if (attemptInsert.error) {
-          setEmployeesError(attemptInsert.error.message);
+          failAddEmployee(attemptInsert.error.message);
           return;
         }
       }
 
-      setStatus({ tone: 'success', message: `已添加/更新员工：${staff}` });
-      await writeAudit({
-        action: 'employee_upsert',
-        staffId: staff,
-        target: EMPLOYEE_TABLE,
-        payload: {
-          staff_id: staff,
-          name,
-          agency,
-          position: normalizedPos,
-          employment_type: employmentType,
-          shift,
-          shift_time: resolvedShiftTime,
-          label,
-          work_account: workAccount,
-          work_password: workPassword
-        }
-      });
+      const successMessage = t(`已添加/更新员工：${staff}`, `Employee added/updated: ${staff}`);
+      setStatus({ tone: 'success', message: successMessage });
+      setEmployeeAddFeedback({ tone: 'success', message: successMessage });
+      try {
+        await writeAudit({
+          action: 'employee_upsert',
+          staffId: staff,
+          target: EMPLOYEE_TABLE,
+          payload: {
+            staff_id: staff,
+            name,
+            agency,
+            position: normalizedPos,
+            employment_type: employmentType,
+            shift,
+            shift_time: resolvedShiftTime,
+            label,
+            work_account: workAccount,
+            work_password: workPassword
+          }
+        });
+      } catch (auditError: any) {
+        setStatus({
+          tone: 'error',
+          message: t(
+            `员工已保存，但审计记录失败：${String(auditError?.message ?? auditError ?? 'Unknown error')}`,
+            `Employee saved, but audit logging failed: ${String(auditError?.message ?? auditError ?? 'Unknown error')}`
+          )
+        });
+      }
       setEmployeeNewStaffId('');
       setEmployeeNewName('');
       setEmployeeNewAgency('');
@@ -7412,9 +7797,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setEmployeeNewLabel('');
       setEmployeeNewWorkAccount('');
       setEmployeeNewWorkPassword('');
-      setEmployeeAddOpen(false);
-      await fetchEmployees({ reset: true });
-    });
+      window.setTimeout(() => {
+        setEmployeeAddOpen(false);
+        setEmployeeAddFeedback(null);
+      }, 700);
+      try {
+        await fetchEmployees({ reset: true });
+      } catch (fetchError: any) {
+        setStatus({
+          tone: 'error',
+          message: t(
+            `员工已保存，但刷新列表失败：${String(fetchError?.message ?? fetchError ?? 'Unknown error')}`,
+            `Employee saved, but refresh failed: ${String(fetchError?.message ?? fetchError ?? 'Unknown error')}`
+          )
+        });
+      }
+      });
+    } catch (error: any) {
+      failAddEmployee(String(error?.message ?? error ?? t('添加员工失败。', 'Failed to add employee.')));
+    }
   };
 
   const deleteEmployeeRow = async (staffId: string) => {
@@ -7431,7 +7832,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const normalizedStaff = normalizeStaffId(staff);
     const employeeSnapshot =
       employees.find((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) === normalizedStaff) ?? null;
-    if (isScheduleOnlyAgency(String(employeeSnapshot?.agency ?? employeeSnapshot?.Agency ?? '').trim())) {
+    if (isScheduleOnlyAgency(String(employeeSnapshot?.agency ?? '').trim())) {
       setEmployeesError(t('JDL员工不能离职。', 'JDL employees cannot be departed.'));
       return;
     }
@@ -7441,7 +7842,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       staff,
       displayName,
       employeeSnapshot,
-      type: 'normal'
+      type: 'normal',
+      reason: ''
     });
     return;
 
@@ -7486,8 +7888,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           soft_deleted: true,
           staff_id: staff,
           name: String(employeeSnapshot?.name ?? '').trim() || null,
-          agency: String(employeeSnapshot?.agency ?? employeeSnapshot?.Agency ?? '').trim() || null,
-          position: String(employeeSnapshot?.position ?? employeeSnapshot?.Position ?? '').trim() || null,
+          agency: String(employeeSnapshot?.agency ?? '').trim() || null,
+          position: String(employeeSnapshot?.position ?? '').trim() || null,
           shift: normalizeShiftValue(String(employeeSnapshot?.shift ?? '').trim()) || null
         }
       });
@@ -7513,6 +7915,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (!departureConfirm || !supabase) return;
     const { staff, displayName, employeeSnapshot } = departureConfirm;
     const terminationType = departureConfirm.type;
+    const terminationReason = normalizeTerminationReason(departureConfirm.reason);
+    if (!terminationReason) {
+      setEmployeesError(t('请填写离职原因。', 'Please enter a departure reason.'));
+      return;
+    }
     const normalizedStaff = normalizeStaffId(staff);
     await runLocked('employee_delete', async () => {
       setEmployeesError(null);
@@ -7526,18 +7933,54 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const departPayload = {
         active: false,
         terminated_at: new Date(serverTime).toISOString(),
-        termination_type: terminationType
+        termination_type: terminationType,
+        termination_reason: terminationReason
       };
       const employeeDeleteRes = await supabase.from(EMPLOYEE_TABLE).update(departPayload as any).eq('staff_id', staff);
       if (employeeDeleteRes.error) {
         setEmployeesError(
-          /active|terminated_at|termination_type/i.test(String(employeeDeleteRes.error.message ?? ''))
-            ? `Departure failed: ${employeeDeleteRes.error.message}. Please run sql/2026-06-14_add_employee_termination_type.sql`
+          /active|terminated_at|termination_type|termination_reason/i.test(String(employeeDeleteRes.error.message ?? ''))
+            ? `Departure failed: ${employeeDeleteRes.error.message}. Please run the latest SQL migrations.`
             : employeeDeleteRes.error.message
         );
         return;
       }
-      setStatus({ tone: 'success', message: `Employee departed: ${displayName}` });
+      let cancelledTerminationRequestCount = 0;
+      let terminationCleanupError = '';
+      try {
+        const cancelResult = await cancelPendingEmployeeTerminationRequests(
+          supabase,
+          staff,
+          'Cancelled automatically because employee was departed directly.'
+        );
+        cancelledTerminationRequestCount = Number(cancelResult.cancelled_count ?? 0);
+      } catch (error) {
+        terminationCleanupError = error instanceof Error ? error.message : String(error);
+      }
+      if (cancelledTerminationRequestCount > 0) {
+        setTerminationRequests((prev) =>
+          prev.filter(
+            (request) =>
+              !(
+                request.status === 'pending' &&
+                normalizeStaffId(String(request.staff_id ?? '').trim()) === normalizedStaff
+              )
+          )
+        );
+      }
+      if (terminationCleanupError) {
+        setStatus({
+          tone: 'error',
+          message: `Employee departed: ${displayName}. Pending departure cleanup failed: ${terminationCleanupError}`
+        });
+      } else if (cancelledTerminationRequestCount === 0) {
+        setStatus({ tone: 'success', message: `Employee departed: ${displayName}` });
+      } else {
+        setStatus({
+          tone: 'success',
+          message: `Employee departed: ${displayName}. Cancelled ${cancelledTerminationRequestCount} pending request${cancelledTerminationRequestCount === 1 ? '' : 's'}.`
+        });
+      }
       await writeAudit({
         action: 'employee_delete',
         staffId: staff,
@@ -7546,10 +7989,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           deleted_schedule_rows: deletedScheduleCount,
           soft_deleted: true,
           termination_type: terminationType,
+          termination_reason: terminationReason,
           staff_id: staff,
           name: String(employeeSnapshot?.name ?? '').trim() || null,
-          agency: String(employeeSnapshot?.agency ?? employeeSnapshot?.Agency ?? '').trim() || null,
-          position: String(employeeSnapshot?.position ?? employeeSnapshot?.Position ?? '').trim() || null,
+          agency: String(employeeSnapshot?.agency ?? '').trim() || null,
+          position: String(employeeSnapshot?.position ?? '').trim() || null,
           shift: normalizeShiftValue(String(employeeSnapshot?.shift ?? '').trim()) || null
         }
       });
@@ -7574,11 +8018,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           staff_id: staff,
           active: false,
           terminated_at: departPayload.terminated_at,
-          termination_type: terminationType
+          termination_type: terminationType,
+          termination_reason: terminationReason,
+          termination_operator: userDisplayName.trim() || user?.email || null
         },
         ...prev.filter((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) !== normalizedStaff)
       ]);
       setDepartureConfirm(null);
+      void fetchTerminationRequests({ lockUi: false });
     });
   };
 
@@ -8154,8 +8601,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return {
           staff,
           name: String(e.name ?? '').trim() || '-',
-          agency: String(e.agency ?? e.Agency ?? '').trim() || '-',
-          position: String(e.position ?? e.Position ?? '').trim() || '-',
+          agency: String(e.agency ?? '').trim() || '-',
+          position: String(e.position ?? '').trim() || '-',
           workAccount: String(e.work_account ?? e.WorkAccount ?? '').trim() || '-',
           workPassword: String(e.work_password ?? e.WorkPassword ?? '').trim() || '-'
         };
@@ -8740,7 +9187,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const normalized = normalizePositionKey(payload.position);
     setEmployeeEditPosition((normalized ?? '') as string);
     setEmployeeEditEmploymentType(normalizeEmploymentTypeValue(payload.employmentType));
-    setEmployeeEditShift(payload.shift);
+    setEmployeeEditShift(normalizeShiftValue(String(payload.shift ?? '').trim()));
     setEmployeeEditShiftTime(normalizeShiftTimeValue(payload.shiftTime));
     setEmployeeEditLabel(payload.label);
     setEmployeeEditWorkAccount(payload.workAccount);
@@ -8763,8 +9210,79 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setEmployeeEditWorkPassword('');
   };
 
+  const canEditEmployeeAdminNote = (target: { position: string } | null) => {
+    if (!target) return false;
+    return (
+      canOperatePosition('employees', resolveEmployeeOperatePosition(target.position)) ||
+      canOperatePosition('schedule', target.position)
+    );
+  };
+
+  const openEmployeeNotes = ({
+    staff,
+    name,
+    position
+  }: {
+    staff: string;
+    name: string;
+    position: string;
+  }) => {
+    const normalizedStaff = normalizeStaffId(String(staff ?? '').trim());
+    if (!normalizedStaff) return;
+    const notes = employeeNotesByStaffId[normalizedStaff];
+    setEmployeeNotesTarget({
+      staff: normalizedStaff,
+      name: String(name ?? '').trim(),
+      position: String(position ?? '').trim()
+    });
+    setEmployeeAdminNoteDraft(String(notes?.adminNote ?? ''));
+    setEmployeeNoteError(null);
+    setEmployeeNotesOpen(true);
+  };
+
+  const closeEmployeeNotes = () => {
+    if (employeeNoteSaving) return;
+    setEmployeeNotesOpen(false);
+    setEmployeeNotesTarget(null);
+    setEmployeeAdminNoteDraft('');
+    setEmployeeNoteError(null);
+  };
+
+  const saveEmployeeAdminNote = async () => {
+    if (!supabase || !employeeNotesTarget) return;
+    if (!canEditEmployeeAdminNote(employeeNotesTarget)) {
+      setEmployeeNoteError(t('当前账号只有查看权限。', 'This account is read-only.'));
+      return;
+    }
+    const nextNote = employeeAdminNoteDraft.trim().slice(0, 500);
+    setEmployeeNoteSaving(true);
+    setEmployeeNoteError(null);
+    try {
+      const result = await supabase.rpc('admin_upsert_employee_note', {
+        p_staff_id: employeeNotesTarget.staff,
+        p_note: nextNote
+      });
+      if (result.error) throw new Error(result.error.message);
+      setEmployeeNotesByStaffId((current) => ({
+        ...current,
+        [employeeNotesTarget.staff]: {
+          agencyNote: current[employeeNotesTarget.staff]?.agencyNote ?? '',
+          adminNote: nextNote,
+          agencyNoteUpdatedBy: current[employeeNotesTarget.staff]?.agencyNoteUpdatedBy ?? '',
+          adminNoteUpdatedBy: nextNote ? String(userDisplayName || user?.email || '').trim() : ''
+        }
+      }));
+      setEmployeeAdminNoteDraft(nextNote);
+    } catch (error) {
+      setEmployeeNoteError(error instanceof Error ? error.message : t('留言保存失败。', 'Failed to save note.'));
+    } finally {
+      setEmployeeNoteSaving(false);
+    }
+  };
+
   const closeEmployeeAdd = () => {
     setEmployeeAddOpen(false);
+    setEmployeeAddFeedback(null);
     setEmployeeNewStaffId('');
     setEmployeeNewName('');
     setEmployeeNewAgency('');
@@ -8787,13 +9305,21 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return;
     }
     const originalStaffRaw = String(employeeEditOriginalStaffId ?? '').trim();
-    const isPlaceholderOriginal = isNewHirePlaceholderStaffId(originalStaffRaw);
-    const originalStaff = isPlaceholderOriginal ? originalStaffRaw : normalizeStaffId(originalStaffRaw);
     const nextStaffInputRaw = String(employeeEditStaffId ?? '').trim();
-    const nextStaff = nextStaffInputRaw
-      ? normalizeStaffId(nextStaffInputRaw)
-      : createManualTemporaryStaffId(employees.map((row) => String(row.staff_id ?? '').trim()));
-    if (!originalStaff || !nextStaff) return;
+    const { originalStaff, nextStaff: resolvedNextStaff, isPlaceholderOriginal } = resolveEmployeeEditStaffIds(originalStaffRaw, nextStaffInputRaw);
+    if (!originalStaff || !resolvedNextStaff) return;
+    let nextStaff = resolvedNextStaff;
+    if (shouldAllocateTemporaryStaffIdOnEdit(originalStaffRaw, nextStaffInputRaw)) {
+      try {
+        nextStaff = await allocateTemporaryStaffId(
+          supabase,
+          employees.map((row) => String(row.staff_id ?? '').trim())
+        );
+      } catch (nextError) {
+        setEmployeesError(nextError instanceof Error ? nextError.message : 'Failed to allocate temp staff ID.');
+        return;
+      }
+    }
     if (!isPlaceholderOriginal && originalStaff !== nextStaff && !isValidStaffIdValue(nextStaff) && !isNewHirePlaceholderStaffId(nextStaff)) {
       setEmployeesError('Invalid staff ID format (e.g. US010454).');
       return;
@@ -8806,7 +9332,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const name = employeeEditName.trim();
     const originalEmployeeForEdit =
       employees.find((row) => normalizeStaffId(String(row.staff_id ?? '').trim()) === originalStaff) ?? null;
-    const originalAgencyForEdit = String(originalEmployeeForEdit?.agency ?? originalEmployeeForEdit?.Agency ?? '').trim();
+    const originalAgencyForEdit = String(originalEmployeeForEdit?.agency ?? '').trim();
     const isProtectedAgencyEdit = isScheduleOnlyAgency(originalAgencyForEdit);
     const agency = isProtectedAgencyEdit ? 'JDL' : employeeEditAgency.trim();
     if (!isProtectedAgencyEdit && isScheduleOnlyAgency(agency)) {
@@ -8891,14 +9417,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         scheduleIdsToMigrate = ((scheduleListRes.data as any[]) ?? []).map((r) => r.id).filter((id) => id !== null && id !== undefined);
       }
 
-      const mode = await resolveEmployeeColumnMode();
       const originalEmployeeRes = await supabase
         .from(EMPLOYEE_TABLE)
-        .select(
-          mode === 'cased'
-            ? 'staff_id,name,"Agency","Position",employment_type,shift,shift_time,label,work_account,work_password'
-            : 'staff_id,name,agency,position,employment_type,shift,shift_time,label,work_account,work_password'
-        )
+        .select('staff_id,name,agency,position,employment_type,shift,shift_time,label,work_account,work_password')
         .eq('staff_id', originalStaff)
         .maybeSingle();
       if (originalEmployeeRes.error) {
@@ -8911,36 +9432,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return;
       }
 
-      const payload =
-        mode === 'cased'
-          ? {
-              staff_id: nextStaff,
-              name,
-              Agency: agency || null,
-              Position: normalizedPos,
-              employment_type: employmentType,
-              shift: employeeEditShift || null,
-              shift_time: resolvedShiftTime || null,
-              label: label || null,
-              work_account: workAccount || null,
-              work_password: workPassword || null,
-              active: true,
-              terminated_at: null
-            }
-          : {
-              staff_id: nextStaff,
-              name,
-              agency: agency || null,
-              position: normalizedPos,
-              employment_type: employmentType,
-              shift: employeeEditShift || null,
-              shift_time: resolvedShiftTime || null,
-              label: label || null,
-              work_account: workAccount || null,
-              work_password: workPassword || null,
-              active: true,
-              terminated_at: null
-            };
+      const payload = buildEmployeeEditWritePayload({
+        staffId: nextStaff,
+        name,
+        agency,
+        position: normalizedPos,
+        employmentType,
+        shift: employeeEditShift,
+        shiftTime: resolvedShiftTime,
+        label,
+        workAccount,
+        workPassword
+      });
       let { error } = await supabase.from(EMPLOYEE_TABLE).update(payload as any).eq('staff_id', originalStaff);
       if (error && /active|terminated_at/i.test(String(error.message ?? ''))) {
         const fallbackPayload = { ...payload } as Record<string, unknown>;
@@ -8956,32 +9459,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       if (isStaffIdChanged) {
         const rollbackEmployee = async () => {
-          const restorePayload =
-            mode === 'cased'
-              ? {
-                  staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
-                  name: originalEmployeeRow.name ?? null,
-                  Agency: originalEmployeeRow.Agency ?? null,
-                  Position: originalEmployeeRow.Position ?? null,
-                  employment_type: originalEmployeeRow.employment_type ?? null,
-                  shift: originalEmployeeRow.shift ?? null,
-                  shift_time: originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime ?? null,
-                  label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null,
-                  work_account: originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? null,
-                  work_password: originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? null
-                }
-              : {
-                  staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
-                  name: originalEmployeeRow.name ?? null,
-                  agency: originalEmployeeRow.agency ?? null,
-                  position: originalEmployeeRow.position ?? null,
-                  employment_type: originalEmployeeRow.employment_type ?? null,
-                  shift: originalEmployeeRow.shift ?? null,
-                  shift_time: originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime ?? null,
-                  label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null,
-                  work_account: originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? null,
-                  work_password: originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? null
-                };
+          const restorePayload = {
+            staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
+            name: originalEmployeeRow.name ?? null,
+            agency: originalEmployeeRow.agency ?? null,
+            position: originalEmployeeRow.position ?? null,
+            employment_type: originalEmployeeRow.employment_type ?? null,
+            shift: originalEmployeeRow.shift ?? null,
+            shift_time: originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime ?? null,
+            label: originalEmployeeRow.label ?? originalEmployeeRow.Label ?? null,
+            work_account: originalEmployeeRow.work_account ?? originalEmployeeRow.WorkAccount ?? null,
+            work_password: originalEmployeeRow.work_password ?? originalEmployeeRow.WorkPassword ?? null
+          };
           await supabase.from(EMPLOYEE_TABLE).update(restorePayload as any).eq('staff_id', nextStaff);
         };
 
@@ -9077,8 +9566,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           before: {
             staff_id: String(originalEmployeeRow.staff_id ?? originalStaff),
             name: String(originalEmployeeRow.name ?? '').trim(),
-            agency: String(originalEmployeeRow.agency ?? originalEmployeeRow.Agency ?? '').trim(),
-            position: String(originalEmployeeRow.position ?? originalEmployeeRow.Position ?? '').trim(),
+            agency: String(originalEmployeeRow.agency ?? '').trim(),
+            position: String(originalEmployeeRow.position ?? '').trim(),
             employment_type: normalizeEmploymentTypeValue(originalEmployeeRow.employment_type),
             shift: normalizeShiftValue(String(originalEmployeeRow.shift ?? '').trim()),
             shift_time: normalizeShiftTimeValue(originalEmployeeRow.shift_time ?? originalEmployeeRow.ShiftTime),
@@ -9580,46 +10069,25 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!ok) return;
 
       await runLocked('audit_undo_employee_delete', async () => {
-        const mode = await resolveEmployeeColumnMode();
-        const payloadRow =
-          mode === 'cased'
-            ? {
-                staff_id: staffFromPayload,
-                name: name || null,
-                Agency: agency || null,
-                Position: position || null,
-                shift: shift || null,
-                active: true,
-                terminated_at: null
-              }
-            : {
-                staff_id: staffFromPayload,
-                name: name || null,
-                agency: agency || null,
-                position: position || null,
-                shift: shift || null,
-                active: true,
-                terminated_at: null
-              };
+        const payloadRow = {
+          staff_id: staffFromPayload,
+          name: name || null,
+          agency: agency || null,
+          position: position || null,
+          shift: shift || null,
+          active: true,
+          terminated_at: null
+        };
         const restoreRes = await supabase.from(EMPLOYEE_TABLE).upsert([payloadRow as any], { onConflict: 'staff_id' });
         if (restoreRes.error) {
           if (/active|terminated_at/i.test(String(restoreRes.error.message ?? ''))) {
-            const fallbackRow =
-              mode === 'cased'
-                ? {
-                    staff_id: staffFromPayload,
-                    name: name || null,
-                    Agency: agency || null,
-                    Position: position || null,
-                    shift: shift || null
-                  }
-                : {
-                    staff_id: staffFromPayload,
-                    name: name || null,
-                    agency: agency || null,
-                    position: position || null,
-                    shift: shift || null
-                  };
+            const fallbackRow = {
+              staff_id: staffFromPayload,
+              name: name || null,
+              agency: agency || null,
+              position: position || null,
+              shift: shift || null
+            };
             const fallbackRes = await supabase.from(EMPLOYEE_TABLE).upsert([fallbackRow as any], { onConflict: 'staff_id' });
             if (fallbackRes.error) {
               setStatus({ tone: 'error', message: `${t('撤销失败：', 'Undo failed: ')}${fallbackRes.error.message}` });
@@ -9963,13 +10431,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const fetchEmployeeShiftByStaffIds = async (staffIds: string[]) => {
       const shiftByStaff = new Map<string, '' | 'early' | 'late'>();
       if (staffIds.length === 0) return shiftByStaff;
-      const mode = await resolveEmployeeColumnMode();
       for (const batch of chunk(staffIds, 200)) {
-        const select =
-          mode === 'cased'
-            ? 'staff_id, shift, shift_time, "Position", name, "Agency", terminated_at'
-            : 'staff_id, shift, shift_time, position, name, agency, terminated_at';
-        const res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch as any);
+        const res = await supabase
+          .from(EMPLOYEE_TABLE)
+          .select('staff_id, shift, shift_time, position, name, agency, terminated_at')
+          .in('staff_id', batch as any);
         if (res.error) throw new Error(res.error.message);
         for (const row of ((res.data as any[]) ?? [])) {
           const staff = normalizeStaffId(String(row?.staff_id ?? '').trim());
@@ -9977,12 +10443,12 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           shiftByStaff.set(staff, normalizeShiftValue(String(row?.shift ?? '').trim()));
           if (!profileByStaff.has(staff)) {
             profileByStaff.set(staff, {
-              position: String(row?.position ?? row?.Position ?? '').trim(),
+              position: String(row?.position ?? '').trim(),
               shift: normalizeShiftValue(String(row?.shift ?? '').trim()),
               shiftTime: normalizeShiftTimeValue(row?.shift_time ?? ''),
               terminatedAt: String(row?.terminated_at ?? '').trim() || null,
               name: String(row?.name ?? '').trim(),
-              agency: String(row?.agency ?? row?.Agency ?? '').trim()
+              agency: String(row?.agency ?? '').trim()
             });
           }
         }
@@ -10024,7 +10490,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (!isWorkingScheduleBaseState(state)) continue;
         const profile = profileByStaff.get(staff);
         const shift = initialShiftByStaff.get(staff) || profile?.shift || 'early';
-        const position = String(profile?.position ?? (row as any).position ?? '').trim();
+        const position = String(profile?.position ?? '').trim();
         if (!position) continue;
         const terminatedAt = String(profile?.terminatedAt ?? '').trim();
         if (terminatedAt) {
@@ -10326,7 +10792,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     position,
     missingEmployeeOnly,
     lockUi,
-    deferLateSync
+    deferLateSync,
+    bypassCache
   }: {
     reset: boolean;
     weekOffset?: number;
@@ -10337,6 +10804,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     missingEmployeeOnly?: boolean;
     lockUi?: boolean;
     deferLateSync?: boolean;
+    bypassCache?: boolean;
   }) => {
     if (!supabase) {
       setTimecardError('缺少 Supabase 配置。');
@@ -10364,10 +10832,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const positionValues = normalizeTimecardFilterValues(position, timecardPosition);
     const missingOnly = missingEmployeeOnly ?? timecardMissingEmployeeOnly;
     const shouldDeferLateSync = deferLateSync ?? true;
+    const advanceTimecardLoadingProgress = (progress: number) => {
+      if (requestId !== timecardFetchSeqRef.current) return;
+      const nextProgress = Math.max(0, Math.min(100, progress));
+      setTimecardLoadingProgress((current) => Math.max(current, nextProgress));
+    };
+    setTimecardLoadingProgress(0);
     setTimecardLoading(true);
     const finishLoading = () => {
       if (requestId === timecardFetchSeqRef.current) {
-        setTimecardLoading(false);
+        setTimecardLoadingProgress(100);
+        window.setTimeout(() => {
+          if (requestId !== timecardFetchSeqRef.current) return;
+          setTimecardLoading(false);
+        }, 180);
       }
     };
 
@@ -10439,7 +10917,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         return { staffToProfile, error: null as string | null };
       }
 
-      const mode = await resolveEmployeeColumnMode();
       if (isStale()) {
         return {
           staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }>(),
@@ -10448,24 +10925,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       const batches = chunk(staffIds, 200);
       for (const batch of batches) {
-        const run = async (m: EmployeeColumnMode) => {
-          const select = m === 'cased'
-            ? 'staff_id, name, "Agency", "Position", shift, terminated_at'
-            : 'staff_id, name, agency, position, shift, terminated_at';
-          return await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch);
-        };
-
-        let res = await run(mode);
+        const res = await supabase
+          .from(EMPLOYEE_TABLE)
+          .select('staff_id, name, agency, position, shift, terminated_at')
+          .in('staff_id', batch);
         if (isStale()) {
           return {
             staffToProfile: new Map<string, { name: string; agency: string; position: string; shift: '' | 'early' | 'late'; terminatedAt: string | null }>(),
             error: STALE_TIMECARD_REQUEST
           };
-        }
-        if (res.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          res = await run(flipped);
         }
         if (res.error) {
           return {
@@ -10479,8 +10947,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           if (!staff) continue;
           staffToProfile.set(staff, {
             name: String(r.name ?? '').trim(),
-            agency: String(r.agency ?? r.Agency ?? '').trim(),
-            position: String(r.position ?? r.Position ?? '').trim(),
+            agency: String(r.agency ?? '').trim(),
+            position: String(r.position ?? '').trim(),
             shift: normalizeShiftValue(String(r.shift ?? '').trim()),
             terminatedAt: String((r as any).terminated_at ?? '').trim() || null
           });
@@ -11019,6 +11487,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
       if (missingOnly) {
         const punchesRes = await fetchPunchesInRange();
+        advanceTimecardLoadingProgress(28);
         if (punchesRes.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: punchesRes.error };
         }
@@ -11048,6 +11517,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
 
         const profilesRes = await fetchProfilesByStaffId(allStaffIds);
+        advanceTimecardLoadingProgress(48);
         if (profilesRes.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: profilesRes.error };
         }
@@ -11077,6 +11547,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           fetchScheduledByStaff(staffIds),
           fetchAttendanceMarksByStaff(staffIds)
         ]);
+        advanceTimecardLoadingProgress(74);
         if (scheduledRes.error) {
           return { rows: [] as TimecardRow[], hasMore: false, error: scheduledRes.error };
         }
@@ -11104,11 +11575,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           });
         });
 
+        advanceTimecardLoadingProgress(92);
         return { rows, hasMore: false, error: null as string | null };
       }
 
       const cachedWeek = timecardWeekCacheRef.current;
-      if (cachedWeek && cachedWeek.weekKey === weekStartDate) {
+      if (
+        cachedWeek &&
+        shouldUseTimecardWeekCache({
+          cachedWeekKey: cachedWeek.weekKey,
+          requestedWeekKey: weekStartDate,
+          bypassCache: bypassCache ?? false
+        })
+      ) {
+        advanceTimecardLoadingProgress(70);
         const viewEmployees = filterEmployeesForView(cachedWeek.allEmployees);
         const now = new Date(serverTime);
         const capEnd = new Date(clamp(now.getTime(), rangeStart.getTime(), rangeEnd.getTime()));
@@ -11130,6 +11610,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             capEnd
           })
         );
+        advanceTimecardLoadingProgress(92);
         return { rows, hasMore: false, error: null as string | null };
       }
 
@@ -11137,6 +11618,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         fetchPunchesInRange(),
         fetchActiveStaffIdsForWeek()
       ]);
+      advanceTimecardLoadingProgress(38);
       if (isStale()) {
         return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
       }
@@ -11167,6 +11649,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const profilesRes = await fetchProfilesByStaffId(activeStaffIds);
+      advanceTimecardLoadingProgress(55);
       if (profilesRes.error) {
         return { rows: [] as TimecardRow[], hasMore: false, error: profilesRes.error };
       }
@@ -11196,6 +11679,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         fetchScheduledByStaff(activeStaffIds),
         fetchAttendanceMarksByStaff(activeStaffIds)
       ]);
+      advanceTimecardLoadingProgress(74);
       if (isStale()) {
         return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
       }
@@ -11217,6 +11701,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       let lateMarksSynced = false;
       if (!shouldDeferLateSync) {
         try {
+          advanceTimecardLoadingProgress(82);
           lateByStaffDayKey = (
             await syncLateMarksForWeek({
               weekStart,
@@ -11235,7 +11720,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           console.warn('[timecard] sync late marks failed:', error);
         }
       }
+      advanceTimecardLoadingProgress(88);
 
+      if (isStale()) {
+        return { rows: [] as TimecardRow[], hasMore: false, error: STALE_TIMECARD_REQUEST };
+      }
       timecardWeekCacheRef.current = {
         weekKey: weekStartDate,
         allEmployees,
@@ -11272,6 +11761,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         });
       });
 
+      advanceTimecardLoadingProgress(94);
       return { rows, hasMore: false, error: null as string | null };
     };
 
@@ -11535,8 +12025,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             return {
               staff_id: staff,
               name: String(employee?.name ?? '').trim(),
-              agency: String(employee?.agency ?? employee?.Agency ?? '').trim(),
-              position: String(employee?.position ?? employee?.Position ?? '').trim(),
+              agency: String(employee?.agency ?? '').trim(),
+              position: String(employee?.position ?? '').trim(),
               shift: normalizeShiftValue(String(employee?.shift ?? '').trim()),
               terminated_at: String((employee as any)?.terminated_at ?? '').trim() || null
             };
@@ -11765,19 +12255,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const staffIds = Array.from(new Set(filteredPunches.map((p) => p.staff_id)));
-      const mode = await resolveEmployeeColumnMode();
       const staffToProfile = new Map<string, { name: string; agency: string; position: string }>();
       const batches = chunk(staffIds, 200);
       for (const batch of batches) {
-        const select = mode === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
-        let res = await supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batch);
-        if (res.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          const select2 =
-            flipped === 'cased' ? 'staff_id, name, "Agency", "Position"' : 'staff_id, name, agency, position';
-          res = await supabase.from(EMPLOYEE_TABLE).select(select2).in('staff_id', batch);
-        }
+        const res = await supabase.from(EMPLOYEE_TABLE).select('staff_id, name, agency, position').in('staff_id', batch);
         if (res.error) {
           setStatus({ tone: 'error', message: `读取员工信息失败：${res.error.message}` });
           return;
@@ -11787,8 +12268,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           if (!staff) continue;
           staffToProfile.set(staff, {
             name: String(r.name ?? '').trim(),
-            agency: String(r.agency ?? r.Agency ?? '').trim(),
-            position: String(r.position ?? r.Position ?? '').trim()
+            agency: String(r.agency ?? '').trim(),
+            position: String(r.position ?? '').trim()
           });
         }
       }
@@ -11808,7 +12289,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         const profile = staffToProfile.get(staff) ?? { name: '', agency: '', position: '' };
         const times: string[] = [];
         for (const item of list) {
-          const timeText = formatTime(new Date(item.at));
+          const timeText = formatTimecardPunchExportDateTime(new Date(item.at));
           times.push(timeText);
         }
         maxPairs = Math.max(maxPairs, Math.ceil(times.length / 2));
@@ -11831,6 +12312,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       try {
         const XLSX = await import('xlsx');
         const ws = XLSX.utils.aoa_to_sheet([headers, ...paddedBody]);
+        const timeColumnStart = 4;
+        for (let rowIndex = 1; rowIndex <= paddedBody.length; rowIndex += 1) {
+          for (let columnIndex = timeColumnStart; columnIndex < headers.length; columnIndex += 1) {
+            const cellAddress = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+            const cell = ws[cellAddress];
+            if (!cell) continue;
+            cell.t = 's';
+            cell.z = '@';
+          }
+        }
+        ws['!cols'] = headers.map((_, index) => ({ wch: index >= timeColumnStart ? 20 : 14 }));
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'daily_punches');
         const filename = `ob_punches_${timecardWeekInput}.xlsx`;
@@ -11865,13 +12357,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   };
 
-  const fetchPunchRowsForTimecard = async (staffId: string, dayIndex: number | null) => {
+  const fetchPunchRowsForTimecard = async (staffId: string, dayIndex: number | null, weekOffsetOverride = timecardWeekOffset) => {
     if (!supabase) {
       return { rows: [] as PunchRow[], error: '缺少 Supabase 配置。' };
     }
 
     const baseWeekStart = startOfWeekMonday(serverTime);
-    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+    const weekStart = addDays(baseWeekStart, weekOffsetOverride * 7);
 
     const dayRange =
       dayIndex === null ? getDayRange(weekStart, 0, 7) : getDayRange(weekStart, dayIndex);
@@ -11907,14 +12399,28 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     return { rows, error: null as string | null };
   };
 
-  const openTimecardPunchModal = async (staffId: string, dayIndex: number | null) => {
+  const getTimecardPunchPosition = (staffId: string | null) => {
+    const staffKey = normalizeStaffId(String(staffId ?? '').trim());
+    if (!staffKey) return '';
+    const employee = employees.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
+    const timecardRow = timecardRows.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
+    const position = String(employee?.position ?? timecardRow?.position ?? '').trim();
+    return normalizePositionKey(position) || position;
+  };
+
+  const canOperateTimecardPunchStaff = (staffId: string | null) => {
+    const position = getTimecardPunchPosition(staffId);
+    return canOperateTimecardPunches(
+      timecardCanOperate,
+      position,
+      (position) => canOperatePosition('timecard', position)
+    );
+  };
+
+  const openTimecardPunchModal = async (staffId: string, dayIndex: number | null, weekOffsetOverride = timecardWeekOffset) => {
     const staff = staffId.trim();
     if (!staff) return;
-    const staffKey = normalizeStaffId(staff);
-    const row = timecardRows.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
-    const employee = employees.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staffKey);
-    const position = String(row?.position ?? employee?.position ?? employee?.Position ?? '').trim();
-    const accessPosition = normalizePositionKey(position) || position;
+    const accessPosition = getTimecardPunchPosition(staff);
     if (!canViewPosition('timecard', accessPosition)) {
       setStatus({
         tone: 'error',
@@ -11932,15 +12438,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setTimecardPunchPendingAddRows([]);
     setTimecardPunchPendingDeleteIds([]);
     setTimecardPunchAddOpen(false);
+    setTimecardPunchAddMenuOpen(false);
     setTimecardPunchEdits({});
     setTimecardPunchDraggingId(null);
     setTimecardPunchDragOverId(null);
     setTimecardPunchOrderIds([]);
+    setTimecardPunchAddMode('single');
     const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
-    setTimecardPunchNew({ inAtLocal: nowLocal, outAtLocal: nowLocal });
+    setTimecardPunchNew({ action: 'IN', atLocal: nowLocal, inAtLocal: nowLocal, outAtLocal: nowLocal });
 
     const requestId = ++timecardPunchFetchSeqRef.current;
-    const res = await fetchPunchRowsForTimecard(staff, dayIndex);
+    const res = await fetchPunchRowsForTimecard(staff, dayIndex, weekOffsetOverride);
     if (requestId !== timecardPunchFetchSeqRef.current) return;
     if (res.error) {
       setTimecardPunchError(res.error);
@@ -11975,7 +12483,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const dayIndex = Math.floor((targetDate.getTime() - targetWeekStart.getTime()) / (24 * 60 * 60 * 1000));
     if (dayIndex < 0 || dayIndex > 6) return;
     const employee = employees.find((item) => normalizeStaffId(String(item.staff_id ?? '')) === staff);
-    const position = String(employee?.position ?? employee?.Position ?? '').trim();
+    const position = String(employee?.position ?? '').trim();
     const accessPosition = normalizePositionKey(position) || position;
     if (!canViewPosition('timecard', accessPosition)) {
       setStatus({
@@ -11987,7 +12495,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     setTimecardWeekOffset(weekOffset);
     setTimecardWeekInput(dateOnly);
-    await fetchTimecard({
+    void fetchTimecard({
       reset: true,
       weekOffset,
       search: staff,
@@ -11997,7 +12505,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       lockUi: false,
       deferLateSync: false
     });
-    await openTimecardPunchModal(staff, dayIndex);
+    await openTimecardPunchModal(staff, dayIndex, weekOffset);
   };
 
   const closeTimecardPunchModal = () => {
@@ -12010,11 +12518,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setTimecardPunchPendingAddRows([]);
     setTimecardPunchPendingDeleteIds([]);
     setTimecardPunchAddOpen(false);
+    setTimecardPunchAddMenuOpen(false);
     setTimecardPunchEdits({});
     setTimecardPunchDraggingId(null);
     setTimecardPunchDragOverId(null);
     setTimecardPunchOrderIds([]);
-    setTimecardPunchNew({ inAtLocal: '', outAtLocal: '' });
+    setTimecardPunchAddMode('single');
+    setTimecardPunchNew({ action: 'IN', atLocal: '', inAtLocal: '', outAtLocal: '' });
   };
 
   const notifyTimecardPunchSaved = (staffId: string, workDate: string) => {
@@ -12030,6 +12540,129 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         }
       })
     );
+  };
+
+  const timecardPunchInputClass = [
+    'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+    themeMode === 'light'
+      ? 'border border-slate-300 bg-white text-slate-900'
+      : 'border border-white/10 bg-black/30 text-white'
+  ].join(' ');
+
+  const timecardPunchActionSelectClass = (action: 'IN' | 'OUT') =>
+    [
+      'mt-2 h-11 w-full rounded-2xl border px-4 font-display text-base tracking-[0.08em] outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
+      themeMode === 'light'
+        ? action === 'IN'
+          ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+          : 'border-rose-300 bg-rose-50 text-rose-700'
+        : action === 'IN'
+          ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200'
+          : 'border-rose-400/40 bg-rose-500/10 text-rose-200'
+    ].join(' ');
+
+  const getTimecardPunchActionSelectStyle = (action: 'IN' | 'OUT'): CSSProperties & { WebkitTextFillColor?: string } => {
+    const tone = action === 'IN'
+      ? { text: '#34d399', border: 'rgba(52, 211, 153, 0.45)', bg: 'rgba(16, 185, 129, 0.10)' }
+      : { text: '#fb7185', border: 'rgba(251, 113, 133, 0.45)', bg: 'rgba(244, 63, 94, 0.10)' };
+
+    return {
+      color: tone.text,
+      WebkitTextFillColor: tone.text,
+      borderColor: tone.border,
+      backgroundColor: tone.bg
+    };
+  };
+
+  const renderTimecardPunchAddPanel = () => (
+    <div
+      className={[
+        'rounded-2xl px-4 py-4',
+        themeMode === 'light' ? 'border border-neon/50 bg-emerald-50' : 'border border-neon/40 bg-black/30 shadow-glow'
+      ].join(' ')}
+    >
+      {timecardPunchAddMode === 'single' ? (
+        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_7rem] lg:items-end">
+          <div>
+            <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Action</div>
+            <select
+            value={timecardPunchNew.action}
+            disabled={isLocked}
+            onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, action: e.target.value === 'OUT' ? 'OUT' : 'IN' }))}
+            className={timecardPunchActionSelectClass(timecardPunchNew.action)}
+            style={getTimecardPunchActionSelectStyle(timecardPunchNew.action)}
+          >
+              <option value="IN" className="bg-slate-950 text-emerald-300">IN</option>
+              <option value="OUT" className="bg-slate-950 text-rose-300">OUT</option>
+            </select>
+          </div>
+          <div>
+            <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>Time</div>
+            <input
+              value={timecardPunchNew.atLocal}
+              disabled={isLocked}
+              onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, atLocal: e.target.value }))}
+              type="datetime-local"
+              className={timecardPunchInputClass}
+            />
+          </div>
+          <button
+            type="button"
+            disabled={isLocked}
+            onClick={() => void addSingleTimecardPunchRow()}
+            className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t('添加', 'Add')}
+          </button>
+        </div>
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_7rem] lg:items-end">
+          <div>
+            <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>IN Time</div>
+            <input
+              value={timecardPunchNew.inAtLocal}
+              disabled={isLocked}
+              onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, inAtLocal: e.target.value }))}
+              type="datetime-local"
+              className={timecardPunchInputClass}
+            />
+          </div>
+          <div>
+            <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>OUT Time</div>
+            <input
+              value={timecardPunchNew.outAtLocal}
+              disabled={isLocked}
+              onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, outAtLocal: e.target.value }))}
+              type="datetime-local"
+              className={timecardPunchInputClass}
+            />
+          </div>
+          <button
+            type="button"
+            disabled={isLocked}
+            onClick={() => void addTimecardPunchRow()}
+            className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t('添加', 'Add')}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  const openTimecardPunchAddForm = (mode: 'single' | 'pair') => {
+    setTimecardPunchAddMode(mode);
+    setTimecardPunchAddMenuOpen(false);
+    setTimecardPunchAddOpen(true);
+  };
+
+  const toggleTimecardPunchAddMenu = () => {
+    if (timecardPunchAddOpen) {
+      setTimecardPunchAddOpen(false);
+      setTimecardPunchAddMenuOpen(false);
+      return;
+    }
+    setTimecardPunchAddMenuOpen((prev) => !prev);
   };
 
   const renderTimecardPunchModal = () => {
@@ -12076,19 +12709,31 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
             </div>
             <div className="flex items-center gap-2">
               {!timecardPunchReadOnly && (
-                <button
-                  type="button"
-                  disabled={isLocked}
-                  onClick={() => setTimecardPunchAddOpen((prev) => !prev)}
-                  className={[
-                    'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-                    themeMode === 'light'
-                      ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                  ].join(' ')}
-                >
-                  {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
-                </button>
+                <div className="relative">
+                  <button
+                    type="button"
+                    disabled={isLocked}
+                    onClick={toggleTimecardPunchAddMenu}
+                    className={[
+                      'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                      themeMode === 'light'
+                        ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                    ].join(' ')}
+                  >
+                    {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
+                  </button>
+                  {timecardPunchAddMenuOpen ? (
+                    <div className={['absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-2xl border p-1 shadow-2xl', themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950'].join(' ')}>
+                      <button type="button" onClick={() => openTimecardPunchAddForm('single')} className={['block h-10 w-full rounded-xl px-3 text-left text-sm font-semibold', themeMode === 'light' ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-200 hover:bg-white/10'].join(' ')}>
+                        {t('单条', 'Single')}
+                      </button>
+                      <button type="button" onClick={() => openTimecardPunchAddForm('pair')} className={['block h-10 w-full rounded-xl px-3 text-left text-sm font-semibold', themeMode === 'light' ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-200 hover:bg-white/10'].join(' ')}>
+                        {t('一组', 'Pair')}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               )}
               {!timecardPunchReadOnly && (
                 <button
@@ -12117,56 +12762,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           </div>
 
           <div className="flex-1 overflow-y-auto px-6 py-5">
-            {!timecardPunchReadOnly && timecardPunchAddOpen && (
-              <div
-                className={[
-                  'rounded-2xl px-4 py-4',
-                  themeMode === 'light' ? 'border border-neon/50 bg-emerald-50' : 'border border-neon/40 bg-black/30 shadow-glow'
-                ].join(' ')}
-              >
-                <div className="grid gap-3 md:grid-cols-[1fr_1fr_7rem] md:items-end">
-                  <div>
-                    <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>IN Time</div>
-                    <input
-                      value={timecardPunchNew.inAtLocal}
-                      disabled={isLocked}
-                      onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, inAtLocal: e.target.value }))}
-                      type="datetime-local"
-                      className={[
-                        'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                        themeMode === 'light'
-                          ? 'border border-slate-300 bg-white text-slate-900'
-                          : 'border border-white/10 bg-black/30 text-white'
-                      ].join(' ')}
-                    />
-                  </div>
-                  <div>
-                    <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>OUT Time</div>
-                    <input
-                      value={timecardPunchNew.outAtLocal}
-                      disabled={isLocked}
-                      onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, outAtLocal: e.target.value }))}
-                      type="datetime-local"
-                      className={[
-                        'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                        themeMode === 'light'
-                          ? 'border border-slate-300 bg-white text-slate-900'
-                          : 'border border-white/10 bg-black/30 text-white'
-                      ].join(' ')}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isLocked}
-                    onClick={() => void addTimecardPunchRow()}
-                    className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {t('添加', 'Add')}
-                  </button>
-                </div>
-                <p className={['mt-3 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{t('手动一次添加一组 IN / OUT 打卡记录。', 'Add one IN/OUT pair manually.')}</p>
-              </div>
-            )}
+            {!timecardPunchReadOnly && timecardPunchAddOpen && renderTimecardPunchAddPanel()}
 
             {timecardPunchError && <p className="text-sm text-ember">{t('操作失败：', 'Failed: ')}{timecardPunchError}</p>}
             {!timecardPunchError && timecardPunchRowsVisible.length === 0 && (
@@ -12283,11 +12879,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
                                 : themeMode === 'light'
                                   ? 'border border-slate-300 bg-white'
                                   : 'border border-white/10 bg-black/30',
-                              edit.action === 'IN' ? 'text-mint' : 'text-ember'
+                              edit.action === 'IN'
+                                ? themeMode === 'light'
+                                  ? 'text-emerald-700'
+                                  : 'text-emerald-300'
+                                : themeMode === 'light'
+                                  ? 'text-rose-700'
+                                  : 'text-rose-300'
                             ].join(' ')}
+                            style={getTimecardPunchActionSelectStyle(edit.action)}
                           >
-                            <option value="IN">IN</option>
-                            <option value="OUT">OUT</option>
+                            <option value="IN" className="bg-slate-950 text-emerald-300">IN</option>
+                            <option value="OUT" className="bg-slate-950 text-rose-300">OUT</option>
                           </select>
                         </div>
                         <div>
@@ -12340,9 +12943,62 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     );
   };
 
+  const getTimecardPunchAddDayRange = () => {
+    if (timecardPunchDayIndex === null || timecardPunchDayIndex < 0 || timecardPunchDayIndex > 6) return null;
+    const baseWeekStart = startOfWeekMonday(serverTime);
+    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
+    return getDayRange(weekStart, timecardPunchDayIndex);
+  };
+
+  const ensureTimecardPunchAddTimeInRange = (createdAt: string) => {
+    const dayRange = getTimecardPunchAddDayRange();
+    if (!dayRange) return { ok: false as const, error: '仅支持在单天视图新增打卡。' };
+    const ms = new Date(createdAt).getTime();
+    const startMs = dayRange.start.getTime();
+    const endMs = dayRange.end.getTime();
+    if (ms < startMs || ms >= endMs) {
+      const startText = formatTime(dayRange.start);
+      const endText = formatTime(dayRange.end);
+      return { ok: false as const, error: `时间必须在单天范围内（${startText} ~ ${endText}，允许跨夜）。` };
+    }
+    return { ok: true as const };
+  };
+
+  const addSingleTimecardPunchRow = async () => {
+    if (!canOperateTimecardPunchStaff(timecardPunchStaffId)) {
+      setTimecardPunchError(t('当前账号没有该岗位的操作权限。', 'No operation access for this employee position.'));
+      return;
+    }
+    const staff = timecardPunchStaffId;
+    if (!staff) return;
+
+    const createdAt = parseLocalDateTimeInputValue(timecardPunchNew.atLocal);
+    if (!createdAt) {
+      setTimecardPunchError('时间格式不正确。');
+      return;
+    }
+    const rangeCheck = ensureTimecardPunchAddTimeInRange(createdAt);
+    if (!rangeCheck.ok) {
+      setTimecardPunchError(rangeCheck.error);
+      return;
+    }
+
+    const tempId = `tmp_add_${Date.now()}_${timecardPunchNew.action.toLowerCase()}_${Math.random().toString(36).slice(2, 8)}`;
+    const stagedRow: PunchRow = { id: tempId, staff_id: staff, action: timecardPunchNew.action, created_at: createdAt };
+    setTimecardPunchError(null);
+    setTimecardPunchPendingAddRows((prev) => [...prev, stagedRow]);
+    setTimecardPunchEdits((prev) => ({
+      ...prev,
+      [tempId]: { action: timecardPunchNew.action, atLocal: timecardPunchNew.atLocal }
+    }));
+    const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
+    setTimecardPunchNew((prev) => ({ ...prev, atLocal: nowLocal }));
+    setStatus({ tone: 'idle', message: t('已暂存新增，请点击保存全部提交。', 'Add staged. Click Save all to apply.') });
+  };
+
   const addTimecardPunchRow = async () => {
-    if (!timecardCanOperate) {
-      setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
+    if (!canOperateTimecardPunchStaff(timecardPunchStaffId)) {
+      setTimecardPunchError(t('当前账号没有该岗位的操作权限。', 'No operation access for this employee position.'));
       return;
     }
     const staff = timecardPunchStaffId;
@@ -12360,21 +13016,14 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       setTimecardPunchError('OUT 时间必须晚于 IN 时间。');
       return;
     }
-    if (timecardPunchDayIndex === null || timecardPunchDayIndex < 0 || timecardPunchDayIndex > 6) {
-      setTimecardPunchError('仅支持在单天视图新增打卡。');
+    const inRangeCheck = ensureTimecardPunchAddTimeInRange(inCreatedAt);
+    if (!inRangeCheck.ok) {
+      setTimecardPunchError(inRangeCheck.error);
       return;
     }
-    const baseWeekStart = startOfWeekMonday(serverTime);
-    const weekStart = addDays(baseWeekStart, timecardWeekOffset * 7);
-    const dayRange = getDayRange(weekStart, timecardPunchDayIndex);
-    const inMs = new Date(inCreatedAt).getTime();
-    const outMs = new Date(outCreatedAt).getTime();
-    const startMs = dayRange.start.getTime();
-    const endMs = dayRange.end.getTime();
-    if (inMs < startMs || inMs >= endMs || outMs < startMs || outMs >= endMs) {
-      const startText = formatTime(dayRange.start);
-      const endText = formatTime(dayRange.end);
-      setTimecardPunchError(`时间必须在单天范围内（${startText} ~ ${endText}，允许跨夜）。`);
+    const outRangeCheck = ensureTimecardPunchAddTimeInRange(outCreatedAt);
+    if (!outRangeCheck.ok) {
+      setTimecardPunchError(outRangeCheck.error);
       return;
     }
     const inTempId = `tmp_add_${Date.now()}_in_${Math.random().toString(36).slice(2, 8)}`;
@@ -12391,13 +13040,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       [outTempId]: { action: 'OUT', atLocal: timecardPunchNew.outAtLocal }
     }));
     const nowLocal = toLocalDateTimeInputValue(new Date(serverTime));
-    setTimecardPunchNew({ inAtLocal: nowLocal, outAtLocal: nowLocal });
+    setTimecardPunchNew({ action: 'IN', atLocal: nowLocal, inAtLocal: nowLocal, outAtLocal: nowLocal });
     setStatus({ tone: 'idle', message: t('已暂存新增，请点击保存全部提交。', 'Add staged. Click Save all to apply.') });
   };
 
   const saveAllTimecardPunchRows = async () => {
-    if (!timecardCanOperate) {
-      setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
+    if (!canOperateTimecardPunchStaff(timecardPunchStaffId)) {
+      setTimecardPunchError(t('当前账号没有该岗位的操作权限。', 'No operation access for this employee position.'));
       return;
     }
     if (!supabase) {
@@ -12580,161 +13229,153 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
     }
 
+    if (!dayRangeForAudit || !dayDateForAudit) {
+      setTimecardPunchError(t('请选择单个日期后再保存。', 'Select one day before saving.'));
+      return;
+    }
+
+    let savePayload;
+    try {
+      savePayload = buildTimecardPunchSavePayload({
+        staffId: staff,
+        workDate: dayDateForAudit,
+        edits: changed.map((item) => ({
+          id: item.rowId,
+          action: item.edit.action,
+          createdAt: parseLocalDateTimeInputValue(item.edit.atLocal) as string
+        })),
+        additions: pendingAdds.map((row) => {
+          const rowId = String(row.id);
+          const edit = timecardPunchEdits[rowId] ?? {
+            action: row.action,
+            atLocal: row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : ''
+          };
+          return {
+            action: edit.action,
+            createdAt: parseLocalDateTimeInputValue(edit.atLocal) as string
+          };
+        }),
+        deleteIds,
+        operator: user?.email ?? null
+      });
+    } catch (error) {
+      setTimecardPunchError(String((error as Error)?.message ?? error));
+      return;
+    }
+
     let saveFailed = false;
+    let auditSaved = true;
     await runLocked('timecard_edit_all', async () => {
       setTimecardPunchError(null);
       const hoursBeforeBatch = computeSnapshotDayHours();
-      let editedCount = 0;
-      let addedCount = 0;
-      let deletedCount = 0;
-      if (changed.length > 0) {
-        const editedAtIso = new Date(serverTime).toISOString();
-        for (const batch of chunk(changed, 20)) {
-          const updateJobs = batch.map(async (item) => {
-            const createdAt = parseLocalDateTimeInputValue(item.edit.atLocal);
-            if (!createdAt) return { ok: false as const, error: '时间格式不正确。', item };
-            const { error } = await supabase
-              .from('ob_punches')
-              .update({
-                action: item.edit.action,
-                created_at: createdAt,
-                device: 'admin_console',
-                source: 'manual_edit',
-                operator: user?.email ?? null,
-                note: `manual_edit:${editedAtIso}`
-              })
-              .eq('id', item.rowId);
-            if (error) return { ok: false as const, error: error.message, item };
-            return { ok: true as const, item, createdAt };
-          });
-          const updateResults = await Promise.all(updateJobs);
-          const firstError = updateResults.find((r) => !r.ok);
-          if (firstError && !firstError.ok) {
-            saveFailed = true;
-            setTimecardPunchError(firstError.error);
-            return;
-          }
-          for (const result of updateResults) {
-            if (!result.ok) continue;
-            punchSnapshot.set(result.item.rowId, {
-              action: result.item.edit.action,
-              created_at: result.createdAt
-            });
-            editedCount += 1;
-          }
-        }
-        if (saveFailed) return;
-      }
-      if (pendingAdds.length > 0) {
-        const rowsToInsert = pendingAdds
-          .map((row) => {
-            const rowId = String(row.id);
-            const edit = timecardPunchEdits[rowId] ?? {
-              action: row.action,
-              atLocal: row.created_at ? toLocalDateTimeInputValue(new Date(row.created_at)) : ''
-            };
-            const createdAt = parseLocalDateTimeInputValue(edit.atLocal);
-            if (!createdAt) return null;
-            return {
-              staff_id: staff,
-              action: edit.action,
-              created_at: createdAt,
-              device: 'admin_console',
-              source: 'manual_add',
-              operator: user?.email ?? null,
-              note: 'manual_add'
-            };
-          })
-          .filter(Boolean) as Array<Record<string, unknown>>;
-        if (rowsToInsert.length > 0) {
-          const insertRes = await supabase.from('ob_punches').insert(rowsToInsert).select('id');
-          if (insertRes.error) {
-            saveFailed = true;
-            setTimecardPunchError(insertRes.error.message);
-            return;
-          }
-          const insertedIds = ((insertRes.data as any[] | null) ?? []).map((x: any) => String(x?.id ?? '').trim());
-          for (let i = 0; i < rowsToInsert.length; i += 1) {
-            const row = rowsToInsert[i] as { action?: string; created_at?: string };
-            const insertedId = insertedIds[i] || null;
-            const rowAction = String(row.action ?? '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
-            const rowCreatedAt = String(row.created_at ?? '');
-            if (insertedId && rowCreatedAt) {
-              punchSnapshot.set(insertedId, { action: rowAction, created_at: rowCreatedAt });
-            }
-            addedCount += 1;
-          }
-        }
-      }
-      if (deleteIds.length > 0) {
-        const beforeDeleteRes = await supabase
-          .from('ob_punches')
-          .select('id, action, created_at')
-          .in('id', deleteIds as any[]);
-        if (beforeDeleteRes.error) {
-          saveFailed = true;
-          setTimecardPunchError(beforeDeleteRes.error.message);
-          return;
-        }
-        const { error: deleteError } = await supabase.from('ob_punches').delete().in('id', deleteIds as any[]);
-        if (deleteError) {
-          saveFailed = true;
-          setTimecardPunchError(deleteError.message);
-          return;
-        }
-        const beforeRows = ((beforeDeleteRes.data as any[]) ?? []) as Array<{ id?: string | number; action?: string; created_at?: string }>;
-        for (const row of beforeRows) {
-          const rowId = String(row.id ?? '').trim();
-          if (rowId) punchSnapshot.delete(rowId);
-          deletedCount += 1;
-        }
+      const rpcResult = await supabase.rpc('save_timecard_punch_changes', savePayload);
+      if (rpcResult.error) {
+        saveFailed = true;
+        setTimecardPunchError(rpcResult.error.message);
+        return;
       }
 
+      let confirmed;
+      try {
+        confirmed = parseTimecardPunchSaveResult(
+          rpcResult.data,
+          staff,
+          dayRangeForAudit.start,
+          dayRangeForAudit.end
+        );
+      } catch (error) {
+        saveFailed = true;
+        setTimecardPunchError(String((error as Error)?.message ?? error));
+        return;
+      }
+
+      if (
+        confirmed.editedCount !== changed.length ||
+        confirmed.addedCount !== pendingAdds.length ||
+        confirmed.deletedCount !== deleteIds.length
+      ) {
+        saveFailed = true;
+        setTimecardPunchError(
+          t(
+            '数据库确认的修改数量与提交内容不一致，请刷新后重试。',
+            'Database-confirmed change counts do not match the submitted batch. Refresh and retry.'
+          )
+        );
+        return;
+      }
+
+      const editedCount = confirmed.editedCount;
+      const addedCount = confirmed.addedCount;
+      const deletedCount = confirmed.deletedCount;
       const totalChanged = editedCount + addedCount + deletedCount;
-      if (totalChanged > 0) {
-        const hoursAfterBatch = computeSnapshotDayHours();
-        const punchCountAfterBatch = computeSnapshotDayPunchCount();
-        let batchAction = 'punch_manual_edit';
-        if (editedCount === 0 && addedCount > 0 && deletedCount === 0) batchAction = 'punch_manual_add';
-        else if (editedCount === 0 && addedCount === 0 && deletedCount > 0) batchAction = 'punch_manual_delete';
-        await writeAudit({
-          action: batchAction,
+      const capEnd = new Date(
+        clamp(new Date(serverTime).getTime(), dayRangeForAudit.start.getTime(), dayRangeForAudit.end.getTime())
+      );
+      const hoursAfterBatch = computeConfirmedOperationalDayHours(
+        confirmed.rows,
+        dayRangeForAudit.start,
+        dayRangeForAudit.end,
+        capEnd
+      );
+      const punchCountAfterBatch = confirmed.rows.length;
+      let batchAction = 'punch_manual_edit';
+      if (editedCount === 0 && addedCount > 0 && deletedCount === 0) batchAction = 'punch_manual_add';
+      else if (editedCount === 0 && addedCount === 0 && deletedCount > 0) batchAction = 'punch_manual_delete';
+
+      const primaryAuditSaved = await writeAudit({
+        action: batchAction,
+        staffId: staff,
+        target: 'ob_punches',
+        payload: {
+          changed_rows: totalChanged,
+          edited_rows: editedCount,
+          added_rows: addedCount,
+          deleted_rows: deletedCount,
+          work_date: dayDateForAudit,
+          hours_before: Number.isFinite(hoursBeforeBatch) ? Math.round(hoursBeforeBatch * 100) / 100 : null,
+          hours_after: Math.round(hoursAfterBatch * 100) / 100
+        }
+      });
+      auditSaved = primaryAuditSaved;
+      if (punchCountAfterBatch > 0 && punchCountAfterBatch !== 4) {
+        const countAuditSaved = await writeAudit({
+          action: 'punch_count_verified',
           staffId: staff,
           target: 'ob_punches',
           payload: {
-            changed_rows: totalChanged,
-            edited_rows: editedCount,
-            added_rows: addedCount,
-            deleted_rows: deletedCount,
-            work_date: dayDateForAudit || null,
-            hours_before: Number.isFinite(hoursBeforeBatch) ? Math.round(hoursBeforeBatch * 100) / 100 : null,
-            hours_after: Number.isFinite(hoursAfterBatch) ? Math.round(hoursAfterBatch * 100) / 100 : null
+            work_date: dayDateForAudit,
+            punch_count: punchCountAfterBatch,
+            expected_count: 4
           }
         });
-        if (dayDateForAudit && Number.isFinite(punchCountAfterBatch) && punchCountAfterBatch > 0 && punchCountAfterBatch !== 4) {
-          await writeAudit({
-            action: 'punch_count_verified',
-            staffId: staff,
-            target: 'ob_punches',
-            payload: {
-              work_date: dayDateForAudit,
-              punch_count: punchCountAfterBatch,
-              expected_count: 4
-            }
-          });
-        }
+        auditSaved = countAuditSaved && auditSaved;
       }
     });
     if (saveFailed) return;
-    setStatus({ tone: 'success', message: t('打卡流水已保存。', 'Punch records saved.') });
+    setStatus(
+      auditSaved
+        ? { tone: 'success', message: t('打卡流水已保存。', 'Punch records saved.') }
+        : {
+            tone: 'error',
+            message: t(
+              '打卡已保存，但操作记录写入失败。',
+              'Punches were saved, but the audit log could not be written.'
+            )
+          }
+    );
     if (dayDateForAudit) notifyTimecardPunchSaved(staff, dayDateForAudit);
     closeTimecardPunchModal();
     void fetchCellAuditLogs();
-    queueTimecardRefresh();
+    if (page === 'home') {
+      await refreshHomePanel({ lockUi: false });
+    } else {
+      timecardWeekCacheRef.current = null;
+      await fetchTimecard({ reset: true, lockUi: false });
+    }
   };
   const deleteTimecardPunchRow = async (row: PunchRow) => {
-    if (!timecardCanOperate) {
-      setTimecardPunchError(t('当前账号只有查看权限。', 'This account is read-only.'));
+    if (!canOperateTimecardPunchStaff(timecardPunchStaffId)) {
+      setTimecardPunchError(t('当前账号没有该岗位的操作权限。', 'No operation access for this employee position.'));
       return;
     }
     const rowId = String(row.id ?? '').trim();
@@ -12789,6 +13430,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     if (page === 'employees') {
       void fetchEmployees({ reset: true, lockUi: false });
+      void fetchEmployeeNotes();
     }
     if (page === 'accounts') {
       void fetchEmployees({ reset: true, lockUi: false });
@@ -12875,10 +13517,45 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }, [page, scheduleWeekOffset, employees]);
 
   useEffect(() => {
+    if (page !== 'schedule' || !supabase) return;
+    let active = true;
+    let refreshTimer: number | null = null;
+
+    const refreshPunchPresence = () => {
+      if (!active || document.hidden) return;
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        if (!active || document.hidden) return;
+        void fetchSchedulePunchPresence({ keepPreviousWhileLoading: true });
+      }, 400);
+    };
+
+    const channel = supabase
+      .channel(`schedule-punch-presence-${scheduleWeekOffset}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ob_punches' }, refreshPunchPresence)
+      .subscribe();
+
+    const interval = window.setInterval(refreshPunchPresence, 30000);
+    const handleVisibility = () => {
+      if (!document.hidden) refreshPunchPresence();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      active = false;
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      void supabase.removeChannel(channel);
+    };
+  }, [page, scheduleWeekOffset, employees]);
+
+  useEffect(() => {
     if (page !== 'schedule') return;
     void fetchScheduleUph();
     void fetchScheduleMistakeCounts();
-  }, [page, employees]);
+  }, [page, employees, toDateOnly(serverTime), serverTime.getHours()]);
 
   useEffect(() => {
     if (page !== 'schedule') return;
@@ -13040,21 +13717,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
     // Guard rail: only reject work accounts that are already occupied.
     const detectUploadIdentityConflicts = async () => {
-      const mode = await resolveEmployeeColumnMode();
-      const run = async (m: EmployeeColumnMode) => {
-        const select =
-          m === 'cased'
-            ? 'staff_id, name, "Agency", work_account'
-            : 'staff_id, name, agency, work_account';
-        return await supabase.from(EMPLOYEE_TABLE).select(select);
-      };
-
-      let res = await run(mode);
-      if (res.error) {
-        const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-        employeeColumnModeRef.current = flipped;
-        res = await run(flipped);
-      }
+      const res = await supabase.from(EMPLOYEE_TABLE).select('staff_id, name, agency, work_account');
       if (res.error) {
         return {
           error: res.error.message,
@@ -13092,34 +13755,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       }
 
       const fetchExistingDetails = async () => {
-        const mode = await resolveEmployeeColumnMode();
-        const run = async (m: EmployeeColumnMode) => {
-          const select =
-            m === 'cased'
-              ? 'staff_id, name, "Agency", "Position", employment_type, shift, shift_time, label, work_account, work_password'
-              : 'staff_id, name, agency, position, employment_type, shift, shift_time, label, work_account, work_password';
-          const [batchRes, allRes] = await Promise.all([
-            supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batchStaffIds),
-            supabase.from(EMPLOYEE_TABLE).select(select)
-          ]);
-          return { mode: m, batchRes, allRes };
-        };
+        const select =
+          'staff_id, name, agency, position, employment_type, shift, shift_time, label, work_account, work_password';
+        const [batchRes, allRes] = await Promise.all([
+          supabase.from(EMPLOYEE_TABLE).select(select).in('staff_id', batchStaffIds),
+          supabase.from(EMPLOYEE_TABLE).select(select)
+        ]);
 
-        let attempt = await run(mode);
-        if (attempt.batchRes.error || attempt.allRes.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          attempt = await run(flipped);
-        }
-
-        if (attempt.batchRes.error || attempt.allRes.error) {
-          return { mode: mode, rows: [] as any[], allRows: [] as any[], error: attempt.batchRes.error ?? attempt.allRes.error };
+        if (batchRes.error || allRes.error) {
+          return { rows: [] as any[], allRows: [] as any[], error: batchRes.error ?? allRes.error };
         }
 
         return {
-          mode: attempt.mode,
-          rows: ((attempt.batchRes.data as any[]) ?? []) as any[],
-          allRows: ((attempt.allRes.data as any[]) ?? []) as any[],
+          rows: ((batchRes.data as any[]) ?? []) as any[],
+          allRows: ((allRes.data as any[]) ?? []) as any[],
           error: null as any
         };
       };
@@ -13148,40 +13797,20 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       let insertedCount = 0;
       if (toInsert.length > 0) {
-        const mode = await resolveEmployeeColumnMode();
-        const buildPayload = (m: EmployeeColumnMode) =>
-          m === 'cased'
-            ? toInsert.map((row: any) => ({
-                staff_id: row.staff_id,
-                name: row.name ?? null,
-                Agency: row.agency ?? null,
-                Position: row.position ?? null,
-                employment_type: normalizeEmploymentTypeValue(row.employment_type),
-                shift: normalizeShiftValue(String(row.shift ?? '')) || null,
-                shift_time: row.shift_time ?? null,
-                label: row.label ?? null,
-                work_account: row.work_account ?? null,
-                work_password: row.work_password ?? null
-              }))
-            : toInsert.map((row: any) => ({
-                staff_id: row.staff_id,
-                name: row.name ?? null,
-                agency: row.agency ?? null,
-                position: row.position ?? null,
-                employment_type: normalizeEmploymentTypeValue(row.employment_type),
-                shift: normalizeShiftValue(String(row.shift ?? '')) || null,
-                shift_time: row.shift_time ?? null,
-                label: row.label ?? null,
-                work_account: row.work_account ?? null,
-                work_password: row.work_password ?? null
-              }));
+        const insertPayload = toInsert.map((row: any) => ({
+          staff_id: row.staff_id,
+          name: row.name ?? null,
+          agency: row.agency ?? null,
+          position: row.position ?? null,
+          employment_type: normalizeEmploymentTypeValue(row.employment_type),
+          shift: normalizeShiftValue(String(row.shift ?? '')) || null,
+          shift_time: row.shift_time ?? null,
+          label: row.label ?? null,
+          work_account: row.work_account ?? null,
+          work_password: row.work_password ?? null
+        }));
 
-        let attempt = await tryInsert(buildPayload(mode));
-        if (attempt.error) {
-          const flipped: EmployeeColumnMode = mode === 'cased' ? 'lower' : 'cased';
-          employeeColumnModeRef.current = flipped;
-          attempt = await tryInsert(buildPayload(flipped));
-        }
+        const attempt = await tryInsert(insertPayload);
 
         if (!attempt.error) {
           insertedCount = toInsert.length;
@@ -13241,8 +13870,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (!staff) continue;
         existingByStaff.set(staff, {
           name: String(r.name ?? '').trim(),
-          agency: String(r.agency ?? r.Agency ?? '').trim(),
-          position: String(r.position ?? r.Position ?? '').trim(),
+          agency: String(r.agency ?? '').trim(),
+          position: String(r.position ?? '').trim(),
           employment_type: normalizeEmploymentTypeValue(r.employment_type),
           shift: normalizeShiftValue(String(r.shift ?? '').trim()),
           shift_time: normalizeShiftTimeValue(r.shift_time),
@@ -13285,12 +13914,10 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         if (sourceStaffKey !== staffKey) payload.staff_id = staffKey;
         if (row.name && String(row.name).trim() && String(row.name).trim() !== existing.name) payload.name = String(row.name).trim();
         if (row.agency && String(row.agency).trim() && String(row.agency).trim() !== existing.agency) {
-          if (existingDetailsRes.mode === 'cased') payload.Agency = String(row.agency).trim();
-          else payload.agency = String(row.agency).trim();
+          payload.agency = String(row.agency).trim();
         }
         if (row.position && String(row.position).trim() && String(row.position).trim() !== existing.position) {
-          if (existingDetailsRes.mode === 'cased') payload.Position = String(row.position).trim();
-          else payload.position = String(row.position).trim();
+          payload.position = String(row.position).trim();
         }
         const nextEmploymentType = normalizeEmploymentTypeValue(row.employment_type);
         if (nextEmploymentType !== existing.employment_type) {
@@ -13327,8 +13954,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           const after = {
             staff_id: payload.staff_id ?? staffKey,
             name: payload.name ?? existing.name,
-            agency: payload.agency ?? payload.Agency ?? existing.agency,
-            position: payload.position ?? payload.Position ?? existing.position,
+            agency: payload.agency ?? existing.agency,
+            position: payload.position ?? existing.position,
             employment_type: payload.employment_type ?? existing.employment_type,
             shift: payload.shift ?? existing.shift,
             shift_time: payload.shift_time ?? existing.shift_time,
@@ -13392,32 +14019,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           scheduleIdsToMigrate = ((scheduleListRes.data as any[]) ?? []).map((r) => r.id).filter((id) => id !== null && id !== undefined);
         }
 
-        const restorePayload =
-          existingDetailsRes.mode === 'cased'
-            ? {
-                staff_id: u.source_staff_id,
-                name: u.before.name ?? null,
-                Agency: u.before.agency ?? null,
-                Position: u.before.position ?? null,
-                employment_type: u.before.employment_type ?? null,
-                shift: u.before.shift || null,
-                shift_time: u.before.shift_time || null,
-                label: u.before.label || null,
-                work_account: u.before.work_account || null,
-                work_password: u.before.work_password || null
-              }
-            : {
-                staff_id: u.source_staff_id,
-                name: u.before.name ?? null,
-                agency: u.before.agency ?? null,
-                position: u.before.position ?? null,
-                employment_type: u.before.employment_type ?? null,
-                shift: u.before.shift || null,
-                shift_time: u.before.shift_time || null,
-                label: u.before.label || null,
-                work_account: u.before.work_account || null,
-                work_password: u.before.work_password || null
-              };
+        const restorePayload = {
+          staff_id: u.source_staff_id,
+          name: u.before.name ?? null,
+          agency: u.before.agency ?? null,
+          position: u.before.position ?? null,
+          employment_type: u.before.employment_type ?? null,
+          shift: u.before.shift || null,
+          shift_time: u.before.shift_time || null,
+          label: u.before.label || null,
+          work_account: u.before.work_account || null,
+          work_password: u.before.work_password || null
+        };
 
         const res = await supabase.from(EMPLOYEE_TABLE).update(u.payload).eq('staff_id', u.source_staff_id);
         if (res.error) {
@@ -13497,10 +14110,11 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           });
         }
       }
-      const skippedTotal = duplicateInFileCount + skippedExistingTotal;
+      const unchangedExistingTotal = Math.max(0, skippedExistingTotal - updatedTotal);
+      const skippedTotal = duplicateInFileCount + unchangedExistingTotal;
       setStatus({
         tone: 'success',
-        message: `上传完成：插入 ${insertedTotal} 条，更新 ${updatedTotal} 条，跳过重复 ${skippedTotal} 条（文件内 ${duplicateInFileCount}，表内 ${skippedExistingTotal}）`
+        message: `上传完成：新增 ${insertedTotal} 条，更新 ${updatedTotal} 条，未变更 ${unchangedExistingTotal} 条，文件内重复 ${duplicateInFileCount} 条`
       });
       await writeAudit({
         action: 'employee_upload',
@@ -13512,9 +14126,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           updated_fill: updatedTotal,
           skipped_total: skippedTotal,
           skipped_file_duplicates: duplicateInFileCount,
-          skipped_existing: skippedExistingTotal
+          skipped_existing: skippedExistingTotal,
+          existing_matched: skippedExistingTotal,
+          unchanged_existing: unchangedExistingTotal
         }
       });
+      await fetchEmployees({ reset: true, lockUi: false });
+      if (departedEmployeesOpen) {
+        await fetchDepartedEmployees({ lockUi: false });
+      }
     });
   };
 
@@ -13591,7 +14211,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         adminAccessContext,
         'employees',
         employees,
-        (employee) => String(employee.position ?? employee.Position ?? '').trim()
+        (employee) => String(employee.position ?? '').trim()
       ),
     [adminAccessContext, employees]
   );
@@ -13600,7 +14220,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const out = new Set<string>();
     for (const e of employeesAllowedByPositionScope) {
       if (isInactiveJdlEmployee(e)) continue;
-      const agency = String(e.agency ?? e.Agency ?? '').trim();
+      const agency = String(e.agency ?? '').trim();
       if (agency) out.add(agency);
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b, 'zh-CN'));
@@ -13617,7 +14237,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   const employeePositionOptions = useMemo(() => {
     const out = new Set<string>();
     for (const e of employeesAllowedByPositionScope) {
-      const position = String(e.position ?? e.Position ?? '').trim();
+      const position = String(e.position ?? '').trim();
       if (!matchesDepartmentFilter(position, employeeDepartment)) continue;
       if (position) out.add(position);
     }
@@ -13632,7 +14252,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const label = String(e.label ?? e.Label ?? '').trim();
       if (!label) continue;
       if (targetPositions.size > 0) {
-        const rowPosition = normalizePositionKey(String(e.position ?? e.Position ?? '').trim());
+        const rowPosition = normalizePositionKey(String(e.position ?? '').trim());
         if (!rowPosition || !targetPositions.has(rowPosition)) continue;
       }
       out.add(label);
@@ -13691,8 +14311,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (isInactiveJdlEmployee(e)) return false;
       const staff = normalizeStaffId(String(e.staff_id ?? '').trim());
       const name = String(e.name ?? '').trim();
-      const agency = String(e.agency ?? e.Agency ?? '').trim();
-      const position = String(e.position ?? e.Position ?? '').trim();
+      const agency = String(e.agency ?? '').trim();
+      const position = String(e.position ?? '').trim();
       const employmentType = normalizeEmploymentTypeValue((e as any).employment_type ?? (e as any).EmploymentType ?? '');
       const label = String(e.label ?? e.Label ?? '').trim();
       const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
@@ -13712,10 +14332,35 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     });
   }, [page, employeesAllowedByPositionScope, employeeFilterNeedles, employeeShiftByStaffId, getDepartmentForPosition, isInactiveJdlEmployee]);
 
-  // Step 3: Apply hire date sorting (optional, depends on filtered rows + sort flag)
+  const compareEmployeeJdlPriority = useCallback((a: EmployeeRow, b: EmployeeRow) => {
+    const agencyA = String(a.agency ?? '').trim().toLowerCase();
+    const agencyB = String(b.agency ?? '').trim().toLowerCase();
+    const isJdlA = agencyA === 'jdl';
+    const isJdlB = agencyB === 'jdl';
+    if (isJdlA === isJdlB) return 0;
+    return isJdlA ? -1 : 1;
+  }, []);
+
+  const employeesAfterJdlPrioritySort = useMemo(() => {
+    return employeesAfterFilter
+      .map((employee, index) => ({ employee, index }))
+      .sort((a, b) => compareEmployeeJdlPriority(a.employee, b.employee) || a.index - b.index)
+      .map((entry) => entry.employee);
+  }, [employeesAfterFilter, compareEmployeeJdlPriority]);
+
+  // Step 3: Apply position sorting (optional, depends on filtered rows + sort flag)
+  const employeesAfterPositionSort = useMemo(() => {
+    if (!employeeSortByPosition) return employeesAfterJdlPrioritySort;
+    return sortEmployeesByPositionOrder(employeesAfterJdlPrioritySort, activePositionNames, normalizeStaffId, compareEmployeeJdlPriority);
+  }, [employeesAfterJdlPrioritySort, employeeSortByPosition, activePositionNames, normalizeStaffId, compareEmployeeJdlPriority]);
+
+  // Step 4: Apply hire date sorting (optional, depends on position-sorted rows + sort flag)
   const employeesAfterHireDateSort = useMemo(() => {
-    if (!employeeSortByHireDateDesc) return employeesAfterFilter;
-    return [...employeesAfterFilter].sort((a, b) => {
+    if (!employeeSortByHireDateDesc) return employeesAfterPositionSort;
+    return [...employeesAfterPositionSort].sort((a, b) => {
+      const priorityCompare = compareEmployeeJdlPriority(a, b);
+      if (priorityCompare !== 0) return priorityCompare;
+
       const atA = Date.parse(String(a.created_at ?? ''));
       const atB = Date.parse(String(b.created_at ?? ''));
       const valA = Number.isFinite(atA) ? atA : -1;
@@ -13725,9 +14370,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
       return staffA.localeCompare(staffB, 'en-US');
     });
-  }, [employeesAfterFilter, employeeSortByHireDateDesc]);
+  }, [employeesAfterPositionSort, employeeSortByHireDateDesc, normalizeStaffId, compareEmployeeJdlPriority]);
 
-  // Step 4: Apply punch time sorting (optional, depends on hire-date sorted rows + sort flag)
+  // Step 5: Apply punch time sorting (optional, depends on hire-date sorted rows + sort flag)
   const employeesFiltered = useMemo(() => {
     if (!employeeSortByLastPunchDesc) return employeesAfterHireDateSort;
     const dayMs = 24 * 60 * 60 * 1000;
@@ -13740,6 +14385,9 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return Math.max(0, Math.floor((nowMs - dt.getTime()) / dayMs));
     };
     return [...employeesAfterHireDateSort].sort((a, b) => {
+      const priorityCompare = compareEmployeeJdlPriority(a, b);
+      if (priorityCompare !== 0) return priorityCompare;
+
       const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
       const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
       const daysA = daysAgoForStaff(staffA);
@@ -13749,7 +14397,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (valA !== valB) return valB - valA;
       return staffA.localeCompare(staffB, 'en-US');
     });
-  }, [employeesAfterHireDateSort, employeeSortByLastPunchDesc, employeeLastPunchAtByStaffId, employeeLastPunchSortNowMs]);
+  }, [employeesAfterHireDateSort, employeeSortByLastPunchDesc, employeeLastPunchAtByStaffId, employeeLastPunchSortNowMs, compareEmployeeJdlPriority]);
 
   const toggleEmployeeLastPunchSort = async () => {
     if (employeeSortByLastPunchDesc) {
@@ -13767,10 +14415,18 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     setEmployeeLastPunchSortNowMs(serverTime.getTime());
     setEmployeeSortByLastPunchDesc(true);
+    setEmployeeSortByPosition(false);
   };
 
   const toggleEmployeeHireDateSort = () => {
     setEmployeeSortByHireDateDesc((prev) => !prev);
+    setEmployeeSortByLastPunchDesc(false);
+    setEmployeeSortByPosition(false);
+  };
+
+  const toggleEmployeePositionSort = () => {
+    setEmployeeSortByPosition((prev) => !prev);
+    setEmployeeSortByHireDateDesc(false);
     setEmployeeSortByLastPunchDesc(false);
   };
   const accountRowsAll = useMemo(() => {
@@ -14127,8 +14783,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const body = rows.map((e) => {
         const staff = String(e.staff_id ?? '').trim();
         const name = String(e.name ?? '').trim();
-        const agency = String(e.agency ?? e.Agency ?? '').trim();
-        const position = String(e.position ?? e.Position ?? '').trim();
+        const agency = String(e.agency ?? '').trim();
+        const position = String(e.position ?? '').trim();
         const employmentType = normalizeEmploymentTypeValue((e as any).employment_type ?? (e as any).EmploymentType ?? '');
         const label = String(e.label ?? e.Label ?? '').trim();
         const workAccount = String(e.work_account ?? e.WorkAccount ?? '').trim();
@@ -14400,7 +15056,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     rows[toIdx] = tmp!;
     return rows;
   }, [timecardPunchCardsVisible, timecardPunchDraggingId, timecardPunchDragOverId]);
-  const timecardPunchReadOnly = timecardPunchDayIndex === null || !timecardCanOperate;
+  const timecardPunchCanOperate = canOperateTimecardPunchStaff(timecardPunchStaffId);
+  const timecardPunchReadOnly = timecardPunchDayIndex === null || !timecardPunchCanOperate;
   const timecardPunchHeaderMeta = useMemo(() => {
     const staff = normalizeStaffId(String(timecardPunchStaffId ?? '').trim());
     if (!staff) {
@@ -14409,7 +15066,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const row = timecardRows.find((r) => normalizeStaffId(String(r.staff_id ?? '').trim()) === staff);
     const employee = employees.find((e) => normalizeStaffId(String(e.staff_id ?? '').trim()) === staff);
     const name = String(row?.name ?? employee?.name ?? '').trim() || '-';
-    const position = String(row?.position ?? employee?.position ?? employee?.Position ?? '').trim() || '-';
+    const position = String(employee?.position ?? '').trim() || '-';
     const label = String(employee?.label ?? employee?.Label ?? '').trim() || '-';
 
     if (timecardPunchDayIndex === null || timecardPunchDayIndex < 0 || timecardPunchDayIndex > 6) {
@@ -14591,7 +15248,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff) continue;
-      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+      const position = normalizePositionKey(String(employee.position ?? '').trim());
       if (position !== 'FLEX TEAM') continue;
       const targetPosition = normalizeFlexCoverageTargetPosition(String(employee.label ?? employee.Label ?? '').trim());
       if (!targetPosition) continue;
@@ -14641,30 +15298,72 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     return next;
   }, [scheduleRecommendedAdjustedByDate, selectedSchedulePositionSet, deferredScheduleShift]);
+  const getScheduleEmployeeDisplayName = useCallback(
+    (employee: EmployeeRow) => resolveScheduleEmployeeDisplayName(employee, scheduleRegisteredNameByEmail),
+    [scheduleRegisteredNameByEmail]
+  );
   const employeeProfileByStaffId = useMemo(() => {
     const map = new Map<string, { name: string; agency: string; position: string; shiftTime: string }>();
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff) continue;
       map.set(staff, {
-        name: String(employee.name ?? '').trim(),
-        agency: String(employee.agency ?? employee.Agency ?? '').trim(),
-        position: String(employee.position ?? employee.Position ?? '').trim(),
+        name: getScheduleEmployeeDisplayName(employee),
+        agency: String(employee.agency ?? '').trim(),
+        position: String(employee.position ?? '').trim(),
         shiftTime: normalizeShiftTimeValue((employee as any).shift_time ?? (employee as any).ShiftTime ?? '')
       });
     }
     return map;
-  }, [employees]);
+  }, [employees, getScheduleEmployeeDisplayName]);
   const scheduleOnlyStaffIds = useMemo(() => {
     const next = new Set<string>();
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-      const agency = String(employee.agency ?? employee.Agency ?? '').trim();
+      const agency = String(employee.agency ?? '').trim();
       if (!staff || !isScheduleOnlyAgency(agency)) continue;
       next.add(staff);
     }
     return next;
   }, [employees]);
+  useEffect(() => {
+    if (!supabase || (page !== 'schedule' && page !== 'employees')) return;
+    const emails = Array.from(
+      new Set(
+        employees
+          .filter((employee) => isScheduleOnlyAgency(String(employee.agency ?? '').trim()))
+          .map(getScheduleEmployeeProfileEmail)
+          .filter(Boolean)
+      )
+    );
+    if (emails.length === 0) return;
+    const missingEmails = emails.filter((email) => !scheduleRegisteredNameByEmail[email]);
+    if (missingEmails.length === 0) return;
+
+    let cancelled = false;
+    const loadRegisteredNames = async () => {
+      const res = await supabase
+        .from(USER_PROFILE_TABLE)
+        .select('user_email, display_name')
+        .in('user_email', missingEmails as any);
+      if (cancelled || res.error) return;
+
+      const next: Record<string, string> = {};
+      for (const row of ((res.data as any[]) ?? [])) {
+        const email = String(row?.user_email ?? '').trim().toLowerCase();
+        const displayName = String(row?.display_name ?? '').trim();
+        if (!email || !displayName) continue;
+        next[email] = displayName;
+      }
+      if (Object.keys(next).length === 0) return;
+      setScheduleRegisteredNameByEmail((current) => ({ ...current, ...next }));
+    };
+    void loadRegisteredNames();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [employees, page, scheduleRegisteredNameByEmail, supabase]);
   const tomorrowDailyList = useMemo(() => {
     const parsedTarget =
       /^\d{4}-\d{2}-\d{2}$/.test(dailyListDateInput)
@@ -14693,7 +15392,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       // Schedule rows can come from legacy records without shift; default working rows to morning.
       const shift = rowShift || inferredShift || 'early';
       if (shift !== 'early' && shift !== 'late') continue;
-      const { position, profilePosition, schedulePosition } = resolveDailyListPositionSource(profile?.position, row.position);
+      const { position, schedulePosition } = resolveDailyListPositionSource(profile?.position, row.position);
       const normalizedPosition = normalizeDailyListPositionKey(position);
       if (!normalizedPosition || !scheduleVisiblePositionSet.has(normalizedPosition)) continue;
       const item: DailyListRow = {
@@ -14704,7 +15403,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         shift,
         start_time: resolveShiftStartTime(shift, position, profile?.shiftTime || ''),
         scheduleOnly: isScheduleOnlyAgency(profile?.agency ?? ''),
-        profilePosition,
         schedulePosition
       };
       if (shift === 'late') countedLateRows.push(item);
@@ -14865,8 +15563,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       lateRows: tomorrowDailyList.lateRows.filter(isNonJdlRow)
     };
   }, [tomorrowDailyList.earlyRows, tomorrowDailyList.lateRows]);
+  const dailyListAgencyOptions = useMemo(() => {
+    const agencies = new Set<string>();
+    [...tomorrowDailyListNonJdlRows.earlyRows, ...tomorrowDailyListNonJdlRows.lateRows].forEach((row) => {
+      const agency = String(row.agency ?? '').trim();
+      if (agency) agencies.add(agency);
+    });
+    return Array.from(agencies).sort((a, b) => a.localeCompare(b, 'en-US'));
+  }, [tomorrowDailyListNonJdlRows]);
   const tomorrowDailyRowsDisplayed = useMemo(() => {
-    if (selectedDailyFilterPositions.length === 0) {
+    const selectedAgency = dailyListFilterAgency.trim().toLowerCase();
+    if (selectedDailyFilterPositions.length === 0 && !selectedAgency) {
       return tomorrowDailyListNonJdlRows;
     }
     const allowed = new Set<string>(
@@ -14876,13 +15583,16 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     );
     const match = (row: DailyListRow) => {
       const pos = normalizeDailyListPositionKey(String(row.position ?? '').trim());
-      return Boolean(pos && allowed.has(pos));
+      const agency = String(row.agency ?? '').trim().toLowerCase();
+      const matchesPosition = allowed.size === 0 || Boolean(pos && allowed.has(pos));
+      const matchesAgency = !selectedAgency || agency === selectedAgency;
+      return matchesPosition && matchesAgency;
     };
     return {
       earlyRows: tomorrowDailyListNonJdlRows.earlyRows.filter(match),
       lateRows: tomorrowDailyListNonJdlRows.lateRows.filter(match)
     };
-  }, [tomorrowDailyListNonJdlRows, selectedDailyFilterPositions]);
+  }, [tomorrowDailyListNonJdlRows, selectedDailyFilterPositions, dailyListFilterAgency]);
   const dailyListDisplayedCapacities = useMemo(
     () => ({
       early: sumDailyListCapacityRows(tomorrowDailyRowsDisplayed.earlyRows),
@@ -14925,7 +15635,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       staff_id: string;
       name: string;
       agency: string;
-      profilePosition: string;
       schedulePosition: string;
     }> = [];
 
@@ -14939,23 +15648,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       if (!isWorkingScheduleRow(row)) continue;
 
       const profile = employeeProfileByStaffId.get(staff);
-      const { position, profilePosition, schedulePosition } = resolveDailyListPositionSource(profile?.position, row.position);
-      const normalizedSchedulePosition = normalizeDailyListPositionKey(schedulePosition);
-      const normalizedProfilePosition = normalizeDailyListPositionKey(profilePosition);
-      if (
-        normalizedSchedulePosition &&
-        normalizedProfilePosition &&
-        normalizedSchedulePosition !== normalizedProfilePosition
-      ) {
-        positionMismatches.push({
-          staff_id: staff,
-          name: profile?.name || '',
-          agency: profile?.agency || '',
-          profilePosition,
-          schedulePosition
-        });
-      }
-
+      const { position, schedulePosition } = resolveDailyListPositionSource(profile?.position, row.position);
       if (includedStaff.has(staff)) continue;
 
       const rowShift = normalizeShiftValue(String(row.shift ?? '').trim());
@@ -14984,7 +15677,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       });
     }
 
-    positionMismatches.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     missingRows.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     return { missingRows, positionMismatches };
   }, [
@@ -15002,6 +15694,80 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     () => Number(tomorrowDailyList.countedEarlyRows.length ?? 0) + Number(tomorrowDailyList.countedLateRows.length ?? 0),
     [tomorrowDailyList]
   );
+  const dailyListDepartmentDemandSummary = useMemo(() => {
+    const counts: Record<'OB' | 'IB' | 'INV', number> = { OB: 0, IB: 0, INV: 0 };
+    for (const row of [...tomorrowDailyList.countedEarlyRows, ...tomorrowDailyList.countedLateRows]) {
+      const position = String(row.position ?? '').trim();
+      const positionKey = normalizeDailyListPositionKey(position) || position;
+      if (!dailyListSelectedPositions[positionKey] && !dailyListSelectedPositions[position]) continue;
+      const department = getDepartmentForPosition(row.position);
+      if (department === 'OB' || department === 'IB' || department === 'INV') counts[department] += 1;
+    }
+    return counts;
+  }, [dailyListSelectedPositions, getDepartmentForPosition, tomorrowDailyList]);
+  const dailyListDisplayedNewHireSummary = useMemo(() => {
+    const rows = [...tomorrowDailyRowsDisplayed.earlyRows, ...tomorrowDailyRowsDisplayed.lateRows];
+    const countByDepartmentAgency = new Map<string, { department: PositionDepartment; agency: string; count: number }>();
+    for (const row of rows) {
+      const staff = String(row.staff_id ?? '').trim();
+      const name = String(row.name ?? '').trim();
+      if (!isDailyListNewHireForDate(staff, tomorrowDailyList.targetDate) && !isDailyListNewHireForDate(name, tomorrowDailyList.targetDate)) continue;
+      const position = normalizePositionKey(String(row.position ?? '').trim()) || '-';
+      const department = getDepartmentForPosition(position);
+      const agency = String(row.agency ?? '').trim();
+      const key = `${department}__${agency.toLowerCase()}`;
+      const current = countByDepartmentAgency.get(key);
+      countByDepartmentAgency.set(key, {
+        department,
+        agency,
+        count: (current?.count ?? 0) + 1
+      });
+    }
+    const groups = Array.from(countByDepartmentAgency.values()).sort((left, right) => {
+      const departmentCompare = left.department.localeCompare(right.department, 'en-US');
+      if (departmentCompare !== 0) return departmentCompare;
+      return left.agency.localeCompare(right.agency, 'en-US');
+    });
+    return {
+      groups,
+      peopleCount: groups.reduce((sum, group) => sum + group.count, 0)
+    };
+  }, [getDepartmentForPosition, tomorrowDailyRowsDisplayed, tomorrowDailyList.targetDate]);
+  const dailyListNewHireDetailRows = useMemo(
+    () =>
+      [...tomorrowDailyList.earlyRows, ...tomorrowDailyList.lateRows]
+        .filter((row) => {
+          const staff = String(row.staff_id ?? '').trim();
+          const name = String(row.name ?? '').trim();
+          return isDailyListNewHireForDate(staff, tomorrowDailyList.targetDate) || isDailyListNewHireForDate(name, tomorrowDailyList.targetDate);
+        })
+        .sort((left, right) => {
+          const positionCompare = String(left.position ?? '').localeCompare(String(right.position ?? ''), 'en-US');
+          if (positionCompare !== 0) return positionCompare;
+          return String(left.agency ?? '').localeCompare(String(right.agency ?? ''), 'en-US');
+        }),
+    [tomorrowDailyList]
+  );
+  const dailyListNewHireDetailPositionOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          dailyListNewHireDetailRows
+            .map((row) => normalizePositionKey(String(row.position ?? '').trim()))
+            .filter((position): position is string => Boolean(position))
+        )
+      ).sort(
+        (left, right) => left.localeCompare(right, 'en-US')
+      ),
+    [dailyListNewHireDetailRows]
+  );
+  const dailyListNewHireDetailRowsFiltered = useMemo(
+    () =>
+      dailyListNewHireDetailPosition
+        ? dailyListNewHireDetailRows.filter((row) => normalizePositionKey(String(row.position ?? '').trim()) === dailyListNewHireDetailPosition)
+        : dailyListNewHireDetailRows,
+    [dailyListNewHireDetailPosition, dailyListNewHireDetailRows]
+  );
 
   const scheduleEmployeesBase = useMemo(() => {
     if (page !== 'schedule') return [];
@@ -15009,8 +15775,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       .filter((employee) => {
         if (isInactiveJdlEmployee(employee)) return false;
         const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-        const agency = String(employee.agency ?? employee.Agency ?? '').trim();
-        const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim()) ?? '';
+        const agency = String(employee.agency ?? '').trim();
+        const position = normalizePositionKey(String(employee.position ?? '').trim()) ?? '';
         if (!canViewPosition('schedule', position)) return false;
         const employmentType = normalizeEmploymentTypeValue((employee as any).employment_type ?? (employee as any).EmploymentType ?? '');
         const label = String(employee.label ?? employee.Label ?? '').trim();
@@ -15063,7 +15829,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const out = new Set<string>();
     for (const employee of employees) {
       if (isInactiveJdlEmployee(employee)) continue;
-      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim()) ?? '';
+      const position = normalizePositionKey(String(employee.position ?? '').trim()) ?? '';
       if (!matchesDepartmentFilter(position, deferredScheduleDepartment)) continue;
       if (selectedSchedulePositionSet.size > 0 && !selectedSchedulePositionSet.has(position)) continue;
       const label = String(employee.label ?? employee.Label ?? '').trim();
@@ -15075,7 +15841,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const byPosition: Record<string, Set<string>> = {};
     for (const employee of employees) {
       if (isInactiveJdlEmployee(employee)) continue;
-      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+      const position = normalizePositionKey(String(employee.position ?? '').trim());
       const label = String(employee.label ?? employee.Label ?? '').trim();
       if (!position || !label) continue;
       (byPosition[position] ??= new Set<string>()).add(label);
@@ -15092,7 +15858,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     if (!targetPosition) return [];
     const out = new Set<string>();
     for (const employee of employees) {
-      const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+      const position = normalizePositionKey(String(employee.position ?? '').trim());
       if (!position || position !== targetPosition) continue;
       const label = String(employee.label ?? employee.Label ?? '').trim();
       if (label) out.add(label);
@@ -15118,11 +15884,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     getPositionBadgeClass(position, schedulePositionToneByPosition);
   const getSchedulePositionBadgeClassLight = (position: string) =>
     getPositionBadgeClassLight(position, schedulePositionToneByPosition);
+  const getSchedulePositionTone = (position: string): LabelToneKey =>
+    getPositionToneFromMap(position, schedulePositionToneByPosition);
   const scheduleLabelDefaultToneByName = useMemo(() => {
     const positionCountByLabel: Record<string, Record<string, number>> = {};
     for (const employee of employees) {
       const label = String(employee.label ?? employee.Label ?? '').trim();
-      const position = normalizePositionToneKey(String(employee.position ?? employee.Position ?? '').trim());
+      const position = normalizePositionToneKey(String(employee.position ?? '').trim());
       if (!label || !position) continue;
       const key = label.toLowerCase();
       const next = positionCountByLabel[key] ?? {};
@@ -15166,7 +15934,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
     const currentLabel = String(employee.label ?? employee.Label ?? '').trim();
     const nextLabel = String(nextLabelRaw ?? '').trim();
-    const position = normalizePositionKey(String(employee.position ?? employee.Position ?? '').trim());
+    const position = normalizePositionKey(String(employee.position ?? '').trim());
     if (!staff || !position || nextLabel === currentLabel) return;
     if (!scheduleCanOperate || !canOperatePosition('schedule', position)) {
       setStatus({ tone: 'error', message: t('排班模块当前为只读。', 'Schedule is read-only.') });
@@ -15185,7 +15953,6 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     setScheduleLabelSavingStaffId(staff);
     try {
       await runLocked('schedule_label_update', async () => {
-        const mode = await resolveEmployeeColumnMode();
         const { error } = await supabase
           .from(EMPLOYEE_TABLE)
           .update({ label: nextLabel } as any)
@@ -15198,7 +15965,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
           prev.map((row) => {
             const rowStaff = normalizeStaffId(String(row.staff_id ?? '').trim());
             if (rowStaff !== staff) return row;
-            return mode === 'cased' ? ({ ...row, Label: nextLabel, label: nextLabel } as EmployeeRow) : ({ ...row, label: nextLabel } as EmployeeRow);
+            return { ...row, label: nextLabel } as EmployeeRow;
           })
         );
         await writeAudit({
@@ -15220,6 +15987,75 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
   };
 
+  const updateScheduleEmployeeShiftTime = async (employee: EmployeeRow, draft: string): Promise<boolean> => {
+    const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
+    const position = normalizePositionKey(String(employee.position ?? '').trim());
+    const currentValue = normalizeScheduleShiftTime(employee.shift_time ?? employee.ShiftTime ?? '');
+    const change = resolveScheduleShiftTimeChange(currentValue, draft);
+
+    if (!staff || !position) return false;
+    if (change.kind === 'unchanged') return true;
+    if (change.kind === 'invalid') {
+      setStatus({ tone: 'error', message: t('请输入有效的班次时间。', 'Enter a valid shift time.') });
+      return false;
+    }
+    if (isLocked || !scheduleCanOperate || !canOperatePosition('schedule', position)) {
+      setStatus({ tone: 'error', message: t('排班模块当前为只读。', 'Schedule is read-only.') });
+      return false;
+    }
+    if (!supabase) {
+      setStatus({ tone: 'error', message: t('缺少 Supabase 配置。', 'Missing Supabase config.') });
+      return false;
+    }
+
+    setScheduleShiftTimeSavingStaffId(staff);
+    try {
+      let saved = false;
+      await runLocked('schedule_shift_time_update', async () => {
+        const { error } = await supabase
+          .from(EMPLOYEE_TABLE)
+          .update({ shift_time: change.value } as any)
+          .eq('staff_id', staff);
+        if (error) {
+          setStatus({ tone: 'error', message: `${t('保存失败：', 'Save failed: ')}${error.message}` });
+          return;
+        }
+
+        setEmployees((previous) =>
+          previous.map((row) =>
+            normalizeStaffId(String(row.staff_id ?? '').trim()) === staff
+              ? ({ ...row, shift_time: change.value, ShiftTime: change.value } as EmployeeRow)
+              : row
+          )
+        );
+        await writeAudit({
+          action: 'employee_shift_time_update',
+          staffId: staff,
+          target: EMPLOYEE_TABLE,
+          payload: {
+            staff_id: staff,
+            position,
+            before: { shift_time: currentValue },
+            after: { shift_time: change.value },
+            source: 'schedule'
+          }
+        });
+        setStatus({ tone: 'success', message: t('班次时间已更新。', 'Shift time updated.') });
+        saved = true;
+      });
+      return saved;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error ?? '');
+      setStatus({
+        tone: 'error',
+        message: `${t('保存失败：', 'Save failed: ')}${detail || t('未知错误', 'Unknown error')}`
+      });
+      return false;
+    } finally {
+      setScheduleShiftTimeSavingStaffId((current) => (current === staff ? null : current));
+    }
+  };
+
   const scheduleEmployeesFiltered = useMemo(() => {
     if (page !== 'schedule') return [];
     const search = deferredScheduleSearch.trim().toLowerCase();
@@ -15227,27 +16063,17 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       ? scheduleEmployeesBase
       : scheduleEmployeesBase.filter((employee) => {
           const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-          const name = String(employee.name ?? '').trim();
-          const position = String(employee.position ?? employee.Position ?? '').trim();
+          const name = getScheduleEmployeeDisplayName(employee);
+          const position = String(employee.position ?? '').trim();
           return [staff, name, position].join(' ').toLowerCase().includes(search);
         });
-    return [...filtered].sort((a, b) => {
-      const staffA = normalizeStaffId(String(a.staff_id ?? '').trim());
-      const staffB = normalizeStaffId(String(b.staff_id ?? '').trim());
-      const pendingA = pendingTerminationRequestsByStaffId.has(staffA);
-      const pendingB = pendingTerminationRequestsByStaffId.has(staffB);
-      if (pendingA !== pendingB) return pendingA ? -1 : 1;
-      if (!scheduleSortByUphDesc) return staffA.localeCompare(staffB, 'en-US');
-      const rawA = Number(scheduleUphByStaffId[staffA]);
-      const rawB = Number(scheduleUphByStaffId[staffB]);
-      const hasA = Number.isFinite(rawA);
-      const hasB = Number.isFinite(rawB);
-      if (hasA && hasB && rawA !== rawB) return rawB - rawA;
-      if (hasA && !hasB) return -1;
-      if (!hasA && hasB) return 1;
-      return staffA.localeCompare(staffB, 'en-US');
+    return sortScheduleEmployees(filtered, {
+      normalizeStaffId,
+      pendingStaffIds: pendingTerminationRequestsByStaffId,
+      sortByUphDesc: scheduleSortByUphDesc,
+      uphByStaffId: scheduleUphByStaffId
     });
-  }, [page, scheduleEmployeesBase, deferredScheduleSearch, pendingTerminationRequestsByStaffId, scheduleSortByUphDesc, scheduleUphByStaffId]);
+  }, [page, scheduleEmployeesBase, deferredScheduleSearch, pendingTerminationRequestsByStaffId, scheduleSortByUphDesc, scheduleUphByStaffId, getScheduleEmployeeDisplayName]);
   const scheduleEmployeesRendered = useMemo(
     () => scheduleEmployeesFiltered.slice(0, Math.max(0, scheduleRenderCount)),
     [scheduleEmployeesFiltered, scheduleRenderCount]
@@ -15399,7 +16225,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
       if (!row || !isWorkingScheduleRow(row)) continue;
       const positionRaw =
-        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || String(row.position ?? '').trim();
+        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim();
       const normalizedPosition = normalizePositionKey(positionRaw);
       if (!normalizedPosition) continue;
       if (!scheduleVisiblePositionSet.has(normalizedPosition)) continue;
@@ -15450,13 +16276,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff) continue;
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
-      const hasPunch = schedulePunchPresenceKeys.has(`${staff}__${homeOperationalDayIndex}`);
+      const hasPunch =
+        schedulePunchPresenceKeys.has(`${staff}__${homeOperationalDayIndex}`) ||
+        (homePunchesByStaffId[staff]?.length ?? 0) > 0;
       // 跳过没有排班也没有打卡的人
       if (!row && !hasPunch && !activeStaffSet.has(staff)) continue;
       // 如果排班不是工作状态，但没有打卡记录，也跳过
       if (row && !isWorkingScheduleRow(row) && !hasPunch && !activeStaffSet.has(staff)) continue;
       const positionRaw =
-        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim() || (row ? String(row.position ?? '').trim() : '');
+        String(employeeProfileByStaffId.get(staff)?.position ?? '').trim();
       const position = normalizePositionKey(positionRaw);
       if (!position) continue;
       if (!scheduleVisiblePositionSet.has(position)) continue;
@@ -15480,6 +16308,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     homeOperationalDayIndex,
     employeeProfileByStaffId,
     employeeShiftByStaffId,
+    homePunchesByStaffId,
     schedulePunchPresenceKeys,
     scheduleVisiblePositionSet
   ]);
@@ -15493,6 +16322,60 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     }
     return map;
   }, [employees]);
+
+  const homeWorkHoursByPositionShift = useMemo(() => {
+    const stats: Record<string, { early: number; late: number }> = {};
+    const capEndMs = new Date(serverTime).getTime();
+    if (!Number.isFinite(capEndMs)) return stats;
+
+    const getHours = (punches: Array<{ action: 'IN' | 'OUT'; created_at: string }>) => {
+      let totalMs = 0;
+      let inAtMs: number | null = null;
+      for (const punch of punches) {
+        const atMs = Date.parse(String(punch.created_at ?? ''));
+        if (!Number.isFinite(atMs)) continue;
+        if (punch.action === 'IN') {
+          inAtMs = atMs;
+          continue;
+        }
+        if (punch.action === 'OUT') {
+          if (inAtMs !== null && atMs > inAtMs) totalMs += atMs - inAtMs;
+          inAtMs = null;
+        }
+      }
+      if (inAtMs !== null && capEndMs > inAtMs) totalMs += capEndMs - inAtMs;
+      return totalMs / 3600000;
+    };
+
+    for (const [staffRaw, punchesRaw] of Object.entries(homePunchesByStaffId)) {
+      const staff = normalizeStaffId(String(staffRaw ?? '').trim());
+      if (!staff || !Array.isArray(punchesRaw) || punchesRaw.length === 0) continue;
+      const employee = homeEmployeeByStaffId.get(staff);
+      const profile = employeeProfileByStaffId.get(staff);
+      const agency = String(profile?.agency ?? employee?.agency ?? '').trim();
+      if (isScheduleOnlyAgency(agency)) continue;
+      const positionRaw = String(profile?.position ?? employee?.position ?? '').trim();
+      const position = normalizePositionKey(positionRaw);
+      if (!position || !scheduleVisiblePositionSet.has(position)) continue;
+      const firstIn = punchesRaw.find((punch) => punch.action === 'IN')?.created_at ?? punchesRaw[0]?.created_at ?? '';
+      const shift = employeeShiftByStaffId[staff]?.shift || getShiftBucket(firstIn) || 'early';
+      if (shift !== 'early' && shift !== 'late') continue;
+      const hours = getHours(
+        [...punchesRaw].sort((a, b) => Date.parse(String(a.created_at ?? '')) - Date.parse(String(b.created_at ?? '')))
+      );
+      if (hours <= 0) continue;
+      const current = (stats[position] ??= { early: 0, late: 0 });
+      current[shift] += hours;
+    }
+    return stats;
+  }, [
+    homePunchesByStaffId,
+    serverTime,
+    homeEmployeeByStaffId,
+    employeeProfileByStaffId,
+    employeeShiftByStaffId,
+    scheduleVisiblePositionSet
+  ]);
 
   const homeBorrowedDeviceByStaffId = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -15582,8 +16465,8 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       return {
         staff_id: staff,
         name: String(profile?.name ?? employee?.name ?? '').trim(),
-        agency: String(profile?.agency ?? employee?.agency ?? employee?.Agency ?? '').trim(),
-        position: String(positionRaw ?? profile?.position ?? employee?.position ?? employee?.Position ?? '').trim(),
+        agency: String(profile?.agency ?? employee?.agency ?? '').trim(),
+        position: String(positionRaw ?? profile?.position ?? employee?.position ?? '').trim(),
         shift: shift === 'early' ? 'Morning' : shift === 'late' ? 'Night' : '-',
         attendance: attendanceOverride ?? (isOnClock ? 'Normal' : 'Absent'),
         label,
@@ -15599,6 +16482,13 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
       };
     };
 
+    const onClockShiftByStaff = new Map<string, 'early' | 'late'>();
+    for (const [staffRaw, shiftRaw] of Object.entries(homeOnClockShiftByStaffId)) {
+      const staff = normalizeStaffId(String(staffRaw ?? '').trim());
+      if (!staff || (shiftRaw !== 'early' && shiftRaw !== 'late')) continue;
+      onClockShiftByStaff.set(staff, shiftRaw);
+    }
+
     for (const employee of employees) {
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff || seen.has(staff)) continue;
@@ -15609,7 +16499,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
 
       const baseState = row ? getScheduleBaseStateFromNote(row.note) : 'rest';
       const hasPunch = schedulePunchPresenceKeys.has(`${staff}__${homeOperationalDayIndex}`);
-      const currentOnClockShift = homeOnClockShiftByStaffId[staff];
+      const currentOnClockShift = onClockShiftByStaff.get(staff);
       const isCurrentlyOnClock = currentOnClockShift === 'early' || currentOnClockShift === 'late';
       const shift = employeeShiftByStaffId[staff]?.shift || 'early';
       const profile = employeeProfileByStaffId.get(staff);
@@ -15617,7 +16507,7 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
         staff,
         profile,
         employee,
-        positionRaw: String(profile?.position ?? '').trim() || String(employee.position ?? employee.Position ?? '').trim() || String(row?.position ?? '').trim(),
+        positionRaw: String(profile?.position ?? '').trim() || String(employee.position ?? '').trim(),
         shift,
         isOnClock: false
       });
@@ -15643,17 +16533,15 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
     absent.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     restWorked.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
     completed.sort((a, b) => a.staff_id.localeCompare(b.staff_id, 'en-US'));
-    for (const [staffRaw, shiftRaw] of Object.entries(homeOnClockShiftByStaffId)) {
-      const staff = normalizeStaffId(String(staffRaw ?? '').trim());
-      if (!staff) continue;
+    for (const [staff, shiftRaw] of onClockShiftByStaff.entries()) {
       const profile = employeeProfileByStaffId.get(staff);
       const row = scheduleRowsByStaffDayIndex.get(`${staff}__${homeOperationalDayIndex}`);
       const fallbackEmp = homeEmployeeByStaffId.get(staff);
       const baseState = row ? getScheduleBaseStateFromNote(row.note) : 'rest';
-      const position = String(row?.position ?? profile?.position ?? fallbackEmp?.position ?? fallbackEmp?.Position ?? '').trim();
+      const position = String(profile?.position ?? fallbackEmp?.position ?? '').trim();
       const normalizedPosition = normalizePositionKey(position);
       if (!normalizedPosition || !scheduleVisiblePositionSet.has(normalizedPosition)) continue;
-      const agency = String(profile?.agency ?? fallbackEmp?.agency ?? fallbackEmp?.Agency ?? '').trim();
+      const agency = String(profile?.agency ?? fallbackEmp?.agency ?? '').trim();
       if (isScheduleOnlyAgency(agency)) continue;
       onClock.push(
         buildHomeRosterItem({
@@ -15715,12 +16603,37 @@ const getPlannedStartTime = (shift: 'early' | 'late', position: string) => getDe
   }, [page, homeRosterRows, homeRosterPositionFilter, activePositionNames, hiddenPositionNameSet]);
   const homeRosterRowsCurrent = useMemo(() => {
     if (page !== 'home') return [];
-    return [
+    const rows = [
       ...homeRosterRowsFiltered.absent,
       ...homeRosterRowsFiltered.restWorked,
       ...homeRosterRowsFiltered.completed,
       ...homeRosterRowsFiltered.onClock
     ];
+    const priorityByAttendance = {
+      Absent: 0,
+      'Off Worked': 1,
+      Completed: 2,
+      Normal: 3
+    } as const;
+    const bestByStaff = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff) continue;
+      const current = bestByStaff.get(staff);
+      const rowPriority = priorityByAttendance[row.attendance] ?? 0;
+      const currentPriority = current ? (priorityByAttendance[current.attendance] ?? 0) : -1;
+      if (!current || rowPriority >= currentPriority) {
+        bestByStaff.set(staff, row);
+      }
+    }
+    const emitted = new Set<string>();
+    return rows.filter((row) => {
+      const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
+      if (!staff || emitted.has(staff)) return false;
+      if (bestByStaff.get(staff) !== row) return false;
+      emitted.add(staff);
+      return true;
+    });
   }, [page, homeRosterRowsFiltered]);
   const formatDailyListStaffId = (row: DailyListRow) => {
     const staff = normalizeStaffId(String(row.staff_id ?? '').trim());
@@ -15927,7 +16840,6 @@ ${rowsToHtml(late)}
     const nextSeq = existingSeqSet.size > 0 ? Math.max(...Array.from(existingSeqSet)) + 1 : 1;
 
     await runLocked('daily_list_new_hire', async () => {
-      const mode = await resolveEmployeeColumnMode();
       const nowIso = new Date(serverTime).toISOString();
       const employeeRows: Array<Record<string, unknown>> = [];
       const scheduleRowsToWrite: Array<Record<string, unknown>> = [];
@@ -15937,28 +16849,16 @@ ${rowsToHtml(late)}
         const seq = nextSeq + i;
         const internalStaffId = `${mmddCompact}${positionUpper}${String(seq).padStart(3, '0')}`;
         const employeeName = note || '-';
-        const employeePayload =
-          mode === 'cased'
-            ? {
-                staff_id: internalStaffId,
-                name: employeeName,
-                Agency: agency || null,
-                Position: position,
-                employment_type: 'FT',
-                shift,
-                label: label || null,
-                created_at: nowIso
-              }
-            : {
-                staff_id: internalStaffId,
-                name: employeeName,
-                agency: agency || null,
-                position,
-                employment_type: 'FT',
-                shift,
-                label: label || null,
-                created_at: nowIso
-              };
+        const employeePayload = {
+          staff_id: internalStaffId,
+          name: employeeName,
+          agency: agency || null,
+          position,
+          employment_type: 'FT',
+          shift,
+          label: label || null,
+          created_at: nowIso
+        };
         employeeRows.push(employeePayload as Record<string, unknown>);
         scheduleRowsToWrite.push({
           staff_id: internalStaffId,
@@ -16048,6 +16948,12 @@ ${rowsToHtml(late)}
       });
     });
   };
+  const handleDisabledNewHireRequestClick = () => {
+    setStatus({
+      tone: 'idle',
+      message: t('如需新人需求请联系HR', 'If you need new hire requests, please contact HR')
+    });
+  };
 
   const exportScheduleTemplate = async () => {
     await runLocked('schedule_export', async () => {
@@ -16056,7 +16962,7 @@ ${rowsToHtml(late)}
         setStatus({ tone: 'error', message: '暂无可导出的排班数据。' });
         return;
       }
-      if (scheduleShift !== 'early' && scheduleShift !== 'late') {
+      if (scheduleShift && scheduleShift !== 'early' && scheduleShift !== 'late') {
         setStatus({ tone: 'error', message: '请先在 Shift 里选择早班或晚班后再导出。' });
         return;
       }
@@ -16080,21 +16986,17 @@ ${rowsToHtml(late)}
           .sort((a, b) => String(a.staff_id ?? '').localeCompare(String(b.staff_id ?? ''), 'en-US'))
           .map((employee) => {
             const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-            const name = String(employee.name ?? '').trim();
+            const name = getScheduleEmployeeDisplayName(employee);
+            const position = String(employee.position ?? '').trim();
+            const resolvedShiftStartTime = resolveShiftStartTime(
+              shift,
+              position,
+              employee.shift_time ?? employee.ShiftTime
+            );
             const dayCells = Array.from({ length: 7 }, (_, dayIndex) => {
               const row = scheduleRowsByStaffDayIndex.get(`${staff}__${dayIndex}`);
-              if (!row) return '休息';
-              const state = getScheduleBaseStateFromNote(row.note);
-              if (state === 'new') return '新人';
-              if (state === 'work') return shift === 'late' ? '晚1' : '早1';
-              if (state === 'fixed_work') return '固定排班';
-              if (state === 'temp_work') return '临时工作';
-              if (state === 'planned_temp_work') return '替补';
-              if (state === 'leave') return '请假';
-              if (state === 'planned_leave') return '计划请假';
-              if (state === 'temp_rest') return '临时排休';
-              if (state === 'planned_temp_rest') return '计划临时排休';
-              return '休息';
+              const state = row ? getScheduleBaseStateFromNote(row.note) : null;
+              return getScheduleExportCellValue(state, resolvedShiftStartTime);
             });
             return ['', staff, name, ...dayCells];
           });
@@ -16131,10 +17033,13 @@ ${rowsToHtml(late)}
         };
 
         const wb = XLSX.utils.book_new();
-        const shift = scheduleShift as 'early' | 'late';
-        const sheetName = shift === 'late' ? '1' : '0';
-        XLSX.utils.book_append_sheet(wb, buildSheet(shift), sheetName);
-        const filename = `ob_schedule_${sheetName}_${toDateOnly(scheduleWeekStart)}.xlsx`;
+        const shiftsToExport: Array<'early' | 'late'> = scheduleShift === 'early' || scheduleShift === 'late' ? [scheduleShift] : ['early', 'late'];
+        for (const shift of shiftsToExport) {
+          const sheetName = shift === 'late' ? '1' : '0';
+          XLSX.utils.book_append_sheet(wb, buildSheet(shift), sheetName);
+        }
+        const filenameShiftPart = shiftsToExport.length === 1 ? (shiftsToExport[0] === 'late' ? '1' : '0') : 'all';
+        const filename = `ob_schedule_${filenameShiftPart}_${toDateOnly(scheduleWeekStart)}.xlsx`;
         XLSX.writeFile(wb, filename);
         setStatus({ tone: 'success', message: `已导出：${filename}` });
       } catch (err: any) {
@@ -16194,8 +17099,8 @@ ${rowsToHtml(late)}
         if (shift !== 'early' && shift !== 'late') return null;
         return {
           staff_id: staff,
-          name: String(employee.name ?? '').trim(),
-          agency: String(employee.agency ?? employee.Agency ?? '').trim(),
+          name: getScheduleEmployeeDisplayName(employee),
+          agency: String(employee.agency ?? '').trim(),
           label: String(employee.label ?? employee.Label ?? '').trim(),
           shift
         };
@@ -16492,7 +17397,7 @@ ${rowsToHtml(late)}
       const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
       if (!staff || scheduleOnlyStaffIds.has(staff)) continue;
       const shift = normalizeShiftValue(String(employee.shift ?? '').trim()) || 'early';
-      const position = String(employee.position ?? employee.Position ?? '').trim();
+      const position = String(employee.position ?? '').trim();
       const shiftTime = normalizeShiftTimeValue((employee as any).shift_time ?? (employee as any).ShiftTime ?? '');
       if (!position) continue;
       if (shift === 'early' && normalizePositionKey(position) === 'Pick') continue;
@@ -16580,7 +17485,7 @@ ${rowsToHtml(late)}
         const createdAt = new Date(`${operationalDate}T00:00:00`).toISOString();
         details.push({
           operational_date: operationalDate,
-          position: String(row?.position ?? employee.position ?? employee.Position ?? '').trim() || '-',
+          position: String(employee.position ?? '').trim() || '-',
           reason: state === 'absent' ? 'Absent' : 'Off Worked',
           reporter_staff_id: 'SYSTEM',
           created_at: createdAt
@@ -16643,7 +17548,7 @@ ${rowsToHtml(late)}
             />
           </main>
         ) : (
-          <div className="grid h-screen grid-rows-[64px_minmax(0,1fr)] overflow-hidden">
+          <div className="grid h-screen max-h-screen min-w-0 max-w-full overflow-hidden grid-rows-[64px_minmax(0,1fr)]">
             <AdminHeader
               t={t}
               isLocked={isLocked}
@@ -16664,7 +17569,7 @@ ${rowsToHtml(late)}
               onLogout={doLogout}
             />
 
-            <div className="flex min-h-0 flex-1 overflow-hidden">
+            <div className="flex min-h-0 min-w-0 max-w-full flex-1 overflow-hidden">
               <AdminNav
                 page={page}
                 isLocked={isLocked}
@@ -16679,25 +17584,54 @@ ${rowsToHtml(late)}
 
               <main
                 className={[
-                  'flex-1 min-w-0',
+                  'flex-1 min-w-0 min-h-0 max-w-full',
                   themeMode === 'light'
-                    ? 'min-h-0 overflow-auto bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.12),transparent_28%),linear-gradient(180deg,rgba(245,247,255,0.95),rgba(242,245,255,0.98))] text-slate-900'
-                    : 'min-h-0 overflow-auto bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.14),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(139,92,246,0.12),transparent_26%),linear-gradient(180deg,rgba(7,10,16,0.98),rgba(10,14,22,0.98))] text-slate-100',
-                  'px-0 py-0'
+                    ? 'bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.12),transparent_28%),linear-gradient(180deg,rgba(245,247,255,0.95),rgba(242,245,255,0.98))] text-slate-900'
+                    : 'bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.14),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(139,92,246,0.12),transparent_26%),linear-gradient(180deg,rgba(7,10,16,0.98),rgba(10,14,22,0.98))] text-slate-100',
+                  page === 'employees' ? 'overflow-hidden' : 'overflow-y-auto overflow-x-hidden',
+                  'px-0 py-0 [scrollbar-gutter:stable]'
                 ].join(' ')}
               >
-                <div className="flex w-full flex-col gap-6">
+                <div className="flex h-full min-h-0 min-w-0 w-full max-w-full flex-col gap-6">
+                  {status.message ? (
+                    <div className="pointer-events-none fixed left-4 top-20 z-[80] w-[min(calc(100vw-2rem),34rem)] md:left-24">
+                      <div
+                        className={[
+                          'rounded-2xl border px-4 py-3 text-sm font-semibold shadow-[0_18px_50px_rgba(15,23,42,0.28)] backdrop-blur-md',
+                          status.tone === 'success'
+                            ? themeMode === 'light'
+                              ? 'border-emerald-200 bg-emerald-50/95 text-emerald-700'
+                              : 'border-emerald-400/30 bg-emerald-400/12 text-emerald-100'
+                            : status.tone === 'error'
+                              ? themeMode === 'light'
+                                ? 'border-rose-200 bg-rose-50/95 text-rose-700'
+                                : 'border-rose-400/30 bg-rose-400/12 text-rose-100'
+                              : status.tone === 'pending'
+                                ? themeMode === 'light'
+                                  ? 'border-sky-200 bg-sky-50/95 text-sky-700'
+                                  : 'border-sky-400/30 bg-sky-400/12 text-sky-100'
+                                : themeMode === 'light'
+                                  ? 'border-slate-200 bg-white/95 text-slate-600'
+                                  : 'border-white/10 bg-slate-900/88 text-slate-200'
+                        ].join(' ')}
+                      >
+                        {status.message}
+                      </div>
+                    </div>
+                  ) : null}
 
             {page === 'home' && (
               <HomeDashboardPage
                 t={t}
                 themeMode={themeMode}
                 homeCardStats={homeCardStats}
+                homeWorkHoursByPositionShift={homeWorkHoursByPositionShift}
                 homeExpectedPositionSummaryCards={homeExpectedPositionSummaryCards}
                 getHomeCardToneClass={getHomeCardToneClass}
                 getHomeChipToneClass={getHomeChipToneClass}
                 getScheduleLabelTone={getScheduleLabelTone}
                 getScheduleTableLabelBadgeClass={getScheduleTableLabelBadgeClass}
+                getSchedulePositionTone={getSchedulePositionTone}
                 getHomePanelToneClass={getHomePanelToneClass}
                 getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                 getScheduleTablePositionBadgeClass={getScheduleTablePositionBadgeClass}
@@ -16756,6 +17690,7 @@ ${rowsToHtml(late)}
                 onDeviceFileSelected={onDeviceFileSelected}
                 uploadDevices={uploadDevices}
                 onDownloadDeviceTemplate={downloadDeviceTemplate}
+                onExportDevices={exportDevices}
                 deviceUploadError={deviceUploadError}
                 deviceSearch={deviceSearch}
                 setDeviceSearch={setDeviceSearch}
@@ -16809,12 +17744,13 @@ ${rowsToHtml(late)}
               <WorkHourComparisonPage
                 t={t}
                 isLocked={isLocked}
-                isReadOnly={!efficiencyCanOperate}
+                isReadOnly={!workHourComparisonCanOperate}
                 supabase={supabase}
                 themeMode={themeMode}
                 serverTime={serverTime}
                 userEmail={String(user?.email ?? '')}
                 userDisplayName={String(userDisplayName ?? '')}
+                positionNames={allPositionNames}
                 positionDepartmentByPosition={positionDepartmentRecord}
                 onOpenTimecardCalibration={openTimecardPunchModalForDate}
               />
@@ -16830,6 +17766,16 @@ ${rowsToHtml(late)}
                 userEmail={String(user?.email ?? '')}
                 userDisplayName={String(userDisplayName ?? '')}
                 onPendingCountChange={setTodoPendingCount}
+              />
+            )}
+            {page === 'exceptions' && (
+              <ExceptionsPage
+                t={t}
+                themeMode={themeMode}
+                isLocked={isLocked}
+                isReadOnly={!exceptionsCanOperate}
+                supabase={supabase}
+                userEmail={String(user?.email ?? '')}
               />
             )}
             {page === 'punches' && (
@@ -16881,7 +17827,7 @@ ${rowsToHtml(late)}
                   changeScheduleWeek={changeScheduleWeek}
                   openScheduleDailyList={openScheduleDailyList}
                   schedulePrintDate={schedulePrintDate}
-                  setSchedulePrintDate={setSchedulePrintDate}
+                  setSchedulePrintDate={selectScheduleDate}
                   scheduleEmployeesFilteredLength={scheduleEmployeesFiltered.length}
                   printScheduleSignInSheet={printScheduleSignInSheet}
                   exportScheduleTemplate={exportScheduleTemplate}
@@ -16889,25 +17835,6 @@ ${rowsToHtml(late)}
                 />
 
                 <div className="mt-5 grid gap-4 md:grid-cols-12 xl:grid-cols-[repeat(16,minmax(0,1fr))]">
-                  <div className="md:col-span-2">
-                    <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('周', 'Week')}</label>
-                    <input
-                      type="date"
-                      value={scheduleWeekInput}
-                      disabled={isLocked}
-                      onChange={(e) => setScheduleWeekInput(e.target.value)}
-                      onBlur={() => {
-                        if (!/^\d{4}-\d{2}-\d{2}$/.test(scheduleWeekInput)) return;
-                        const parsed = new Date(`${scheduleWeekInput}T00:00:00`);
-                        if (Number.isNaN(parsed.getTime())) return;
-                        const weekStart = startOfWeekMonday(parsed);
-                        const baseWeekStart = startOfWeekMonday(serverTime);
-                        const offset = Math.round((weekStart.getTime() - baseWeekStart.getTime()) / (7 * 24 * 60 * 60 * 1000));
-                        changeScheduleWeek(offset, 'date_input');
-                      }}
-                      className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-base text-white outline-none transition focus:border-neon focus:shadow-glow disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                  </div>
                   <div className="md:col-span-2">
                     <label className="text-xs uppercase tracking-[0.25em] text-slate-400">{t('搜索', 'Search')}</label>
                     <input
@@ -17270,16 +18197,40 @@ ${rowsToHtml(late)}
                     className="mx-auto mt-4 min-h-[320px] max-h-[68vh] overflow-x-hidden overflow-y-auto rounded-2xl border border-white/10 bg-black/30 pr-3 pb-2"
                   >
                     <table className="mx-auto w-full table-fixed text-center text-xs leading-tight">
+                      <colgroup>
+                        <col className="w-[44px]" />
+                        <col className="w-[88px]" />
+                        <col className="w-[124px]" />
+                        <col className="w-[74px]" />
+                        <col className="w-[82px]" />
+                        <col className="w-[74px]" />
+                        <col className="w-[74px]" />
+                        <col className="w-[88px]" />
+                        <col className="w-[64px]" />
+                        <col className="w-[78px]" />
+                        <col className="w-[56px]" />
+                        <col className="w-[64px]" />
+                        <col className="w-[58px]" />
+                        <col className="w-[58px]" />
+                        {scheduleDays.map((day) => (
+                          <col key={`schedule-col-${toDateOnly(day)}`} className="w-[72px]" />
+                        ))}
+                        <col className="w-[52px]" />
+                      </colgroup>
                       <thead className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 text-[10px] uppercase tracking-[0.16em] text-slate-400 backdrop-blur">
                         <tr>
-                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 pl-4 pr-1 py-2 text-left backdrop-blur">{t('工号', 'ID')}</th>
+                          <th className="sticky top-0 z-20 bg-slate-950/95 px-1 py-2 text-center backdrop-blur">NO.</th>
+                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('工号', 'ID')}</th>
                           <th className="sticky top-0 z-20 w-[124px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('姓名', 'Name')}</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1.5 py-2 text-center backdrop-blur">{t('工作天数', 'Work Days')}</th>
                           <th className="sticky top-0 z-20 w-[82px] bg-slate-950/95 px-1 py-2 text-left backdrop-blur">{t('中介', 'Agency')}</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">Driver</th>
                           <th className="sticky top-0 z-20 w-[74px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('岗位', 'Position')}</th>
-                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 backdrop-blur">{t('标签', 'Label')}</th>
+                          <th className="sticky top-0 z-20 w-[88px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('标签', 'Label')}</th>
                           <th className="sticky top-0 z-20 w-[64px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">{t('班次', 'Shift')}</th>
+                          <th className="sticky top-0 z-20 w-[78px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
+                            {t('班次时间', 'Shift Time')}
+                          </th>
                           <th className="sticky top-0 z-20 w-[56px] bg-slate-950/95 px-1 py-2 text-center backdrop-blur">
                             <button
                               type="button"
@@ -17345,12 +18296,12 @@ ${rowsToHtml(late)}
                         </tr>
                       </thead>
                       <tbody>
-                        {scheduleEmployeesRendered.map((employee) => {
+                        {scheduleEmployeesRendered.map((employee, renderedIndex) => {
                           const staff = normalizeStaffId(String(employee.staff_id ?? '').trim());
-                          const name = String(employee.name ?? '').trim();
-                          const agency = String(employee.agency ?? employee.Agency ?? '').trim();
+                          const name = getScheduleEmployeeDisplayName(employee);
+                          const agency = String(employee.agency ?? '').trim();
                           const attendanceTrackingDisabled = scheduleOnlyStaffIds.has(staff);
-                          const position = String(employee.position ?? employee.Position ?? '').trim();
+                          const position = String(employee.position ?? '').trim();
                           const label = String(employee.label ?? employee.Label ?? '').trim();
                           const normalizedPosition = normalizePositionKey(position);
                           const labelOptions = normalizedPosition ? (scheduleLabelOptionsByPosition[normalizedPosition] ?? []) : [];
@@ -17360,10 +18311,27 @@ ${rowsToHtml(late)}
                             !scheduleReadOnly &&
                             canOperatePosition('schedule', normalizedPosition);
                           const labelSaving = scheduleLabelSavingStaffId === staff;
+                          const canEditScheduleShiftTime =
+                            Boolean(normalizedPosition) &&
+                            scheduleCanOperate &&
+                            canOperatePosition('schedule', normalizedPosition);
+                          const shiftTimeSaving = scheduleShiftTimeSavingStaffId === staff;
                           const pendingTerminationRequest = pendingTerminationRequestsByStaffId.get(staff) ?? null;
                           const hasPendingTermination = Boolean(pendingTerminationRequest);
+                          const canDepartFromSchedule =
+                            employeesCanOperate &&
+                            Boolean(normalizedPosition) &&
+                            canOperatePosition('employees', resolveEmployeeOperatePosition(normalizedPosition || position)) &&
+                            !isScheduleOnlyAgency(agency);
+                          const departFromScheduleTitle = !employeesCanOperate
+                            ? t('员工模块当前为只读。', 'Employees is read-only.')
+                            : !normalizedPosition || !canOperatePosition('employees', resolveEmployeeOperatePosition(normalizedPosition || position))
+                              ? t('当前账号不能操作该 Position。', 'This account cannot operate this position.')
+                              : isScheduleOnlyAgency(agency)
+                                ? t('JDL员工不能离职', 'JDL employees cannot be departed')
+                                : undefined;
                           const scheduleDriverInfo = scheduleDriverGroupByStaffId[staff] ?? null;
-                          const scheduleAgencyNote = String(scheduleAgencyNoteByStaffId[staff] ?? '').trim();
+                          const scheduleEmployeeNotes = employeeNotesByStaffId[staff];
                           if (!staff) return null;
 
                           let workDays = 0;
@@ -17417,8 +18385,8 @@ ${rowsToHtml(late)}
                           const effectiveWorkDays = workDays + restWorkedBonusDays - absentPenaltyDays;
                           const scheduleRowClass = hasPendingTermination
                             ? themeMode === 'light'
-                              ? 'border-b border-slate-300 bg-slate-200/85 text-slate-700 transition-colors hover:bg-slate-200 last:border-0'
-                              : 'border-b border-white/5 bg-slate-800/70 text-slate-200 transition-colors hover:bg-slate-800 last:border-0'
+                              ? 'border-b border-slate-300 bg-slate-200/85 text-slate-700 transition-colors hover:bg-slate-100 last:border-0'
+                              : 'border-b border-white/5 bg-slate-800/70 text-slate-200 transition-colors hover:bg-slate-700/80 last:border-0'
                             : 'border-b border-white/5 transition-colors hover:bg-white/[0.04] last:border-0';
                           const scheduleBodyTextClass = hasPendingTermination
                             ? themeMode === 'light'
@@ -17432,24 +18400,17 @@ ${rowsToHtml(late)}
 
                           return (
                             <tr className={scheduleRowClass} key={staff}>
-                              <td className={['pl-4 pr-1 py-2 font-mono', scheduleBodyTextClass].join(' ')}>{staff}</td>
-                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
-                                <div className="relative inline-flex max-w-full items-start">
-                                  <span
-                                    className="group relative inline-flex max-w-full items-start pr-2"
-                                    title={scheduleAgencyNote ? undefined : name || '-'}
-                                  >
-                                    <span className="block truncate">{name || '-'}</span>
-                                    {scheduleAgencyNote ? (
-                                      <>
-                                        <span className="absolute -right-0.5 -top-1 h-2 w-2 rounded-full border border-slate-950 bg-rose-400 shadow-[0_0_0_2px_rgba(244,63,94,0.18)]" />
-                                        <span className="pointer-events-none absolute left-0 top-full z-40 mt-1 hidden w-48 rounded-lg border border-rose-300/25 bg-slate-950/95 px-2 py-1.5 text-[11px] font-medium leading-snug text-slate-100 shadow-2xl backdrop-blur group-hover:block">
-                                          {scheduleAgencyNote}
-                                        </span>
-                                      </>
-                                    ) : null}
-                                  </span>
-                                </div>
+                              <td className="px-1 py-2 text-center font-mono text-[10px] tabular-nums text-slate-400">{renderedIndex + 1}</td>
+                              <td className={['px-1 py-2 text-left font-mono', scheduleBodyTextClass].join(' ')}>{staff}</td>
+                              <td className={['px-1 py-2 text-left', scheduleBodyTextClass].join(' ')}>
+                                <EmployeeNoteNameButton
+                                  staff={staff}
+                                  name={name}
+                                  position={position}
+                                  notes={scheduleEmployeeNotes}
+                                  isLight={themeMode === 'light'}
+                                  onOpen={openEmployeeNotes}
+                                />
                                 {hasPendingTermination && (
                                   <div
                                     className={[
@@ -17469,7 +18430,7 @@ ${rowsToHtml(late)}
                                   'min-w-[38px] px-1.5 py-0.5 tabular-nums'
                                 )}
                               </td>
-                              <td className={['px-1 py-2 truncate', scheduleBodyTextClass].join(' ')}>{agency || '-'}</td>
+                              <td className={['px-1 py-2 truncate text-left', scheduleBodyTextClass].join(' ')}>{agency || '-'}</td>
                               <td className="px-1 py-2 text-center">
                                 {scheduleDriverInfo ? (
                                   <span
@@ -17487,7 +18448,7 @@ ${rowsToHtml(late)}
                                   <span className={scheduleBodyTextClass} />
                                 )}
                               </td>
-                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
+                              <td className={['px-1 py-2 text-center', scheduleBodyTextClass].join(' ')}>
                                 {position ? (
                                   <BorderGlow
                                     className="admin-position-badge-glow admin-schedule-badge-glow"
@@ -17516,7 +18477,7 @@ ${rowsToHtml(late)}
                                   renderScheduleEmptyPill()
                                 )}
                               </td>
-                              <td className={['px-1 py-2', scheduleBodyTextClass].join(' ')}>
+                              <td className={['px-1 py-2 text-center', scheduleBodyTextClass].join(' ')}>
                                 {canEditScheduleLabel && !label ? (
                                   <span
                                     className="relative inline-flex align-middle"
@@ -17584,6 +18545,20 @@ ${rowsToHtml(late)}
                                     'h-[22px] w-[58px] px-2 tracking-[0.04em]'
                                   );
                                 })()}
+                              </td>
+                              <td className={['px-1 py-2 text-center', scheduleBodyTextClass].join(' ')}>
+                                <ScheduleShiftTimeCell
+                                  value={employee.shift_time ?? employee.ShiftTime ?? ''}
+                                  canEdit={canEditScheduleShiftTime && !isLocked}
+                                  saving={shiftTimeSaving}
+                                  editing={scheduleShiftTimeEditingStaffId === staff}
+                                  t={t}
+                                  onStartEditing={() => setScheduleShiftTimeEditingStaffId(staff)}
+                                  onStopEditing={() =>
+                                    setScheduleShiftTimeEditingStaffId((current) => (current === staff ? null : current))
+                                  }
+                                  onSave={(draft) => updateScheduleEmployeeShiftTime(employee, draft)}
+                                />
                               </td>
                               <td className={['px-1 py-2 text-center font-mono', scheduleBodyTextClass].join(' ')}>
                                 {(() => {
@@ -17724,7 +18699,7 @@ ${rowsToHtml(late)}
                                   row &&
                                   !String(row.note ?? '').trim() &&
                                   isNewHirePlaceholderStaffId(staff) &&
-                                  isNewHirePlaceholderName(String(employee.name ?? '').trim()) &&
+                                  isNewHirePlaceholderName(name) &&
                                   isNewHireFirstWorkDate(staff, scheduleDays[dayIndex] as Date);
                                 const displayState: ScheduleDisplayState = isImplicitNew ? 'new' : state;
                                 const scheduleAuditKey = `${staff}__${getTemplateDateByDayIndex(dayIndex, scheduleWeekOffset)}`;
@@ -17872,7 +18847,7 @@ ${rowsToHtml(late)}
                                       title={pendingTerminationRequest?.reason || undefined}
                                       onClick={() => {
                                         if (!pendingTerminationRequest) return;
-                                        void reviewTerminationRequest(pendingTerminationRequest, 'approve');
+                                        openTerminationApproval(pendingTerminationRequest);
                                       }}
                                       className="rounded-md bg-ember px-1.5 py-1 text-[9px] font-semibold leading-none text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
                                     >
@@ -17883,7 +18858,7 @@ ${rowsToHtml(late)}
                                       disabled={isLocked || !scheduleCanReviewTermination}
                                       onClick={() => {
                                         if (!pendingTerminationRequest) return;
-                                        void reviewTerminationRequest(pendingTerminationRequest, 'reject');
+                                        void rejectTerminationRequest(pendingTerminationRequest);
                                       }}
                                       className="rounded-md bg-white/10 px-1.5 py-1 text-[9px] font-semibold leading-none text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                                     >
@@ -17893,11 +18868,17 @@ ${rowsToHtml(late)}
                                 ) : (
                                   <button
                                     type="button"
-                                    disabled={isLocked}
-                                    onClick={() => {
+                                    disabled={isLocked || !canDepartFromSchedule}
+                                    title={departFromScheduleTitle}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
                                       void deleteEmployeeRow(staff);
                                     }}
-                                    className="rounded-md bg-ember px-1.5 py-1 text-[9px] font-semibold leading-none text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                                    className={[
+                                      'magic-button-surface magic-button-compact inline-flex min-w-[42px] items-center justify-center whitespace-nowrap',
+                                      'rounded-md border border-rose-300/35 bg-rose-500/18 px-1.5 py-1 text-[9px] font-semibold leading-none text-rose-50 transition',
+                                      'disabled:cursor-not-allowed disabled:opacity-60'
+                                    ].join(' ')}
                                   >
                                     {t('离职', 'Depart')}
                                   </button>
@@ -18190,111 +19171,190 @@ ${rowsToHtml(late)}
                           <div className="md:col-span-2">
                             <div
                               className={[
-                                'flex flex-wrap items-center gap-2 rounded-2xl border px-3 py-2',
+                                'flex flex-col gap-2 rounded-2xl border px-3 py-2',
                                 themeMode === 'light' ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-black/25'
                               ].join(' ')}
                             >
-                              <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
-                                {t('筛选', 'Filter')}
-                              </span>
-                              {dailyListVisiblePositions.map((position) => {
-                                const filterKey = normalizeDailyListPositionKey(position) || position;
-                                const isFilterSelected = selectedDailyFilterPositions.some(
-                                  (selectedPosition) => (normalizeDailyListPositionKey(selectedPosition) || selectedPosition) === filterKey
-                                );
-                                const filterButton = (
-                                  <button
-                                    key={`filter-button-${position}`}
-                                    type="button"
-                                    onClick={() =>
-                                      setDailyListFilterPositions((prev) => ({
-                                        ...prev,
-                                        [filterKey]: !prev[filterKey]
-                                      }))
-                                    }
-                                    className={[
-                                      'rounded-lg border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] transition',
-                                      isFilterSelected
-                                        ? themeMode === 'light'
-                                          ? 'border-transparent bg-white/80 text-slate-950'
-                                          : 'border-transparent bg-white/[0.06] text-white'
-                                        : themeMode === 'light'
-                                          ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
-                                          : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
-                                    ].join(' ')}
-                                  >
-                                    {position}
-                                  </button>
-                                );
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                  {t('岗位', 'Position')}
+                                </span>
+                                {dailyListVisiblePositions.map((position) => {
+                                  const filterKey = normalizeDailyListPositionKey(position) || position;
+                                  const isFilterSelected = selectedDailyFilterPositions.some(
+                                    (selectedPosition) => (normalizeDailyListPositionKey(selectedPosition) || selectedPosition) === filterKey
+                                  );
+                                  const filterButton = (
+                                    <button
+                                      key={`filter-button-${position}`}
+                                      type="button"
+                                      onClick={() =>
+                                        setDailyListFilterPositions((prev) => ({
+                                          ...prev,
+                                          [filterKey]: !prev[filterKey]
+                                        }))
+                                      }
+                                      className={[
+                                        'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] transition',
+                                        isFilterSelected
+                                          ? themeMode === 'light'
+                                            ? 'border-sky-500 bg-sky-50 text-sky-950 shadow-sm ring-2 ring-sky-200'
+                                            : 'border-sky-300/70 bg-sky-400/25 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_0_1px_rgba(125,211,252,0.18),0_8px_22px_rgba(14,165,233,0.22)] ring-2 ring-sky-400/35'
+                                          : themeMode === 'light'
+                                            ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                                            : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
+                                      ].join(' ')}
+                                    >
+                                      {isFilterSelected ? (
+                                        <span
+                                          className={[
+                                            'h-1.5 w-1.5 shrink-0 rounded-full',
+                                            themeMode === 'light' ? 'bg-sky-600' : 'bg-sky-200 shadow-[0_0_10px_rgba(186,230,253,0.95)]'
+                                          ].join(' ')}
+                                        />
+                                      ) : null}
+                                      {position}
+                                    </button>
+                                  );
 
-                                return isFilterSelected ? (
-                                  <ElectricBorder
-                                    key={`filter-${position}`}
-                                    color={getElectricBorderColor(position, schedulePositionToneByPosition)}
-                                    speed={0.9}
-                                    chaos={0.1}
-                                    thickness={1}
-                                    borderRadius={8}
-                                    className="eb-chip rounded-lg"
-                                  >
-                                    {filterButton}
-                                  </ElectricBorder>
-                                ) : (
-                                  <span key={`filter-${position}`} className="inline-flex">
-                                    {filterButton}
-                                  </span>
-                                );
-                              })}
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setDailyListFilterPositions(createEmptyDailyListLightFlags())
-                                }
-                                className={[
-                                  'ml-auto rounded-lg px-3 py-1 text-xs font-semibold transition',
-                                  themeMode === 'light'
-                                    ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                                ].join(' ')}
-                              >
-                                {t('清空筛选', 'Clear filters')}
-                              </button>
+                                  return isFilterSelected ? (
+                                    <ElectricBorder
+                                      key={`filter-${position}`}
+                                      color={getElectricBorderColor(position, schedulePositionToneByPosition)}
+                                      speed={0.9}
+                                      chaos={0.1}
+                                      thickness={1}
+                                      borderRadius={8}
+                                      className="eb-chip rounded-lg"
+                                    >
+                                      {filterButton}
+                                    </ElectricBorder>
+                                  ) : (
+                                    <span key={`filter-${position}`} className="inline-flex">
+                                      {filterButton}
+                                    </span>
+                                  );
+                                })}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDailyListFilterPositions(createEmptyDailyListLightFlags());
+                                    setDailyListFilterAgency('');
+                                  }}
+                                  className={[
+                                    'ml-auto rounded-lg px-3 py-1 text-xs font-semibold transition',
+                                    themeMode === 'light'
+                                      ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                  ].join(' ')}
+                                >
+                                  {t('清空筛选', 'Clear filters')}
+                                </button>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                  Agency
+                                </span>
+                                {dailyListAgencyOptions.map((agency) => {
+                                  const isFilterSelected = dailyListFilterAgency.trim().toLowerCase() === agency.toLowerCase();
+                                  return (
+                                    <button
+                                      key={`filter-agency-${agency}`}
+                                      type="button"
+                                      onClick={() => setDailyListFilterAgency(isFilterSelected ? '' : agency)}
+                                      className={[
+                                        'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition',
+                                        isFilterSelected
+                                          ? themeMode === 'light'
+                                            ? 'border-sky-500 bg-sky-50 text-sky-950 shadow-sm ring-2 ring-sky-200'
+                                            : 'border-sky-300/70 bg-sky-400/25 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_0_1px_rgba(125,211,252,0.18),0_8px_22px_rgba(14,165,233,0.22)] ring-2 ring-sky-400/35'
+                                          : themeMode === 'light'
+                                            ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                                            : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
+                                      ].join(' ')}
+                                    >
+                                      {isFilterSelected ? (
+                                        <span
+                                          className={[
+                                            'h-1.5 w-1.5 shrink-0 rounded-full',
+                                            themeMode === 'light' ? 'bg-sky-600' : 'bg-sky-200 shadow-[0_0_10px_rgba(186,230,253,0.95)]'
+                                          ].join(' ')}
+                                        />
+                                      ) : null}
+                                      {agency}
+                                    </button>
+                                  );
+                                })}
+                              </div>
                             </div>
                           </div>
                           <div className="md:col-span-2">
                             <div
                               className={[
-                                'flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 text-sm font-medium',
+                                'flex flex-wrap items-center justify-between gap-3 rounded-xl border px-3 py-2 text-sm font-medium',
                                 themeMode === 'light'
                                   ? 'border-slate-200 bg-slate-50 text-slate-700'
                                   : 'border-white/10 bg-white/5 text-slate-200'
                               ].join(' ')}
                             >
-                              <div>
-                                {lang === 'en' ? `${dailyListDateDisplay} Outbound Request:` : `${dailyListDateDisplay} 出库需求:`}
-                                {' '}
-                                <span className={themeMode === 'light' ? 'text-slate-900' : 'text-white'}>{dailyListTotalDemandCount}</span>
-                                {lang === 'en' ? ' people' : t('人', '')}
+                              <div className="min-w-0 flex-1">
+                                <div>
+                                  {lang === 'en' ? `${dailyListDateDisplay} Staff demand:` : `${dailyListDateDisplay} 人员需求:`}
+                                  <span className={themeMode === 'light' ? 'text-slate-900' : 'text-white'}>{dailyListTotalDemandCount}</span>
+                                  {lang === 'en' ? ' people' : t('人', '')}
+                                  <span className={['ml-3 text-xs font-semibold', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                    {lang === 'en'
+                                      ? `Confirmed OB ${dailyListDepartmentDemandSummary.OB}, IB ${dailyListDepartmentDemandSummary.IB}, INV ${dailyListDepartmentDemandSummary.INV}`
+                                      : `已确认：OB${dailyListDepartmentDemandSummary.OB}人，IB${dailyListDepartmentDemandSummary.IB}人，INV${dailyListDepartmentDemandSummary.INV}人`}
+                                  </span>
+                                </div>
+                                {dailyListDisplayedNewHireSummary.peopleCount > 0 ? (
+                                  <div className={['mt-1 text-xs font-semibold leading-5', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                    {lang === 'en'
+                                      ? `Includes ${dailyListDisplayedNewHireSummary.groups
+                                          .map(
+                                            (group) =>
+                                              `${group.department} demand ${group.agency || 'Any agency'} new hire ${group.count}${
+                                                group.count === 1 ? '' : 's'
+                                              }`
+                                          )
+                                          .join(', ')}`
+                                      : `其中包括 ${dailyListDisplayedNewHireSummary.groups
+                                          .map((group) => `${group.department}需求${group.agency || '任意Agency'}新人${group.count}名`)
+                                          .join('、')}`}
+                                  </div>
+                                ) : null}
                               </div>
-                              <button
-                                type="button"
-                                disabled={isLocked}
-                                onClick={() => setDailyListNewHireOpen(true)}
-                                className={[
-                                  'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50',
-                                  themeMode === 'light'
-                                    ? 'border border-slate-300 bg-white text-slate-900 hover:bg-slate-100'
-                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                                ].join(' ')}
-                              >
-                                {t('新人需求', 'New Request')}
-                              </button>
+                              <div className="flex shrink-0 items-center gap-2 self-start">
+                                <button
+                                  type="button"
+                                  disabled={dailyListNewHireDetailRows.length === 0}
+                                  onClick={() => setDailyListNewHireDetailOpen(true)}
+                                  className={[
+                                    'rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50',
+                                    themeMode === 'light'
+                                      ? 'border border-slate-300 bg-white text-slate-900 hover:bg-slate-100'
+                                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                  ].join(' ')}
+                                >
+                                  {t('新人明细', 'New Hire List')}
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-disabled="true"
+                                  onClick={handleDisabledNewHireRequestClick}
+                                  title={t('如需新人需求请联系HR', 'If you need new hire requests, please contact HR')}
+                                  className={[
+                                    'rounded-xl px-3 py-1.5 text-xs font-semibold opacity-50 transition',
+                                    themeMode === 'light'
+                                      ? 'cursor-not-allowed border border-slate-300 bg-white text-slate-900'
+                                      : 'cursor-not-allowed bg-white/10 text-slate-200'
+                                  ].join(' ')}
+                                >
+                                  {t('新人需求', 'New Request')}
+                                </button>
+                              </div>
                             </div>
-                            {dailyCapacityError ? (
-                              <div className={['mt-2 text-xs', themeMode === 'light' ? 'text-amber-700' : 'text-amber-200'].join(' ')}>
-                                {t('预计产能已回退到模板值。', 'Capacity has fallen back to template values.')}
-                              </div>
-                            ) : null}
                             {dailyListDataAudit.missingRows.length > 0 ? (
                               <div
                                 className={[
@@ -18490,6 +19550,112 @@ ${rowsToHtml(late)}
                     document.body
                   )}
 
+                {dailyListNewHireDetailOpen &&
+                  createPortal(
+                    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+                      <div
+                        className={[
+                          'flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border shadow-2xl',
+                          themeMode === 'light' ? 'border-slate-200 bg-white text-slate-900' : 'border-white/15 bg-slate-950 text-slate-100'
+                        ].join(' ')}
+                        role="dialog"
+                        aria-modal="true"
+                      >
+                        <div className={['flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4', themeMode === 'light' ? 'border-slate-200' : 'border-white/10'].join(' ')}>
+                          <div>
+                            <h3 className="text-base font-semibold">{t('新人明细', 'New Hire List')}</h3>
+                            <div className={['mt-1 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                              {dailyListDateDisplay}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setDailyListNewHireDetailOpen(false)}
+                            className={[
+                              'rounded-xl px-3 py-1.5 text-xs font-semibold transition',
+                              themeMode === 'light'
+                                ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                                : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                            ].join(' ')}
+                          >
+                            {t('关闭', 'Close')}
+                          </button>
+                        </div>
+                        <div className={['flex flex-wrap items-center gap-2 border-b px-5 py-3', themeMode === 'light' ? 'border-slate-200' : 'border-white/10'].join(' ')}>
+                          <span className={['text-xs uppercase tracking-[0.14em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                            {t('岗位', 'Position')}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setDailyListNewHireDetailPosition('')}
+                            className={[
+                              'rounded-lg border px-2.5 py-1 text-xs font-semibold transition',
+                              !dailyListNewHireDetailPosition
+                                ? themeMode === 'light'
+                                  ? 'border-sky-500 bg-sky-50 text-sky-950'
+                                  : 'border-sky-300/70 bg-sky-400/20 text-white'
+                                : themeMode === 'light'
+                                  ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                                  : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
+                            ].join(' ')}
+                          >
+                            {t('全部岗位', 'All')}
+                          </button>
+                          {dailyListNewHireDetailPositionOptions.map((position) => (
+                            <button
+                              key={`daily-list-new-hire-detail-position-${position}`}
+                              type="button"
+                              onClick={() => setDailyListNewHireDetailPosition(position)}
+                              className={[
+                                'rounded-lg border px-2.5 py-1 text-xs font-semibold transition',
+                                dailyListNewHireDetailPosition === position
+                                  ? themeMode === 'light'
+                                    ? 'border-sky-500 bg-sky-50 text-sky-950'
+                                    : 'border-sky-300/70 bg-sky-400/20 text-white'
+                                  : themeMode === 'light'
+                                    ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                                    : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
+                              ].join(' ')}
+                            >
+                              {position}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="overflow-auto p-5">
+                          <table className="min-w-full text-left text-xs">
+                            <thead className={['text-[10px] uppercase tracking-[0.16em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                              <tr>
+                                <th className="border-b px-3 py-2">{t('姓名', 'Name')}</th>
+                                <th className="border-b px-3 py-2">Agency</th>
+                                <th className="border-b px-3 py-2">{t('岗位', 'Position')}</th>
+                                <th className="border-b px-3 py-2">{t('到岗时间', 'Start Time')}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {dailyListNewHireDetailRowsFiltered.length === 0 ? (
+                                <tr>
+                                  <td colSpan={4} className={['px-3 py-6 text-center', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>
+                                    {t('暂无数据', 'No data')}
+                                  </td>
+                                </tr>
+                              ) : (
+                                dailyListNewHireDetailRowsFiltered.map((row) => (
+                                  <tr key={`new-hire-detail-${row.staff_id}`} className={themeMode === 'light' ? 'border-b border-slate-100' : 'border-b border-white/5'}>
+                                    <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-800' : 'text-slate-100'].join(' ')}>{row.name || '-'}</td>
+                                    <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.agency || t('任意Agency', 'Any agency')}</td>
+                                    <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.position || '-'}</td>
+                                    <td className={['px-3 py-2', themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'].join(' ')}>{row.start_time || '-'}</td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>,
+                    document.body
+                  )}
+
                 <DailyListNewHireModal
                   open={dailyListNewHireOpen}
                   t={t}
@@ -18520,7 +19686,7 @@ ${rowsToHtml(late)}
             )}
 
             {page === 'employees' && (
-              <section className="px-6 py-8">
+              <section className="flex h-full min-h-0 flex-col overflow-hidden px-4 py-5 sm:px-6 sm:py-8">
                 <EmployeesToolbar
                   t={t}
                   themeMode={themeMode}
@@ -18536,7 +19702,11 @@ ${rowsToHtml(late)}
                   exportEmployees={exportEmployees}
                   setEmployeeAddOpen={setEmployeeAddOpen}
                   openDepartedEmployees={openDepartedEmployees}
-                  fetchEmployees={fetchEmployees}
+                  fetchEmployees={async (args) => {
+                    const rows = await fetchEmployees(args);
+                    await fetchEmployeeNotes();
+                    return rows;
+                  }}
                   setEmployeeSearch={setEmployeeSearch}
                   setEmployeeAgency={setEmployeeAgency}
                   setEmployeeDepartment={setEmployeeDepartment}
@@ -18559,11 +19729,33 @@ ${rowsToHtml(late)}
                   cycleScheduleLabelTone={cycleScheduleLabelTone}
                 />
 
+                {employeeAddFeedback ? (
+                  <div
+                    className={[
+                      'rounded-2xl border px-4 py-3 text-sm font-semibold',
+                      employeeAddFeedback.tone === 'success'
+                        ? themeMode === 'light'
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                          : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-100'
+                        : employeeAddFeedback.tone === 'error'
+                          ? themeMode === 'light'
+                            ? 'border-rose-200 bg-rose-50 text-rose-700'
+                            : 'border-rose-400/30 bg-rose-400/10 text-rose-100'
+                          : themeMode === 'light'
+                            ? 'border-sky-200 bg-sky-50 text-sky-700'
+                            : 'border-sky-400/30 bg-sky-400/10 text-sky-100'
+                    ].join(' ')}
+                  >
+                    {employeeAddFeedback.message}
+                  </div>
+                ) : null}
+
                 <EmployeeAddModal
                   t={t}
                   themeMode={themeMode}
                   open={employeeAddOpen}
                   isLocked={employeesReadOnly}
+                  isSubmitting={employeeAddFeedback?.tone === 'pending'}
                   employeeNewStaffId={employeeNewStaffId}
                   setEmployeeNewStaffId={setEmployeeNewStaffId}
                   employeeNewName={employeeNewName}
@@ -18597,12 +19789,16 @@ ${rowsToHtml(late)}
                   themeMode={themeMode}
                   employeesError={employeesError}
                   employeesFiltered={employeesFiltered}
+                  employeeSortByPosition={employeeSortByPosition}
                   employeeSortByLastPunchDesc={employeeSortByLastPunchDesc}
                   employeePunchMetaLoading={employeePunchMetaLoading}
                   employeeSortByHireDateDesc={employeeSortByHireDateDesc}
+                  onTogglePositionSort={toggleEmployeePositionSort}
                   onToggleSort={toggleEmployeeLastPunchSort}
                   onToggleHireDateSort={toggleEmployeeHireDateSort}
                   displayStaffId={displayStaffId}
+                  getEmployeeDisplayName={getScheduleEmployeeDisplayName}
+                  getSchedulePositionTone={getSchedulePositionTone}
                   getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                   getScheduleLabelTone={getScheduleLabelTone}
                   getScheduleLabelToneClass={getScheduleLabelToneClass}
@@ -18618,7 +19814,9 @@ ${rowsToHtml(late)}
                   toDateOnly={toDateOnly}
                   employeeBadgePrintingStaffId={employeeBadgePrintingStaffId}
                   employeeBadgeBatchSelectedStaffIds={employeeBadgeBatchSelectedStaffIds}
+                  employeeNotesByStaffId={employeeNotesByStaffId}
                   toggleEmployeeBadgeBatchSelectedStaffId={toggleEmployeeBadgeBatchSelectedStaffId}
+                  openEmployeeNotes={openEmployeeNotes}
                   openEmployeeAuditLog={openEmployeeAuditLog}
                   printEmployeeTempBadge={printEmployeeTempBadge}
                   canOperateEmployeePosition={(position) => canOperatePosition('employees', resolveEmployeeOperatePosition(position))}
@@ -18637,52 +19835,12 @@ ${rowsToHtml(late)}
                   canHardDelete={adminAccessContext?.role === 'level1'}
                   onClose={() => setDepartedEmployeesOpen(false)}
                   onRefresh={() => fetchDepartedEmployees({ lockUi: false })}
+                  onExport={exportDepartedEmployees}
                   onToggleTerminationType={updateDepartedEmployeeTerminationType}
                   onRehire={rehireDepartedEmployee}
                   onHardDelete={hardDeleteDepartedEmployee}
                   displayStaffId={displayStaffId}
                 />
-
-                {departureConfirm ? (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm">
-                    <div className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-950 p-5 text-white shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
-                      <div className="font-display text-xl tracking-[0.08em]">{t('离职确认', 'Departure')}</div>
-                      <div className="mt-4 text-sm text-slate-300">{departureConfirm.displayName}</div>
-                      <div className="mt-5 grid gap-3">
-                        <label className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                          <span className="flex items-center gap-3 text-sm font-semibold">
-                            <input
-                              type="radio"
-                              name="termination_type"
-                              checked={departureConfirm.type === 'normal'}
-                              onChange={() => setDepartureConfirm((prev) => (prev ? { ...prev, type: 'normal' } : prev))}
-                            />
-                            {t('正常离职', 'Normal')}
-                          </span>
-                        </label>
-                        <label className="rounded-2xl border border-rose-300/20 bg-rose-500/[0.06] p-3">
-                          <span className="flex items-center gap-3 text-sm font-semibold text-rose-100">
-                            <input
-                              type="radio"
-                              name="termination_type"
-                              checked={departureConfirm.type === 'blacklist'}
-                              onChange={() => setDepartureConfirm((prev) => (prev ? { ...prev, type: 'blacklist' } : prev))}
-                            />
-                            {t('黑名单', 'Blacklist')}
-                          </span>
-                        </label>
-                      </div>
-                      <div className="mt-5 flex justify-end gap-2">
-                        <button type="button" className="admin-btn admin-btn-toolbar admin-btn-secondary px-4" onClick={() => setDepartureConfirm(null)} disabled={isLocked}>
-                          {t('取消', 'Cancel')}
-                        </button>
-                        <button type="button" className="admin-btn admin-btn-toolbar admin-btn-primary px-4" onClick={() => void confirmEmployeeDeparture()} disabled={isLocked}>
-                          {t('确认', 'Confirm')}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
 
                 <EmployeeAuditModal
                   open={employeeAuditOpen}
@@ -18796,7 +19954,7 @@ ${rowsToHtml(late)}
             )}
 
             {page === 'timecard' && (
-              <section className="px-6 py-8">
+              <section className="flex h-[calc(100vh-64px)] min-h-0 flex-col overflow-hidden px-4 py-5 sm:px-6 sm:py-8">
                 <TimecardControls
                   t={t}
                   themeMode={themeMode}
@@ -18840,6 +19998,7 @@ ${rowsToHtml(late)}
                   themeMode={themeMode}
                   isLocked={timecardReadOnly}
                   timecardLoading={timecardLoading}
+                  timecardLoadingProgress={timecardLoadingProgress}
                   serverTime={serverTime}
                   timecardWeekOffset={timecardWeekOffset}
                   timecardWeekStart={timecardWeekStart}
@@ -18847,6 +20006,7 @@ ${rowsToHtml(late)}
                   addDays={addDays}
                   toDateOnly={toDateOnly}
                   formatHours={formatHours}
+                  getSchedulePositionTone={getSchedulePositionTone}
                   getSchedulePositionBadgeClass={getSchedulePositionBadgeClass}
                   timecardDayTotalHours={timecardDayTotalHours}
                   timecardDayAttendanceCount={timecardDayAttendanceCount}
@@ -18920,19 +20080,31 @@ ${rowsToHtml(late)}
                           </div>
                           <div className="flex items-center gap-2">
                             {!timecardPunchReadOnly && (
-                              <button
-                                type="button"
-                                disabled={isLocked}
-                                onClick={() => setTimecardPunchAddOpen((prev) => !prev)}
-                                className={[
-                                  'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
-                                  themeMode === 'light'
-                                    ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
-                                    : 'bg-white/10 text-slate-200 hover:bg-white/15'
-                                ].join(' ')}
-                              >
-                                {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
-                              </button>
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  disabled={isLocked}
+                                  onClick={toggleTimecardPunchAddMenu}
+                                  className={[
+                                    'rounded-2xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60',
+                                    themeMode === 'light'
+                                      ? 'border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                      : 'bg-white/10 text-slate-200 hover:bg-white/15'
+                                  ].join(' ')}
+                                >
+                                  {timecardPunchAddOpen ? t('隐藏新增', 'Hide add') : t('新增打卡', 'Add punch')}
+                                </button>
+                                {timecardPunchAddMenuOpen ? (
+                                  <div className={['absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-2xl border p-1 shadow-2xl', themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950'].join(' ')}>
+                                    <button type="button" onClick={() => openTimecardPunchAddForm('single')} className={['block h-10 w-full rounded-xl px-3 text-left text-sm font-semibold', themeMode === 'light' ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-200 hover:bg-white/10'].join(' ')}>
+                                      {t('单条', 'Single')}
+                                    </button>
+                                    <button type="button" onClick={() => openTimecardPunchAddForm('pair')} className={['block h-10 w-full rounded-xl px-3 text-left text-sm font-semibold', themeMode === 'light' ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-200 hover:bg-white/10'].join(' ')}>
+                                      {t('一组', 'Pair')}
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
                             )}
                             {!timecardPunchReadOnly && (
                               <button
@@ -18961,56 +20133,7 @@ ${rowsToHtml(late)}
                         </div>
 
                         <div className="flex-1 overflow-y-auto px-6 py-5">
-                          {!timecardPunchReadOnly && timecardPunchAddOpen && (
-                            <div
-                              className={[
-                                'rounded-2xl px-4 py-4',
-                                themeMode === 'light' ? 'border border-neon/50 bg-emerald-50' : 'border border-neon/40 bg-black/30 shadow-glow'
-                              ].join(' ')}
-                            >
-                              <div className="grid gap-3 md:grid-cols-[1fr_1fr_7rem] md:items-end">
-                                <div>
-                                  <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>IN Time</div>
-                                  <input
-                                    value={timecardPunchNew.inAtLocal}
-                                    disabled={isLocked}
-                                    onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, inAtLocal: e.target.value }))}
-                                    type="datetime-local"
-                                    className={[
-                                      'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                                      themeMode === 'light'
-                                        ? 'border border-slate-300 bg-white text-slate-900'
-                                        : 'border border-white/10 bg-black/30 text-white'
-                                    ].join(' ')}
-                                  />
-                                </div>
-                                <div>
-                                  <div className={['text-xs uppercase tracking-[0.25em]', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>OUT Time</div>
-                                  <input
-                                    value={timecardPunchNew.outAtLocal}
-                                    disabled={isLocked}
-                                    onChange={(e) => setTimecardPunchNew((prev) => ({ ...prev, outAtLocal: e.target.value }))}
-                                    type="datetime-local"
-                                    className={[
-                                      'mt-2 h-11 w-full rounded-2xl px-4 text-sm outline-none transition focus:border-neon disabled:cursor-not-allowed disabled:opacity-60',
-                                      themeMode === 'light'
-                                        ? 'border border-slate-300 bg-white text-slate-900'
-                                        : 'border border-white/10 bg-black/30 text-white'
-                                    ].join(' ')}
-                                  />
-                                </div>
-                                <button
-                                  type="button"
-                                  disabled={isLocked}
-                                  onClick={() => void addTimecardPunchRow()}
-                                  className="h-11 rounded-2xl bg-neon px-6 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                  {t('添加', 'Add')}
-                                </button>
-                              </div>
-                              <p className={['mt-3 text-xs', themeMode === 'light' ? 'text-slate-500' : 'text-slate-400'].join(' ')}>{t('手动一次添加一组 IN / OUT 打卡记录。', 'Add one IN/OUT pair manually.')}</p>
-                            </div>
-                          )}
+                          {!timecardPunchReadOnly && timecardPunchAddOpen && renderTimecardPunchAddPanel()}
 
                         {timecardPunchError && <p className="text-sm text-ember">{t('操作失败：', 'Failed: ')}{timecardPunchError}</p>}
                         {!timecardPunchError && timecardPunchRowsVisible.length === 0 && (
@@ -19127,11 +20250,18 @@ ${rowsToHtml(late)}
                                             : themeMode === 'light'
                                               ? 'border border-slate-300 bg-white'
                                               : 'border border-white/10 bg-black/30',
-                                          edit.action === 'IN' ? 'text-mint' : 'text-ember'
+                                          edit.action === 'IN'
+                                            ? themeMode === 'light'
+                                              ? 'text-emerald-700'
+                                              : 'text-emerald-300'
+                                            : themeMode === 'light'
+                                              ? 'text-rose-700'
+                                              : 'text-rose-300'
                                         ].join(' ')}
+                                        style={getTimecardPunchActionSelectStyle(edit.action)}
                                       >
-                                        <option value="IN">IN</option>
-                                        <option value="OUT">OUT</option>
+                                        <option value="IN" className="bg-slate-950 text-emerald-300">IN</option>
+                                        <option value="OUT" className="bg-slate-950 text-rose-300">OUT</option>
                                       </select>
                                     </div>
                                     <div>
@@ -19198,6 +20328,37 @@ ${rowsToHtml(late)}
                 uploadError={uploadError}
               />
             )}
+
+            {departureConfirm ? (
+              <DepartureConfirmDialog
+                t={t}
+                displayName={departureConfirm.displayName}
+                type={departureConfirm.type}
+                reason={departureConfirm.reason}
+                adminNote={employeeNotesByStaffId[normalizeStaffId(departureConfirm.staff)]?.adminNote ?? ''}
+                agencyNote={employeeNotesByStaffId[normalizeStaffId(departureConfirm.staff)]?.agencyNote ?? ''}
+                isLocked={isLocked}
+                onTypeChange={(type) => setDepartureConfirm((prev) => (prev ? { ...prev, type } : prev))}
+                onReasonChange={(reason) => setDepartureConfirm((prev) => (prev ? { ...prev, reason } : prev))}
+                onCancel={() => setDepartureConfirm(null)}
+                onConfirm={confirmEmployeeDeparture}
+              />
+            ) : null}
+            {terminationApprovalRequest ? (
+              <AgencyTerminationApprovalDialog
+                t={t}
+                details={normalizeAgencyTerminationDetails(terminationApprovalRequest)}
+                themeMode={themeMode}
+                isSubmitting={terminationApprovalSubmitting}
+                error={terminationApprovalError}
+                onCancel={() => {
+                  if (terminationApprovalSubmitting) return;
+                  setTerminationApprovalError('');
+                  setTerminationApprovalRequest(null);
+                }}
+                onConfirm={submitTerminationApproval}
+              />
+            ) : null}
                 </div>
               </main>
             </div>
@@ -19302,7 +20463,68 @@ ${rowsToHtml(late)}
             document.body
           )}
 
-        <BusyOverlay visible={busyVisible} themeMode={themeMode} t={t} />
+        <EmployeeNotesModal
+          open={employeeNotesOpen}
+          t={t}
+          themeMode={themeMode}
+          staff={employeeNotesTarget?.staff ?? ''}
+          name={employeeNotesTarget?.name ?? ''}
+          agencyNote={
+            employeeNotesTarget
+              ? employeeNotesByStaffId[employeeNotesTarget.staff]?.agencyNote ?? ''
+              : ''
+          }
+          adminNote={
+            employeeNotesTarget
+              ? employeeNotesByStaffId[employeeNotesTarget.staff]?.adminNote ?? ''
+              : ''
+          }
+          agencyNoteUpdatedBy={
+            employeeNotesTarget
+              ? employeeNotesByStaffId[employeeNotesTarget.staff]?.agencyNoteUpdatedBy ?? ''
+              : ''
+          }
+          adminNoteUpdatedBy={
+            employeeNotesTarget
+              ? employeeNotesByStaffId[employeeNotesTarget.staff]?.adminNoteUpdatedBy ?? ''
+              : ''
+          }
+          draft={employeeAdminNoteDraft}
+          canEdit={canEditEmployeeAdminNote(employeeNotesTarget)}
+          dirty={
+            Boolean(employeeNotesTarget) &&
+            employeeAdminNoteDraft.trim().slice(0, 500) !==
+              (employeeNotesByStaffId[employeeNotesTarget?.staff ?? '']?.adminNote ?? '').trim()
+          }
+          saving={employeeNoteSaving}
+          error={employeeNoteError}
+          onDraftChange={setEmployeeAdminNoteDraft}
+          onClose={closeEmployeeNotes}
+          onSave={() => void saveEmployeeAdminNote()}
+        />
+
+        <BusyOverlay
+          visible={busyVisible || (page === 'home' && homePanelLoading)}
+          themeMode={themeMode}
+          t={t}
+          titleZh={page === 'home' && homePanelLoading ? '看板同步中' : '处理中...'}
+          titleEn={page === 'home' && homePanelLoading ? 'Syncing Dashboard' : 'Processing...'}
+          detailZh={
+            page === 'home' && homePanelLoading
+              ? homePanelLoadingStage === 'finalizing'
+                ? '正在校准出勤与覆盖率'
+                : '正在加载排班、员工和打卡'
+              : undefined
+          }
+          detailEn={
+            page === 'home' && homePanelLoading
+              ? homePanelLoadingStage === 'finalizing'
+                ? 'Finalizing attendance and coverage'
+                : 'Loading schedules, roster, and punches'
+              : undefined
+          }
+          progress={page === 'home' && homePanelLoading ? homePanelLoadingProgress : null}
+        />
 
         {user && userDisplayNamePromptOpen && (
           <div className={['fixed inset-0 z-[80] flex items-center justify-center px-4', themeMode === 'light' ? 'bg-slate-900/30' : 'bg-black/70'].join(' ')}>

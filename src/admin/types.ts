@@ -16,7 +16,8 @@ export type AdminPage =
   | 'devices'
   | 'forecast'
   | 'prediction_model'
-  | 'efficiency';
+  | 'efficiency'
+  | 'exceptions';
 
 export type StatusTone = 'idle' | 'pending' | 'success' | 'error';
 
@@ -58,8 +59,6 @@ export type EmployeeRow = {
   work_account?: string | null;
   work_password?: string | null;
   shift_time?: string | null;
-  Agency?: string | null;
-  Position?: string | null;
   EmploymentType?: EmploymentType | string | null;
   Label?: string | null;
   WorkAccount?: string | null;
@@ -68,6 +67,8 @@ export type EmployeeRow = {
   active?: boolean | null;
   terminated_at?: string | null;
   termination_type?: TerminationType | string | null;
+  termination_reason?: string | null;
+  termination_operator?: string | null;
   created_at?: string | null;
 };
 

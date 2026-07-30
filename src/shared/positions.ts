@@ -1,4 +1,4 @@
-import { LABEL_TONE_KEYS, type LabelToneKey } from '../lib/labelTone';
+import { LABEL_TONE_KEYS, type LabelToneKey } from '../lib/labelTone.js';
 
 export type PositionRecord = {
   id?: string | number;

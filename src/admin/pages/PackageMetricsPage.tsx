@@ -21,6 +21,7 @@ import {
   shouldCountScheduledPackageMetricsStaff
 } from '../../shared/packageStaffing';
 import AdminNoticeToast from '../components/AdminNoticeToast';
+import BusyOverlay from '../components/BusyOverlay';
 import ConsumablesWorkspace from '../components/ConsumablesWorkspace';
 import StyledDateInput from '../components/StyledDateInput';
 
@@ -662,17 +663,6 @@ const parseJsonResponse = (text: string) => {
   }
 };
 
-const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.subarray(index, index + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return window.btoa(binary);
-};
-
 const resolvePackageMetricsImportUrls = () => {
   if (typeof window === 'undefined') return ['/api/package-metrics-import'];
   const urls = ['/api/package-metrics-import'];
@@ -982,10 +972,7 @@ const fetchEmployeePositions = async (supabase: any, staffIds: string[]) => {
   }
 
   for (const batch of batches) {
-    let response = await supabase.from(EMPLOYEE_TABLE).select('staff_id, active, terminated_at, position').in('staff_id', batch);
-    if (response.error) {
-      response = await supabase.from(EMPLOYEE_TABLE).select('staff_id, active, terminated_at, "Position"').in('staff_id', batch);
-    }
+    const response = await supabase.from(EMPLOYEE_TABLE).select('staff_id, active, terminated_at, position').in('staff_id', batch);
     if (response.error) {
       throw new Error(String(response.error.message ?? 'Failed to load employee positions.'));
     }
@@ -995,7 +982,6 @@ const fetchEmployeePositions = async (supabase: any, staffIds: string[]) => {
       active?: boolean | null;
       terminated_at?: string | null;
       position?: string | null;
-      Position?: string | null;
     }> | null) ?? []) {
       const staffId = normalizeStaffId(String(row.staff_id ?? ''));
       if (!staffId) continue;
@@ -1003,7 +989,7 @@ const fetchEmployeePositions = async (supabase: any, staffIds: string[]) => {
       if (terminatedAt) continue;
       if (row.active === false) continue;
       activeStaffIds.add(staffId);
-      const position = normalizeOutboundStaffingPosition(row.position ?? row.Position ?? '');
+      const position = normalizeOutboundStaffingPosition(row.position ?? '');
       if (position) positionByStaff.set(staffId, position);
     }
   }
@@ -1163,6 +1149,7 @@ export default function PackageMetricsPage({
   const [unfinishedReason, setUnfinishedReason] = useState('');
   const [dailyReportText, setDailyReportText] = useState('');
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
   const [transferDialogOpen, setTransferDialogOpen] = useState(false);
   const [transferSaving, setTransferSaving] = useState(false);
   const [transferForm, setTransferForm] = useState(() => createEmptyTransferForm());
@@ -1209,6 +1196,49 @@ export default function PackageMetricsPage({
     themeMode === 'light'
       ? 'border-r border-slate-200/80 bg-white'
       : 'border-r border-slate-800/70 bg-slate-950/80';
+  const metricsBusyOverlay = useMemo(() => {
+    if (loading) {
+      return {
+        titleZh: '日报导入中',
+        titleEn: 'Importing Daily',
+        detailZh: '正在上传并计算出库数据',
+        detailEn: 'Uploading and computing outbound metrics'
+      };
+    }
+    if (tableLoading) {
+      return {
+        titleZh: '日报加载中',
+        titleEn: 'Loading Daily',
+        detailZh: '正在读取日报范围和人力汇总',
+        detailEn: 'Loading metric range and labor summary'
+      };
+    }
+    if (reportLoading) {
+      return {
+        titleZh: '生成日报中',
+        titleEn: 'Generating Report',
+        detailZh: '正在整理日报文本',
+        detailEn: 'Preparing report text'
+      };
+    }
+    if (transferSaving) {
+      return {
+        titleZh: '保存调拨中',
+        titleEn: 'Saving Transfer',
+        detailZh: '正在写入调拨日报数据',
+        detailEn: 'Saving transfer daily metrics'
+      };
+    }
+    if (transferInventoryLoading) {
+      return {
+        titleZh: '库存加载中',
+        titleEn: 'Loading Inventory',
+        detailZh: '正在读取调拨库存量',
+        detailEn: 'Loading transfer inventory level'
+      };
+    }
+    return null;
+  }, [loading, reportLoading, tableLoading, transferInventoryLoading, transferSaving]);
 
   useEffect(() => {
     if (!status.message || status.tone === 'idle') return undefined;
@@ -1419,7 +1449,7 @@ export default function PackageMetricsPage({
       const requestBody = JSON.stringify({
         metric_date: metricDate,
         filename: selectedFile.name,
-        file_base64: arrayBufferToBase64(fileBuffer)
+        rows
       });
       const requestInit: RequestInit = {
         method: 'POST',
@@ -1686,6 +1716,7 @@ export default function PackageMetricsPage({
   const openDailyReport = async (reason: string) => {
     if (!selectedMetricsRow) return;
 
+    setReportLoading(true);
     try {
       const labor =
         laborSummaryByDate[selectedMetricsRow.metric_date] ??
@@ -1714,6 +1745,8 @@ export default function PackageMetricsPage({
         tone: 'error',
         message: String(error?.message ?? error ?? t('生成日报失败。', 'Failed to generate daily report.'))
       });
+    } finally {
+      setReportLoading(false);
     }
   };
 
@@ -1731,14 +1764,23 @@ export default function PackageMetricsPage({
 
   return (
     <>
-      <div className={mode === 'consumables' ? shellClass : ['w-full px-4 py-4 md:px-5', shellClass].join(' ')}>
-        <div className="flex flex-col gap-4">
+      <BusyOverlay
+        visible={Boolean(metricsBusyOverlay)}
+        themeMode={themeMode}
+        t={t}
+        titleZh={metricsBusyOverlay?.titleZh}
+        titleEn={metricsBusyOverlay?.titleEn}
+        detailZh={metricsBusyOverlay?.detailZh}
+        detailEn={metricsBusyOverlay?.detailEn}
+      />
+      <div className={mode === 'consumables' ? ['min-w-0 max-w-full overflow-x-hidden', shellClass].join(' ') : ['min-w-0 w-full max-w-full overflow-x-hidden px-4 py-4 md:px-5', shellClass].join(' ')}>
+        <div className="flex min-w-0 max-w-full flex-col gap-4">
           {showMetrics ? (
           <>
-          <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.55fr)_360px]">
+          <div className="grid min-w-0 max-w-full items-stretch gap-4 xl:grid-cols-[minmax(0,1.55fr)_360px]">
             <div
               className={[
-                'overflow-hidden rounded-[28px] border',
+                'min-w-0 overflow-hidden rounded-[28px] border',
                 themeMode === 'light'
                   ? 'border-slate-200 bg-[radial-gradient(circle_at_top_left,rgba(15,23,42,0.07),transparent_38%),linear-gradient(180deg,rgba(248,250,252,0.99),rgba(241,245,249,0.94))]'
                   : 'border-slate-800/80 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_28%),linear-gradient(180deg,rgba(15,23,42,0.96),rgba(2,6,23,0.82))]'
@@ -1804,7 +1846,7 @@ export default function PackageMetricsPage({
               ) : null}
             </div>
 
-            <div className="grid h-full gap-4">
+            <div className="grid h-full min-w-0 gap-4">
               <div className={[subtlePanelClass, 'flex h-full min-h-[356px] flex-col rounded-[28px] p-4'].join(' ')}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0 flex-1">
@@ -1866,10 +1908,10 @@ export default function PackageMetricsPage({
             </div>
           </div>
 
-          <div className={[subtlePanelClass, 'overflow-hidden rounded-[28px] p-0'].join(' ')}>
+          <div className={[subtlePanelClass, 'min-w-0 max-w-full overflow-hidden rounded-[28px] p-0'].join(' ')}>
             <div
               className={[
-                'grid gap-4 border-b px-4 py-4 md:px-5 xl:grid-cols-[minmax(280px,1fr)_auto]',
+                'grid min-w-0 gap-4 border-b px-4 py-4 md:px-5 xl:grid-cols-[minmax(280px,1fr)_auto]',
                 themeMode === 'light' ? 'border-slate-200 bg-white/65' : 'border-slate-800 bg-slate-950/25'
               ].join(' ')}
             >
@@ -1961,7 +2003,7 @@ export default function PackageMetricsPage({
 
               <div
                 className={[
-                  'rounded-[22px] border p-2 xl:col-span-2',
+                  'min-w-0 max-w-full overflow-hidden rounded-[22px] border p-2 xl:col-span-2',
                   themeMode === 'light' ? 'border-slate-200 bg-white/80' : 'border-slate-800 bg-slate-950/45'
                 ].join(' ')}
               >
@@ -2027,7 +2069,7 @@ export default function PackageMetricsPage({
 
             <div
               className={[
-                'overflow-hidden',
+                'w-full max-w-full overflow-hidden',
                 themeMode === 'light'
                   ? 'bg-white'
                   : 'bg-slate-950/45'
@@ -2038,7 +2080,7 @@ export default function PackageMetricsPage({
                   {tableLoading ? 'Loading...' : 'No saved metrics in the selected range.'}
                 </div>
               ) : (
-                <div className="flex min-w-0">
+                <div className="flex w-full min-w-0 max-w-full overflow-hidden">
                   <div className={['shrink-0', frozenWrapClass].join(' ')}>
                     <table className="w-[250px] border-separate border-spacing-0 text-left">
                       <thead className={tableHeadClass}>

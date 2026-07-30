@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Children, isValidElement, type ReactNode } from 'react';
 
 import type { LabelToneKey } from '../lib/labelTone';
 import BorderGlow from '../admin/components/BorderGlow';
@@ -8,6 +8,8 @@ type GlowLabelChipProps = {
   tone?: LabelToneKey;
   className?: string;
   title?: string;
+  static?: boolean;
+  glowSeed?: string;
 };
 
 const GLOW_THEME: Record<LabelToneKey, { glowColor: string; colors: [string, string, string] }> = {
@@ -41,18 +43,25 @@ const GLOW_BACKGROUND: Record<LabelToneKey, string> = {
 };
 
 const TEXT_CLASS: Record<LabelToneKey, string> = {
-  sky: 'text-sky-200',
-  cyan: 'text-cyan-200',
-  teal: 'text-teal-200',
-  emerald: 'text-emerald-200',
-  lime: 'text-lime-200',
-  amber: 'text-amber-200',
-  orange: 'text-orange-200',
-  rose: 'text-rose-200',
-  fuchsia: 'text-fuchsia-200',
-  violet: 'text-violet-200',
-  indigo: 'text-indigo-200',
+  sky: 'text-slate-100',
+  cyan: 'text-slate-100',
+  teal: 'text-slate-100',
+  emerald: 'text-slate-100',
+  lime: 'text-slate-100',
+  amber: 'text-slate-100',
+  orange: 'text-slate-100',
+  rose: 'text-slate-100',
+  fuchsia: 'text-slate-100',
+  violet: 'text-slate-100',
+  indigo: 'text-slate-100',
   slate: 'text-slate-100'
+};
+
+const getTextSeed = (node: ReactNode): string => {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(getTextSeed).join('|');
+  if (isValidElement<{ children?: ReactNode }>(node)) return getTextSeed(node.props.children);
+  return Children.count(node) ? 'chip' : 'empty';
 };
 
 export const getGlowToneForPosition = (value: string): LabelToneKey => {
@@ -80,8 +89,29 @@ export const getGlowToneForPunch = (value: string): LabelToneKey => {
   return 'slate';
 };
 
-export default function GlowLabelChip({ children, tone = 'slate', className = '', title }: GlowLabelChipProps) {
+export default function GlowLabelChip({ children, tone = 'slate', className = '', title, static: useStatic = false, glowSeed }: GlowLabelChipProps) {
   const glowTheme = GLOW_THEME[tone] ?? GLOW_THEME.slate;
+  const resolvedGlowSeed = glowSeed ?? `${tone}:${getTextSeed(children)}`;
+  if (useStatic) {
+    return (
+      <span
+        className={[
+          'inline-flex items-center justify-center rounded-full border px-2.5 py-[5px] text-[10px] font-semibold leading-none',
+          TEXT_CLASS[tone] ?? TEXT_CLASS.slate,
+          className
+        ].join(' ')}
+        style={{
+          backgroundColor: GLOW_BACKGROUND[tone] ?? GLOW_BACKGROUND.slate,
+          borderColor: glowTheme.colors[0],
+          boxShadow: `inset 0 0 0 1px rgb(255 255 255 / 4%), 0 0 8px ${glowTheme.colors[0]}55`
+        }}
+        title={title}
+      >
+        {children}
+      </span>
+    );
+  }
+
   return (
     <BorderGlow
       className="admin-position-badge-glow admin-schedule-badge-glow"
@@ -96,6 +126,7 @@ export default function GlowLabelChip({ children, tone = 'slate', className = ''
       rotateDuration={4200}
       colors={glowTheme.colors}
       fillOpacity={0.5}
+      glowSeed={resolvedGlowSeed}
     >
       <span
         className={[

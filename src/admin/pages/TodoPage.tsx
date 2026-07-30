@@ -16,6 +16,7 @@ import {
 } from '../todoShared';
 import { createPortal } from 'react-dom';
 import AdminUserAvatar from '../components/AdminUserAvatar';
+import BusyOverlay from '../components/BusyOverlay';
 import { buildAdminUserIdentityView } from '../adminIdentity';
 import {
   fetchAssignedTodoItems,
@@ -875,9 +876,38 @@ export default function TodoPage({
     ['pending', t('待删确认', 'Pending delete')]
   ];
   const modalRoot = typeof document === 'undefined' ? null : document.body;
+  const busyOverlay = useMemo(() => {
+    if (saving) {
+      return {
+        titleZh: '待办保存中',
+        titleEn: 'Saving ToDo',
+        detailZh: '正在同步任务状态',
+        detailEn: 'Syncing task changes'
+      };
+    }
+    if (loading) {
+      return {
+        titleZh: '待办加载中',
+        titleEn: 'Loading ToDo',
+        detailZh: '正在加载任务和人员',
+        detailEn: 'Loading tasks and profiles'
+      };
+    }
+    return null;
+  }, [loading, saving]);
 
   return (
-    <section className="px-6 py-8">
+    <>
+      <BusyOverlay
+        visible={Boolean(busyOverlay)}
+        themeMode={themeMode}
+        t={t}
+        titleZh={busyOverlay?.titleZh}
+        titleEn={busyOverlay?.titleEn}
+        detailZh={busyOverlay?.detailZh}
+        detailEn={busyOverlay?.detailEn}
+      />
+      <section className="px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><h2 className="font-display text-2xl tracking-[0.08em]">{t('待办', 'ToDo')}</h2></div>
         <div className="flex flex-wrap gap-2">
@@ -1136,6 +1166,7 @@ export default function TodoPage({
             modalRoot
           )
         : null}
-    </section>
+      </section>
+    </>
   );
 }

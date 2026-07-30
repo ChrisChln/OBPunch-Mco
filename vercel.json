@@ -1,6 +1,22 @@
 {
   "routes": [
     {
+      "src": "/api/package-staffing-sync",
+      "dest": "/api/package-metrics-transfer?job=package-staffing-sync"
+    },
+    {
+      "src": "/api/dashboard-attendance-snapshot-expected",
+      "dest": "/api/attendance-auto-checkout?job=dashboard-attendance-snapshot&mode=expected"
+    },
+    {
+      "src": "/api/dashboard-attendance-snapshot-actual",
+      "dest": "/api/attendance-auto-checkout?job=dashboard-attendance-snapshot&mode=actual"
+    },
+    {
+      "src": "/api/dashboard-attendance-snapshot",
+      "dest": "/api/attendance-auto-checkout?job=dashboard-attendance-snapshot"
+    },
+    {
       "src": "/api/(.*)",
       "dest": "/api/$1"
     },
@@ -20,6 +36,10 @@
     {
       "path": "/api/attendance-auto-checkout",
       "schedule": "5 10 * * *"
+    },
+    {
+      "path": "/api/dashboard-attendance-snapshot-expected",
+      "schedule": "55 8 * * *"
     },
     {
       "path": "/api/todo-recurring-sync",

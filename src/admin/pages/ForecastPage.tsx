@@ -1,8 +1,12 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import BusyOverlay from '../components/BusyOverlay';
 import StyledDateInput from '../components/StyledDateInput';
 import type { ForecastModelRow } from '../forecast';
 import { FORECAST_HOURS, calculateForecast, getIsoWeekday } from '../forecast';
+import type { ReportProgress } from '../forecastInflowReport';
+import { runInflowImportWorker } from '../forecastInflowWorkerClient';
+import { formatSignedDifferenceQuantity, getForecastVariancePresentation } from '../forecastVariance';
 
 type TranslateFn = (zh: string, en: string) => string;
 
@@ -94,6 +98,9 @@ const LOOKBACK_OPTIONS: { value: LookbackMode; label: string }[] = [
 const FORECAST_INPUT_TABLE = 'volume_forecast_daily_inputs';
 const FIXED_FORECAST_HOUR = 12;
 const YESTERDAY_INFLOW_HOUR_KEYS = HOUR_COLUMNS.slice(0, 14);
+const MAX_OUTBOUND_REPORT_BYTES = 100 * 1024 * 1024;
+const VOLUME_HISTORY_WRITE_BATCH_SIZE = 100;
+type ReportImportStage = 'reading' | 'parsing' | 'saving' | 'verifying' | 'refreshing';
 const WEEKDAY_OPTIONS: { value: WeekdayValue; zh: string; en: string; shortEn: string }[] = [
   { value: 1, zh: '周一', en: 'Monday', shortEn: 'Mon' },
   { value: 2, zh: '周二', en: 'Tuesday', shortEn: 'Tue' },
@@ -168,6 +175,16 @@ const getWeekStartDateOnly = (dateOnly: string) => {
   if (Number.isNaN(date.getTime())) return '';
   const weekday = getIsoWeekday(date);
   return toDateOnly(addDays(date, -(weekday - 1)));
+};
+const getHistoricalWeekOffset = (baseDate: Date, dateOnly: string) => {
+  const baseWeekStart = getWeekDates(baseDate, 0)[0] ?? '';
+  const targetWeekStart = getWeekStartDateOnly(dateOnly);
+  if (!baseWeekStart || !targetWeekStart) return null;
+  const toUtcDay = (value: string) => {
+    const [year, month, day] = value.split('-').map(Number);
+    return Date.UTC(year, month - 1, day);
+  };
+  return Math.round((toUtcDay(baseWeekStart) - toUtcDay(targetWeekStart)) / (7 * 24 * 60 * 60 * 1000));
 };
 const getMonthKeyFromDateOnly = (dateOnly: string) => {
   if (!isValidDateOnly(dateOnly)) return '';
@@ -772,6 +789,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const isLight = themeMode === 'light';
   const initialWeekday = getIsoWeekday(serverTime) as WeekdayValue;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const reportFileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedWeekday, setSelectedWeekday] = useState<WeekdayValue>(initialWeekday);
   const [lookbackMode, setLookbackMode] = useState<LookbackMode>('all');
   const [modelRows, setModelRows] = useState<ForecastModelRow[]>([]);
@@ -801,6 +819,9 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [reportImporting, setReportImporting] = useState(false);
+  const [reportProgress, setReportProgress] = useState<ReportProgress | null>(null);
+  const [reportImportStage, setReportImportStage] = useState<ReportImportStage | null>(null);
   const [volumeTrendRangeStart, setVolumeTrendRangeStart] = useState(() => toDateOnly(addDays(serverTime, -6)));
   const [volumeTrendRangeEnd, setVolumeTrendRangeEnd] = useState(() => toDateOnly(serverTime));
   const [inventoryTrendRangeStart, setInventoryTrendRangeStart] = useState(() => toDateOnly(addDays(serverTime, -29)));
@@ -831,6 +852,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     { key: 'weekday', width: 72 },
     { key: 'forecast', width: 120 },
     { key: 'variance', width: 104 },
+    { key: 'differenceQuantity', width: 112 },
     { key: 'dailyTotal', width: 108 },
     { key: 'cutoff', width: 104 },
     { key: 'itr', width: 96 },
@@ -841,6 +863,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     { key: 'weekday', width: 72 },
     { key: 'forecast', width: 120 },
     { key: 'variance', width: 104 },
+    { key: 'differenceQuantity', width: 112 },
     { key: 'dailyTotal', width: 108 },
     { key: 'itr', width: 96 },
     { key: 'weather', width: 104 }
@@ -1393,15 +1416,24 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     setManualInputSaveMessage(null);
     setManualInputDialogOpen(true);
   };
-  const shiftManualInputWeek = async (delta: number) => {
-    const nextOffset = manualInputWeekOffset + delta;
+  const navigateManualInputDate = async (selectedDate: string) => {
+    if (!isValidDateOnly(selectedDate)) return;
+    const nextOffset = getHistoricalWeekOffset(serverTime, selectedDate);
+    if (nextOffset === null) return;
     const nextWeekDates = getWeekDates(serverTime, nextOffset);
+    if (!nextWeekDates.includes(selectedDate)) return;
+    setHistoryPasteDate(selectedDate);
     setManualInputWeekOffset(nextOffset);
     const historyRows = await loadHistoryWindow(nextWeekDates);
     setManualInputDraftRows(buildManualInputDraftRows(nextOffset, historyRows));
     setManualInputDraftDirty(false);
-    setHistoryPasteDate((current) => (nextWeekDates.includes(current) ? current : getDefaultHistoryPasteDate(nextWeekDates)));
     setManualInputSaveError(null);
+  };
+  const shiftManualInputWeek = async (delta: number) => {
+    const nextOffset = manualInputWeekOffset + delta;
+    const nextWeekDates = getWeekDates(serverTime, nextOffset);
+    const selectedDayIndex = Math.max(0, currentWeekDates.indexOf(historyPasteDate));
+    await navigateManualInputDate(nextWeekDates[selectedDayIndex] ?? getDefaultHistoryPasteDate(nextWeekDates));
   };
   const closeManualInputDialog = () => {
     if (manualInputSaving) return;
@@ -1624,6 +1656,63 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     const hourCount = filledHours === null ? 0 : filledHours + 1;
     const total = HOUR_COLUMNS.reduce((sum, hourKey) => sum + Number(row[hourKey] ?? 0), 0);
     return t(`已写入 ${row.date}，${hourCount} 小时，合计 ${formatNumber(total)}。`, `Saved ${row.date}, ${hourCount} hours, total ${formatNumber(total)}.`);
+  };
+  const onOutboundReportSelected = async (file: File | null) => {
+    if (!file || reportImporting) return;
+    if (!supabase) {
+      setUploadError(t('Missing Supabase configuration.', 'Missing Supabase configuration.'));
+      return;
+    }
+    if (file.size > MAX_OUTBOUND_REPORT_BYTES) {
+      setUploadError(t('文件超过 100 MB。', 'The file exceeds 100 MB.'));
+      return;
+    }
+
+    let writeStarted = false;
+    setReportImporting(true);
+    setReportImportStage('reading');
+    setReportProgress(null);
+    setUploadError(null);
+    setUploadMessage(null);
+    setHistoryWindowError(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      setReportImportStage('parsing');
+      const result = await runInflowImportWorker(buffer, setReportProgress);
+      const parsedRows = result.rows as VolumeHistoryUploadRow[];
+
+      setReportImportStage('saving');
+      for (let index = 0; index < parsedRows.length; index += VOLUME_HISTORY_WRITE_BATCH_SIZE) {
+        writeStarted = true;
+        const batch = parsedRows.slice(index, index + VOLUME_HISTORY_WRITE_BATCH_SIZE);
+        const response = await upsertVolumeHistoryRows(batch);
+        if (response.error) {
+          throw new Error(String(response.error.message ?? 'Upload failed.'));
+        }
+      }
+
+      setReportImportStage('verifying');
+      await verifyVolumeHistoryRowsPersisted(parsedRows);
+      mergeHistoryRows(parsedRows);
+      setReportImportStage('refreshing');
+      await Promise.all([loadModel(lookbackMode), loadHistoryWindow(currentWeekDates), loadAutoForecastSnapshot(selectedWeekday)]);
+      setUploadMessage(
+        t(
+          `已导入 ${result.stats.dayCount} 天 · ${result.stats.importedRows} 行 · ${formatNumber(result.stats.totalQuantity)} 件`,
+          `Imported ${result.stats.dayCount} days · ${result.stats.importedRows} rows · ${formatNumber(result.stats.totalQuantity)} items`
+        )
+      );
+    } catch (err) {
+      setUploadError(String((err as Error)?.message ?? err ?? 'Upload failed.'));
+      if (writeStarted) {
+        await loadHistoryWindow(currentWeekDates);
+      }
+    } finally {
+      setReportImporting(false);
+      setReportProgress(null);
+      setReportImportStage(null);
+      if (reportFileInputRef.current) reportFileInputRef.current.value = '';
+    }
   };
   const saveManualInput = async () => {
     if (!supabase) {
@@ -1921,9 +2010,72 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
+  const busyOverlay = useMemo(() => {
+    if (reportImporting && reportImportStage) {
+      const detail = {
+        reading: { zh: '正在读取文件', en: 'Reading file' },
+        parsing: {
+          zh: `正在解析 ${reportProgress?.percent ?? 0}%`,
+          en: `Parsing ${reportProgress?.percent ?? 0}%`
+        },
+        saving: { zh: '正在保存', en: 'Saving' },
+        verifying: { zh: '正在校验', en: 'Verifying' },
+        refreshing: { zh: '正在刷新', en: 'Refreshing' }
+      }[reportImportStage];
+      return {
+        titleZh: '历史流入导入中',
+        titleEn: 'Importing Inflow',
+        detailZh: detail.zh,
+        detailEn: detail.en
+      };
+    }
+    if (uploading) {
+      return {
+        titleZh: 'Forecast 导入中',
+        titleEn: 'Importing Forecast',
+        detailZh: '正在解析并保存历史数据',
+        detailEn: 'Parsing and saving history'
+      };
+    }
+    if (historyPasteSaving || manualInputSaving) {
+      return {
+        titleZh: 'Forecast 保存中',
+        titleEn: 'Saving Forecast',
+        detailZh: '正在同步手动输入',
+        detailEn: 'Syncing manual inputs'
+      };
+    }
+    if (historyWindowLoading || manualInputsLoading) {
+      return {
+        titleZh: 'Forecast 加载中',
+        titleEn: 'Loading Forecast',
+        detailZh: '正在加载历史和手动输入',
+        detailEn: 'Loading history and inputs'
+      };
+    }
+    if (loading) {
+      return {
+        titleZh: '模型计算中',
+        titleEn: 'Calculating Model',
+        detailZh: '正在刷新预测模型',
+        detailEn: 'Refreshing forecast model'
+      };
+    }
+    return null;
+  }, [historyPasteSaving, historyWindowLoading, loading, manualInputSaving, manualInputsLoading, reportImportStage, reportImporting, reportProgress?.percent, uploading]);
 
   return (
-    <section className="px-6 py-8">
+    <>
+      <BusyOverlay
+        visible={Boolean(busyOverlay)}
+        themeMode={themeMode}
+        t={t}
+        titleZh={busyOverlay?.titleZh}
+        titleEn={busyOverlay?.titleEn}
+        detailZh={busyOverlay?.detailZh}
+        detailEn={busyOverlay?.detailEn}
+      />
+      <section className="px-6 py-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-display text-2xl tracking-[0.08em]">{t('Forecast', 'Forecast')}</h2>
@@ -2175,17 +2327,18 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
               <div className={['min-w-0 rounded-2xl overflow-hidden', tableWrapClass].join(' ')}>
                 <div className="flex min-w-0">
                   <div className={['shrink-0 border-r', isLight ? 'border-slate-200 bg-white shadow-[10px_0_24px_rgba(15,23,42,0.05)]' : 'border-white/10 bg-slate-950 shadow-[10px_0_28px_rgba(2,6,23,0.5)]'].join(' ')}>
-                    <table className="w-[836px] table-fixed text-left text-xs">
+                    <table className="w-[948px] table-fixed text-left text-xs">
                       <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
                         <tr>
                           <th className="px-3 py-2" style={{ width: historyFrozenColumns[0].width, minWidth: historyFrozenColumns[0].width }}>{t('日期', 'Date')}</th>
                           <th className="px-3 py-2" style={{ width: historyFrozenColumns[1].width, minWidth: historyFrozenColumns[1].width }}>{t('星期', 'Weekday')}</th>
                           <th className="px-3 py-2" style={{ width: historyFrozenColumns[2].width, minWidth: historyFrozenColumns[2].width }}>{t('截止12点预测', '12:00 forecast')}</th>
                           <th className="px-3 py-2" style={{ width: historyFrozenColumns[3].width, minWidth: historyFrozenColumns[3].width }}>{t('实际差异', 'Actual variance')}</th>
-                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[4].width, minWidth: historyFrozenColumns[4].width }}>{t('当日总流入', 'Daily total')}</th>
-                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[5].width, minWidth: historyFrozenColumns[5].width }}>{t('12点截单', '12:00 cutoff')}</th>
-                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[6].width, minWidth: historyFrozenColumns[6].width }}>{t('库存转换率', 'ITR')}</th>
-                          <th className="border-r px-3 py-2" style={{ width: historyFrozenColumns[7].width, minWidth: historyFrozenColumns[7].width }}>{t('恶劣天气', 'Severe weather')}</th>
+                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[4].width, minWidth: historyFrozenColumns[4].width }}>{t('差异件数', 'Difference')}</th>
+                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[5].width, minWidth: historyFrozenColumns[5].width }}>{t('当日总流入', 'Daily total')}</th>
+                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[6].width, minWidth: historyFrozenColumns[6].width }}>{t('12点截单', '12:00 cutoff')}</th>
+                          <th className="px-3 py-2" style={{ width: historyFrozenColumns[7].width, minWidth: historyFrozenColumns[7].width }}>{t('库存转换率', 'ITR')}</th>
+                          <th className="border-r px-3 py-2" style={{ width: historyFrozenColumns[8].width, minWidth: historyFrozenColumns[8].width }}>{t('恶劣天气', 'Severe weather')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2209,17 +2362,21 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                           const inventoryLevel = Number(manualInputRow?.inventory_level ?? 0);
                           const severeWeather = Boolean(manualInputRow?.severe_weather ?? false);
                           const isCompleteDay = lastFilledHour !== null && lastFilledHour >= 23;
-                          const actualVariance =
-                            isCompleteDay && dailyTotal !== null && noonForecast !== null && noonForecast > 0
-                              ? (dailyTotal - noonForecast) / noonForecast
-                              : null;
+                          const variancePresentation = getForecastVariancePresentation(noonForecast, isCompleteDay ? dailyTotal : null);
+                          const varianceClass =
+                            variancePresentation.tone === 'danger'
+                              ? isLight ? 'font-bold text-rose-600' : 'font-bold text-rose-400'
+                              : variancePresentation.tone === 'success'
+                                ? isLight ? 'font-bold text-emerald-600' : 'font-bold text-emerald-400'
+                                : '';
                           const itr = dailyTotal !== null && inventoryLevel > 0 ? dailyTotal / inventoryLevel : null;
                           return (
                             <tr key={`page-history-frozen-${date}`} className={tableRowClass}>
                               <td className="px-3 py-2 font-semibold">{date}</td>
                               <td className="px-3 py-2">{t(WEEKDAY_OPTIONS[weekday - 1]?.zh ?? '周一', WEEKDAY_OPTIONS[weekday - 1]?.shortEn ?? 'Mon')}</td>
                               <td className="px-3 py-2">{formatNumber(noonForecast)}</td>
-                              <td className="px-3 py-2">{actualVariance === null ? '-' : formatPercent(actualVariance, 2)}</td>
+                              <td className={['px-3 py-2', varianceClass].join(' ')}>{variancePresentation.variance === null ? '-' : formatPercent(variancePresentation.variance, 2)}</td>
+                              <td className="px-3 py-2">{formatSignedDifferenceQuantity(variancePresentation.differenceQuantity)}</td>
                               <td className="px-3 py-2">{formatNumber(dailyTotal)}</td>
                               <td className="px-3 py-2">{formatNumber(noonCutoffVolume)}</td>
                               <td className="px-3 py-2">{itr === null ? '-' : formatPercent(itr, 2)}</td>
@@ -2433,12 +2590,47 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className={['text-xl font-semibold', valueClass].join(' ')}>
-                    {forecastDialogView === 'weekly' ? t('本周数据', 'Weekly data') : t('历史流入数据', 'Historical inflow data')}
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className={['text-xl font-semibold', valueClass].join(' ')}>
+                      {forecastDialogView === 'weekly' ? t('本周数据', 'Weekly data') : t('历史流入数据', 'Historical inflow data')}
+                    </div>
+                    <input
+                      ref={reportFileInputRef}
+                      type="file"
+                      className="hidden"
+                      accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                      onChange={(event) => void onOutboundReportSelected(event.target.files?.[0] ?? null)}
+                    />
+                    {forecastDialogView === 'history' && (
+                      <button
+                        type="button"
+                        disabled={isLocked || uploading || historyPasteSaving || reportImporting}
+                        onClick={() => reportFileInputRef.current?.click()}
+                        className={[
+                          'shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                          isLight ? 'bg-slate-900 text-white hover:bg-slate-700' : 'bg-lime-400 text-slate-950 hover:bg-lime-300'
+                        ].join(' ')}
+                      >
+                        {t('导入报表', 'Import report')}
+                      </button>
+                    )}
                   </div>
                   {manualInputRangeLabel && <div className={['mt-2 text-xs', helperClass].join(' ')}>{manualInputRangeLabel}</div>}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <input
+                    type="date"
+                    aria-label={t('选择日期', 'Select date')}
+                    value={historyPasteDate}
+                    onChange={(event) => void navigateManualInputDate(event.target.value)}
+                    disabled={isLocked || manualInputSaving || historyWindowLoading || reportImporting}
+                    className={[
+                      'h-10 w-[180px] rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                      isLight
+                        ? 'border border-slate-300 bg-white text-slate-900 focus:border-neon/60'
+                        : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                    ].join(' ')}
+                  />
                   <button
                     type="button"
                     disabled={manualInputSaving}
@@ -2466,15 +2658,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   <button
                     type="button"
                     disabled={manualInputSaving || manualInputWeekOffset === 0}
-                    onClick={async () => {
-                      const weekDates = getWeekDates(serverTime, 0);
-                      const historyRows = await loadHistoryWindow(weekDates);
-                      setManualInputWeekOffset(0);
-                      setManualInputDraftRows(buildManualInputDraftRows(0, historyRows));
-                      setManualInputDraftDirty(false);
-                      setHistoryPasteDate(getDefaultHistoryPasteDate(weekDates));
-                      setManualInputSaveError(null);
-                    }}
+                    onClick={() => void navigateManualInputDate(toDateOnly(serverTime))}
                     className={secondaryButtonClass}
                   >
                     {t('本周', 'This week')}
@@ -2515,7 +2699,18 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                       </thead>
                       <tbody>
                         {manualInputDraftRows.map((draftRow, index) => (
-                          <tr key={draftRow.input_date} className={tableRowClass}>
+                          <tr
+                            key={draftRow.input_date}
+                            data-selected={draftRow.input_date === historyPasteDate ? 'true' : 'false'}
+                            className={[
+                              tableRowClass,
+                              draftRow.input_date === historyPasteDate
+                                ? isLight
+                                  ? 'bg-emerald-50/80'
+                                  : 'bg-neon/10'
+                                : ''
+                            ].join(' ')}
+                          >
                             <td className="px-2 py-3 align-top">
                               <input
                                 type="date"
@@ -2663,22 +2858,10 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   <div>
                     <div className="mb-4">
                       <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
-                        <div className="flex items-center justify-between gap-3">
-                          <input
-                            type="date"
-                            value={historyPasteDate}
-                            onChange={(e) => setHistoryPasteDate(e.target.value)}
-                            disabled={isLocked || uploading || historyPasteSaving}
-                            className={[
-                              'h-10 w-full max-w-[220px] rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
-                              isLight
-                                ? 'border border-slate-300 bg-white text-slate-900 focus:border-neon/60'
-                                : 'border border-white/10 bg-black/30 text-white focus:border-neon'
-                            ].join(' ')}
-                          />
+                        <div className="flex items-center justify-end gap-3">
                           <button
                             type="button"
-                            disabled={isLocked || uploading || historyPasteSaving || !historyPasteValue.trim()}
+                            disabled={isLocked || uploading || historyPasteSaving || reportImporting || !historyPasteValue.trim()}
                             onClick={() => void applyPastedHistoryData()}
                             className={[
                               'rounded-2xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
@@ -2693,7 +2876,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                           onChange={(e) => setHistoryPasteValue(e.target.value)}
                           placeholder=""
                           rows={4}
-                          disabled={isLocked || uploading || historyPasteSaving}
+                          disabled={isLocked || uploading || historyPasteSaving || reportImporting}
                           className={[
                             'mt-3 w-full rounded-2xl px-4 py-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
                             isLight
@@ -2736,16 +2919,17 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                     <div className={['overflow-auto rounded-2xl', tableWrapClass].join(' ')}>
                       <div className="flex min-w-0">
                         <div className={['shrink-0 border-r', isLight ? 'border-slate-200 bg-white shadow-[10px_0_24px_rgba(15,23,42,0.05)]' : 'border-white/10 bg-slate-950 shadow-[10px_0_28px_rgba(2,6,23,0.5)]'].join(' ')}>
-                          <table className="w-[728px] table-fixed text-left text-xs">
+                          <table className="w-[840px] table-fixed text-left text-xs">
                             <thead className={['text-[10px] uppercase tracking-[0.16em]', tableHeadClass].join(' ')}>
                               <tr>
                                 <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[0].width, minWidth: weeklyFrozenColumns[0].width }}>{t('日期', 'Date')}</th>
                                 <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[1].width, minWidth: weeklyFrozenColumns[1].width }}>{t('星期', 'Weekday')}</th>
                                 <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[2].width, minWidth: weeklyFrozenColumns[2].width }}>{t('截止12点预测', '12:00 forecast')}</th>
                                 <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[3].width, minWidth: weeklyFrozenColumns[3].width }}>{t('实际差异', 'Actual variance')}</th>
-                                <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[4].width, minWidth: weeklyFrozenColumns[4].width }}>{t('当日总流入', 'Daily total')}</th>
-                                <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[5].width, minWidth: weeklyFrozenColumns[5].width }}>{t('库存转换率', 'ITR')}</th>
-                                <th className={['border-r px-3 py-2', isLight ? 'border-slate-200' : 'border-white/10'].join(' ')} style={{ width: weeklyFrozenColumns[6].width, minWidth: weeklyFrozenColumns[6].width }}>{t('恶劣天气', 'Severe weather')}</th>
+                                <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[4].width, minWidth: weeklyFrozenColumns[4].width }}>{t('差异件数', 'Difference')}</th>
+                                <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[5].width, minWidth: weeklyFrozenColumns[5].width }}>{t('当日总流入', 'Daily total')}</th>
+                                <th className="px-3 py-2" style={{ width: weeklyFrozenColumns[6].width, minWidth: weeklyFrozenColumns[6].width }}>{t('库存转换率', 'ITR')}</th>
+                                <th className={['border-r px-3 py-2', isLight ? 'border-slate-200' : 'border-white/10'].join(' ')} style={{ width: weeklyFrozenColumns[7].width, minWidth: weeklyFrozenColumns[7].width }}>{t('恶劣天气', 'Severe weather')}</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -2767,17 +2951,21 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                                 const inventoryLevel = Number(manualInputRow?.inventory_level ?? 0);
                                 const severeWeather = Boolean(manualInputRow?.severe_weather ?? false);
                                 const isCompleteHistoryDay = lastFilledHour !== null && lastFilledHour >= 23;
-                                const actualVariance =
-                                  isCompleteHistoryDay && dailyTotal !== null && noonForecast !== null && noonForecast > 0
-                                    ? (dailyTotal - noonForecast) / noonForecast
-                                    : null;
+                                const variancePresentation = getForecastVariancePresentation(noonForecast, isCompleteHistoryDay ? dailyTotal : null);
+                                const varianceClass =
+                                  variancePresentation.tone === 'danger'
+                                    ? isLight ? 'font-bold text-rose-600' : 'font-bold text-rose-400'
+                                    : variancePresentation.tone === 'success'
+                                      ? isLight ? 'font-bold text-emerald-600' : 'font-bold text-emerald-400'
+                                      : '';
                                 const itr = dailyTotal !== null && inventoryLevel > 0 ? dailyTotal / inventoryLevel : null;
                                 return (
                                   <tr key={`weekly-frozen-${date}`} className={tableRowClass}>
                                     <td className="px-3 py-2 font-semibold">{date}</td>
                                     <td className="px-3 py-2">{t(WEEKDAY_OPTIONS[weekday - 1]?.zh ?? '周一', WEEKDAY_OPTIONS[weekday - 1]?.shortEn ?? 'Mon')}</td>
                                     <td className="px-3 py-2">{formatNumber(noonForecast)}</td>
-                                    <td className="px-3 py-2">{actualVariance === null ? '-' : formatPercent(actualVariance, 2)}</td>
+                                    <td className={['px-3 py-2', varianceClass].join(' ')}>{variancePresentation.variance === null ? '-' : formatPercent(variancePresentation.variance, 2)}</td>
+                                    <td className="px-3 py-2">{formatSignedDifferenceQuantity(variancePresentation.differenceQuantity)}</td>
                                     <td className="px-3 py-2">{formatNumber(dailyTotal)}</td>
                                     <td className="px-3 py-2">{itr === null ? '-' : formatPercent(itr, 2)}</td>
                                     <td className={['border-r px-3 py-2', isLight ? 'border-slate-200' : 'border-white/10'].join(' ')}>{severeWeather ? t('是', 'Yes') : t('否', 'No')}</td>
@@ -2858,6 +3046,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
           </div>,
           document.body
         )}
-    </section>
+      </section>
+    </>
   );
 }

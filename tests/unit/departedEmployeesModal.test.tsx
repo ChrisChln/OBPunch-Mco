@@ -15,7 +15,9 @@ const rows: EmployeeRow[] = [
     agency: 'Prime',
     position: 'Pick',
     terminated_at: '2026-06-14T10:00:00.000Z',
-    termination_type: 'normal'
+    termination_type: 'normal',
+    termination_reason: 'Moved out of state',
+    termination_operator: 'Linda Chen'
   },
   {
     staff_id: 'US010002',
@@ -23,7 +25,8 @@ const rows: EmployeeRow[] = [
     agency: 'Lyneer',
     position: 'Pack',
     terminated_at: '2026-06-13T10:00:00.000Z',
-    termination_type: 'blacklist'
+    termination_type: 'blacklist',
+    termination_reason: 'Attendance issue'
   }
 ];
 
@@ -43,6 +46,7 @@ const renderModal = (overrides: Partial<React.ComponentProps<typeof DepartedEmpl
     canHardDelete: false,
     onClose: vi.fn(),
     onRefresh: vi.fn(),
+    onExport: vi.fn(),
     onToggleTerminationType: vi.fn(),
     onRehire: vi.fn(),
     onHardDelete: vi.fn(),
@@ -73,5 +77,39 @@ describe('DepartedEmployeesModal', () => {
 
     expect(onToggleTerminationType).toHaveBeenCalledWith('US010001', 'blacklist');
     expect(onRehire).toHaveBeenCalledWith('US010001');
+  });
+
+  test('shows departure reasons and filters by an inclusive date range', async () => {
+    renderModal();
+
+    expect(screen.getByText('离职原因')).toBeInTheDocument();
+    expect(screen.getByText('Moved out of state')).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText('开始日期'), '2026-06-14');
+    await userEvent.type(screen.getByLabelText('结束日期'), '2026-06-14');
+
+    expect(screen.getByText('Jennifer Bravo')).toBeInTheDocument();
+    expect(screen.queryByText('Zion Green')).not.toBeInTheDocument();
+  });
+
+  test('exports the currently filtered rows', async () => {
+    const onExport = vi.fn();
+    renderModal({ onExport });
+
+    await userEvent.type(screen.getByPlaceholderText('搜索名字 / USID'), 'Jennifer');
+    await userEvent.click(screen.getByRole('button', { name: '导出' }));
+
+    expect(onExport).toHaveBeenCalledWith([expect.objectContaining({ staff_id: 'US010001' })]);
+  });
+
+  test('shows the departure operator without forcing horizontal table overflow', () => {
+    renderModal();
+
+    expect(screen.getByText('操作人')).toBeInTheDocument();
+    expect(screen.getByText('Linda Chen')).toBeInTheDocument();
+
+    const table = screen.getByRole('table');
+    expect(table).not.toHaveClass('min-w-[1240px]');
+    expect(table.parentElement).toHaveClass('overflow-x-hidden');
   });
 });

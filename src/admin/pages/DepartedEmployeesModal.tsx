@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
+import {
+  filterDepartedEmployees,
+  formatTerminationDate,
+  normalizeTerminationType
+} from '../departedEmployees';
 import type { EmployeeRow, TerminationType } from '../types';
 
 type TranslateFn = (zh: string, en: string) => string;
@@ -14,6 +19,7 @@ type DepartedEmployeesModalProps = {
   canHardDelete: boolean;
   onClose: () => void;
   onRefresh: () => void | Promise<void>;
+  onExport: (rows: EmployeeRow[]) => void | Promise<void>;
   onToggleTerminationType: (staffId: string, nextType: TerminationType) => void | Promise<void>;
   onRehire: (staffId: string) => void | Promise<void>;
   onHardDelete: (staffId: string) => void | Promise<void>;
@@ -22,17 +28,8 @@ type DepartedEmployeesModalProps = {
 
 const normalizeText = (value: unknown) => String(value ?? '').trim();
 
-const normalizeTerminationType = (value: unknown): TerminationType => {
-  const text = normalizeText(value).toLowerCase();
-  return text === 'blacklist' ? 'blacklist' : 'normal';
-};
-
 const formatDate = (value: unknown) => {
-  const text = normalizeText(value);
-  if (!text) return '-';
-  const date = new Date(text);
-  if (Number.isNaN(date.getTime())) return text.slice(0, 10) || '-';
-  return date.toISOString().slice(0, 10);
+  return formatTerminationDate(value) || '-';
 };
 
 const ROW_HEIGHT = 50;
@@ -49,6 +46,7 @@ export default function DepartedEmployeesModal({
   canHardDelete,
   onClose,
   onRefresh,
+  onExport,
   onToggleTerminationType,
   onRehire,
   onHardDelete,
@@ -58,6 +56,8 @@ export default function DepartedEmployeesModal({
   const [agency, setAgency] = useState('');
   const [position, setPosition] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | TerminationType>('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
   const visibleStartRef = useRef(0);
   const pendingScrollTopRef = useRef(0);
@@ -68,42 +68,31 @@ export default function DepartedEmployeesModal({
 
   const agencyOptions = useMemo(
     () =>
-      Array.from(new Set(rows.map((row) => normalizeText(row.agency ?? row.Agency)).filter(Boolean))).sort((a, b) =>
+      Array.from(new Set(rows.map((row) => normalizeText(row.agency)).filter(Boolean))).sort((a, b) =>
         a.localeCompare(b)
       ),
     [rows]
   );
   const positionOptions = useMemo(
     () =>
-      Array.from(new Set(rows.map((row) => normalizeText(row.position ?? row.Position)).filter(Boolean))).sort((a, b) =>
+      Array.from(new Set(rows.map((row) => normalizeText(row.position)).filter(Boolean))).sort((a, b) =>
         a.localeCompare(b)
       ),
     [rows]
   );
 
-  const filteredRows = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    return rows.filter((row) => {
-      const rowAgency = normalizeText(row.agency ?? row.Agency);
-      const rowPosition = normalizeText(row.position ?? row.Position);
-      const rowType = normalizeTerminationType(row.termination_type);
-      if (agency && rowAgency !== agency) return false;
-      if (position && rowPosition !== position) return false;
-      if (typeFilter !== 'all' && rowType !== typeFilter) return false;
-      if (!needle) return true;
-      const haystack = [
-        row.staff_id,
-        row.name,
-        rowAgency,
-        rowPosition,
-        rowType === 'blacklist' ? 'blacklist 黑名单' : 'normal 正常离职',
-        row.terminated_at
-      ]
-        .map((item) => normalizeText(item).toLowerCase())
-        .join(' ');
-      return haystack.includes(needle);
-    });
-  }, [agency, position, rows, search, typeFilter]);
+  const filteredRows = useMemo(
+    () =>
+      filterDepartedEmployees(rows, {
+        search,
+        agency,
+        position,
+        type: typeFilter,
+        startDate,
+        endDate
+      }),
+    [agency, endDate, position, rows, search, startDate, typeFilter]
+  );
 
   useEffect(() => {
     const el = tableScrollRef.current;
@@ -123,7 +112,7 @@ export default function DepartedEmployeesModal({
     visibleStartRef.current = 0;
     setVisibleStart(0);
     if (tableScrollRef.current) tableScrollRef.current.scrollTop = 0;
-  }, [agency, position, search, typeFilter, rows]);
+  }, [agency, endDate, position, search, startDate, typeFilter, rows]);
 
   useEffect(() => {
     return () => {
@@ -175,10 +164,18 @@ export default function DepartedEmployeesModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm">
-      <div className={['flex max-h-[88vh] w-full max-w-6xl flex-col rounded-2xl border', panelClass].join(' ')}>
+      <div className={['flex max-h-[88vh] w-full max-w-7xl flex-col rounded-2xl border', panelClass].join(' ')}>
         <div className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
           <h3 className="font-display text-xl tracking-[0.08em]">{t('离职员工', 'Departed')}</h3>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void onExport(filteredRows)}
+              disabled={loading || filteredRows.length === 0}
+              className="admin-btn admin-btn-toolbar admin-btn-secondary px-4 disabled:opacity-60"
+            >
+              {t('导出', 'Export')}
+            </button>
             <button type="button" onClick={() => void onRefresh()} disabled={loading} className="admin-btn admin-btn-toolbar admin-btn-secondary px-4 disabled:opacity-60">
               {t('刷新', 'Refresh')}
             </button>
@@ -188,7 +185,7 @@ export default function DepartedEmployeesModal({
           </div>
         </div>
 
-        <div className="grid gap-3 px-5 py-4 md:grid-cols-5">
+        <div className="grid gap-3 px-5 py-4 md:grid-cols-2 xl:grid-cols-7">
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
@@ -216,33 +213,57 @@ export default function DepartedEmployeesModal({
             <option value="normal">{t('正常离职', 'Normal')}</option>
             <option value="blacklist">{t('黑名单', 'Blacklist')}</option>
           </select>
+          <label className="relative">
+            <span className="sr-only">{t('开始日期', 'Start date')}</span>
+            <input
+              type="date"
+              aria-label={t('开始日期', 'Start date')}
+              value={startDate}
+              max={endDate || undefined}
+              onChange={(event) => setStartDate(event.target.value)}
+              className={[inputClass, 'w-full'].join(' ')}
+            />
+          </label>
+          <label className="relative">
+            <span className="sr-only">{t('结束日期', 'End date')}</span>
+            <input
+              type="date"
+              aria-label={t('结束日期', 'End date')}
+              value={endDate}
+              min={startDate || undefined}
+              onChange={(event) => setEndDate(event.target.value)}
+              className={[inputClass, 'w-full'].join(' ')}
+            />
+          </label>
         </div>
 
         {error ? <div className="px-5 pb-3 text-sm text-ember">{error}</div> : null}
 
         <div
           ref={tableScrollRef}
-          className="min-h-0 flex-1 overflow-auto px-5 pb-5"
+          className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-5 pb-5"
           style={{ contain: 'layout paint style' }}
           onScroll={handleScroll}
         >
-          <table className="w-full min-w-[900px] table-fixed text-left text-sm">
+          <table className="w-full table-fixed text-left text-sm">
             <thead className={['sticky top-0 z-10 border-b text-xs uppercase tracking-[0.18em]', isLight ? 'border-slate-200 bg-white text-slate-500' : 'border-white/10 bg-slate-950 text-slate-400'].join(' ')}>
               <tr>
-                <th className="w-[130px] px-3 py-3">{t('离职日期', 'Date')}</th>
-                <th className="w-[180px] px-3 py-3">{t('名字', 'Name')}</th>
-                <th className="w-[150px] px-3 py-3">USID</th>
-                <th className="w-[130px] px-3 py-3">Agency</th>
-                <th className="w-[130px] px-3 py-3">Position</th>
-                <th className="w-[130px] px-3 py-3">{t('类型', 'Type')}</th>
-                {canManageDeparted || canHardDelete ? <th className="w-[190px] px-3 py-3 text-right">{t('操作', 'Action')}</th> : null}
+                <th className="w-[9%] px-2 py-3">{t('离职日期', 'Date')}</th>
+                <th className="w-[12%] px-2 py-3">{t('名字', 'Name')}</th>
+                <th className="w-[10%] px-2 py-3">USID</th>
+                <th className="w-[8%] px-2 py-3">Agency</th>
+                <th className="w-[8%] px-2 py-3">Position</th>
+                <th className="w-[10%] px-2 py-3">{t('类型', 'Type')}</th>
+                <th className="w-[15%] px-2 py-3">{t('离职原因', 'Departure reason')}</th>
+                <th className="w-[10%] px-2 py-3">{t('操作人', 'Operator')}</th>
+                {canManageDeparted || canHardDelete ? <th className="w-[18%] px-2 py-3 text-right">{t('操作', 'Action')}</th> : null}
               </tr>
             </thead>
             <tbody>
               {visibleMeta.topSpacerHeight > 0 ? (
                 <tr aria-hidden="true">
                   <td
-                    colSpan={canManageDeparted || canHardDelete ? 7 : 6}
+                    colSpan={canManageDeparted || canHardDelete ? 9 : 8}
                     style={{ height: visibleMeta.topSpacerHeight, padding: 0, border: 0 }}
                   />
                 </tr>
@@ -252,16 +273,22 @@ export default function DepartedEmployeesModal({
                 const type = normalizeTerminationType(row.termination_type);
                 return (
                   <tr key={`${staffId}:${row.terminated_at}`} className="h-[50px] border-b border-white/5 last:border-0">
-                    <td className="px-3 py-3 font-mono">{formatDate(row.terminated_at)}</td>
-                    <td className="px-3 py-3">
+                    <td className="whitespace-nowrap px-2 py-3 font-mono">{formatDate(row.terminated_at)}</td>
+                    <td className="px-2 py-3">
                       <span className="block truncate" title={normalizeText(row.name) || '-'}>
                         {normalizeText(row.name) || '-'}
                       </span>
                     </td>
-                    <td className="px-3 py-3 font-mono">{staffId ? displayStaffId(staffId) : '-'}</td>
-                    <td className="px-3 py-3">{normalizeText(row.agency ?? row.Agency) || '-'}</td>
-                    <td className="px-3 py-3">{normalizeText(row.position ?? row.Position) || '-'}</td>
-                    <td className="px-3 py-3">
+                    <td className="truncate px-2 py-3 font-mono" title={staffId ? displayStaffId(staffId) : '-'}>
+                      {staffId ? displayStaffId(staffId) : '-'}
+                    </td>
+                    <td className="truncate px-2 py-3" title={normalizeText(row.agency) || '-'}>
+                      {normalizeText(row.agency) || '-'}
+                    </td>
+                    <td className="truncate px-2 py-3" title={normalizeText(row.position) || '-'}>
+                      {normalizeText(row.position) || '-'}
+                    </td>
+                    <td className="px-2 py-3">
                       <button
                         type="button"
                         disabled={loading || !staffId || !canManageDeparted}
@@ -277,8 +304,18 @@ export default function DepartedEmployeesModal({
                         {type === 'blacklist' ? t('黑名单', 'Blacklist') : t('正常离职', 'Normal')}
                       </button>
                     </td>
+                    <td className="px-2 py-3">
+                      <span className="block truncate" title={normalizeText(row.termination_reason) || '-'}>
+                        {normalizeText(row.termination_reason) || '-'}
+                      </span>
+                    </td>
+                    <td className="px-2 py-3">
+                      <span className="block truncate" title={normalizeText(row.termination_operator) || '-'}>
+                        {normalizeText(row.termination_operator) || '-'}
+                      </span>
+                    </td>
                     {canManageDeparted || canHardDelete ? (
-                      <td className="px-3 py-3">
+                      <td className="px-2 py-3">
                         <div className="flex justify-end gap-2">
                           {canManageDeparted ? (
                             <button
@@ -309,7 +346,7 @@ export default function DepartedEmployeesModal({
               {visibleMeta.bottomSpacerHeight > 0 ? (
                 <tr aria-hidden="true">
                   <td
-                    colSpan={canManageDeparted || canHardDelete ? 7 : 6}
+                    colSpan={canManageDeparted || canHardDelete ? 9 : 8}
                     style={{ height: visibleMeta.bottomSpacerHeight, padding: 0, border: 0 }}
                   />
                 </tr>

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  formatLeaveDateTime,
   getApproveWindow,
   getCurrentOperationalDate,
   getEffectiveLeaveStatus,
@@ -7,6 +8,16 @@ import {
 } from '../../src/admin/leaveApprovalShared';
 
 describe('leaveApprovalShared', () => {
+  test('formats leave timestamps in New York time', () => {
+    expect(formatLeaveDateTime('2026-07-27T12:30:00.000Z')).toContain('08:30');
+    expect(formatLeaveDateTime('2026-01-27T12:30:00.000Z')).toContain('07:30');
+  });
+
+  test('uses a dash for missing or invalid leave timestamps', () => {
+    expect(formatLeaveDateTime(null)).toBe('-');
+    expect(formatLeaveDateTime('not-a-date')).toBe('-');
+  });
+
   test('operational day rolls back before cutoff hour', () => {
     expect(getCurrentOperationalDate(new Date('2026-04-07T04:59:59'))).toBe('2026-04-06');
     expect(getCurrentOperationalDate(new Date('2026-04-07T05:00:00'))).toBe('2026-04-07');

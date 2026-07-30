@@ -148,8 +148,8 @@ function AdminHeader({
   );
 
   return (
-    <header className={['relative z-40 h-16 shrink-0', shellClass].join(' ')}>
-      <div className="flex h-16 items-center gap-4 px-5 lg:px-6">
+    <header className={['relative z-40 h-16 w-full min-w-0 max-w-full shrink-0 overflow-hidden', shellClass].join(' ')}>
+      <div className="flex h-16 min-w-0 max-w-full items-center gap-4 px-5 lg:px-6">
         <div className="flex items-center">
           <img src={TOP_MENU_LOGO_SRC} alt="Top menu logo" className="h-10 w-10 shrink-0 object-contain" />
           <span className={['ml-3 font-display text-lg font-bold tracking-[0.06em]', isLight ? 'text-slate-900' : 'text-slate-100'].join(' ')}>

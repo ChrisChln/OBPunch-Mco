@@ -1,5 +1,7 @@
 ﻿import { createPortal } from 'react-dom';
 
+import { Check } from 'lucide-react';
+
 type TranslateFn = (zh: string, en: string) => string;
 
 type EmployeeEditModalProps = {
@@ -92,8 +94,11 @@ export default function EmployeeEditModal({
     ? 'mt-2 flex h-11 items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-2'
     : 'mt-2 flex h-11 items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-2';
   const shiftInactiveClass = isLight
-    ? 'text-slate-600 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60'
-    : 'text-slate-400 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60';
+    ? 'border-slate-200 bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60'
+    : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60';
+  const shiftLabelValueClass = isLight
+    ? 'text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500'
+    : 'text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300';
   const closeBtnClass = isLight
     ? 'rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200'
     : 'rounded-xl bg-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/15';
@@ -103,6 +108,7 @@ export default function EmployeeEditModal({
   const saveBtnClass = isLight
     ? 'rounded-2xl bg-neon px-6 py-2 text-sm font-semibold text-slate-900 shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50'
     : 'rounded-2xl bg-neon px-6 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-50';
+  const selectedShiftLabel = employeeEditShift === 'early' ? t('白班', 'Day') : employeeEditShift === 'late' ? t('夜班', 'Night') : t('未选择', 'Not set');
 
   return createPortal(
     <div className={['fixed inset-0 z-40 flex items-center justify-center overflow-y-auto px-4 py-10', overlayClass].join(' ')}>
@@ -185,26 +191,35 @@ export default function EmployeeEditModal({
                 </select>
               </div>
               <div>
-                <label className={['text-xs uppercase tracking-[0.25em]', labelClass].join(' ')}>{t('班次', 'Shift')}</label>
+                <div className="flex items-center justify-between gap-3">
+                  <label className={['text-xs uppercase tracking-[0.25em]', labelClass].join(' ')}>{t('班次', 'Shift')}</label>
+                  <span className={shiftLabelValueClass}>{selectedShiftLabel}</span>
+                </div>
                 <div className={shiftGroupClass}>
                   {([
-                    ['early', t('早班', 'Morning')],
-                    ['late', t('晚班', 'Night')]
+                    ['early', t('白班', 'Day')],
+                    ['late', t('夜班', 'Night')]
                   ] as const).map(([val, label]) => (
                     <button
                       key={val}
                       type="button"
                       disabled={isLocked}
+                      aria-pressed={employeeEditShift === val}
                       onClick={() => setEmployeeEditShift(val as '' | 'early' | 'late')}
                       className={[
-                        'flex-1 rounded-xl px-3 py-2 text-sm font-semibold transition',
+                        'flex-1 inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition',
                         employeeEditShift === val
                           ? val === 'early'
-                            ? 'bg-amber-500 text-white shadow-md'
-                            : 'bg-indigo-500 text-white shadow-md'
+                            ? isLight
+                              ? 'border-amber-400 bg-amber-400 text-slate-950 shadow-[0_8px_22px_rgba(251,191,36,0.32)] ring-2 ring-amber-200'
+                              : 'border-amber-300 bg-amber-400 text-slate-950 shadow-[0_10px_28px_rgba(251,191,36,0.3)] ring-2 ring-amber-200/30'
+                            : isLight
+                              ? 'border-indigo-500 bg-indigo-600 text-white shadow-[0_8px_22px_rgba(79,70,229,0.28)] ring-2 ring-indigo-200'
+                              : 'border-indigo-300 bg-indigo-500 text-white shadow-[0_10px_28px_rgba(99,102,241,0.3)] ring-2 ring-indigo-200/30'
                           : shiftInactiveClass
                       ].join(' ')}
                     >
+                      {employeeEditShift === val && <Check className="h-4 w-4" aria-hidden="true" />}
                       {label}
                     </button>
                   ))}
@@ -267,7 +282,12 @@ export default function EmployeeEditModal({
           <button type="button" disabled={isLocked} onClick={closeEmployeeEdit} className={cancelBtnClass}>
             {t('取消', 'Cancel')}
           </button>
-          <button type="button" disabled={isLocked} onClick={() => void saveEmployeeEdit()} className={saveBtnClass}>
+          <button
+            type="button"
+            disabled={isLocked || !employeeEditPosition.trim()}
+            onClick={() => void saveEmployeeEdit()}
+            className={saveBtnClass}
+          >
             {t('保存', 'Save')}
           </button>
         </div>

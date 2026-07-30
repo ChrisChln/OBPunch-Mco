@@ -31,7 +31,7 @@ export const resolveDailyListPositionSource = (profilePosition: unknown, schedul
   const profile = String(profilePosition ?? '').trim();
   const schedule = String(schedulePosition ?? '').trim();
   return {
-    position: profile || schedule,
+    position: profile,
     profilePosition: profile,
     schedulePosition: schedule
   };

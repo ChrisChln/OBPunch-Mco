@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getTrackedStaffIds } from '../../src/admin/workHourGlobalStats';
+import { buildWorkHourPositionList, getTrackedStaffIds } from '../../src/admin/workHourGlobalStats';
 
 describe('workHourGlobalStats', () => {
   it('returns only tracked position staff ids', () => {
@@ -26,5 +26,35 @@ describe('workHourGlobalStats', () => {
     );
 
     expect(result).toEqual(['US0001', 'US0002']);
+  });
+
+  it('includes custom configured and employee positions', () => {
+    const result = buildWorkHourPositionList(
+      {
+        US0001: { position: 'Pick' },
+        US0002: { position: 'Shipping' },
+        US0003: { position: 'Custom Returns' }
+      },
+      ['Pick', 'Pack', 'Shipping'],
+      {}
+    );
+
+    expect(result).toEqual(['Pick', 'Pack', 'Shipping', 'Custom Returns']);
+  });
+
+  it('excludes hidden configured positions', () => {
+    const result = buildWorkHourPositionList(
+      {
+        US0001: { position: 'Pick' },
+        US0002: { position: 'Manager' },
+        US0003: { position: 'Shipping' }
+      },
+      ['Pick', 'Manager', 'Shipping'],
+      {
+        manager: 'hidden'
+      }
+    );
+
+    expect(result).toEqual(['Pick', 'Shipping']);
   });
 });

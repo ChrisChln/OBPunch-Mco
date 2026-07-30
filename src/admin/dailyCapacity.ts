@@ -121,7 +121,7 @@ const isEmployeeActive = (employee: EmployeeRow) => {
   return true;
 };
 
-const getEmployeePosition = (row: EmployeeRow) => String(row.position ?? row.Position ?? '').trim();
+const getEmployeePosition = (row: EmployeeRow) => String(row.position ?? '').trim();
 const getEmployeeLabel = (row: EmployeeRow) => String(row.label ?? row.Label ?? '').trim();
 const getEmployeeWorkAccount = (row: EmployeeRow) => String(row.work_account ?? row.WorkAccount ?? '').trim();
 

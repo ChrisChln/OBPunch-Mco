@@ -12,7 +12,6 @@ type PunchRow = {
 type EmployeeRow = {
   staff_id?: string | null;
   agency?: string | null;
-  Agency?: string | null;
   terminated_at?: string | null;
 };
 
@@ -136,7 +135,7 @@ const fetchEmployeesByStaffId = async (supabase: SupabaseLike, staffIds: string[
     const batch = staffIds.slice(index, index + 200);
     const res = await supabase
       .from('ob_employees')
-      .select('staff_id, agency, "Agency", terminated_at')
+      .select('staff_id, agency, terminated_at')
       .in('staff_id', batch);
     if (res.error) throw res.error;
     for (const row of ((res.data ?? []) as EmployeeRow[])) {
@@ -206,7 +205,7 @@ export const runAttendanceAutoCheckout = async (
   const skippedStaffIds: string[] = [];
   for (const staffId of candidates) {
     const employee = employees.get(staffId);
-    const agency = String(employee?.agency ?? employee?.Agency ?? '').trim();
+    const agency = String(employee?.agency ?? '').trim();
     if (!employee || existingCutoffOut.has(staffId) || isScheduleOnlyAgency(agency) || isEmployeeTerminated({ terminatedAt: employee.terminated_at })) {
       skippedStaffIds.push(staffId);
       continue;
