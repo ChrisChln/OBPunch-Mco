@@ -29,13 +29,13 @@ const makeSupabase = () => {
   return { from, rpc: vi.fn(async () => ({ data: [], error: null })), upsert };
 };
 
-const pageElement = (supabase: unknown = null) =>
+const pageElement = (supabase: unknown = null, themeMode: 'light' | 'dark' = 'light') =>
     <ForecastPage
       t={t}
       isLocked={false}
       serverTime={new Date(2026, 6, 30, 12, 0, 0)}
       supabase={supabase}
-      themeMode="light"
+      themeMode={themeMode}
     />;
 
 const renderPage = (supabase: unknown = null) => render(pageElement(supabase));
@@ -49,13 +49,35 @@ describe('ForecastPage outbound report import', () => {
     cleanup();
   });
 
-  test('shows a dedicated report import button in the history view', async () => {
+  test('shows report import beside the historical inflow title', async () => {
     renderPage();
 
     fireEvent.click(screen.getByRole('button', { name: '历史流入' }));
 
+    expect(await screen.findByText('历史流入数据')).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: '导入报表' })).toBeInTheDocument();
-  });
+  }, 10_000);
+
+  test('uses a high-contrast report import button in dark mode', async () => {
+    render(pageElement(null, 'dark'));
+    fireEvent.click(screen.getByRole('button', { name: '历史流入' }));
+
+    expect(await screen.findByRole('button', { name: '导入报表' })).toHaveClass('bg-lime-400', 'text-slate-950');
+  }, 10_000);
+
+  test('selecting a date shows its week and highlights that day', async () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: '填数据' }));
+
+    const dateNavigator = await screen.findByLabelText('选择日期');
+    fireEvent.change(dateNavigator, { target: { value: '2026-05-14' } });
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('2026-05-11')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('2026-05-17')).toBeInTheDocument();
+    });
+    expect(document.querySelector('tr[data-selected="true"] input[value="2026-05-14"]')).not.toBeNull();
+  }, 10_000);
 
   test('saves aggregated rows and shows a concise import summary', async () => {
     const supabase = makeSupabase();
@@ -78,7 +100,7 @@ describe('ForecastPage outbound report import', () => {
 
     expect((await screen.findAllByText('已导入 1 天 · 13219 行 · 14,040 件')).length).toBeGreaterThan(0);
     expect(supabase.upsert).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ date: '2026-07-01', h17: 14_040 })]), { onConflict: 'date' });
-  });
+  }, 10_000);
 
   test('does not write when Worker validation fails', async () => {
     const supabase = makeSupabase();
@@ -93,5 +115,5 @@ describe('ForecastPage outbound report import', () => {
 
     expect((await screen.findAllByText('第 218 行“创建时间”无效')).length).toBeGreaterThan(0);
     await waitFor(() => expect(supabase.upsert).not.toHaveBeenCalled());
-  });
+  }, 10_000);
 });

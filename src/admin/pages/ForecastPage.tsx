@@ -175,6 +175,16 @@ const getWeekStartDateOnly = (dateOnly: string) => {
   const weekday = getIsoWeekday(date);
   return toDateOnly(addDays(date, -(weekday - 1)));
 };
+const getHistoricalWeekOffset = (baseDate: Date, dateOnly: string) => {
+  const baseWeekStart = getWeekDates(baseDate, 0)[0] ?? '';
+  const targetWeekStart = getWeekStartDateOnly(dateOnly);
+  if (!baseWeekStart || !targetWeekStart) return null;
+  const toUtcDay = (value: string) => {
+    const [year, month, day] = value.split('-').map(Number);
+    return Date.UTC(year, month - 1, day);
+  };
+  return Math.round((toUtcDay(baseWeekStart) - toUtcDay(targetWeekStart)) / (7 * 24 * 60 * 60 * 1000));
+};
 const getMonthKeyFromDateOnly = (dateOnly: string) => {
   if (!isValidDateOnly(dateOnly)) return '';
   return String(dateOnly).slice(0, 7);
@@ -1403,15 +1413,24 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
     setManualInputSaveMessage(null);
     setManualInputDialogOpen(true);
   };
-  const shiftManualInputWeek = async (delta: number) => {
-    const nextOffset = manualInputWeekOffset + delta;
+  const navigateManualInputDate = async (selectedDate: string) => {
+    if (!isValidDateOnly(selectedDate)) return;
+    const nextOffset = getHistoricalWeekOffset(serverTime, selectedDate);
+    if (nextOffset === null) return;
     const nextWeekDates = getWeekDates(serverTime, nextOffset);
+    if (!nextWeekDates.includes(selectedDate)) return;
+    setHistoryPasteDate(selectedDate);
     setManualInputWeekOffset(nextOffset);
     const historyRows = await loadHistoryWindow(nextWeekDates);
     setManualInputDraftRows(buildManualInputDraftRows(nextOffset, historyRows));
     setManualInputDraftDirty(false);
-    setHistoryPasteDate((current) => (nextWeekDates.includes(current) ? current : getDefaultHistoryPasteDate(nextWeekDates)));
     setManualInputSaveError(null);
+  };
+  const shiftManualInputWeek = async (delta: number) => {
+    const nextOffset = manualInputWeekOffset + delta;
+    const nextWeekDates = getWeekDates(serverTime, nextOffset);
+    const selectedDayIndex = Math.max(0, currentWeekDates.indexOf(historyPasteDate));
+    await navigateManualInputDate(nextWeekDates[selectedDayIndex] ?? getDefaultHistoryPasteDate(nextWeekDates));
   };
   const closeManualInputDialog = () => {
     if (manualInputSaving) return;
@@ -2563,12 +2582,47 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className={['text-xl font-semibold', valueClass].join(' ')}>
-                    {forecastDialogView === 'weekly' ? t('本周数据', 'Weekly data') : t('历史流入数据', 'Historical inflow data')}
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className={['text-xl font-semibold', valueClass].join(' ')}>
+                      {forecastDialogView === 'weekly' ? t('本周数据', 'Weekly data') : t('历史流入数据', 'Historical inflow data')}
+                    </div>
+                    <input
+                      ref={reportFileInputRef}
+                      type="file"
+                      className="hidden"
+                      accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                      onChange={(event) => void onOutboundReportSelected(event.target.files?.[0] ?? null)}
+                    />
+                    {forecastDialogView === 'history' && (
+                      <button
+                        type="button"
+                        disabled={isLocked || uploading || historyPasteSaving || reportImporting}
+                        onClick={() => reportFileInputRef.current?.click()}
+                        className={[
+                          'shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+                          isLight ? 'bg-slate-900 text-white hover:bg-slate-700' : 'bg-lime-400 text-slate-950 hover:bg-lime-300'
+                        ].join(' ')}
+                      >
+                        {t('导入报表', 'Import report')}
+                      </button>
+                    )}
                   </div>
                   {manualInputRangeLabel && <div className={['mt-2 text-xs', helperClass].join(' ')}>{manualInputRangeLabel}</div>}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <input
+                    type="date"
+                    aria-label={t('选择日期', 'Select date')}
+                    value={historyPasteDate}
+                    onChange={(event) => void navigateManualInputDate(event.target.value)}
+                    disabled={isLocked || manualInputSaving || historyWindowLoading || reportImporting}
+                    className={[
+                      'h-10 w-[180px] rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
+                      isLight
+                        ? 'border border-slate-300 bg-white text-slate-900 focus:border-neon/60'
+                        : 'border border-white/10 bg-black/30 text-white focus:border-neon'
+                    ].join(' ')}
+                  />
                   <button
                     type="button"
                     disabled={manualInputSaving}
@@ -2596,15 +2650,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   <button
                     type="button"
                     disabled={manualInputSaving || manualInputWeekOffset === 0}
-                    onClick={async () => {
-                      const weekDates = getWeekDates(serverTime, 0);
-                      const historyRows = await loadHistoryWindow(weekDates);
-                      setManualInputWeekOffset(0);
-                      setManualInputDraftRows(buildManualInputDraftRows(0, historyRows));
-                      setManualInputDraftDirty(false);
-                      setHistoryPasteDate(getDefaultHistoryPasteDate(weekDates));
-                      setManualInputSaveError(null);
-                    }}
+                    onClick={() => void navigateManualInputDate(toDateOnly(serverTime))}
                     className={secondaryButtonClass}
                   >
                     {t('本周', 'This week')}
@@ -2645,7 +2691,18 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                       </thead>
                       <tbody>
                         {manualInputDraftRows.map((draftRow, index) => (
-                          <tr key={draftRow.input_date} className={tableRowClass}>
+                          <tr
+                            key={draftRow.input_date}
+                            data-selected={draftRow.input_date === historyPasteDate ? 'true' : 'false'}
+                            className={[
+                              tableRowClass,
+                              draftRow.input_date === historyPasteDate
+                                ? isLight
+                                  ? 'bg-emerald-50/80'
+                                  : 'bg-neon/10'
+                                : ''
+                            ].join(' ')}
+                          >
                             <td className="px-2 py-3 align-top">
                               <input
                                 type="date"
@@ -2793,37 +2850,7 @@ export default function ForecastPage({ t, isLocked, serverTime, supabase, themeM
                   <div>
                     <div className="mb-4">
                       <div className={['rounded-2xl p-4', subPanelClass].join(' ')}>
-                        <div className="flex items-center justify-between gap-3">
-                          <input
-                            ref={reportFileInputRef}
-                            type="file"
-                            className="hidden"
-                            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-                            onChange={(event) => void onOutboundReportSelected(event.target.files?.[0] ?? null)}
-                          />
-                          <button
-                            type="button"
-                            disabled={isLocked || uploading || historyPasteSaving || reportImporting}
-                            onClick={() => reportFileInputRef.current?.click()}
-                            className={[
-                              'shrink-0 rounded-2xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
-                              isLight ? 'bg-slate-900 text-white hover:bg-slate-700' : 'bg-neon text-slate-950 hover:shadow-glow'
-                            ].join(' ')}
-                          >
-                            {t('导入报表', 'Import report')}
-                          </button>
-                          <input
-                            type="date"
-                            value={historyPasteDate}
-                            onChange={(e) => setHistoryPasteDate(e.target.value)}
-                            disabled={isLocked || uploading || historyPasteSaving || reportImporting}
-                            className={[
-                              'h-10 w-full max-w-[220px] rounded-xl px-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60',
-                              isLight
-                                ? 'border border-slate-300 bg-white text-slate-900 focus:border-neon/60'
-                                : 'border border-white/10 bg-black/30 text-white focus:border-neon'
-                            ].join(' ')}
-                          />
+                        <div className="flex items-center justify-end gap-3">
                           <button
                             type="button"
                             disabled={isLocked || uploading || historyPasteSaving || reportImporting || !historyPasteValue.trim()}
